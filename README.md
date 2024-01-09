@@ -45,4 +45,4 @@ RMD combines and exports your streams:
 ## Join the Raptor Community
 We invite developers, streamers, and tech enthusiasts to contribute to the Raptor project. Whether it's by contributing code, providing feedback, or sharing your streaming experiences, your input is invaluable in making Raptor the most efficient and user-friendly streaming platform available.
 
-Dive into the world of high-quality streaming with Raptor – where every frame counts! 🚀📹
+Dive into the world of high-quality streaming with Raptor, on _your_ device – where every frame counts! 🚀📹
