@@ -4,6 +4,9 @@
 
 Welcome to **Raptor**, an innovative and open-source platform designed for modular, multi-platform IP camera streaming. Our system is crafted to provide a versatile and robust solution for a wide range of streaming applications.
 
+## Open-Source Licensing
+Raptor is proudly released under the **GNU General Public License v3 (GPL-3)**. This license grants you the freedom to modify, distribute, and use the software for any purpose, as long as you adhere to the GPL-3 terms and conditions. This includes ensuring that any derivative work you distribute is under the same license, thus contributing to the open-source community's growth and innovation.
+
 ## Raptor Streaming System (RSS)
 At the core of Raptor is the RSS, a suite of specialized daemons working in harmony to deliver an exceptional streaming experience.
 
