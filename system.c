@@ -19,13 +19,14 @@
 
 extern struct chn_conf chn[];
 
+IMPSensorInfo sensor_info;
 
 int system_initalize()
 {
 	int i, ret;
 
 	/* Step.1 System init */
-	ret = sample_system_init();
+	ret = isp_init();
 	if (ret < 0) {
 		IMP_LOG_ERR(TAG, "IMP_System_Init() failed\n");
 		return -1;
@@ -80,8 +81,6 @@ int system_initalize()
 		return -1;
 	}
 
-/* Exit sequence as follow */
-
 	/* Step.a Stream Off */
 	ret = sample_framesource_streamoff();
 	if (ret < 0) {
@@ -115,11 +114,200 @@ int system_initalize()
 	}
 
 	/* Step.e System exit */
-	ret = sample_system_exit();
+	ret = isp_exit();
 	if (ret < 0) {
 		IMP_LOG_ERR(TAG, "sample_system_exit() failed\n");
 		return -1;
 	}
 
+	return 0;
+}
+
+int isp_init()
+{
+	int ret = 0;
+
+
+/*
+ *    IMP_System_MemPoolRequest(0, 12 * ( 1 << 20 ), "mempool0");
+ *    IMP_System_MemPoolRequest(1, 10 * ( 1 << 20 ), "mempool1");
+ *
+ *    IMP_Encoder_SetPool(0, 0);
+ *    IMP_Encoder_SetPool(1, 1);
+ *
+ *    IMP_FrameSource_SetPool(0, 0);
+ *    IMP_FrameSource_SetPool(1, 1);
+ *
+ *    IMP_System_MemPoolFree(1);
+ *    IMP_System_MemPoolFree(0);
+ */
+
+	memset(&sensor_info, 0, sizeof(IMPSensorInfo));
+	memcpy(sensor_info.name, SENSOR_NAME, sizeof(SENSOR_NAME));
+	sensor_info.cbus_type = SENSOR_CUBS_TYPE;
+	memcpy(sensor_info.i2c.type, SENSOR_NAME, sizeof(SENSOR_NAME));
+	sensor_info.i2c.addr = SENSOR_I2C_ADDR;
+
+	IMP_LOG_DBG(TAG, "sample_system_init start\n");
+
+	ret = IMP_ISP_Open();
+	if(ret < 0){
+		IMP_LOG_ERR(TAG, "failed to open ISP\n");
+		return -1;
+	}
+
+	ret = IMP_ISP_AddSensor(&sensor_info);
+	if(ret < 0){
+		IMP_LOG_ERR(TAG, "failed to AddSensor\n");
+		return -1;
+	}
+
+	ret = IMP_ISP_EnableSensor();
+	if(ret < 0){
+		IMP_LOG_ERR(TAG, "failed to EnableSensor\n");
+		return -1;
+	}
+
+	ret = IMP_System_Init();
+	if(ret < 0){
+		IMP_LOG_ERR(TAG, "IMP_System_Init failed\n");
+		return -1;
+	}
+
+	/* enable turning, to debug graphics */
+	ret = IMP_ISP_EnableTuning();
+	if(ret < 0){
+		IMP_LOG_ERR(TAG, "IMP_ISP_EnableTuning failed\n");
+		return -1;
+	}
+    IMP_ISP_Tuning_SetContrast(128);
+    IMP_ISP_Tuning_SetSharpness(128);
+    IMP_ISP_Tuning_SetSaturation(128);
+    IMP_ISP_Tuning_SetBrightness(128);
+#if 1
+    ret = IMP_ISP_Tuning_SetISPRunningMode(IMPISP_RUNNING_MODE_DAY);
+    if (ret < 0){
+        IMP_LOG_ERR(TAG, "failed to set running mode\n");
+        return -1;
+    }
+#endif
+#if 0
+    ret = IMP_ISP_Tuning_SetSensorFPS(SENSOR_FRAME_RATE_NUM, SENSOR_FRAME_RATE_DEN);
+    if (ret < 0){
+        IMP_LOG_ERR(TAG, "failed to set sensor fps\n");
+        return -1;
+    }
+#endif
+	IMP_LOG_DBG(TAG, "ImpSystemInit success\n");
+
+	return 0;
+}
+
+int isp_exit()
+{
+	int ret = 0;
+
+	IMP_LOG_DBG(TAG, "sample_system_exit start\n");
+
+
+	IMP_System_Exit();
+
+	ret = IMP_ISP_DisableSensor();
+	if(ret < 0){
+		IMP_LOG_ERR(TAG, "failed to EnableSensor\n");
+		return -1;
+	}
+
+	ret = IMP_ISP_DelSensor(&sensor_info);
+	if(ret < 0){
+		IMP_LOG_ERR(TAG, "failed to AddSensor\n");
+		return -1;
+	}
+
+	ret = IMP_ISP_DisableTuning();
+	if(ret < 0){
+		IMP_LOG_ERR(TAG, "IMP_ISP_DisableTuning failed\n");
+		return -1;
+	}
+
+	if(IMP_ISP_Close()){
+		IMP_LOG_ERR(TAG, "failed to open ISP\n");
+		return -1;
+	}
+
+	IMP_LOG_DBG(TAG, " sample_system_exit success\n");
+
+	return 0;
+}
+
+int sample_framesource_streamon()
+{
+	int ret = 0, i = 0;
+	/* Enable channels */
+	for (i = 0; i < FS_CHN_NUM; i++) {
+		if (chn[i].enable) {
+			ret = IMP_FrameSource_EnableChn(chn[i].index);
+			if (ret < 0) {
+				IMP_LOG_ERR(TAG, "IMP_FrameSource_EnableChn(%d) error: %d\n", ret, chn[i].index);
+				return -1;
+			}
+		}
+	}
+	return 0;
+}
+
+int sample_framesource_streamoff()
+{
+	int ret = 0, i = 0;
+	/* Enable channels */
+	for (i = 0; i < FS_CHN_NUM; i++) {
+		if (chn[i].enable){
+			ret = IMP_FrameSource_DisableChn(chn[i].index);
+			if (ret < 0) {
+				IMP_LOG_ERR(TAG, "IMP_FrameSource_DisableChn(%d) error: %d\n", ret, chn[i].index);
+				return -1;
+			}
+		}
+	}
+	return 0;
+}
+
+int sample_framesource_init()
+{
+	int i, ret;
+
+	for (i = 0; i < FS_CHN_NUM; i++) {
+		if (chn[i].enable) {
+			ret = IMP_FrameSource_CreateChn(chn[i].index, &chn[i].fs_chn_attr);
+			if(ret < 0){
+				IMP_LOG_ERR(TAG, "IMP_FrameSource_CreateChn(chn%d) error !\n", chn[i].index);
+				return -1;
+			}
+
+			ret = IMP_FrameSource_SetChnAttr(chn[i].index, &chn[i].fs_chn_attr);
+			if (ret < 0) {
+				IMP_LOG_ERR(TAG, "IMP_FrameSource_SetChnAttr(chn%d) error !\n",  chn[i].index);
+				return -1;
+			}
+		}
+	}
+
+	return 0;
+}
+
+int sample_framesource_exit()
+{
+	int ret,i;
+
+	for (i = 0; i <  FS_CHN_NUM; i++) {
+		if (chn[i].enable) {
+			/*Destroy channel */
+			ret = IMP_FrameSource_DestroyChn(chn[i].index);
+			if (ret < 0) {
+				IMP_LOG_ERR(TAG, "IMP_FrameSource_DestroyChn(%d) error: %d\n", chn[i].index, ret);
+				return -1;
+			}
+		}
+	}
 	return 0;
 }

@@ -93,15 +93,6 @@ typedef struct {
 
 #define  CHN_NUM  ARRAY_SIZE(chn)
 
-int sample_system_init();
-int sample_system_exit();
-
-int sample_framesource_streamon();
-int sample_framesource_streamoff();
-
-int sample_framesource_init();
-int sample_framesource_exit();
-
 int sample_encoder_init();
 int sample_encoder_exit(void);
 
