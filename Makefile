@@ -10,25 +10,28 @@ STRIP = $(CROSS_COMPILE)strip
 
 CFLAGS = $(INCLUDES) -O2 -Wall -march=mips32r2
 
-ifeq ($(CONFIG_MUSL_BUILD), y)
-SDK_LIB_DIR = lib/uclibc
-else
-SDK_LIB_DIR = /lib/glibc
-endif
-
-SDK_INC_DIR = include
-
+SDK_LIB_DIR = lib
 INCLUDES = -I$(SDK_INC_DIR)
 
-LIBS = $(SDK_LIB_DIR)/libimp.so $(SDK_LIB_DIR)/libalog.so
+ifeq ($(TARGET),t31)
+SDK_INC_DIR = include/t31
+LIBS = $(SDK_LIB_DIR)/t31/uclibc/libimp.so $(SDK_LIB_DIR)/t31/uclibc/libalog.so
+COMPILE_OPTS += -DPLATFORM_T31
+else
+SDK_INC_DIR = include/t20
+LIBS = $(SDK_LIB_DIR)/t20/uclibc/libimp.so $(SDK_LIB_DIR)/t20/uclibc/libalog.so
+COMPILE_OPTS += -DPLATFORM_T20
+endif
 
 LDFLAG += -Wl,-gc-sections
 
-SAMPLES = raptor-t31
+APP = raptor
 
-all: 	$(SAMPLES)
+.PHONY:all
 
-raptor-t31: $(SDK_LIB_DIR)/libimp.a $(SDK_LIB_DIR)/libalog.a sample-common.o sample-Encoder-video.o musl_shim.o
+all: 	$(APP)
+
+$(APP): sample-common.o sample-Encoder-video.o musl_shim.o
 	$(CPLUSPLUS) $(LDFLAG) -o $@ $^ $(LIBS) -lpthread -lm -lrt
 	$(STRIP) $@
 
@@ -39,4 +42,4 @@ clean:
 	rm -f *.o *~
 
 distclean: clean
-	rm -f $(SAMPLES)
+	rm -f $(APP)
