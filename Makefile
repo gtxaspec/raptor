@@ -31,7 +31,7 @@ APP = raptor
 
 all: 	$(APP)
 
-$(APP): sample-common.o sample-Encoder-video.o musl_shim.o
+$(APP): encoder.o system.o musl_shim.o tcp.o
 	$(CPLUSPLUS) $(LDFLAG) -o $@ $^ $(LIBS) -lpthread -lm -lrt
 	$(STRIP) $@
 

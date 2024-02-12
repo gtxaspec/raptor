@@ -64,12 +64,10 @@ extern "C"
 #define CHN_ENABLE 1
 #define CHN_DISABLE 0
 
-int get_stream(int fd, int chn);
-
 struct chn_conf{
 	unsigned int index;//0 for main channel ,1 for second channel
 	unsigned int enable;
-  IMPEncoderProfile payloadType;
+	IMPEncoderProfile payloadType;
 	IMPFSChnAttr fs_chn_attr;
 	IMPCell framesource_chn;
 	IMPCell imp_encoder;

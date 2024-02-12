@@ -8,13 +8,11 @@
 #include <imp/imp_framesource.h>
 #include <imp/imp_encoder.h>
 #include <imp/imp_isp.h>
+#include "encoder.h"
 
-#include "sample-common.h"
-
-#define TAG "Sample-Common"
+#define TAG "encoder"
 
 static const IMPEncoderRcMode S_RC_METHOD = IMP_ENC_RC_MODE_CAPPED_QUALITY;
-//static const IMPEncoderRcMode S_RC_METHOD = IMP_ENC_RC_MODE_CBR;
 //#define LOW_BITSTREAM
 
 struct chn_conf chn[FS_CHN_NUM] = {
