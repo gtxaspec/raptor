@@ -24,11 +24,11 @@ LIBS = $(SDK_LIB_DIR)/libimp.so $(SDK_LIB_DIR)/libalog.so
 
 LDFLAG += -Wl,-gc-sections
 
-SAMPLES = sample-Encoder-video
+SAMPLES = raptor-t31
 
 all: 	$(SAMPLES)
 
-sample-Encoder-video: $(SDK_LIB_DIR)/libimp.a $(SDK_LIB_DIR)/libalog.a sample-common.o sample-Encoder-video.o musl_shim.o
+raptor-t31: $(SDK_LIB_DIR)/libimp.a $(SDK_LIB_DIR)/libalog.a sample-common.o sample-Encoder-video.o musl_shim.o
 	$(CPLUSPLUS) $(LDFLAG) -o $@ $^ $(LIBS) -lpthread -lm -lrt
 	$(STRIP) $@
 

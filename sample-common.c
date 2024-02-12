@@ -1,18 +1,5 @@
-/*
- * sample-common.c
- *
- * Copyright (C) 2014 Ingenic Semiconductor Co.,Ltd
- */
-
-#include <fcntl.h>
-#include <unistd.h>
 #include <string.h>
 #include <errno.h>
-#include <time.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <sys/types.h>
-#include <unistd.h>
 #include <math.h>
 
 #include <imp/imp_log.h>
@@ -29,14 +16,6 @@
 static const IMPEncoderRcMode S_RC_METHOD = IMP_ENC_RC_MODE_CAPPED_QUALITY;
 
 //#define LOW_BITSTREAM
-//#define SHOW_FRM_BITRATE
-#ifdef SHOW_FRM_BITRATE
-#define FRM_BIT_RATE_TIME 2
-#define STREAM_TYPE_NUM 3
-static int frmrate_sp[STREAM_TYPE_NUM] = { 0 };
-static int statime_sp[STREAM_TYPE_NUM] = { 0 };
-static int bitrate_sp[STREAM_TYPE_NUM] = { 0 };
-#endif
 
 struct chn_conf chn[FS_CHN_NUM] = {
 	{
@@ -297,93 +276,6 @@ int sample_framesource_streamoff()
 	return 0;
 }
 
-static void *get_frame(void *args)
-{
-	int index = (int)args;
-	int chnNum = chn[index].index;
-	int i = 0, ret = 0;
-	IMPFrameInfo *frame = NULL;
-	char framefilename[64];
-	int fd = -1;
-
-	if (PIX_FMT_NV12 == chn[index].fs_chn_attr.pixFmt) {
-		sprintf(framefilename, "frame%dx%d.nv12", chn[index].fs_chn_attr.picWidth, chn[index].fs_chn_attr.picHeight);
-	} else {
-		sprintf(framefilename, "frame%dx%d.raw", chn[index].fs_chn_attr.picWidth, chn[index].fs_chn_attr.picHeight);
-	}
-
-	fd = open(framefilename, O_RDWR | O_CREAT, 0x644);
-	if (fd < 0) {
-		IMP_LOG_ERR(TAG, "open %s failed:%s\n", framefilename, strerror(errno));
-		goto err_open_framefilename;
-	}
-
-	ret = IMP_FrameSource_SetFrameDepth(chnNum, chn[index].fs_chn_attr.nrVBs * 2);
-	if (ret < 0) {
-		IMP_LOG_ERR(TAG, "IMP_FrameSource_SetFrameDepth(%d,%d) failed\n", chnNum, chn[index].fs_chn_attr.nrVBs * 2);
-		goto err_IMP_FrameSource_SetFrameDepth_1;
-	}
-
-	for (i = 0; i < NR_FRAMES_TO_SAVE; i++) {
-		ret = IMP_FrameSource_GetFrame(chnNum, &frame);
-		if (ret < 0) {
-			IMP_LOG_ERR(TAG, "IMP_FrameSource_GetFrame(%d) i=%d failed\n", chnNum, i);
-			goto err_IMP_FrameSource_GetFrame_i;
-		}
-		if (NR_FRAMES_TO_SAVE/2 == i) {
-			if (write(fd, (void *)frame->virAddr, frame->size) != frame->size) {
-				IMP_LOG_ERR(TAG, "chnNum=%d write frame i=%d failed\n", chnNum, i);
-				goto err_write_frame;
-			}
-		}
-		ret = IMP_FrameSource_ReleaseFrame(chnNum, frame);
-		if (ret < 0) {
-			IMP_LOG_ERR(TAG, "IMP_FrameSource_ReleaseFrame(%d) i=%d failed\n", chnNum, i);
-			goto err_IMP_FrameSource_ReleaseFrame_i;
-		}
-	}
-
-	IMP_FrameSource_SetFrameDepth(chnNum, 0);
-
-	return (void *)0;
-
-err_IMP_FrameSource_ReleaseFrame_i:
-err_write_frame:
-	IMP_FrameSource_ReleaseFrame(chnNum, frame);
-err_IMP_FrameSource_GetFrame_i:
-	goto err_IMP_FrameSource_SetFrameDepth_1;
-	IMP_FrameSource_SetFrameDepth(chnNum, 0);
-err_IMP_FrameSource_SetFrameDepth_1:
-	close(fd);
-err_open_framefilename:
-	return (void *)-1;
-}
-
-int sample_get_frame()
-{
-	unsigned int i;
-	int ret;
-	pthread_t tid[FS_CHN_NUM];
-
-	for (i = 0; i < FS_CHN_NUM; i++) {
-		if (chn[i].enable) {
-			ret = pthread_create(&tid[i], NULL, get_frame, (void *)i);
-			if (ret < 0) {
-				IMP_LOG_ERR(TAG, "Create ChnNum%d get_frame failed\n", chn[i].index);
-				return -1;
-			}
-		}
-	}
-
-	for (i = 0; i < FS_CHN_NUM; i++) {
-		if (chn[i].enable) {
-			pthread_join(tid[i],NULL);
-		}
-	}
-
-	return 0;
-}
-
 int sample_framesource_init()
 {
 	int i, ret;
@@ -424,42 +316,6 @@ int sample_framesource_exit()
 	return 0;
 }
 
-
-int sample_jpeg_init()
-{
-	int i, ret;
-	IMPEncoderChnAttr channel_attr;
-	IMPFSChnAttr *imp_chn_attr_tmp;
-
-	for (i = 0; i <  FS_CHN_NUM; i++) {
-		if (chn[i].enable) {
-			imp_chn_attr_tmp = &chn[i].fs_chn_attr;
-			memset(&channel_attr, 0, sizeof(IMPEncoderChnAttr));
-			ret = IMP_Encoder_SetDefaultParam(&channel_attr, IMP_ENC_PROFILE_JPEG, IMP_ENC_RC_MODE_FIXQP,
-					imp_chn_attr_tmp->picWidth, imp_chn_attr_tmp->picHeight,
-					imp_chn_attr_tmp->outFrmRateNum, imp_chn_attr_tmp->outFrmRateDen, 0, 0, 25, 0);
-
-			/* Create Channel */
-			ret = IMP_Encoder_CreateChn(4 + chn[i].index, &channel_attr);
-			if (ret < 0) {
-				IMP_LOG_ERR(TAG, "IMP_Encoder_CreateChn(%d) error: %d\n",
-							chn[i].index, ret);
-				return -1;
-			}
-
-			/* Resigter Channel */
-			ret = IMP_Encoder_RegisterChn(i, 4 + chn[i].index);
-			if (ret < 0) {
-				IMP_LOG_ERR(TAG, "IMP_Encoder_RegisterChn(0, %d) error: %d\n",
-							chn[i].index, ret);
-				return -1;
-			}
-		}
-	}
-
-	return 0;
-}
-
 int sample_encoder_init()
 {
 	int i, ret, chnNum = 0;
@@ -481,6 +337,7 @@ int sample_encoder_init()
 			}
 			ratio = ratio > 0.1 ? ratio : 0.1;
 			unsigned int uTargetBitRate = BITRATE_720P_Kbs * ratio;
+            //unsigned int uTargetBitRate = (double)1.0 * (imp_chn_attr_tmp->picWidth * imp_chn_attr_tmp->picHeight) / (1280 * 720);
 
             ret = IMP_Encoder_SetDefaultParam(&channel_attr, chn[i].payloadType, S_RC_METHOD,
                     imp_chn_attr_tmp->picWidth, imp_chn_attr_tmp->picHeight,
@@ -568,41 +425,6 @@ int sample_encoder_init()
 	return 0;
 }
 
-int sample_jpeg_exit(void)
-{
-	int ret = 0, i = 0, chnNum = 0;
-	IMPEncoderChnStat chn_stat;
-
-	for (i = 0; i <  FS_CHN_NUM; i++) {
-		if (chn[i].enable) {
-			chnNum = 4 + chn[i].index;
-			memset(&chn_stat, 0, sizeof(IMPEncoderChnStat));
-			ret = IMP_Encoder_Query(chnNum, &chn_stat);
-			if (ret < 0) {
-				IMP_LOG_ERR(TAG, "IMP_Encoder_Query(%d) error: %d\n", chnNum, ret);
-				return -1;
-			}
-
-			if (chn_stat.registered) {
-				ret = IMP_Encoder_UnRegisterChn(chnNum);
-				if (ret < 0) {
-					IMP_LOG_ERR(TAG, "IMP_Encoder_UnRegisterChn(%d) error: %d\n", chnNum, ret);
-					return -1;
-				}
-
-				ret = IMP_Encoder_DestroyChn(chnNum);
-				if (ret < 0) {
-					IMP_LOG_ERR(TAG, "IMP_Encoder_DestroyChn(%d) error: %d\n", chnNum, ret);
-					return -1;
-				}
-			}
-		}
-	}
-
-	return 0;
-}
-
-
 int sample_encoder_exit(void)
 {
     int ret = 0, i = 0, chnNum = 0;
@@ -644,13 +466,12 @@ int sample_encoder_exit(void)
 }
 
 
+#if 1
 static int save_stream(int fd, IMPEncoderStream *stream)
 {
 	int ret, i, nr_pack = stream->packCount;
 
-  //IMP_LOG_DBG(TAG, "----------packCount=%d, stream->seq=%u start----------\n", stream->packCount, stream->seq);
 	for (i = 0; i < nr_pack; i++) {
-    //IMP_LOG_DBG(TAG, "[%d]:%10u,%10lld,%10u,%10u,%10u\n", i, stream->pack[i].length, stream->pack[i].timestamp, stream->pack[i].frameEnd, *((uint32_t *)(&stream->pack[i].nalType)), stream->pack[i].sliceType);
 		IMPEncoderPack *pack = &stream->pack[i];
 		if(pack->length){
 			uint32_t remSize = stream->streamSize - pack->offset;
@@ -674,10 +495,11 @@ static int save_stream(int fd, IMPEncoderStream *stream)
 			}
 		}
 	}
-  //IMP_LOG_DBG(TAG, "----------packCount=%d, stream->seq=%u end----------\n", stream->packCount, stream->seq);
 	return 0;
 }
+#endif
 
+#if 0
 static int save_stream_by_name(char *stream_prefix, int idx, IMPEncoderStream *stream)
 {
     int stream_fd = -1;
@@ -724,7 +546,9 @@ static int save_stream_by_name(char *stream_prefix, int idx, IMPEncoderStream *s
 
 	return 0;
 }
+#endif
 
+#if 0
 static void *get_video_stream(void *args)
 {
   int val, i, chnNum, ret;
@@ -768,27 +592,6 @@ static void *get_video_stream(void *args)
     IMPEncoderStream stream;
     /* Get H264 or H265 Stream */
     ret = IMP_Encoder_GetStream(chnNum, &stream, 1);
-#ifdef SHOW_FRM_BITRATE
-    int i, len = 0;
-    for (i = 0; i < stream.packCount; i++) {
-      len += stream.pack[i].length;
-    }
-    bitrate_sp[chnNum] += len;
-    frmrate_sp[chnNum]++;
-
-    int64_t now = IMP_System_GetTimeStamp() / 1000;
-    if(((int)(now - statime_sp[chnNum]) / 1000) >= FRM_BIT_RATE_TIME){
-      double fps = (double)frmrate_sp[chnNum] / ((double)(now - statime_sp[chnNum]) / 1000);
-      double kbr = (double)bitrate_sp[chnNum] * 8 / (double)(now - statime_sp[chnNum]);
-
-      printf("streamNum[%d]:FPS: %0.2f,Bitrate: %0.2f(kbps)\n", chnNum, fps, kbr);
-      //fflush(stdout);
-
-      frmrate_sp[chnNum] = 0;
-      bitrate_sp[chnNum] = 0;
-      statime_sp[chnNum] = now;
-    }
-#endif
     if (ret < 0) {
       IMP_LOG_ERR(TAG, "IMP_Encoder_GetStream(%d) failed\n", chnNum);
       return ((void *)-1);
@@ -800,7 +603,7 @@ static void *get_video_stream(void *args)
         return ((void *)ret);
       }
     }
-#if 1
+#if 0
     else {
       ret = save_stream(stream_fd, &stream);
       if (ret < 0) {
@@ -822,7 +625,9 @@ static void *get_video_stream(void *args)
 
   return ((void *)0);
 }
+#endif
 
+#if 0
 int sample_get_video_stream()
 {
 	unsigned int i;
@@ -852,66 +657,9 @@ int sample_get_video_stream()
 
 	return 0;
 }
+#endif
 
-int sample_get_jpeg_snap()
-{
-	int i, ret;
-	char snap_path[64];
-
-	for (i = 0; i < FS_CHN_NUM; i++) {
-		if (chn[i].enable) {
-			ret = IMP_Encoder_StartRecvPic(4 + chn[i].index);
-			if (ret < 0) {
-				IMP_LOG_ERR(TAG, "IMP_Encoder_StartRecvPic(%d) failed\n", 3 + chn[i].index);
-				return -1;
-			}
-
-			sprintf(snap_path, "%s/snap-%d.jpg",
-					SNAP_FILE_PATH_PREFIX, chn[i].index);
-
-			IMP_LOG_ERR(TAG, "Open Snap file %s ", snap_path);
-			int snap_fd = open(snap_path, O_RDWR | O_CREAT | O_TRUNC, 0777);
-			if (snap_fd < 0) {
-				IMP_LOG_ERR(TAG, "failed: %s\n", strerror(errno));
-				return -1;
-			}
-			IMP_LOG_DBG(TAG, "OK\n");
-
-			/* Polling JPEG Snap, set timeout as 1000msec */
-			ret = IMP_Encoder_PollingStream(4 + chn[i].index, 10000);
-			if (ret < 0) {
-				IMP_LOG_ERR(TAG, "Polling stream timeout\n");
-				continue;
-			}
-
-			IMPEncoderStream stream;
-			/* Get JPEG Snap */
-			ret = IMP_Encoder_GetStream(chn[i].index + 4, &stream, 1);
-			if (ret < 0) {
-				IMP_LOG_ERR(TAG, "IMP_Encoder_GetStream() failed\n");
-				return -1;
-			}
-
-			ret = save_stream(snap_fd, &stream);
-			if (ret < 0) {
-				close(snap_fd);
-				return ret;
-			}
-
-			IMP_Encoder_ReleaseStream(4 + chn[i].index, &stream);
-
-			close(snap_fd);
-
-			ret = IMP_Encoder_StopRecvPic(4 + chn[i].index);
-			if (ret < 0) {
-				IMP_LOG_ERR(TAG, "IMP_Encoder_StopRecvPic() failed\n");
-				return -1;
-			}
-		}
-	}
-	return 0;
-}
-
+#if 0
 int sample_get_video_stream_byfd()
 {
     int streamFd[FS_CHN_NUM], vencFd[FS_CHN_NUM], maxVencFd = 0;
@@ -1001,7 +749,7 @@ int sample_get_video_stream_byfd()
                     } else {
                         chnNum = chn[i].index;
                     }
-                    /* Get H264 or H265 Stream */
+                    // Get H264 or H265 Stream 
                     ret = IMP_Encoder_GetStream(chnNum, &stream, 1);
                     if (ret < 0) {
                         IMP_LOG_ERR(TAG, "IMP_Encoder_GetStream(%d) failed\n", chnNum);
@@ -1042,5 +790,49 @@ int sample_get_video_stream_byfd()
 
     return 0;
 }
+#endif
 
+static int get_h264_stream(int fd, int chn)
+{
+    int ret;
 
+    ret = IMP_Encoder_PollingStream(chn, 100);
+    if (ret < 0) {
+        IMP_LOG_ERR(TAG, "Polling stream timeout\n");
+    }
+
+    IMPEncoderStream stream;
+    ret = IMP_Encoder_GetStream(chn, &stream, 0);
+    if (ret < 0) {
+        IMP_LOG_ERR(TAG, "IMP_Encoder_GetStream() failed\n");
+        return -1;
+    }
+
+    ret = save_stream(fd, &stream);
+    if (ret < 0) {
+        close(fd);
+        return ret;
+    }
+
+    IMP_Encoder_ReleaseStream(chn, &stream);
+
+    return 0;
+}
+
+int get_stream(int fd, int chn)
+{
+    int  ret;
+
+    ret = IMP_Encoder_StartRecvPic(chn);
+    if (ret < 0){
+        IMP_LOG_ERR(TAG, "IMP_Encoder_StartRecvPic(%d) failed\n", 1);
+        return ret;
+    }
+    ret = get_h264_stream(fd, chn);
+    if (ret < 0) {
+        IMP_LOG_ERR(TAG, "Get H264 stream failed\n");
+        return ret;
+    }
+
+    return 0;
+}
