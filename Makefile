@@ -3,9 +3,6 @@ CONFIG_MUSL_BUILD=y
 CROSS_COMPILE ?= mipsel-linux-
 
 CC = $(CROSS_COMPILE)gcc
-CPLUSPLUS = $(CROSS_COMPILE)g++
-LD = $(CROSS_COMPILE)ld
-AR = $(CROSS_COMPILE)ar cr
 STRIP = $(CROSS_COMPILE)strip
 
 CFLAGS = $(INCLUDES) -O2 -Wall -march=mips32r2
@@ -32,10 +29,10 @@ APP = raptor
 all: 	$(APP)
 
 $(APP): raptor.o encoder.o system.o musl_shim.o tcp.o
-	$(CPLUSPLUS) $(LDFLAG) -o $@ $^ $(LIBS) -lpthread -lm -lrt
+	$(CC) $(LDFLAG) -o $@ $^ $(LIBS) -lpthread -lm -lrt
 	$(STRIP) $@
 
-%.o:%.c sample-common.h
+%.o:%.c
 	$(CC) -c $(CFLAGS) $< -o $@
 
 clean:

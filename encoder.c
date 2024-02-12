@@ -124,7 +124,7 @@ struct chn_conf chn[FS_CHN_NUM] = {
 	},
 };
 
-int sample_encoder_init()
+int encoder_init()
 {
 	int i, ret, chnNum = 0;
 	IMPFSChnAttr *imp_chn_attr_tmp;
@@ -233,7 +233,7 @@ int sample_encoder_init()
 	return 0;
 }
 
-int sample_encoder_exit(void)
+int encoder_exit(void)
 {
     int ret = 0, i = 0, chnNum = 0;
     IMPEncoderChnStat chn_stat;

@@ -33,7 +33,7 @@ int system_initalize()
 	}
 
 	/* Step.2 FrameSource init */
-	ret = sample_framesource_init();
+	ret = framesource_init();
 	if (ret < 0) {
 		IMP_LOG_ERR(TAG, "FrameSource init failed\n");
 		return -1;
@@ -50,7 +50,7 @@ int system_initalize()
 		}
 	}
 
-	ret = sample_encoder_init();
+	ret = encoder_init();
 	if (ret < 0) {
 		IMP_LOG_ERR(TAG, "Encoder init failed\n");
 		return -1;
@@ -68,7 +68,7 @@ int system_initalize()
 	}
 
 	/* Step.5 Stream On */
-	ret = sample_framesource_streamon();
+	ret = framesource_streamon();
 	if (ret < 0) {
 		IMP_LOG_ERR(TAG, "ImpStreamOn failed\n");
 		return -1;
@@ -82,7 +82,7 @@ int system_initalize()
 	}
 
 	/* Step.a Stream Off */
-	ret = sample_framesource_streamoff();
+	ret = framesource_streamoff();
 	if (ret < 0) {
 		IMP_LOG_ERR(TAG, "FrameSource StreamOff failed\n");
 		return -1;
@@ -100,14 +100,14 @@ int system_initalize()
 	}
 
 	/* Step.c Encoder exit */
-	ret = sample_encoder_exit();
+	ret = encoder_exit();
 	if (ret < 0) {
 		IMP_LOG_ERR(TAG, "Encoder exit failed\n");
 		return -1;
 	}
 
 	/* Step.d FrameSource exit */
-	ret = sample_framesource_exit();
+	ret = framesource_exit();
 	if (ret < 0) {
 		IMP_LOG_ERR(TAG, "FrameSource exit failed\n");
 		return -1;
@@ -240,7 +240,7 @@ int isp_exit()
 	return 0;
 }
 
-int sample_framesource_streamon()
+int framesource_streamon()
 {
 	int ret = 0, i = 0;
 	/* Enable channels */
@@ -256,7 +256,7 @@ int sample_framesource_streamon()
 	return 0;
 }
 
-int sample_framesource_streamoff()
+int framesource_streamoff()
 {
 	int ret = 0, i = 0;
 	/* Enable channels */
@@ -272,7 +272,7 @@ int sample_framesource_streamoff()
 	return 0;
 }
 
-int sample_framesource_init()
+int framesource_init()
 {
 	int i, ret;
 
@@ -295,7 +295,7 @@ int sample_framesource_init()
 	return 0;
 }
 
-int sample_framesource_exit()
+int framesource_exit()
 {
 	int ret,i;
 

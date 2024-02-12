@@ -9,13 +9,6 @@
 #include <imp/imp_encoder.h>
 #include <unistd.h>
 
-#ifdef __cplusplus
-#if __cplusplus
-extern "C"
-{
-#endif
-#endif /* __cplusplus */
-
 #define SENSOR_FRAME_RATE_NUM		30
 #define SENSOR_FRAME_RATE_DEN		1
 
@@ -93,17 +86,11 @@ typedef struct {
 
 #define  CHN_NUM  ARRAY_SIZE(chn)
 
-int sample_encoder_init();
-int sample_encoder_exit(void);
+int encoder_init();
+int encoder_exit(void);
 
 int sample_get_frame();
 int sample_get_video_stream();
 int sample_get_video_stream_byfd();
-
-#ifdef __cplusplus
-#if __cplusplus
-}
-#endif
-#endif /* __cplusplus */
 
 #endif /* __SAMPLE_COMMON_H__ */
