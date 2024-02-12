@@ -55,15 +55,7 @@ extern "C"
 
 #define BITRATE_720P_Kbs        1000
 
-#define NR_FRAMES_TO_SAVE		200
-#define STREAM_BUFFER_SIZE		(1 * 1024 * 1024)
-
-#define STREAM_FILE_PATH_PREFIX		"/tmp"
-
-#define SLEEP_TIME			1
-
 #define FS_CHN_NUM			4  //MIN 1,MAX 3
-#define IVS_CHN_ID          3
 
 #define CH0_INDEX  0
 #define CH1_INDEX  1
@@ -71,7 +63,9 @@ extern "C"
 #define CH3_INDEX  3
 #define CHN_ENABLE 1
 #define CHN_DISABLE 0
+
 int get_stream(int fd, int chn);
+
 struct chn_conf{
 	unsigned int index;//0 for main channel ,1 for second channel
 	unsigned int enable;

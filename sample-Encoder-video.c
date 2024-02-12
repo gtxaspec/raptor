@@ -13,12 +13,11 @@
 #include <errno.h>  // Include for the errno variable
 
 #define SERVER_PORT 8080
-#define BUFFER_SIZE 4096  // 4 KB
+#define BUFFER_SIZE 2048  // 4 KB
 
 #define TAG "Sample-Encoder-video"
 
 extern struct chn_conf chn[];
-static int byGetFd = 0;
 
 void displayUsage() {
 	printf("usage: ingenic-vidcap [args...]\n\n"
@@ -48,10 +47,6 @@ int main(int argc, char *argv[])
 			}
 		}
 	}
-
-    if (argc >= 2) {
-        byGetFd = atoi(argv[1]);
-    }
 
 	/* Step.1 System init */
 	ret = sample_system_init();
@@ -101,8 +96,6 @@ int main(int argc, char *argv[])
 		IMP_LOG_ERR(TAG, "ImpStreamOn failed\n");
 		return -1;
 	}
-
-
 
    // Setup TCP server
     int server_socket, client_socket;

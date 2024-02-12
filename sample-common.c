@@ -14,7 +14,7 @@
 #define TAG "Sample-Common"
 
 static const IMPEncoderRcMode S_RC_METHOD = IMP_ENC_RC_MODE_CAPPED_QUALITY;
-
+//static const IMPEncoderRcMode S_RC_METHOD = IMP_ENC_RC_MODE_CBR;
 //#define LOW_BITSTREAM
 
 struct chn_conf chn[FS_CHN_NUM] = {
@@ -339,7 +339,7 @@ int sample_encoder_init()
 			unsigned int uTargetBitRate = BITRATE_720P_Kbs * ratio;
             //unsigned int uTargetBitRate = (double)1.0 * (imp_chn_attr_tmp->picWidth * imp_chn_attr_tmp->picHeight) / (1280 * 720);
 
-            ret = IMP_Encoder_SetDefaultParam(&channel_attr, chn[i].payloadType, S_RC_METHOD,
+            ret = IMP_Encoder_SetDefaultParam(&channel_attr, chn[i].payloadType, IMP_ENC_RC_MODE_VBR,
                     imp_chn_attr_tmp->picWidth, imp_chn_attr_tmp->picHeight,
                     imp_chn_attr_tmp->outFrmRateNum, imp_chn_attr_tmp->outFrmRateDen,
                     imp_chn_attr_tmp->outFrmRateNum * 2 / imp_chn_attr_tmp->outFrmRateDen, 2,
@@ -349,7 +349,7 @@ int sample_encoder_init()
                 IMP_LOG_ERR(TAG, "IMP_Encoder_SetDefaultParam(%d) error !\n", chnNum);
                 return -1;
             }
-#ifdef LOW_BITSTREAM
+//#ifdef LOW_BITSTREAM
 			IMPEncoderRcAttr *rcAttr = &channel_attr.rcAttr;
 			uTargetBitRate /= 2;
 
@@ -406,7 +406,7 @@ int sample_encoder_init()
 					IMP_LOG_ERR(TAG, "unsupported rcmode:%d, we only support fixqp, cbr vbr and capped vbr\n", rcAttr->attrRcMode.rcMode);
 					return -1;
 			}
-#endif
+//#endif
 
             ret = IMP_Encoder_CreateChn(chnNum, &channel_attr);
             if (ret < 0) {
