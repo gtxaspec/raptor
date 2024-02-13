@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include <imp/imp_log.h>
+#include <imp/imp_system.h>
 #include "system.h"
 #include "version.h"
 
@@ -42,6 +43,7 @@ int main(int argc, char *argv[])
 	}
 
     printf("Raptor Video Daemon for %s Version: %s\n", TOSTRING(SOC), VERSION);
+    IMP_System_GetCPUInfo();
     ret = system_initalize();
 	if (ret < 0) {
 		IMP_LOG_ERR(TAG, "system init failed\n");
