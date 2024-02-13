@@ -38,6 +38,18 @@
 #define CHN3_EN				0
 #define CROP_EN				1
 
+#elif defined SENSOR_GC4653
+#define SENSOR_NAME				"gc4653"
+#define SENSOR_CUBS_TYPE			TX_SENSOR_CONTROL_INTERFACE_I2C
+#define SENSOR_I2C_ADDR			0x29
+#define SENSOR_WIDTH				1920
+#define SENSOR_HEIGHT				1080
+#define CHN0_EN				1
+#define CHN1_EN				0
+#define CHN2_EN				0
+#define CHN3_EN				0
+#define CROP_EN				1
+
 #endif
 
 #define SENSOR_WIDTH_SECOND		1280

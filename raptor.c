@@ -6,6 +6,7 @@
 #include <imp/imp_system.h>
 #include "system.h"
 #include "version.h"
+#include "encoder.h"
 
 #define STRINGIFY(x) #x
 #define TOSTRING(x) STRINGIFY(x)
@@ -42,7 +43,7 @@ int main(int argc, char *argv[])
 		}
 	}
 
-    printf("Raptor Video Daemon for %s Version: %s\n", TOSTRING(SOC), VERSION);
+    printf("Raptor Video Daemon for %s Sensor: %s Version: %s\n", TOSTRING(SOC), SENSOR_NAME, VERSION);
     IMP_System_GetCPUInfo();
     ret = system_initalize();
 	if (ret < 0) {
