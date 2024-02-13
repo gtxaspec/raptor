@@ -12,14 +12,26 @@
 
 #define TAG "encoder"
 
-static const IMPEncoderRcMode S_RC_METHOD = IMP_ENC_RC_MODE_CAPPED_QUALITY;
+#ifdef PLATFORM_T31
+	#define IMPEncoderCHNAttr IMPEncoderChnAttr
+	#define IMPEncoderCHNStat IMPEncoderChnStat
+#endif
+
+//static const IMPEncoderRcMode S_RC_METHOD = IMP_ENC_RC_MODE_CAPPED_QUALITY;
+
+#ifdef PLATFORM_T31
+static const int S_RC_METHOD = IMP_ENC_RC_MODE_VBR;
+#else
+static const int S_RC_METHOD = ENC_RC_MODE_SMART;
+#endif
+
 //#define LOW_BITSTREAM
 
 struct chn_conf chn[FS_CHN_NUM] = {
 	{
 		.index = CH0_INDEX,
 		.enable = CHN0_EN,
-    .payloadType = IMP_ENC_PROFILE_HEVC_MAIN,
+	//.payloadType = IMP_ENC_PROFILE_HEVC_MAIN,
 		.fs_chn_attr = {
 			.pixFmt = PIX_FMT_NV12,
 			.outFrmRateNum = SENSOR_FRAME_RATE_NUM,
@@ -44,7 +56,7 @@ struct chn_conf chn[FS_CHN_NUM] = {
 	{
 		.index = CH1_INDEX,
 		.enable = CHN1_EN,
-    .payloadType = IMP_ENC_PROFILE_HEVC_MAIN,
+   // .payloadType = IMP_ENC_PROFILE_HEVC_MAIN,
 		.fs_chn_attr = {
 			.pixFmt = PIX_FMT_NV12,
 			.outFrmRateNum = SENSOR_FRAME_RATE_NUM,
@@ -71,7 +83,7 @@ struct chn_conf chn[FS_CHN_NUM] = {
 	{
 		.index = CH2_INDEX,
 		.enable = CHN2_EN,
-    .payloadType = IMP_ENC_PROFILE_HEVC_MAIN,
+   // .payloadType = IMP_ENC_PROFILE_HEVC_MAIN,
 		.fs_chn_attr = {
 			.pixFmt = PIX_FMT_NV12,
 			.outFrmRateNum = SENSOR_FRAME_RATE_NUM,
@@ -98,7 +110,7 @@ struct chn_conf chn[FS_CHN_NUM] = {
 	{
 		.index = CH3_INDEX,
 		.enable = CHN3_EN,
-    .payloadType = IMP_ENC_PROFILE_HEVC_MAIN,
+	//.payloadType = IMP_ENC_PROFILE_HEVC_MAIN,
 		.fs_chn_attr = {
 			.pixFmt = PIX_FMT_NV12,
 			.outFrmRateNum = SENSOR_FRAME_RATE_NUM,
@@ -128,14 +140,15 @@ int encoder_init()
 {
 	int i, ret, chnNum = 0;
 	IMPFSChnAttr *imp_chn_attr_tmp;
-	IMPEncoderChnAttr channel_attr;
+	IMPEncoderCHNAttr channel_attr;
 
-    for (i = 0; i <  FS_CHN_NUM; i++) {
-        if (chn[i].enable) {
-            imp_chn_attr_tmp = &chn[i].fs_chn_attr;
-            chnNum = chn[i].index;
+	for (i = 0; i <  FS_CHN_NUM; i++) {
+		if (chn[i].enable) {
+			imp_chn_attr_tmp = &chn[i].fs_chn_attr;
+			chnNum = chn[i].index;
 
-            memset(&channel_attr, 0, sizeof(IMPEncoderChnAttr));
+			memset(&channel_attr, 0, sizeof(IMPEncoderCHNAttr));
+#ifdef PLATFORM_T31
 
 			float ratio = 1;
 			if (((uint64_t)imp_chn_attr_tmp->picWidth * imp_chn_attr_tmp->picHeight) > (1280 * 720)) {
@@ -145,18 +158,19 @@ int encoder_init()
 			}
 			ratio = ratio > 0.1 ? ratio : 0.1;
 			unsigned int uTargetBitRate = BITRATE_720P_Kbs * ratio;
-            //unsigned int uTargetBitRate = (double)1.0 * (imp_chn_attr_tmp->picWidth * imp_chn_attr_tmp->picHeight) / (1280 * 720);
+			//unsigned int uTargetBitRate = (double)1.0 * (imp_chn_attr_tmp->picWidth * imp_chn_attr_tmp->picHeight) / (1280 * 720);
 
-            ret = IMP_Encoder_SetDefaultParam(&channel_attr, chn[i].payloadType, IMP_ENC_RC_MODE_VBR,
-                    imp_chn_attr_tmp->picWidth, imp_chn_attr_tmp->picHeight,
-                    imp_chn_attr_tmp->outFrmRateNum, imp_chn_attr_tmp->outFrmRateDen,
-                    imp_chn_attr_tmp->outFrmRateNum * 2 / imp_chn_attr_tmp->outFrmRateDen, 2,
-                    (S_RC_METHOD == IMP_ENC_RC_MODE_FIXQP) ? 35 : -1,
-                    uTargetBitRate);
-            if (ret < 0) {
-                IMP_LOG_ERR(TAG, "IMP_Encoder_SetDefaultParam(%d) error !\n", chnNum);
-                return -1;
-            }
+			//ret = IMP_Encoder_SetDefaultParam(&channel_attr, chn[i].payloadType, IMP_ENC_RC_MODE_VBR,
+			ret = IMP_Encoder_SetDefaultParam(&channel_attr, IMP_ENC_PROFILE_AVC_HIGH, S_RC_METHOD,
+					imp_chn_attr_tmp->picWidth, imp_chn_attr_tmp->picHeight,
+					imp_chn_attr_tmp->outFrmRateNum, imp_chn_attr_tmp->outFrmRateDen,
+					imp_chn_attr_tmp->outFrmRateNum * 2 / imp_chn_attr_tmp->outFrmRateDen, 2,
+					(S_RC_METHOD == IMP_ENC_RC_MODE_FIXQP) ? 35 : -1,
+					uTargetBitRate);
+			if (ret < 0) {
+				IMP_LOG_ERR(TAG, "IMP_Encoder_SetDefaultParam(%d) error !\n", chnNum);
+				return -1;
+			}
 //#ifdef LOW_BITSTREAM
 			IMPEncoderRcAttr *rcAttr = &channel_attr.rcAttr;
 			uTargetBitRate /= 2;
@@ -214,13 +228,97 @@ int encoder_init()
 					IMP_LOG_ERR(TAG, "unsupported rcmode:%d, we only support fixqp, cbr vbr and capped vbr\n", rcAttr->attrRcMode.rcMode);
 					return -1;
 			}
-//#endif
+#else
+			IMPEncoderRcAttr *rc_attr;
+			IMPEncoderAttr *enc_attr;
 
-            ret = IMP_Encoder_CreateChn(chnNum, &channel_attr);
-            if (ret < 0) {
-                IMP_LOG_ERR(TAG, "IMP_Encoder_CreateChn(%d) error !\n", chnNum);
-                return -1;
-            }
+			enc_attr = &channel_attr.encAttr;
+			enc_attr->enType = PT_H264;
+			enc_attr->bufSize = 0;
+			enc_attr->profile = 1;
+			enc_attr->picWidth = imp_chn_attr_tmp->picWidth;
+			enc_attr->picHeight = imp_chn_attr_tmp->picHeight;
+			rc_attr = &channel_attr.rcAttr;
+			rc_attr->outFrmRate.frmRateNum = imp_chn_attr_tmp->outFrmRateNum;
+			rc_attr->outFrmRate.frmRateDen = imp_chn_attr_tmp->outFrmRateDen;
+			rc_attr->maxGop = 2 * rc_attr->outFrmRate.frmRateNum / rc_attr->outFrmRate.frmRateDen;
+			if (S_RC_METHOD == ENC_RC_MODE_CBR) {
+				rc_attr->attrRcMode.rcMode = ENC_RC_MODE_CBR;
+				rc_attr->attrRcMode.attrH264Cbr.outBitRate = (double)2000.0 * (imp_chn_attr_tmp->picWidth * imp_chn_attr_tmp->picHeight) / (1280 * 720);
+				rc_attr->attrRcMode.attrH264Cbr.maxQp = 45;
+				rc_attr->attrRcMode.attrH264Cbr.minQp = 15;
+				rc_attr->attrRcMode.attrH264Cbr.iBiasLvl = 0;
+				rc_attr->attrRcMode.attrH264Cbr.frmQPStep = 3;
+				rc_attr->attrRcMode.attrH264Cbr.gopQPStep = 15;
+				rc_attr->attrRcMode.attrH264Cbr.adaptiveMode = false;
+				rc_attr->attrRcMode.attrH264Cbr.gopRelation = false;
+
+				rc_attr->attrHSkip.hSkipAttr.skipType = IMP_Encoder_STYPE_N1X;
+				rc_attr->attrHSkip.hSkipAttr.m = 0;
+				rc_attr->attrHSkip.hSkipAttr.n = 0;
+				rc_attr->attrHSkip.hSkipAttr.maxSameSceneCnt = 0;
+				rc_attr->attrHSkip.hSkipAttr.bEnableScenecut = 0;
+				rc_attr->attrHSkip.hSkipAttr.bBlackEnhance = 0;
+				rc_attr->attrHSkip.maxHSkipType = IMP_Encoder_STYPE_N1X;
+			} else if (S_RC_METHOD == ENC_RC_MODE_VBR) {
+				rc_attr->attrRcMode.rcMode = ENC_RC_MODE_VBR;
+				rc_attr->attrRcMode.attrH264Vbr.maxQp = 45;
+				rc_attr->attrRcMode.attrH264Vbr.minQp = 15;
+				rc_attr->attrRcMode.attrH264Vbr.staticTime = 2;
+				rc_attr->attrRcMode.attrH264Vbr.maxBitRate = (double)2000.0 * (imp_chn_attr_tmp->picWidth * imp_chn_attr_tmp->picHeight) / (1280 * 720);
+				rc_attr->attrRcMode.attrH264Vbr.iBiasLvl = 0;
+				rc_attr->attrRcMode.attrH264Vbr.changePos = 80;
+				rc_attr->attrRcMode.attrH264Vbr.qualityLvl = 2;
+				rc_attr->attrRcMode.attrH264Vbr.frmQPStep = 3;
+				rc_attr->attrRcMode.attrH264Vbr.gopQPStep = 15;
+				rc_attr->attrRcMode.attrH264Vbr.gopRelation = false;
+
+				rc_attr->attrHSkip.hSkipAttr.skipType = IMP_Encoder_STYPE_N1X;
+				rc_attr->attrHSkip.hSkipAttr.m = 0;
+				rc_attr->attrHSkip.hSkipAttr.n = 0;
+				rc_attr->attrHSkip.hSkipAttr.maxSameSceneCnt = 0;
+				rc_attr->attrHSkip.hSkipAttr.bEnableScenecut = 0;
+				rc_attr->attrHSkip.hSkipAttr.bBlackEnhance = 0;
+				rc_attr->attrHSkip.maxHSkipType = IMP_Encoder_STYPE_N1X;
+			} else if (S_RC_METHOD == ENC_RC_MODE_SMART) {
+				rc_attr->attrRcMode.rcMode = ENC_RC_MODE_SMART;
+				rc_attr->attrRcMode.attrH264Smart.maxQp = 45;
+				rc_attr->attrRcMode.attrH264Smart.minQp = 15;
+				rc_attr->attrRcMode.attrH264Smart.staticTime = 2;
+				rc_attr->attrRcMode.attrH264Smart.maxBitRate = (double)2000.0 * (imp_chn_attr_tmp->picWidth * imp_chn_attr_tmp->picHeight) / (1280 * 720);
+				rc_attr->attrRcMode.attrH264Smart.iBiasLvl = 0;
+				rc_attr->attrRcMode.attrH264Smart.changePos = 80;
+				rc_attr->attrRcMode.attrH264Smart.qualityLvl = 2;
+				rc_attr->attrRcMode.attrH264Smart.frmQPStep = 3;
+				rc_attr->attrRcMode.attrH264Smart.gopQPStep = 15;
+				rc_attr->attrRcMode.attrH264Smart.gopRelation = false;
+
+				rc_attr->attrHSkip.hSkipAttr.skipType = IMP_Encoder_STYPE_N1X;
+				rc_attr->attrHSkip.hSkipAttr.m = rc_attr->maxGop - 1;
+				rc_attr->attrHSkip.hSkipAttr.n = 1;
+				rc_attr->attrHSkip.hSkipAttr.maxSameSceneCnt = 6;
+				rc_attr->attrHSkip.hSkipAttr.bEnableScenecut = 0;
+				rc_attr->attrHSkip.hSkipAttr.bBlackEnhance = 0;
+				rc_attr->attrHSkip.maxHSkipType = IMP_Encoder_STYPE_N1X;
+			} else { /* fixQp */
+				rc_attr->attrRcMode.rcMode = ENC_RC_MODE_FIXQP;
+				rc_attr->attrRcMode.attrH264FixQp.qp = 42;
+
+				rc_attr->attrHSkip.hSkipAttr.skipType = IMP_Encoder_STYPE_N1X;
+				rc_attr->attrHSkip.hSkipAttr.m = 0;
+				rc_attr->attrHSkip.hSkipAttr.n = 0;
+				rc_attr->attrHSkip.hSkipAttr.maxSameSceneCnt = 0;
+				rc_attr->attrHSkip.hSkipAttr.bEnableScenecut = 0;
+				rc_attr->attrHSkip.hSkipAttr.bBlackEnhance = 0;
+				rc_attr->attrHSkip.maxHSkipType = IMP_Encoder_STYPE_N1X;
+			}
+
+#endif
+			ret = IMP_Encoder_CreateChn(chnNum, &channel_attr);
+			if (ret < 0) {
+				IMP_LOG_ERR(TAG, "IMP_Encoder_CreateChn(%d) error !\n", chnNum);
+				return -1;
+			}
 
 			ret = IMP_Encoder_RegisterChn(chn[i].index, chnNum);
 			if (ret < 0) {
@@ -235,42 +333,42 @@ int encoder_init()
 
 int encoder_exit(void)
 {
-    int ret = 0, i = 0, chnNum = 0;
-    IMPEncoderChnStat chn_stat;
+	int ret = 0, i = 0, chnNum = 0;
+	IMPEncoderCHNStat chn_stat;
 
 	for (i = 0; i <  FS_CHN_NUM; i++) {
 		if (chn[i].enable) {
-            chnNum = chn[i].index;
-            memset(&chn_stat, 0, sizeof(IMPEncoderChnStat));
-            ret = IMP_Encoder_Query(chnNum, &chn_stat);
-            if (ret < 0) {
-                IMP_LOG_ERR(TAG, "IMP_Encoder_Query(%d) error: %d\n", chnNum, ret);
-                return -1;
-            }
+			chnNum = chn[i].index;
+			memset(&chn_stat, 0, sizeof(IMPEncoderCHNStat));
+			ret = IMP_Encoder_Query(chnNum, &chn_stat);
+			if (ret < 0) {
+				IMP_LOG_ERR(TAG, "IMP_Encoder_Query(%d) error: %d\n", chnNum, ret);
+				return -1;
+			}
 
-            if (chn_stat.registered) {
-                ret = IMP_Encoder_UnRegisterChn(chnNum);
-                if (ret < 0) {
-                    IMP_LOG_ERR(TAG, "IMP_Encoder_UnRegisterChn(%d) error: %d\n", chnNum, ret);
-                    return -1;
-                }
+			if (chn_stat.registered) {
+				ret = IMP_Encoder_UnRegisterChn(chnNum);
+				if (ret < 0) {
+					IMP_LOG_ERR(TAG, "IMP_Encoder_UnRegisterChn(%d) error: %d\n", chnNum, ret);
+					return -1;
+				}
 
-                ret = IMP_Encoder_DestroyChn(chnNum);
-                if (ret < 0) {
-                    IMP_LOG_ERR(TAG, "IMP_Encoder_DestroyChn(%d) error: %d\n", chnNum, ret);
-                    return -1;
-                }
+				ret = IMP_Encoder_DestroyChn(chnNum);
+				if (ret < 0) {
+					IMP_LOG_ERR(TAG, "IMP_Encoder_DestroyChn(%d) error: %d\n", chnNum, ret);
+					return -1;
+				}
 
-                ret = IMP_Encoder_DestroyGroup(chnNum);
-                if (ret < 0) {
-                    IMP_LOG_ERR(TAG, "IMP_Encoder_DestroyGroup(%d) error: %d\n", chnNum, ret);
-                    return -1;
-                }
-            }
-        }
-    }
+				ret = IMP_Encoder_DestroyGroup(chnNum);
+				if (ret < 0) {
+					IMP_LOG_ERR(TAG, "IMP_Encoder_DestroyGroup(%d) error: %d\n", chnNum, ret);
+					return -1;
+				}
+			}
+		}
+	}
 
-    return 0;
+	return 0;
 }
 
 
@@ -280,6 +378,7 @@ static int save_stream(int fd, IMPEncoderStream *stream)
 	int ret, i, nr_pack = stream->packCount;
 
 	for (i = 0; i < nr_pack; i++) {
+		#ifdef PLATFORM_T31
 		IMPEncoderPack *pack = &stream->pack[i];
 		if(pack->length){
 			uint32_t remSize = stream->streamSize - pack->offset;
@@ -302,6 +401,14 @@ static int save_stream(int fd, IMPEncoderStream *stream)
 				}
 			}
 		}
+		#else
+		ret = write(fd, (void *)stream->pack[i].virAddr, stream->pack[i].length);
+		if (ret != stream->pack[i].length) {
+			IMP_LOG_ERR(TAG, "stream write error:%s\n", strerror(errno));
+			return -1;
+		}
+#endif
+
 	}
 	return 0;
 }
@@ -310,19 +417,19 @@ static int save_stream(int fd, IMPEncoderStream *stream)
 #if 0
 static int save_stream_by_name(char *stream_prefix, int idx, IMPEncoderStream *stream)
 {
-    int stream_fd = -1;
-    char stream_path[128];
+	int stream_fd = -1;
+	char stream_path[128];
 	int ret, i, nr_pack = stream->packCount;
 
-    sprintf(stream_path, "%s_%d", stream_prefix, idx);
+	sprintf(stream_path, "%s_%d", stream_prefix, idx);
 
-    IMP_LOG_DBG(TAG, "Open Stream file %s ", stream_path);
-    stream_fd = open(stream_path, O_RDWR | O_CREAT | O_TRUNC, 0777);
-    if (stream_fd < 0) {
-        IMP_LOG_ERR(TAG, "failed: %s\n", strerror(errno));
-        return -1;
-    }
-    IMP_LOG_DBG(TAG, "OK\n");
+	IMP_LOG_DBG(TAG, "Open Stream file %s ", stream_path);
+	stream_fd = open(stream_path, O_RDWR | O_CREAT | O_TRUNC, 0777);
+	if (stream_fd < 0) {
+		IMP_LOG_ERR(TAG, "failed: %s\n", strerror(errno));
+		return -1;
+	}
+	IMP_LOG_DBG(TAG, "OK\n");
 
 	for (i = 0; i < nr_pack; i++) {
 		IMPEncoderPack *pack = &stream->pack[i];
@@ -350,7 +457,7 @@ static int save_stream_by_name(char *stream_prefix, int idx, IMPEncoderStream *s
 		}
 	}
 
-    close(stream_fd);
+	close(stream_fd);
 
 	return 0;
 }
@@ -370,65 +477,65 @@ static void *get_video_stream(void *args)
 
   ret = IMP_Encoder_StartRecvPic(chnNum);
   if (ret < 0) {
-    IMP_LOG_ERR(TAG, "IMP_Encoder_StartRecvPic(%d) failed\n", chnNum);
-    return ((void *)-1);
+	IMP_LOG_ERR(TAG, "IMP_Encoder_StartRecvPic(%d) failed\n", chnNum);
+	return ((void *)-1);
   }
 
   sprintf(stream_path, "%s/stream-%d.%s", STREAM_FILE_PATH_PREFIX, chnNum,
-      (encType == IMP_ENC_TYPE_AVC) ? "h264" : ((encType == IMP_ENC_TYPE_HEVC) ? "h265" : "jpeg"));
+	  (encType == IMP_ENC_TYPE_AVC) ? "h264" : ((encType == IMP_ENC_TYPE_HEVC) ? "h265" : "jpeg"));
 
   if (encType == IMP_ENC_TYPE_JPEG) {
-    totalSaveCnt = ((NR_FRAMES_TO_SAVE / 50) > 0) ? (NR_FRAMES_TO_SAVE / 50) : 1;
+	totalSaveCnt = ((NR_FRAMES_TO_SAVE / 50) > 0) ? (NR_FRAMES_TO_SAVE / 50) : 1;
   } else {
-    IMP_LOG_DBG(TAG, "Video ChnNum=%d Open Stream file %s ", chnNum, stream_path);
-    stream_fd = open(stream_path, O_RDWR | O_CREAT | O_TRUNC, 0777);
-    if (stream_fd < 0) {
-      IMP_LOG_ERR(TAG, "failed: %s\n", strerror(errno));
-      return ((void *)-1);
-    }
-    IMP_LOG_DBG(TAG, "OK\n");
-    totalSaveCnt = NR_FRAMES_TO_SAVE;
+	IMP_LOG_DBG(TAG, "Video ChnNum=%d Open Stream file %s ", chnNum, stream_path);
+	stream_fd = open(stream_path, O_RDWR | O_CREAT | O_TRUNC, 0777);
+	if (stream_fd < 0) {
+	  IMP_LOG_ERR(TAG, "failed: %s\n", strerror(errno));
+	  return ((void *)-1);
+	}
+	IMP_LOG_DBG(TAG, "OK\n");
+	totalSaveCnt = NR_FRAMES_TO_SAVE;
   }
 
   for (i = 0; i < totalSaveCnt; i++) {
-    ret = IMP_Encoder_PollingStream(chnNum, 1000);
-    if (ret < 0) {
-      IMP_LOG_ERR(TAG, "IMP_Encoder_PollingStream(%d) timeout\n", chnNum);
-      continue;
-    }
+	ret = IMP_Encoder_PollingStream(chnNum, 1000);
+	if (ret < 0) {
+	  IMP_LOG_ERR(TAG, "IMP_Encoder_PollingStream(%d) timeout\n", chnNum);
+	  continue;
+	}
 
-    IMPEncoderStream stream;
-    /* Get H264 or H265 Stream */
-    ret = IMP_Encoder_GetStream(chnNum, &stream, 1);
-    if (ret < 0) {
-      IMP_LOG_ERR(TAG, "IMP_Encoder_GetStream(%d) failed\n", chnNum);
-      return ((void *)-1);
-    }
+	IMPEncoderStream stream;
+	/* Get H264 or H265 Stream */
+	ret = IMP_Encoder_GetStream(chnNum, &stream, 1);
+	if (ret < 0) {
+	  IMP_LOG_ERR(TAG, "IMP_Encoder_GetStream(%d) failed\n", chnNum);
+	  return ((void *)-1);
+	}
 
-    if (encType == IMP_ENC_TYPE_JPEG) {
-      ret = save_stream_by_name(stream_path, i, &stream);
-      if (ret < 0) {
-        return ((void *)ret);
-      }
-    }
+	if (encType == IMP_ENC_TYPE_JPEG) {
+	  ret = save_stream_by_name(stream_path, i, &stream);
+	  if (ret < 0) {
+		return ((void *)ret);
+	  }
+	}
 #if 0
-    else {
-      ret = save_stream(stream_fd, &stream);
-      if (ret < 0) {
-        close(stream_fd);
-        return ((void *)ret);
-      }
-    }
+	else {
+	  ret = save_stream(stream_fd, &stream);
+	  if (ret < 0) {
+		close(stream_fd);
+		return ((void *)ret);
+	  }
+	}
 #endif
-    IMP_Encoder_ReleaseStream(chnNum, &stream);
+	IMP_Encoder_ReleaseStream(chnNum, &stream);
   }
 
   close(stream_fd);
 
   ret = IMP_Encoder_StopRecvPic(chnNum);
   if (ret < 0) {
-    IMP_LOG_ERR(TAG, "IMP_Encoder_StopRecvPic(%d) failed\n", chnNum);
-    return ((void *)-1);
+	IMP_LOG_ERR(TAG, "IMP_Encoder_StopRecvPic(%d) failed\n", chnNum);
+	return ((void *)-1);
   }
 
   return ((void *)0);
@@ -444,12 +551,12 @@ int sample_get_video_stream()
 
 	for (i = 0; i < FS_CHN_NUM; i++) {
 		if (chn[i].enable) {
-            int arg = 0;
-            if (chn[i].payloadType == IMP_ENC_PROFILE_JPEG) {
-                arg = (((chn[i].payloadType >> 24) << 16) | (4 + chn[i].index));
-            } else {
-                arg = (((chn[i].payloadType >> 24) << 16) | chn[i].index);
-            }
+			int arg = 0;
+			if (chn[i].payloadType == IMP_ENC_PROFILE_JPEG) {
+				arg = (((chn[i].payloadType >> 24) << 16) | (4 + chn[i].index));
+			} else {
+				arg = (((chn[i].payloadType >> 24) << 16) | chn[i].index);
+			}
 			ret = pthread_create(&tid[i], NULL, get_video_stream, (void *)arg);
 			if (ret < 0) {
 				IMP_LOG_ERR(TAG, "Create ChnNum%d get_video_stream failed\n", (chn[i].payloadType == IMP_ENC_PROFILE_JPEG) ? (4 + chn[i].index) : chn[i].index);
@@ -470,177 +577,177 @@ int sample_get_video_stream()
 #if 0
 int sample_get_video_stream_byfd()
 {
-    int streamFd[FS_CHN_NUM], vencFd[FS_CHN_NUM], maxVencFd = 0;
+	int streamFd[FS_CHN_NUM], vencFd[FS_CHN_NUM], maxVencFd = 0;
 	char stream_path[FS_CHN_NUM][128];
-    fd_set readfds;
-    struct timeval selectTimeout;
-    int saveStreamCnt[FS_CHN_NUM], totalSaveStreamCnt[FS_CHN_NUM];
-    int i = 0, ret = 0, chnNum = 0;
-    memset(streamFd, 0, sizeof(streamFd));
-    memset(vencFd, 0, sizeof(vencFd));
-    memset(stream_path, 0, sizeof(stream_path));
-    memset(saveStreamCnt, 0, sizeof(saveStreamCnt));
-    memset(totalSaveStreamCnt, 0, sizeof(totalSaveStreamCnt));
+	fd_set readfds;
+	struct timeval selectTimeout;
+	int saveStreamCnt[FS_CHN_NUM], totalSaveStreamCnt[FS_CHN_NUM];
+	int i = 0, ret = 0, chnNum = 0;
+	memset(streamFd, 0, sizeof(streamFd));
+	memset(vencFd, 0, sizeof(vencFd));
+	memset(stream_path, 0, sizeof(stream_path));
+	memset(saveStreamCnt, 0, sizeof(saveStreamCnt));
+	memset(totalSaveStreamCnt, 0, sizeof(totalSaveStreamCnt));
 
 	for (i = 0; i < FS_CHN_NUM; i++) {
-        streamFd[i] = -1;
-        vencFd[i] = -1;
-        saveStreamCnt[i] = 0;
-        if (chn[i].enable) {
-            if (chn[i].payloadType == IMP_ENC_PROFILE_JPEG) {
-                chnNum = 4 + chn[i].index;
-                totalSaveStreamCnt[i] = (NR_FRAMES_TO_SAVE / 50 > 0) ? NR_FRAMES_TO_SAVE / 50 : NR_FRAMES_TO_SAVE;
-            } else {
-                chnNum = chn[i].index;
-                totalSaveStreamCnt[i] = NR_FRAMES_TO_SAVE;
-            }
-            sprintf(stream_path[i], "%s/stream-%d.%s", STREAM_FILE_PATH_PREFIX, chnNum,
-                    ((chn[i].payloadType >> 24) == IMP_ENC_TYPE_AVC) ? "h264" : (((chn[i].payloadType >> 24) == IMP_ENC_TYPE_HEVC) ? "h265" : "jpeg"));
+		streamFd[i] = -1;
+		vencFd[i] = -1;
+		saveStreamCnt[i] = 0;
+		if (chn[i].enable) {
+			if (chn[i].payloadType == IMP_ENC_PROFILE_JPEG) {
+				chnNum = 4 + chn[i].index;
+				totalSaveStreamCnt[i] = (NR_FRAMES_TO_SAVE / 50 > 0) ? NR_FRAMES_TO_SAVE / 50 : NR_FRAMES_TO_SAVE;
+			} else {
+				chnNum = chn[i].index;
+				totalSaveStreamCnt[i] = NR_FRAMES_TO_SAVE;
+			}
+			sprintf(stream_path[i], "%s/stream-%d.%s", STREAM_FILE_PATH_PREFIX, chnNum,
+					((chn[i].payloadType >> 24) == IMP_ENC_TYPE_AVC) ? "h264" : (((chn[i].payloadType >> 24) == IMP_ENC_TYPE_HEVC) ? "h265" : "jpeg"));
 
-            if (chn[i].payloadType != IMP_ENC_PROFILE_JPEG) {
-                streamFd[i] = open(stream_path[i], O_RDWR | O_CREAT | O_TRUNC, 0777);
-                if (streamFd[i] < 0) {
-                    IMP_LOG_ERR(TAG, "open %s failed:%s\n", stream_path[i], strerror(errno));
-                    return -1;
-                }
-            }
+			if (chn[i].payloadType != IMP_ENC_PROFILE_JPEG) {
+				streamFd[i] = open(stream_path[i], O_RDWR | O_CREAT | O_TRUNC, 0777);
+				if (streamFd[i] < 0) {
+					IMP_LOG_ERR(TAG, "open %s failed:%s\n", stream_path[i], strerror(errno));
+					return -1;
+				}
+			}
 
-            vencFd[i] = IMP_Encoder_GetFd(chnNum);
-            if (vencFd[i] < 0) {
-                IMP_LOG_ERR(TAG, "IMP_Encoder_GetFd(%d) failed\n", chnNum);
-                return -1;
-            }
+			vencFd[i] = IMP_Encoder_GetFd(chnNum);
+			if (vencFd[i] < 0) {
+				IMP_LOG_ERR(TAG, "IMP_Encoder_GetFd(%d) failed\n", chnNum);
+				return -1;
+			}
 
-            if (maxVencFd < vencFd[i]) {
-                maxVencFd = vencFd[i];
-            }
+			if (maxVencFd < vencFd[i]) {
+				maxVencFd = vencFd[i];
+			}
 
-            ret = IMP_Encoder_StartRecvPic(chnNum);
-            if (ret < 0) {
-                IMP_LOG_ERR(TAG, "IMP_Encoder_StartRecvPic(%d) failed\n", chnNum);
-                return -1;
-            }
-        }
-    }
+			ret = IMP_Encoder_StartRecvPic(chnNum);
+			if (ret < 0) {
+				IMP_LOG_ERR(TAG, "IMP_Encoder_StartRecvPic(%d) failed\n", chnNum);
+				return -1;
+			}
+		}
+	}
 
-    while(1) {
-        int breakFlag = 1;
-        for (i = 0; i < FS_CHN_NUM; i++) {
-            breakFlag &= (saveStreamCnt[i] >= totalSaveStreamCnt[i]);
-        }
-        if (breakFlag) {
-            break;  // save frame enough
-        }
+	while(1) {
+		int breakFlag = 1;
+		for (i = 0; i < FS_CHN_NUM; i++) {
+			breakFlag &= (saveStreamCnt[i] >= totalSaveStreamCnt[i]);
+		}
+		if (breakFlag) {
+			break;  // save frame enough
+		}
 
-        FD_ZERO(&readfds);
-        for (i = 0; i < FS_CHN_NUM; i++) {
-            if (chn[i].enable && saveStreamCnt[i] < totalSaveStreamCnt[i]) {
-                FD_SET(vencFd[i], &readfds);
-            }
-        }
-        selectTimeout.tv_sec = 2;
-        selectTimeout.tv_usec = 0;
+		FD_ZERO(&readfds);
+		for (i = 0; i < FS_CHN_NUM; i++) {
+			if (chn[i].enable && saveStreamCnt[i] < totalSaveStreamCnt[i]) {
+				FD_SET(vencFd[i], &readfds);
+			}
+		}
+		selectTimeout.tv_sec = 2;
+		selectTimeout.tv_usec = 0;
 
-        ret = select(maxVencFd + 1, &readfds, NULL, NULL, &selectTimeout);
-        if (ret < 0) {
-            IMP_LOG_ERR(TAG, "select failed:%s\n", strerror(errno));
-            return -1;
-        } else if (ret == 0) {
-            continue;
-        } else {
-            for (i = 0; i < FS_CHN_NUM; i++) {
-                if (chn[i].enable && FD_ISSET(vencFd[i], &readfds)) {
-                    IMPEncoderStream stream;
+		ret = select(maxVencFd + 1, &readfds, NULL, NULL, &selectTimeout);
+		if (ret < 0) {
+			IMP_LOG_ERR(TAG, "select failed:%s\n", strerror(errno));
+			return -1;
+		} else if (ret == 0) {
+			continue;
+		} else {
+			for (i = 0; i < FS_CHN_NUM; i++) {
+				if (chn[i].enable && FD_ISSET(vencFd[i], &readfds)) {
+					IMPEncoderStream stream;
 
-                    if (chn[i].payloadType == IMP_ENC_PROFILE_JPEG) {
-                        chnNum = 4 + chn[i].index;
-                    } else {
-                        chnNum = chn[i].index;
-                    }
-                    // Get H264 or H265 Stream 
-                    ret = IMP_Encoder_GetStream(chnNum, &stream, 1);
-                    if (ret < 0) {
-                        IMP_LOG_ERR(TAG, "IMP_Encoder_GetStream(%d) failed\n", chnNum);
-                        return -1;
-                    }
+					if (chn[i].payloadType == IMP_ENC_PROFILE_JPEG) {
+						chnNum = 4 + chn[i].index;
+					} else {
+						chnNum = chn[i].index;
+					}
+					// Get H264 or H265 Stream 
+					ret = IMP_Encoder_GetStream(chnNum, &stream, 1);
+					if (ret < 0) {
+						IMP_LOG_ERR(TAG, "IMP_Encoder_GetStream(%d) failed\n", chnNum);
+						return -1;
+					}
 
-                    if (chn[i].payloadType == IMP_ENC_PROFILE_JPEG) {
-                        ret = save_stream_by_name(stream_path[i], saveStreamCnt[i], &stream);
-                        if (ret < 0) {
-                            return -1;
-                        }
-                    } else {
-                        ret = save_stream(streamFd[i], &stream);
-                        if (ret < 0) {
-                            close(streamFd[i]);
-                            return -1;
-                        }
-                    }
+					if (chn[i].payloadType == IMP_ENC_PROFILE_JPEG) {
+						ret = save_stream_by_name(stream_path[i], saveStreamCnt[i], &stream);
+						if (ret < 0) {
+							return -1;
+						}
+					} else {
+						ret = save_stream(streamFd[i], &stream);
+						if (ret < 0) {
+							close(streamFd[i]);
+							return -1;
+						}
+					}
 
-                    IMP_Encoder_ReleaseStream(chnNum, &stream);
-                    saveStreamCnt[i]++;
-                }
-            }
-        }
-    }
+					IMP_Encoder_ReleaseStream(chnNum, &stream);
+					saveStreamCnt[i]++;
+				}
+			}
+		}
+	}
 
 	for (i = 0; i < FS_CHN_NUM; i++) {
-        if (chn[i].enable) {
-            if (chn[i].payloadType == IMP_ENC_PROFILE_JPEG) {
-                chnNum = 4 + chn[i].index;
-            } else {
-                chnNum = chn[i].index;
-            }
-            IMP_Encoder_StopRecvPic(chnNum);
-            close(streamFd[i]);
-        }
-    }
+		if (chn[i].enable) {
+			if (chn[i].payloadType == IMP_ENC_PROFILE_JPEG) {
+				chnNum = 4 + chn[i].index;
+			} else {
+				chnNum = chn[i].index;
+			}
+			IMP_Encoder_StopRecvPic(chnNum);
+			close(streamFd[i]);
+		}
+	}
 
-    return 0;
+	return 0;
 }
 #endif
 
 static int get_h264_stream(int fd, int chn)
 {
-    int ret;
+	int ret;
 
-    ret = IMP_Encoder_PollingStream(chn, 100);
-    if (ret < 0) {
-        IMP_LOG_ERR(TAG, "Polling stream timeout\n");
-    }
+	ret = IMP_Encoder_PollingStream(chn, 100);
+	if (ret < 0) {
+		IMP_LOG_ERR(TAG, "Polling stream timeout\n");
+	}
 
-    IMPEncoderStream stream;
-    ret = IMP_Encoder_GetStream(chn, &stream, 0);
-    if (ret < 0) {
-        IMP_LOG_ERR(TAG, "IMP_Encoder_GetStream() failed\n");
-        return -1;
-    }
+	IMPEncoderStream stream;
+	ret = IMP_Encoder_GetStream(chn, &stream, 0);
+	if (ret < 0) {
+		IMP_LOG_ERR(TAG, "IMP_Encoder_GetStream() failed\n");
+		return -1;
+	}
 
-    ret = save_stream(fd, &stream);
-    if (ret < 0) {
-        close(fd);
-        return ret;
-    }
+	ret = save_stream(fd, &stream);
+	if (ret < 0) {
+		close(fd);
+		return ret;
+	}
 
-    IMP_Encoder_ReleaseStream(chn, &stream);
+	IMP_Encoder_ReleaseStream(chn, &stream);
 
-    return 0;
+	return 0;
 }
 
 int get_stream(int fd, int chn)
 {
-    int  ret;
+	int  ret;
 
-    ret = IMP_Encoder_StartRecvPic(chn);
-    if (ret < 0){
-        IMP_LOG_ERR(TAG, "IMP_Encoder_StartRecvPic(%d) failed\n", 1);
-        return ret;
-    }
-    ret = get_h264_stream(fd, chn);
-    if (ret < 0) {
-        IMP_LOG_ERR(TAG, "Get H264 stream failed\n");
-        return ret;
-    }
+	ret = IMP_Encoder_StartRecvPic(chn);
+	if (ret < 0){
+		IMP_LOG_ERR(TAG, "IMP_Encoder_StartRecvPic(%d) failed\n", 1);
+		return ret;
+	}
+	ret = get_h264_stream(fd, chn);
+	if (ret < 0) {
+		IMP_LOG_ERR(TAG, "Get H264 stream failed\n");
+		return ret;
+	}
 
-    return 0;
+	return 0;
 }

@@ -36,11 +36,11 @@ endif
 ifeq ($(TARGET),t20)
 SDK_INC_DIR = include/t20
 LIBS = $(SDK_LIB_DIR)/t20/uclibc/libimp.so $(SDK_LIB_DIR)/t20/uclibc/libalog.so
-COMPILE_OPTS += -DPLATFORM_T20
+CFLAGS += -DPLATFORM_T20 -DSENSOR_JXF23 -DSENSOR_FRAME_RATE_NUM=15
 else
 SDK_INC_DIR = include/t31
 LIBS = $(SDK_LIB_DIR)/t31/uclibc/libimp.so $(SDK_LIB_DIR)/t31/uclibc/libalog.so
-COMPILE_OPTS += -DPLATFORM_T31
+CFLAGS += -DPLATFORM_T31 -DSENSOR_GC2053 -DSENSOR_FRAME_RATE_NUM=30
 endif
 
 APP = raptor
