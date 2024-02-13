@@ -4,10 +4,15 @@
 
 #include <imp/imp_log.h>
 #include "system.h"
+#include "version.h"
+
+#define STRINGIFY(x) #x
+#define TOSTRING(x) STRINGIFY(x)
 
 #define TAG "raptor"
 
 void displayUsage() {
+    printf("Raptor Video Daemon for %s Version: %s\n", TOSTRING(SOC), VERSION);
 	printf("usage: ingenic-vidcap [args...]\n\n"
 		" --help            display this help message\n");
 	exit(0);
@@ -36,6 +41,7 @@ int main(int argc, char *argv[])
 		}
 	}
 
+    printf("Raptor Video Daemon for %s Version: %s\n", TOSTRING(SOC), VERSION);
     ret = system_initalize();
 	if (ret < 0) {
 		IMP_LOG_ERR(TAG, "system init failed\n");

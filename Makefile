@@ -36,25 +36,33 @@ endif
 ifeq ($(TARGET),t20)
 SDK_INC_DIR = include/t20
 LIBS = $(SDK_LIB_DIR)/t20/uclibc/libimp.so $(SDK_LIB_DIR)/t20/uclibc/libalog.so
-CFLAGS += -DPLATFORM_T20 -DSENSOR_JXF23 -DSENSOR_FRAME_RATE_NUM=15
+CFLAGS += -DPLATFORM_T20 -DSENSOR_JXF23 -DSENSOR_FRAME_RATE_NUM=15 -DSOC=T20
 else
 SDK_INC_DIR = include/t31
 LIBS = $(SDK_LIB_DIR)/t31/uclibc/libimp.so $(SDK_LIB_DIR)/t31/uclibc/libalog.so
-CFLAGS += -DPLATFORM_T31 -DSENSOR_GC2053 -DSENSOR_FRAME_RATE_NUM=30
+CFLAGS += -DPLATFORM_T31 -DSENSOR_GC2053 -DSENSOR_FRAME_RATE_NUM=30 -DSOC=T31
 endif
 
 APP = raptor
 
-.PHONY:all
+.PHONY:	all version
 
-all: 	$(APP)
+all: version $(APP)
 
-$(APP): raptor.o encoder.o system.o musl_shim.o tcp.o
+version:
+		@if  ! grep "$(commit_tag)" version.h >/dev/null 2>&1 ; then \
+		echo "update version.h" ; \
+		sed 's/COMMIT_TAG/"$(commit_tag)"/g' version.tpl.h > version.h ; \
+		fi
+
+$(APP): version.h raptor.o encoder.o system.o musl_shim.o tcp.o
 	$(CC) $(LDFLAG) -o $@ $^ $(LIBS) $(LDLIBS)
 	$(STRIP) $@
 
 %.o:%.c
 	$(CC) -c $(CFLAGS) $< -o $@
+
+
 
 clean:
 	rm -f *.o *~
