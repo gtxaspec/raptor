@@ -2,7 +2,6 @@
 commit_tag=$(shell git rev-parse --short HEAD)
 
 CC = ccache $(CROSS_COMPILE)gcc
-CXX = ccache $(CROSS_COMPILE)g++
 STRIP = $(CROSS_COMPILE)strip
 
 CONFIG_MUSL_BUILD=y
@@ -50,6 +49,7 @@ CFLAGS += -DPLATFORM_T31 -DSENSOR_GC2053 -DSENSOR_FRAME_RATE_NUM=30 -DSOC=T31
 endif
 
 APP = raptor
+raptor_OBJS = raptor.o encoder.o system.o musl_shim.o tcp.o
 
 .PHONY:	all version clean distclean $(APP)
 
@@ -61,15 +61,15 @@ version:
 	sed 's/COMMIT_TAG/"$(commit_tag)"/g' version.tpl.h > version.h ; \
 	fi
 
-$(APP): version.h raptor.o encoder.o system.o musl_shim.o tcp.o
-	$(CC) $(LDFLAG) -o $@ $^ $(LIBS) $(LDLIBS)
-	$(STRIP) $@
+$(APP): version $(raptor_OBJS)
+	$(CC) $(LDFLAG) -o $@ $(raptor_OBJS) $(LIBS) $(LDLIBS)
+	$(STRIPCMD) $@
 
 %.o:%.c
 	$(CC) -c $(CFLAGS) $< -o $@
 
 clean:
-	rm -f *.o *~
+	rm -f version.h *.o *~
 
 distclean: clean
 	rm -f $(APP)

@@ -11,7 +11,7 @@
 #define TAG "tcp"
 
 #define SERVER_PORT 8080
-#define BUFFER_SIZE 2048  // 4 KB
+#define BUFFER_SIZE 4096  // 4 KB
 
 int setup_tcp() {
 	// Setup TCP server

@@ -20,7 +20,7 @@
 //static const IMPEncoderRcMode S_RC_METHOD = IMP_ENC_RC_MODE_CAPPED_QUALITY;
 
 #ifdef PLATFORM_T31
-static const int S_RC_METHOD = IMP_ENC_RC_MODE_VBR;
+static const int S_RC_METHOD = IMP_ENC_RC_MODE_CAPPED_QUALITY;
 #else
 static const int S_RC_METHOD = ENC_RC_MODE_SMART;
 #endif
@@ -157,15 +157,17 @@ int encoder_init()
 				ratio = 1.0 / (log10f((1280 * 720.0) / ((uint64_t)imp_chn_attr_tmp->picWidth * imp_chn_attr_tmp->picHeight)) + 1);
 			}
 			ratio = ratio > 0.1 ? ratio : 0.1;
-			unsigned int uTargetBitRate = BITRATE_720P_Kbs * ratio;
+			//unsigned int uTargetBitRate = BITRATE_720P_Kbs * ratio;
 			//unsigned int uTargetBitRate = (double)1.0 * (imp_chn_attr_tmp->picWidth * imp_chn_attr_tmp->picHeight) / (1280 * 720);
+			unsigned int uTargetBitRate = (double)2000.0 * (imp_chn_attr_tmp->picWidth * imp_chn_attr_tmp->picHeight) / (1280 * 720);
+
 
 			//ret = IMP_Encoder_SetDefaultParam(&channel_attr, chn[i].payloadType, IMP_ENC_RC_MODE_VBR,
 			ret = IMP_Encoder_SetDefaultParam(&channel_attr, IMP_ENC_PROFILE_AVC_HIGH, S_RC_METHOD,
 					imp_chn_attr_tmp->picWidth, imp_chn_attr_tmp->picHeight,
 					imp_chn_attr_tmp->outFrmRateNum, imp_chn_attr_tmp->outFrmRateDen,
 					imp_chn_attr_tmp->outFrmRateNum * 2 / imp_chn_attr_tmp->outFrmRateDen, 2,
-					(S_RC_METHOD == IMP_ENC_RC_MODE_FIXQP) ? 35 : -1,
+					(S_RC_METHOD == IMP_ENC_RC_MODE_CAPPED_QUALITY) ? 35 : -1,
 					uTargetBitRate);
 			if (ret < 0) {
 				IMP_LOG_ERR(TAG, "IMP_Encoder_SetDefaultParam(%d) error !\n", chnNum);
@@ -213,16 +215,16 @@ int encoder_init()
 					rcAttr->attrRcMode.attrCappedVbr.uMaxPSNR = 42;
 					break;
 				case IMP_ENC_RC_MODE_CAPPED_QUALITY:
-					rcAttr->attrRcMode.attrCappedQuality.uTargetBitRate = uTargetBitRate;
-					rcAttr->attrRcMode.attrCappedQuality.uMaxBitRate = uTargetBitRate * 4 / 3;
+					rcAttr->attrRcMode.attrCappedQuality.uTargetBitRate = 720;
+					rcAttr->attrRcMode.attrCappedQuality.uMaxBitRate = 1000;
 					rcAttr->attrRcMode.attrCappedQuality.iInitialQP = -1;
-					rcAttr->attrRcMode.attrCappedQuality.iMinQP = 34;
+					rcAttr->attrRcMode.attrCappedQuality.iMinQP = 23;
 					rcAttr->attrRcMode.attrCappedQuality.iMaxQP = 51;
-					rcAttr->attrRcMode.attrCappedQuality.iIPDelta = -1;
-					rcAttr->attrRcMode.attrCappedQuality.iPBDelta = -1;
-					rcAttr->attrRcMode.attrCappedQuality.eRcOptions = IMP_ENC_RC_SCN_CHG_RES | IMP_ENC_RC_OPT_SC_PREVENTION;
-					rcAttr->attrRcMode.attrCappedQuality.uMaxPictureSize = uTargetBitRate * 4 / 3;
-					rcAttr->attrRcMode.attrCappedQuality.uMaxPSNR = 42;
+					rcAttr->attrRcMode.attrCappedQuality.iIPDelta = 3;
+					rcAttr->attrRcMode.attrCappedQuality.iPBDelta = 3;
+					rcAttr->attrRcMode.attrCappedQuality.eRcOptions = IMP_ENC_RC_SCN_CHG_RES;
+					rcAttr->attrRcMode.attrCappedQuality.uMaxPictureSize = 1920;
+					rcAttr->attrRcMode.attrCappedQuality.uMaxPSNR = 48;
 					break;
 				case IMP_ENC_RC_MODE_INVALID:
 					IMP_LOG_ERR(TAG, "unsupported rcmode:%d, we only support fixqp, cbr vbr and capped vbr\n", rcAttr->attrRcMode.rcMode);
