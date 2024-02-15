@@ -8,19 +8,17 @@ CONFIG_MUSL_BUILD=y
 CONFIG_STATIC_BUILD=n
 DEBUG=n
 
-ifeq ($(TARGET),t20)
-TARGET=t20
-else
+ifneq ($(TARGET),t20)
 TARGET=t31
 endif
 
 SDK_INC_DIR = include/$(TARGET)
-INCLUDES = -I$(SDK_INC_DIR)
+INCLUDES = -I$(SDK_INC_DIR) -I./include
 LIBS = $(SDK_LIB_DIR)/uclibc/libimp.$(LIBTYPE) $(SDK_LIB_DIR)/uclibc/libalog.$(LIBTYPE) \
 	$(SDK_LIB_DIR)/uclibc/libsysutils.$(LIBTYPE)
 
 CFLAGS = $(INCLUDES) -O2 -Wall -march=mips32r2
-LDFLAG += -Wl,-gc-sections
+LDFLAGS += -Wl,-gc-sections
 LDLIBS = -lpthread -lm -lrt -ldl
 SDK_LIB_DIR = lib/$(TARGET)
 
@@ -37,9 +35,9 @@ endif
 
 ifeq ($(CONFIG_STATIC_BUILD), y)
 LDFLAGS += -static
-LIBTYPE="a"
+LIBTYPE=a
 else
-LIBTYPE="so"
+LIBTYPE=so
 endif
 
 ifeq ($(TARGET),t20)
@@ -62,7 +60,7 @@ version:
 	fi
 
 $(APP): version $(raptor_OBJS)
-	$(CC) $(LDFLAG) -o $@ $(raptor_OBJS) $(LIBS) $(LDLIBS)
+	$(CC) $(LDFLAGS) -o $@ $(raptor_OBJS) $(LIBS) $(LDLIBS)
 	$(STRIPCMD) $@
 
 %.o:%.c
