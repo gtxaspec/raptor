@@ -42,6 +42,12 @@ RMD combines and exports your streams:
 - **A/V Sync**: Ensure perfect synchronization between audio and video streams.
 - **Network Streaming**: Ready for export to go2rtc or other network streaming solutions.
 
+### Raptor V4L2 (RV4)
+RV4 bridges your device with V4L2 applications through a compatibility layer, utilizing the [v4l2loopback](https://github.com/umlaeute/v4l2loopback) kernel module for seamless integration. This layer enhances multimedia projects by facilitating:
+- **V4L2 Support**: Integrates with v4l2loopback module to extend V4L2 functionalities.
+- **Stream Handling**: Manages video streams efficiently for use in V4L2 compliant applications.
+- **Flexible Integration**: Offers compatibility for a broad range of multimedia projects with V4L2 requirements.
+
 ## Join the Raptor Community
 We invite developers, streamers, and tech enthusiasts to contribute to the Raptor project. Whether it's by contributing code, providing feedback, or sharing your streaming experiences, your input is invaluable in making Raptor the most efficient and user-friendly streaming platform available.
 
