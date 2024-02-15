@@ -43,7 +43,7 @@ int main(int argc, char *argv[])
 		}
 	}
 
-    printf("Raptor Video Daemon for %s Sensor: %s Version: %s\n", TOSTRING(SOC), SENSOR_NAME, VERSION);
+    printf("Raptor Video Daemon for %s Sensor: %s Version: %s\n", TOSTRING(SOC), TOSTRING(SENSOR), VERSION);
     IMP_System_GetCPUInfo();
     ret = system_initalize();
 	if (ret < 0) {
