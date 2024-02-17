@@ -14,6 +14,8 @@
 
 #include "system.h"
 #include "tcp.h"
+#include "config.h"
+#include "framesource.h"
 
 #define TAG "encoder"
 
@@ -32,8 +34,20 @@ int system_initalize()
 		return -1;
 	}
 
+ // update conf before framesource init... temp
+ for (i = 0; i <  FS_CHN_NUM; i++) {
+		if (chn[i].enable) {
+		chn[i].fs_chn_attr.picWidth = config.sensor_1_width;
+		chn[i].fs_chn_attr.picHeight = config.sensor_1_height;
+		chn[i].fs_chn_attr.crop.width = config.sensor_1_width;
+		chn[i].fs_chn_attr.crop.height = config.sensor_1_height;
+		chn[i].fs_chn_attr.outFrmRateNum = config.sensor_1_fps;
+		}
+ }
+
 	/* Step.2 FrameSource init */
 	ret = framesource_init();
+	//setup_framesource();
 	if (ret < 0) {
 		IMP_LOG_ERR(TAG, "FrameSource init failed\n");
 		return -1;
@@ -143,10 +157,27 @@ int isp_init()
  */
 
 	memset(&sensor_info, 0, sizeof(IMPSensorInfo));
-	memcpy(sensor_info.name, SENSOR_NAME, sizeof(SENSOR_NAME));
-	sensor_info.cbus_type = SENSOR_CUBS_TYPE;
-	memcpy(sensor_info.i2c.type, SENSOR_NAME, sizeof(SENSOR_NAME));
-	sensor_info.i2c.addr = SENSOR_I2C_ADDR;
+
+	// Ensure config.sensor_name is null-terminated and does not exceed the size of sensor_info.name
+	strncpy(sensor_info.name, config.sensor_1_name, sizeof(sensor_info.name) - 1);
+	// Explicitly null-terminate to avoid string overflow issues
+	sensor_info.name[sizeof(sensor_info.name) - 1] = '\0';
+
+	//sensor_info.cbus_type = SENSOR_CUBS_TYPE;
+	if (strcmp(config.sensor_1_bus, "i2c") == 0) {
+		sensor_info.cbus_type = TX_SENSOR_CONTROL_INTERFACE_I2C;
+	} else if (strcmp(config.sensor_1_bus, "spi") == 0) {
+		sensor_info.cbus_type = TX_SENSOR_CONTROL_INTERFACE_SPI;
+	} else {
+		printf("unsupported bus type\n");
+	}
+
+	strncpy(sensor_info.i2c.type, config.sensor_1_name, sizeof(sensor_info.i2c.type) - 1);
+	sensor_info.i2c.type[sizeof(sensor_info.i2c.type) - 1] = '\0';
+
+	sensor_info.i2c.addr = config.sensor_1_i2c_address;
+
+	//sensor_info.i2c.addr = SENSOR_I2C_ADDR;
 
 	IMP_LOG_DBG(TAG, "sample_system_init start\n");
 
@@ -191,7 +222,7 @@ int isp_init()
         return -1;
     }
 #endif
-#if 0
+#if 0 // SENSOR FPS
     ret = IMP_ISP_Tuning_SetSensorFPS(SENSOR_FRAME_RATE_NUM, SENSOR_FRAME_RATE_DEN);
     if (ret < 0){
         IMP_LOG_ERR(TAG, "failed to set sensor fps\n");
@@ -240,74 +271,3 @@ int isp_exit()
 	return 0;
 }
 
-int framesource_streamon()
-{
-	int ret = 0, i = 0;
-	/* Enable channels */
-	for (i = 0; i < FS_CHN_NUM; i++) {
-		if (chn[i].enable) {
-			ret = IMP_FrameSource_EnableChn(chn[i].index);
-			if (ret < 0) {
-				IMP_LOG_ERR(TAG, "IMP_FrameSource_EnableChn(%d) error: %d\n", ret, chn[i].index);
-				return -1;
-			}
-		}
-	}
-	return 0;
-}
-
-int framesource_streamoff()
-{
-	int ret = 0, i = 0;
-	/* Enable channels */
-	for (i = 0; i < FS_CHN_NUM; i++) {
-		if (chn[i].enable){
-			ret = IMP_FrameSource_DisableChn(chn[i].index);
-			if (ret < 0) {
-				IMP_LOG_ERR(TAG, "IMP_FrameSource_DisableChn(%d) error: %d\n", ret, chn[i].index);
-				return -1;
-			}
-		}
-	}
-	return 0;
-}
-
-int framesource_init()
-{
-	int i, ret;
-
-	for (i = 0; i < FS_CHN_NUM; i++) {
-		if (chn[i].enable) {
-			ret = IMP_FrameSource_CreateChn(chn[i].index, &chn[i].fs_chn_attr);
-			if(ret < 0){
-				IMP_LOG_ERR(TAG, "IMP_FrameSource_CreateChn(chn%d) error !\n", chn[i].index);
-				return -1;
-			}
-
-			ret = IMP_FrameSource_SetChnAttr(chn[i].index, &chn[i].fs_chn_attr);
-			if (ret < 0) {
-				IMP_LOG_ERR(TAG, "IMP_FrameSource_SetChnAttr(chn%d) error !\n",  chn[i].index);
-				return -1;
-			}
-		}
-	}
-
-	return 0;
-}
-
-int framesource_exit()
-{
-	int ret,i;
-
-	for (i = 0; i <  FS_CHN_NUM; i++) {
-		if (chn[i].enable) {
-			/*Destroy channel */
-			ret = IMP_FrameSource_DestroyChn(chn[i].index);
-			if (ret < 0) {
-				IMP_LOG_ERR(TAG, "IMP_FrameSource_DestroyChn(%d) error: %d\n", chn[i].index, ret);
-				return -1;
-			}
-		}
-	}
-	return 0;
-}

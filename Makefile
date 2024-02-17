@@ -10,10 +10,8 @@ DEBUG=n
 
 ifeq ($(TARGET),t20)
 SOC_FAMILY ?= T20
-SENSOR_MODEL ?= JXF23
 else
 SOC_FAMILY ?= T31
-SENSOR_MODEL ?= GC2053
 TARGET=t31
 endif
 
@@ -45,15 +43,9 @@ else
 LIBTYPE=so
 endif
 
-CFLAGS += -DPLATFORM_$(SOC_FAMILY) -DSOC=$(SOC_FAMILY) -DSENSOR_$(SENSOR_MODEL)
-ifeq ($(TARGET),t20)
-CFLAGS += -DSENSOR_FRAME_RATE_NUM=15
-else
-CFLAGS += -DSENSOR_FRAME_RATE_NUM=30
-endif
-
+CFLAGS += -DPLATFORM_$(SOC_FAMILY) -DSOC=$(SOC_FAMILY)
 APP = raptor
-raptor_OBJS = raptor.o encoder.o system.o musl_shim.o tcp.o
+raptor_OBJS = raptor.o encoder.o system.o musl_shim.o tcp.o ini.o config.o framesource.o
 
 .PHONY:	all version clean distclean $(APP)
 
