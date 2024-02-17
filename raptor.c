@@ -63,6 +63,8 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 
+
+
 	free_configuration(&config); // Free the configuration resources before exiting
 
 	return 0;

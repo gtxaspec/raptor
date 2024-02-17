@@ -45,7 +45,7 @@ endif
 
 CFLAGS += -DPLATFORM_$(SOC_FAMILY) -DSOC=$(SOC_FAMILY)
 APP = raptor
-raptor_OBJS = raptor.o encoder.o system.o musl_shim.o tcp.o ini.o config.o framesource.o
+raptor_OBJS = raptor.o encoder.o system.o musl_shim.o tcp.o ini.o config.o framesource.o ringbuffer.o
 
 .PHONY:	all version clean distclean $(APP)
 

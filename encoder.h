@@ -38,6 +38,11 @@
 #define CHN_ENABLE				1
 #define CHN_DISABLE				0
 
+void* video_feeder_thread(void *arg);
+typedef struct ring_buffer_t ring_buffer_t;  // Forward declaration
+
+int feed_video_to_ring_buffer(ring_buffer_t *rb, int chn);
+
 struct chn_conf{
 	unsigned int index;//0 for main channel ,1 for second channel
 	unsigned int enable;

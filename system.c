@@ -88,12 +88,33 @@ int system_initalize()
 		return -1;
 	}
 
-	// Run TCP
+	/*// Run TCP
 	ret = setup_tcp();
 	if (ret < 0) {
 		IMP_LOG_ERR(TAG, "TCP failed\n");
 		return -1;
-	}
+	}*/
+
+	  pthread_t thread_id;
+    int video_channel = 0; // Example video channel ID
+
+    // Start the video feeder thread
+    if(pthread_create(&thread_id, NULL, video_feeder_thread, &video_channel) != 0) {
+        perror("Failed to create video feeder thread");
+        return -1;
+    }
+
+    // Run TCP server setup
+    ret = setup_tcp();
+		if (ret < 0) {
+		IMP_LOG_ERR(TAG, "TCP failed\n");
+		return -1;
+		}
+
+    // Cleanup
+    pthread_join(thread_id, NULL); // Wait for the feeder thread to finish
+    return 0;
+
 
 	/* Step.a Stream Off */
 	ret = framesource_streamoff();

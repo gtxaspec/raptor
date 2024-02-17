@@ -8,6 +8,8 @@
 #include <imp/imp_framesource.h>
 #include <imp/imp_encoder.h>
 #include <imp/imp_isp.h>
+#include "ringbuffer.h"
+
 #include "encoder.h"
 #include "config.h"
 #include "framesource.h"
@@ -311,298 +313,6 @@ static int save_stream(int fd, IMPEncoderStream *stream)
 #endif
 
 #if 0
-static int save_stream_by_name(char *stream_prefix, int idx, IMPEncoderStream *stream)
-{
-	int stream_fd = -1;
-	char stream_path[128];
-	int ret, i, nr_pack = stream->packCount;
-
-	sprintf(stream_path, "%s_%d", stream_prefix, idx);
-
-	IMP_LOG_DBG(TAG, "Open Stream file %s ", stream_path);
-	stream_fd = open(stream_path, O_RDWR | O_CREAT | O_TRUNC, 0777);
-	if (stream_fd < 0) {
-		IMP_LOG_ERR(TAG, "failed: %s\n", strerror(errno));
-		return -1;
-	}
-	IMP_LOG_DBG(TAG, "OK\n");
-
-	for (i = 0; i < nr_pack; i++) {
-		IMPEncoderPack *pack = &stream->pack[i];
-		if(pack->length){
-			uint32_t remSize = stream->streamSize - pack->offset;
-			if(remSize < pack->length){
-				ret = write(stream_fd, (void *)(stream->virAddr + pack->offset),
-						remSize);
-				if (ret != remSize) {
-					IMP_LOG_ERR(TAG, "stream write ret(%d) != pack[%d].remSize(%d) error:%s\n", ret, i, remSize, strerror(errno));
-					return -1;
-				}
-				ret = write(stream_fd, (void *)stream->virAddr, pack->length - remSize);
-				if (ret != (pack->length - remSize)) {
-					IMP_LOG_ERR(TAG, "stream write ret(%d) != pack[%d].(length-remSize)(%d) error:%s\n", ret, i, (pack->length - remSize), strerror(errno));
-					return -1;
-				}
-			}else {
-				ret = write(stream_fd, (void *)(stream->virAddr + pack->offset), pack->length);
-				if (ret != pack->length) {
-					IMP_LOG_ERR(TAG, "stream write ret(%d) != pack[%d].length(%d) error:%s\n", ret, i, pack->length, strerror(errno));
-					return -1;
-				}
-			}
-		}
-	}
-
-	close(stream_fd);
-
-	return 0;
-}
-#endif
-
-#if 0
-static void *get_video_stream(void *args)
-{
-  int val, i, chnNum, ret;
-  char stream_path[64];
-  IMPEncoderEncType encType;
-  int stream_fd = -1, totalSaveCnt = 0;
-
-  val = (int)args;
-  chnNum = val & 0xffff;
-  encType = (val >> 16) & 0xffff;
-
-  ret = IMP_Encoder_StartRecvPic(chnNum);
-  if (ret < 0) {
-	IMP_LOG_ERR(TAG, "IMP_Encoder_StartRecvPic(%d) failed\n", chnNum);
-	return ((void *)-1);
-  }
-
-  sprintf(stream_path, "%s/stream-%d.%s", STREAM_FILE_PATH_PREFIX, chnNum,
-	  (encType == IMP_ENC_TYPE_AVC) ? "h264" : ((encType == IMP_ENC_TYPE_HEVC) ? "h265" : "jpeg"));
-
-  if (encType == IMP_ENC_TYPE_JPEG) {
-	totalSaveCnt = ((NR_FRAMES_TO_SAVE / 50) > 0) ? (NR_FRAMES_TO_SAVE / 50) : 1;
-  } else {
-	IMP_LOG_DBG(TAG, "Video ChnNum=%d Open Stream file %s ", chnNum, stream_path);
-	stream_fd = open(stream_path, O_RDWR | O_CREAT | O_TRUNC, 0777);
-	if (stream_fd < 0) {
-	  IMP_LOG_ERR(TAG, "failed: %s\n", strerror(errno));
-	  return ((void *)-1);
-	}
-	IMP_LOG_DBG(TAG, "OK\n");
-	totalSaveCnt = NR_FRAMES_TO_SAVE;
-  }
-
-  for (i = 0; i < totalSaveCnt; i++) {
-	ret = IMP_Encoder_PollingStream(chnNum, 1000);
-	if (ret < 0) {
-	  IMP_LOG_ERR(TAG, "IMP_Encoder_PollingStream(%d) timeout\n", chnNum);
-	  continue;
-	}
-
-	IMPEncoderStream stream;
-	/* Get H264 or H265 Stream */
-	ret = IMP_Encoder_GetStream(chnNum, &stream, 1);
-	if (ret < 0) {
-	  IMP_LOG_ERR(TAG, "IMP_Encoder_GetStream(%d) failed\n", chnNum);
-	  return ((void *)-1);
-	}
-
-	if (encType == IMP_ENC_TYPE_JPEG) {
-	  ret = save_stream_by_name(stream_path, i, &stream);
-	  if (ret < 0) {
-		return ((void *)ret);
-	  }
-	}
-#if 0
-	else {
-	  ret = save_stream(stream_fd, &stream);
-	  if (ret < 0) {
-		close(stream_fd);
-		return ((void *)ret);
-	  }
-	}
-#endif
-	IMP_Encoder_ReleaseStream(chnNum, &stream);
-  }
-
-  close(stream_fd);
-
-  ret = IMP_Encoder_StopRecvPic(chnNum);
-  if (ret < 0) {
-	IMP_LOG_ERR(TAG, "IMP_Encoder_StopRecvPic(%d) failed\n", chnNum);
-	return ((void *)-1);
-  }
-
-  return ((void *)0);
-}
-#endif
-
-#if 0
-int sample_get_video_stream()
-{
-	unsigned int i;
-	int ret;
-	pthread_t tid[FS_CHN_NUM];
-
-	for (i = 0; i < FS_CHN_NUM; i++) {
-		if (chn[i].enable) {
-			int arg = 0;
-			if (chn[i].payloadType == IMP_ENC_PROFILE_JPEG) {
-				arg = (((chn[i].payloadType >> 24) << 16) | (4 + chn[i].index));
-			} else {
-				arg = (((chn[i].payloadType >> 24) << 16) | chn[i].index);
-			}
-			ret = pthread_create(&tid[i], NULL, get_video_stream, (void *)arg);
-			if (ret < 0) {
-				IMP_LOG_ERR(TAG, "Create ChnNum%d get_video_stream failed\n", (chn[i].payloadType == IMP_ENC_PROFILE_JPEG) ? (4 + chn[i].index) : chn[i].index);
-			}
-		}
-	}
-
-	for (i = 0; i < FS_CHN_NUM; i++) {
-		if (chn[i].enable) {
-			pthread_join(tid[i],NULL);
-		}
-	}
-
-	return 0;
-}
-#endif
-
-#if 0
-int sample_get_video_stream_byfd()
-{
-	int streamFd[FS_CHN_NUM], vencFd[FS_CHN_NUM], maxVencFd = 0;
-	char stream_path[FS_CHN_NUM][128];
-	fd_set readfds;
-	struct timeval selectTimeout;
-	int saveStreamCnt[FS_CHN_NUM], totalSaveStreamCnt[FS_CHN_NUM];
-	int i = 0, ret = 0, chnNum = 0;
-	memset(streamFd, 0, sizeof(streamFd));
-	memset(vencFd, 0, sizeof(vencFd));
-	memset(stream_path, 0, sizeof(stream_path));
-	memset(saveStreamCnt, 0, sizeof(saveStreamCnt));
-	memset(totalSaveStreamCnt, 0, sizeof(totalSaveStreamCnt));
-
-	for (i = 0; i < FS_CHN_NUM; i++) {
-		streamFd[i] = -1;
-		vencFd[i] = -1;
-		saveStreamCnt[i] = 0;
-		if (chn[i].enable) {
-			if (chn[i].payloadType == IMP_ENC_PROFILE_JPEG) {
-				chnNum = 4 + chn[i].index;
-				totalSaveStreamCnt[i] = (NR_FRAMES_TO_SAVE / 50 > 0) ? NR_FRAMES_TO_SAVE / 50 : NR_FRAMES_TO_SAVE;
-			} else {
-				chnNum = chn[i].index;
-				totalSaveStreamCnt[i] = NR_FRAMES_TO_SAVE;
-			}
-			sprintf(stream_path[i], "%s/stream-%d.%s", STREAM_FILE_PATH_PREFIX, chnNum,
-					((chn[i].payloadType >> 24) == IMP_ENC_TYPE_AVC) ? "h264" : (((chn[i].payloadType >> 24) == IMP_ENC_TYPE_HEVC) ? "h265" : "jpeg"));
-
-			if (chn[i].payloadType != IMP_ENC_PROFILE_JPEG) {
-				streamFd[i] = open(stream_path[i], O_RDWR | O_CREAT | O_TRUNC, 0777);
-				if (streamFd[i] < 0) {
-					IMP_LOG_ERR(TAG, "open %s failed:%s\n", stream_path[i], strerror(errno));
-					return -1;
-				}
-			}
-
-			vencFd[i] = IMP_Encoder_GetFd(chnNum);
-			if (vencFd[i] < 0) {
-				IMP_LOG_ERR(TAG, "IMP_Encoder_GetFd(%d) failed\n", chnNum);
-				return -1;
-			}
-
-			if (maxVencFd < vencFd[i]) {
-				maxVencFd = vencFd[i];
-			}
-
-			ret = IMP_Encoder_StartRecvPic(chnNum);
-			if (ret < 0) {
-				IMP_LOG_ERR(TAG, "IMP_Encoder_StartRecvPic(%d) failed\n", chnNum);
-				return -1;
-			}
-		}
-	}
-
-	while(1) {
-		int breakFlag = 1;
-		for (i = 0; i < FS_CHN_NUM; i++) {
-			breakFlag &= (saveStreamCnt[i] >= totalSaveStreamCnt[i]);
-		}
-		if (breakFlag) {
-			break;  // save frame enough
-		}
-
-		FD_ZERO(&readfds);
-		for (i = 0; i < FS_CHN_NUM; i++) {
-			if (chn[i].enable && saveStreamCnt[i] < totalSaveStreamCnt[i]) {
-				FD_SET(vencFd[i], &readfds);
-			}
-		}
-		selectTimeout.tv_sec = 2;
-		selectTimeout.tv_usec = 0;
-
-		ret = select(maxVencFd + 1, &readfds, NULL, NULL, &selectTimeout);
-		if (ret < 0) {
-			IMP_LOG_ERR(TAG, "select failed:%s\n", strerror(errno));
-			return -1;
-		} else if (ret == 0) {
-			continue;
-		} else {
-			for (i = 0; i < FS_CHN_NUM; i++) {
-				if (chn[i].enable && FD_ISSET(vencFd[i], &readfds)) {
-					IMPEncoderStream stream;
-
-					if (chn[i].payloadType == IMP_ENC_PROFILE_JPEG) {
-						chnNum = 4 + chn[i].index;
-					} else {
-						chnNum = chn[i].index;
-					}
-					// Get H264 or H265 Stream 
-					ret = IMP_Encoder_GetStream(chnNum, &stream, 1);
-					if (ret < 0) {
-						IMP_LOG_ERR(TAG, "IMP_Encoder_GetStream(%d) failed\n", chnNum);
-						return -1;
-					}
-
-					if (chn[i].payloadType == IMP_ENC_PROFILE_JPEG) {
-						ret = save_stream_by_name(stream_path[i], saveStreamCnt[i], &stream);
-						if (ret < 0) {
-							return -1;
-						}
-					} else {
-						ret = save_stream(streamFd[i], &stream);
-						if (ret < 0) {
-							close(streamFd[i]);
-							return -1;
-						}
-					}
-
-					IMP_Encoder_ReleaseStream(chnNum, &stream);
-					saveStreamCnt[i]++;
-				}
-			}
-		}
-	}
-
-	for (i = 0; i < FS_CHN_NUM; i++) {
-		if (chn[i].enable) {
-			if (chn[i].payloadType == IMP_ENC_PROFILE_JPEG) {
-				chnNum = 4 + chn[i].index;
-			} else {
-				chnNum = chn[i].index;
-			}
-			IMP_Encoder_StopRecvPic(chnNum);
-			close(streamFd[i]);
-		}
-	}
-
-	return 0;
-}
-#endif
-
 static int get_h264_stream(int fd, int chn)
 {
 	int ret;
@@ -646,4 +356,46 @@ int get_stream(int fd, int chn)
 	}
 
 	return 0;
+}
+#endif
+
+int feed_video_to_ring_buffer(ring_buffer_t *rb, int chn)
+{
+    int ret;
+    IMPEncoderStream stream;
+    
+	ret = IMP_Encoder_StartRecvPic(chn);
+	if (ret < 0){
+		IMP_LOG_ERR(TAG, "IMP_Encoder_StartRecvPic(%d) failed\n", 1);
+		return ret;
+	}
+
+    // Poll for the stream first
+    ret = IMP_Encoder_PollingStream(chn, 100); // Timeout of 100 ms
+    if (ret < 0) {
+        IMP_LOG_ERR(TAG, "Polling stream timeout\n");
+        return -1;
+    }
+
+    // Get the stream
+    ret = IMP_Encoder_GetStream(chn, &stream, 0); // Blocking call
+    if (ret < 0) {
+        IMP_LOG_ERR(TAG, "IMP_Encoder_GetStream() failed\n");
+        return -1;
+    }
+
+    // Iterate through each packet in the stream
+    for (int i = 0; i < stream.packCount; i++) {
+        IMPEncoderPack *pack = &stream.pack[i];
+        if(pack->length > 0){
+            // Assuming the ring buffer has been initialized correctly elsewhere
+            // Feed each packet into the ring buffer
+            ring_buffer_queue_arr(rb, (const char *)(stream.virAddr + pack->offset), pack->length);
+        }
+    }
+
+    // Release the stream after processing
+    IMP_Encoder_ReleaseStream(chn, &stream);
+
+    return 0; // Success
 }
