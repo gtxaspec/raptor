@@ -8,8 +8,8 @@
 #include <imp/imp_framesource.h>
 #include <imp/imp_encoder.h>
 #include <imp/imp_isp.h>
-#include "ringbuffer.h"
 
+#include "ringbuffer.h"
 #include "encoder.h"
 #include "config.h"
 #include "framesource.h"
@@ -268,96 +268,6 @@ int encoder_exit(void)
 
 	return 0;
 }
-
-
-#if 1
-static int save_stream(int fd, IMPEncoderStream *stream)
-{
-	int ret, i, nr_pack = stream->packCount;
-
-	for (i = 0; i < nr_pack; i++) {
-		#ifdef PLATFORM_T31
-		IMPEncoderPack *pack = &stream->pack[i];
-		if(pack->length){
-			uint32_t remSize = stream->streamSize - pack->offset;
-			if(remSize < pack->length){
-				ret = write(fd, (void *)(stream->virAddr + pack->offset), remSize);
-				if (ret != remSize) {
-					IMP_LOG_ERR(TAG, "stream write ret(%d) != pack[%d].remSize(%d) error:%s\n", ret, i, remSize, strerror(errno));
-					return -1;
-				}
-				ret = write(fd, (void *)stream->virAddr, pack->length - remSize);
-				if (ret != (pack->length - remSize)) {
-					IMP_LOG_ERR(TAG, "stream write ret(%d) != pack[%d].(length-remSize)(%d) error:%s\n", ret, i, (pack->length - remSize), strerror(errno));
-					return -1;
-				}
-			}else {
-				ret = write(fd, (void *)(stream->virAddr + pack->offset), pack->length);
-				if (ret != pack->length) {
-					IMP_LOG_ERR(TAG, "stream write ret(%d) != pack[%d].length(%d) error:%s\n", ret, i, pack->length, strerror(errno));
-					return -1;
-				}
-			}
-		}
-		#else
-		ret = write(fd, (void *)stream->pack[i].virAddr, stream->pack[i].length);
-		if (ret != stream->pack[i].length) {
-			IMP_LOG_ERR(TAG, "stream write error:%s\n", strerror(errno));
-			return -1;
-		}
-#endif
-
-	}
-	return 0;
-}
-#endif
-
-#if 0
-static int get_h264_stream(int fd, int chn)
-{
-	int ret;
-
-	ret = IMP_Encoder_PollingStream(chn, 100);
-	if (ret < 0) {
-		IMP_LOG_ERR(TAG, "Polling stream timeout\n");
-	}
-
-	IMPEncoderStream stream;
-	ret = IMP_Encoder_GetStream(chn, &stream, 0);
-	if (ret < 0) {
-		IMP_LOG_ERR(TAG, "IMP_Encoder_GetStream() failed\n");
-		return -1;
-	}
-
-	ret = save_stream(fd, &stream);
-	if (ret < 0) {
-		close(fd);
-		return ret;
-	}
-
-	IMP_Encoder_ReleaseStream(chn, &stream);
-
-	return 0;
-}
-
-int get_stream(int fd, int chn)
-{
-	int  ret;
-
-	ret = IMP_Encoder_StartRecvPic(chn);
-	if (ret < 0){
-		IMP_LOG_ERR(TAG, "IMP_Encoder_StartRecvPic(%d) failed\n", 1);
-		return ret;
-	}
-	ret = get_h264_stream(fd, chn);
-	if (ret < 0) {
-		IMP_LOG_ERR(TAG, "Get H264 stream failed\n");
-		return ret;
-	}
-
-	return 0;
-}
-#endif
 
 int feed_video_to_ring_buffer(ring_buffer_t *rb, int chn)
 {

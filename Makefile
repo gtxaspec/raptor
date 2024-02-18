@@ -20,7 +20,7 @@ INCLUDES = -I$(SDK_INC_DIR) -I./include
 LIBS = $(SDK_LIB_DIR)/uclibc/libimp.$(LIBTYPE) $(SDK_LIB_DIR)/uclibc/libalog.$(LIBTYPE) \
 	$(SDK_LIB_DIR)/uclibc/libsysutils.$(LIBTYPE)
 
-CFLAGS = $(INCLUDES) -O2 -Wall -march=mips32r2
+CFLAGS = $(INCLUDES) -O2 -Wall -march=mips32r2 -DSOCKLEN_T=socklen_t -D_LARGEFILE_SOURCE=1 -D_FILE_OFFSET_BITS=64
 LDFLAGS += -Wl,-gc-sections
 LDLIBS = -lpthread -lm -lrt -ldl
 SDK_LIB_DIR = lib/$(TARGET)

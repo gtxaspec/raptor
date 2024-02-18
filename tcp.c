@@ -5,9 +5,10 @@
 #include <arpa/inet.h>
 #include <netinet/tcp.h>
 #include <errno.h>
-#include <pthread.h>
+#include <fcntl.h> // For O_WRONLY and O_NONBLOCK
+#include <sys/stat.h>
 
-#include "encoder.h"  // Ensure this and other headers are correctly defined
+#include "encoder.h"
 #include "system.h"
 #include "tcp.h"
 #include "ringbuffer.h"
@@ -15,12 +16,22 @@
 #define TAG "tcp"
 
 #define SERVER_PORT 8080
-#define BUFFER_SIZE 4096  // 4 KB
-#define RING_BUFFER_SIZE 4096  // Ensure this is a power of two
+#define BUFFER_SIZE 131072
+#define RING_BUFFER_SIZE 131072  // Must be a power of two
 
 // Declare the ring buffer globally
 ring_buffer_t videoRingBuffer;
 char *ringBufferData;
+
+// Path for the FIFO file
+const char *fifoPath = "/tmp/h264_fifo";
+// Function to create FIFO
+void create_fifo() {
+	if (mkfifo(fifoPath, 0666) == -1 && errno != EEXIST) {
+		perror("Failed to create FIFO");
+		exit(EXIT_FAILURE);
+	}
+}
 
 int setup_tcp() {
 	// Initialize the ring buffer
@@ -64,6 +75,8 @@ int setup_tcp() {
 		exit(1);
 	}
 
+	create_fifo();
+
 	while (1) {
 		printf("Waiting for client connection...\n");
 		client_socket = accept(server_socket, (struct sockaddr*)&client_addr, &addr_len);
@@ -73,7 +86,7 @@ int setup_tcp() {
 		}
 		printf("Client connected.\n");
 
-		char buffer[RING_BUFFER_SIZE]; // Temporary buffer for data to send
+		char buffer[BUFFER_SIZE]; // Temporary buffer for data to send
 
 		while (1) {
 			ring_buffer_size_t bytesAvailable = ring_buffer_num_items(&videoRingBuffer);
@@ -88,7 +101,7 @@ int setup_tcp() {
 					}
 				}
 			}
-			//usleep(10); // Adjust delay as needed
+			usleep(100000);
 		}
 
 		if (client_socket != -1) {
@@ -104,16 +117,62 @@ int setup_tcp() {
 }
 
 void* video_feeder_thread(void *arg) {
-	//int video_source_channel = *((int*)arg); // Assuming video source channel is passed as an argument
-	int video_source_channel = 0; // Assuming video source channel is passed as an argument
+	int video_source_channel = *((int*)arg); // Assuming video source channel is passed as an argument
 
 	while (1) {
 		feed_video_to_ring_buffer(&videoRingBuffer, video_source_channel);
-		usleep(10000); // Adjust based on video frame rate and processing needs
+		usleep(10000);  // Wait before trying to open FIFO again
 	}
 
 	return NULL;
 }
 
+void* fifo_writer_thread(void *arg) {
+	const char *fifoPath = (const char *)arg;
+	char buffer[BUFFER_SIZE];
+	int fifo_fd = -1;
+
+	while (1) {
+		// Attempt to open FIFO if not already open
+		if (fifo_fd == -1) {
+			fifo_fd = open(fifoPath, O_WRONLY);
+			if (fifo_fd == -1) {
+				if (errno != ENXIO) {  // Ignore if no readers are currently available
+					perror("Unable to open FIFO");
+				}
+				usleep(100000);  // Wait before trying to open FIFO again
+				continue;
+			}
+		}
+
+		// Check if there's data in the ring buffer
+		ring_buffer_size_t bytesAvailable = ring_buffer_num_items(&videoRingBuffer);
+		if (bytesAvailable > 0) {
+			ring_buffer_size_t bytesToRead = bytesAvailable < BUFFER_SIZE ? bytesAvailable : BUFFER_SIZE;
+			ring_buffer_size_t bytesRead = ring_buffer_dequeue_arr(&videoRingBuffer, buffer, bytesToRead);
+
+			if (bytesRead > 0) {
+				ssize_t bytesWritten = write(fifo_fd, buffer, bytesRead);
+				if (bytesWritten == -1) {
+					if (errno == EPIPE || errno == ENXIO) {
+						// Reader has gone away, close and mark FIFO for reopening
+						close(fifo_fd);
+						fifo_fd = -1;
+					} else {
+						perror("Write to FIFO failed");
+					}
+				}
+			}
+		} else {
+			// No data in the ring buffer, sleep briefly to yield CPU
+			usleep(10000);
+		}
+	}
+
+	if (fifo_fd != -1) {
+		close(fifo_fd);
+	}
+	return NULL;
+}
 
 

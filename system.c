@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <string.h>
 #include <imp/imp_log.h>
 #include <imp/imp_common.h>
 #include <imp/imp_system.h>
@@ -6,12 +7,6 @@
 #include <imp/imp_encoder.h>
 
 #include "encoder.h"
-
-#include <string.h>
-#include <arpa/inet.h>
-#include <netinet/tcp.h>
-#include <errno.h>  // Include for the errno variable
-
 #include "system.h"
 #include "tcp.h"
 #include "config.h"
@@ -95,26 +90,34 @@ int system_initalize()
 		return -1;
 	}*/
 
-	  pthread_t thread_id;
-    int video_channel = 0; // Example video channel ID
+	pthread_t thread_id, fifo_thread;
+	int video_channel = 0; // Example video channel ID
 
-    // Start the video feeder thread
-    if(pthread_create(&thread_id, NULL, video_feeder_thread, &video_channel) != 0) {
-        perror("Failed to create video feeder thread");
-        return -1;
-    }
-
-    // Run TCP server setup
-    ret = setup_tcp();
-		if (ret < 0) {
-		IMP_LOG_ERR(TAG, "TCP failed\n");
+	// Start the video feeder thread
+	if(pthread_create(&thread_id, NULL, video_feeder_thread, &video_channel) != 0) {
+		perror("Failed to create video feeder thread");
 		return -1;
-		}
+	}
 
-    // Cleanup
-    pthread_join(thread_id, NULL); // Wait for the feeder thread to finish
-    return 0;
+	const char *fifoPath = "/tmp/h264_fifo";
 
+	// Start FIFO writer thread
+	if (pthread_create(&fifo_thread, NULL, fifo_writer_thread, (void *)fifoPath)) {
+		perror("Could not create FIFO writer thread");
+		return -1;
+	}
+
+	// Run TCP server setup
+	ret = setup_tcp();
+	if (ret < 0) {
+	IMP_LOG_ERR(TAG, "TCP failed\n");
+	return -1;
+	}
+
+	// Cleanup
+	pthread_join(thread_id, NULL); // Wait for the feeder thread to finish
+	pthread_join(fifo_thread, NULL); // Wait for the FIFO writer thread to finish
+	return 0;
 
 	/* Step.a Stream Off */
 	ret = framesource_streamoff();
@@ -161,7 +164,6 @@ int system_initalize()
 int isp_init()
 {
 	int ret = 0;
-
 
 /*
  *    IMP_System_MemPoolRequest(0, 12 * ( 1 << 20 ), "mempool0");
@@ -260,7 +262,6 @@ int isp_exit()
 	int ret = 0;
 
 	IMP_LOG_DBG(TAG, "sample_system_exit start\n");
-
 
 	IMP_System_Exit();
 

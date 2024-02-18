@@ -39,6 +39,8 @@
 #define CHN_DISABLE				0
 
 void* video_feeder_thread(void *arg);
+void* fifo_writer_thread(void *arg);
+
 typedef struct ring_buffer_t ring_buffer_t;  // Forward declaration
 
 int feed_video_to_ring_buffer(ring_buffer_t *rb, int chn);
