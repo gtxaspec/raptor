@@ -1,7 +1,15 @@
 # Variables
 commit_tag=$(shell git rev-parse --short HEAD)
 
-CC = ccache $(CROSS_COMPILE)gcc
+# Check if ccache is available
+CCACHE_EXISTS := $(shell command -v ccache 2> /dev/null)
+
+ifdef CCACHE_EXISTS
+    CC = ccache $(CROSS_COMPILE)gcc
+else
+    CC = $(CROSS_COMPILE)gcc
+endif
+
 STRIP = $(CROSS_COMPILE)strip
 
 CONFIG_MUSL_BUILD=y
