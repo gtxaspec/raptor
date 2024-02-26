@@ -4,6 +4,7 @@
 #include <signal.h>
 #include <imp/imp_log.h>
 #include <imp/imp_system.h>
+
 #include "system.h"
 #include "version.h"
 #include "encoder.h"
@@ -25,12 +26,13 @@ void displayUsage() {
 
 void handle_sigpipe(int sig) {
 	// Ignore for now
-	//printf("SIGPIPE caught.\n");
+	// printf("SIGPIPE caught.\n");
 }
 
 int main(int argc, char *argv[])
 {
 	signal(SIGPIPE, handle_sigpipe);
+
 	int i, ret;
 
 	if (load_configuration("raptor.ini", &config) < 0) {
@@ -40,7 +42,6 @@ int main(int argc, char *argv[])
 
 	printf("Config loaded from 'raptor.ini': soc_family=%s, sensor=%s, frame_rate=%d, debug=%s, sensor_i2c=%x,sensor_width=%d\n\n",
 	config.soc_family, config.sensor_1_name, config.sensor_1_fps, config.debug, config.sensor_1_i2c_address, config.sensor_1_width);
-	//return 0;
 
 	// parse args
 	for (i = 0; i < argc; i++) {

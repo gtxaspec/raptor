@@ -8,7 +8,7 @@
 
 #include "encoder.h"
 #include "system.h"
-#include "tcp.h"
+#include "unix.h"
 #include "config.h"
 #include "framesource.h"
 
@@ -90,7 +90,7 @@ int system_initalize()
 		return -1;
 	}*/
 
-	pthread_t thread_id, fifo_thread;
+	pthread_t thread_id;
 	int video_channel = 0; // Example video channel ID
 
 	// Start the video feeder thread
@@ -99,24 +99,15 @@ int system_initalize()
 		return -1;
 	}
 
-	const char *fifoPath = "/tmp/h264_fifo";
-
-	// Start FIFO writer thread
-	if (pthread_create(&fifo_thread, NULL, fifo_writer_thread, (void *)fifoPath)) {
-		perror("Could not create FIFO writer thread");
-		return -1;
-	}
-
-	// Run TCP server setup
-	ret = setup_tcp();
+	// Run unix server setup
+	ret = setup_uds();
 	if (ret < 0) {
-	IMP_LOG_ERR(TAG, "TCP failed\n");
+	IMP_LOG_ERR(TAG, "uds failed\n");
 	return -1;
 	}
 
 	// Cleanup
 	pthread_join(thread_id, NULL); // Wait for the feeder thread to finish
-	pthread_join(fifo_thread, NULL); // Wait for the FIFO writer thread to finish
 	return 0;
 
 	/* Step.a Stream Off */

@@ -1,8 +1,10 @@
 #include <stdlib.h>
 #include <string.h>
+
 #include "config.h"
 #include "ini.h"
 
+// Very primitive for now
 static int handler(void* user, const char* section, const char* name, const char* value)
 {
 	configuration* pconfig = (configuration*)user;

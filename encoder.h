@@ -9,11 +9,7 @@
 #include <imp/imp_encoder.h>
 #include <unistd.h>
 
-//#define SENSOR_FRAME_RATE_NUM		30
 #define SENSOR_FRAME_RATE_DEN	1
-
-//#define SENSOR_GC2053
-
 
 #define CHN0_EN				1
 #define CHN1_EN				0
@@ -39,9 +35,8 @@
 #define CHN_DISABLE				0
 
 void* video_feeder_thread(void *arg);
-void* fifo_writer_thread(void *arg);
 
-typedef struct ring_buffer_t ring_buffer_t;  // Forward declaration
+typedef struct ring_buffer_t ring_buffer_t;
 
 int feed_video_to_ring_buffer(ring_buffer_t *rb, int chn);
 
