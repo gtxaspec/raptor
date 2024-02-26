@@ -1,33 +1,46 @@
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "config.h"
 #include "ini.h"
 
-// Very primitive for now
-static int handler(void* user, const char* section, const char* name, const char* value)
-{
-	configuration* pconfig = (configuration*)user;
-	if (strcmp(section, "platform") == 0 && strcmp(name, "soc_family") == 0) {
-		pconfig->soc_family = strdup(value);
-	} else if (strcmp(section, "sensor_1") == 0 && strcmp(name, "sensor_name") == 0) {
-		pconfig->sensor_1_name = strdup(value);
-	} else if (strcmp(section, "sensor_1") == 0 && strcmp(name, "sensor_bus") == 0) {
-		pconfig->sensor_1_bus = strdup(value);
-	} else if (strcmp(section, "sensor_1") == 0 && strcmp(name, "sensor_i2c_address") == 0) {
-		pconfig->sensor_1_i2c_address = (int)strtol(value, NULL, 0);
-	} else if (strcmp(section, "sensor_1") == 0 && strcmp(name, "sensor_width") == 0) {
-		pconfig->sensor_1_width = atoi(value);
-	} else if (strcmp(section, "sensor_1") == 0 && strcmp(name, "sensor_height") == 0) {
-		pconfig->sensor_1_height = atoi(value);
-	} else if (strcmp(section, "sensor_1") == 0 && strcmp(name, "sensor_fps") == 0) {
-		pconfig->sensor_1_fps = atoi(value);
-	} else if (strcmp(section, "development") == 0 && strcmp(name, "debug") == 0) {
-		pconfig->debug = strdup(value);
-	} else {
-		return 0; // unknown section/name, error
-	}
-	return 1;
+typedef struct {
+    const char* section;
+    const char* key;
+    size_t offset;
+    enum { TYPE_STRING, TYPE_INT } type;
+} config_option_t;
+
+const config_option_t config_options[] = {
+    {"platform", "soc_family", offsetof(configuration, soc_family), TYPE_STRING},
+    {"sensor_1", "sensor_name", offsetof(configuration, sensor_1_name), TYPE_STRING},
+    {"sensor_1", "sensor_bus", offsetof(configuration, sensor_1_bus), TYPE_STRING},
+    {"sensor_1", "sensor_i2c_address", offsetof(configuration, sensor_1_i2c_address), TYPE_INT},
+    {"sensor_1", "sensor_width", offsetof(configuration, sensor_1_width), TYPE_INT},
+    {"sensor_1", "sensor_height", offsetof(configuration, sensor_1_height), TYPE_INT},
+    {"sensor_1", "sensor_fps", offsetof(configuration, sensor_1_fps), TYPE_INT},
+    {"development", "debug", offsetof(configuration, debug), TYPE_STRING},
+    {NULL, NULL, 0, 0} // Mark the end of the options
+};
+
+static int handler(void* user, const char* section, const char* name, const char* value) {
+    configuration* pconfig = (configuration*)user;
+    for (const config_option_t* option = config_options; option->section; ++option) {
+        if (strcmp(section, option->section) == 0 && strcmp(name, option->key) == 0) {
+            char* dest = (char*)pconfig + option->offset;
+            switch (option->type) {
+                case TYPE_STRING:
+                    *((char**)dest) = strdup(value);
+                    break;
+                case TYPE_INT:
+                    *((int*)dest) = (int)strtol(value, NULL, 0);
+                    break;
+            }
+            return 1;
+        }
+    }
+    return 0; // unknown section/name, error
 }
 
 int load_configuration(const char* filename, configuration* config)
