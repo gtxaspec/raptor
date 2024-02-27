@@ -29,8 +29,8 @@ int system_initalize()
 		return -1;
 	}
 
- // update conf before framesource init... temp
- for (i = 0; i <  FS_CHN_NUM; i++) {
+// update conf before framesource init... temp
+for (i = 0; i <  FS_CHN_NUM; i++) {
 		if (chn[i].enable) {
 		chn[i].fs_chn_attr.picWidth = config.sensor_1_width;
 		chn[i].fs_chn_attr.picHeight = config.sensor_1_height;
@@ -38,7 +38,7 @@ int system_initalize()
 		chn[i].fs_chn_attr.crop.height = config.sensor_1_height;
 		chn[i].fs_chn_attr.outFrmRateNum = config.sensor_1_fps;
 		}
- }
+}
 
 	/* Step.2 FrameSource init */
 	ret = framesource_init();
@@ -157,18 +157,18 @@ int isp_init()
 	int ret = 0;
 
 /*
- *    IMP_System_MemPoolRequest(0, 12 * ( 1 << 20 ), "mempool0");
- *    IMP_System_MemPoolRequest(1, 10 * ( 1 << 20 ), "mempool1");
- *
- *    IMP_Encoder_SetPool(0, 0);
- *    IMP_Encoder_SetPool(1, 1);
- *
- *    IMP_FrameSource_SetPool(0, 0);
- *    IMP_FrameSource_SetPool(1, 1);
- *
- *    IMP_System_MemPoolFree(1);
- *    IMP_System_MemPoolFree(0);
- */
+*    IMP_System_MemPoolRequest(0, 12 * ( 1 << 20 ), "mempool0");
+*    IMP_System_MemPoolRequest(1, 10 * ( 1 << 20 ), "mempool1");
+*
+*    IMP_Encoder_SetPool(0, 0);
+*    IMP_Encoder_SetPool(1, 1);
+*
+*    IMP_FrameSource_SetPool(0, 0);
+*    IMP_FrameSource_SetPool(1, 1);
+*
+*    IMP_System_MemPoolFree(1);
+*    IMP_System_MemPoolFree(0);
+*/
 
 	memset(&sensor_info, 0, sizeof(IMPSensorInfo));
 
@@ -225,23 +225,23 @@ int isp_init()
 		IMP_LOG_ERR(TAG, "IMP_ISP_EnableTuning failed\n");
 		return -1;
 	}
-    IMP_ISP_Tuning_SetContrast(128);
-    IMP_ISP_Tuning_SetSharpness(128);
-    IMP_ISP_Tuning_SetSaturation(128);
-    IMP_ISP_Tuning_SetBrightness(128);
+	IMP_ISP_Tuning_SetContrast(128);
+	IMP_ISP_Tuning_SetSharpness(128);
+	IMP_ISP_Tuning_SetSaturation(128);
+	IMP_ISP_Tuning_SetBrightness(128);
 #if 1
-    ret = IMP_ISP_Tuning_SetISPRunningMode(IMPISP_RUNNING_MODE_DAY);
-    if (ret < 0){
-        IMP_LOG_ERR(TAG, "failed to set running mode\n");
-        return -1;
-    }
+	ret = IMP_ISP_Tuning_SetISPRunningMode(IMPISP_RUNNING_MODE_DAY);
+	if (ret < 0){
+		IMP_LOG_ERR(TAG, "failed to set running mode\n");
+		return -1;
+	}
 #endif
 #if 0 // SENSOR FPS
-    ret = IMP_ISP_Tuning_SetSensorFPS(SENSOR_FRAME_RATE_NUM, SENSOR_FRAME_RATE_DEN);
-    if (ret < 0){
-        IMP_LOG_ERR(TAG, "failed to set sensor fps\n");
-        return -1;
-    }
+	ret = IMP_ISP_Tuning_SetSensorFPS(SENSOR_FRAME_RATE_NUM, SENSOR_FRAME_RATE_DEN);
+	if (ret < 0){
+		IMP_LOG_ERR(TAG, "failed to set sensor fps\n");
+		return -1;
+	}
 #endif
 	IMP_LOG_DBG(TAG, "ImpSystemInit success\n");
 

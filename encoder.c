@@ -257,45 +257,45 @@ int encoder_exit(void)
 
 int feed_video_to_ring_buffer(ring_buffer_t *rb, int chn)
 {
-    int ret;
-    IMPEncoderStream stream;
-    
+	int ret;
+	IMPEncoderStream stream;
+
 	ret = IMP_Encoder_StartRecvPic(chn);
 	if (ret < 0){
 		IMP_LOG_ERR(TAG, "IMP_Encoder_StartRecvPic(%d) failed\n", 1);
 		return ret;
 	}
 
-    // Poll for the stream first
-    ret = IMP_Encoder_PollingStream(chn, 100); // Timeout of 100 ms
-    if (ret < 0) {
-        IMP_LOG_ERR(TAG, "Polling stream timeout\n");
-        return -1;
-    }
-
-    // Get the stream
-    ret = IMP_Encoder_GetStream(chn, &stream, 0); // Blocking call
-    if (ret < 0) {
-        IMP_LOG_ERR(TAG, "IMP_Encoder_GetStream() failed\n");
-        return -1;
-    }
-
-    // Iterate through each packet in the stream
-    for (int i = 0; i < stream.packCount; i++) {
-        IMPEncoderPack *pack = &stream.pack[i];
-        if(pack->length > 0){
-            // Assuming the ring buffer has been initialized correctly elsewhere
-            // Feed each packet into the ring buffer
-		#ifdef PLATFORM_T31
-            ring_buffer_queue_arr(rb, (const char *)(stream.virAddr + pack->offset), pack->length);
- 		#else
-        	ring_buffer_queue_arr(rb, (const char *)(pack->virAddr), pack->length);
-		#endif
-        }
+	// Poll for the stream first
+	ret = IMP_Encoder_PollingStream(chn, 100); // Timeout of 100 ms
+	if (ret < 0) {
+		IMP_LOG_ERR(TAG, "Polling stream timeout\n");
+		return -1;
 	}
 
-    // Release the stream after processing
-    IMP_Encoder_ReleaseStream(chn, &stream);
+	// Get the stream
+	ret = IMP_Encoder_GetStream(chn, &stream, 0); // Blocking call
+	if (ret < 0) {
+		IMP_LOG_ERR(TAG, "IMP_Encoder_GetStream() failed\n");
+		return -1;
+	}
 
-    return 0; // Success
+	// Iterate through each packet in the stream
+	for (int i = 0; i < stream.packCount; i++) {
+		IMPEncoderPack *pack = &stream.pack[i];
+		if(pack->length > 0){
+			// Assuming the ring buffer has been initialized correctly elsewhere
+			// Feed each packet into the ring buffer
+		#ifdef PLATFORM_T31
+			ring_buffer_queue_arr(rb, (const char *)(stream.virAddr + pack->offset), pack->length);
+		#else
+			ring_buffer_queue_arr(rb, (const char *)(pack->virAddr), pack->length);
+		#endif
+		}
+	}
+
+	// Release the stream after processing
+	IMP_Encoder_ReleaseStream(chn, &stream);
+
+	return 0; // Success
 }

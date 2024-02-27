@@ -8,34 +8,34 @@
 /*
 void setup_framesource(FrameSource *framesource)
 {
-  int ret;
-  IMPFSChnAttr *fs_chn_attr = &framesource->imp_fs_attrs;
+int ret;
+IMPFSChnAttr *fs_chn_attr = &framesource->imp_fs_attrs;
 
-  fs_chn_attr->pixFmt = framesource->pixel_format;
-  fs_chn_attr->outFrmRateNum = framesource->frame_rate_numerator;
-  fs_chn_attr->outFrmRateDen = framesource->frame_rate_denominator;
-  fs_chn_attr->nrVBs = framesource->buffer_size;
-  fs_chn_attr->crop.enable = framesource->crop_enable;  
-  fs_chn_attr->crop.top = framesource->crop_top;
-  fs_chn_attr->crop.left = framesource->crop_left;
-  fs_chn_attr->crop.width = framesource->crop_width;
-  fs_chn_attr->crop.height = framesource->crop_height;
-  fs_chn_attr->scaler.enable = framesource->scaling_enable;
-  fs_chn_attr->scaler.outwidth = framesource->scaling_width;
-  fs_chn_attr->scaler.outheight = framesource->scaling_height;
-  fs_chn_attr->picWidth = framesource->pic_width;
-  fs_chn_attr->picHeight = framesource->pic_height;
-  fs_chn_attr->type = framesource->channel_type;
+fs_chn_attr->pixFmt = framesource->pixel_format;
+fs_chn_attr->outFrmRateNum = framesource->frame_rate_numerator;
+fs_chn_attr->outFrmRateDen = framesource->frame_rate_denominator;
+fs_chn_attr->nrVBs = framesource->buffer_size;
+fs_chn_attr->crop.enable = framesource->crop_enable;
+fs_chn_attr->crop.top = framesource->crop_top;
+fs_chn_attr->crop.left = framesource->crop_left;
+fs_chn_attr->crop.width = framesource->crop_width;
+fs_chn_attr->crop.height = framesource->crop_height;
+fs_chn_attr->scaler.enable = framesource->scaling_enable;
+fs_chn_attr->scaler.outwidth = framesource->scaling_width;
+fs_chn_attr->scaler.outheight = framesource->scaling_height;
+fs_chn_attr->picWidth = framesource->pic_width;
+fs_chn_attr->picHeight = framesource->pic_height;
+fs_chn_attr->type = framesource->channel_type;
 
-  ret = IMP_FrameSource_CreateChn(framesource->id, fs_chn_attr);
-  if(ret < 0){
-    exit(1);
-  }
+ret = IMP_FrameSource_CreateChn(framesource->id, fs_chn_attr);
+if(ret < 0){
+	exit(1);
+}
 
-  ret = IMP_FrameSource_SetChnAttr(framesource->id, fs_chn_attr);
-  if (ret < 0) {
-    exit(1);
-  }
+ret = IMP_FrameSource_SetChnAttr(framesource->id, fs_chn_attr);
+if (ret < 0) {
+	exit(1);
+}
 
 }*/
 
@@ -61,14 +61,14 @@ struct chn_conf chn[FS_CHN_NUM] = {
 
 			//.picWidth = SENSOR_WIDTH,
 			//.picHeight = SENSOR_HEIGHT,
-		   },
+		},
 		.framesource_chn =	{ DEV_ID_FS, CH0_INDEX, 0},
 		.imp_encoder = { DEV_ID_ENC, CH0_INDEX, 0},
 	},
 	{
 		.index = CH1_INDEX,
 		.enable = CHN1_EN,
-   // .payloadType = IMP_ENC_PROFILE_HEVC_MAIN,
+// .payloadType = IMP_ENC_PROFILE_HEVC_MAIN,
 		.fs_chn_attr = {
 			.pixFmt = PIX_FMT_NV12,
 			//.outFrmRateNum = SENSOR_FRAME_RATE_NUM,
@@ -88,14 +88,14 @@ struct chn_conf chn[FS_CHN_NUM] = {
 
 			.picWidth = SENSOR_WIDTH_THIRD,
 			.picHeight = SENSOR_HEIGHT_THIRD,
-		   },
+		},
 		.framesource_chn =	{ DEV_ID_FS, CH1_INDEX, 0},
 		.imp_encoder = { DEV_ID_ENC, CH1_INDEX, 0},
 	},
 	{
 		.index = CH2_INDEX,
 		.enable = CHN2_EN,
-   // .payloadType = IMP_ENC_PROFILE_HEVC_MAIN,
+// .payloadType = IMP_ENC_PROFILE_HEVC_MAIN,
 		.fs_chn_attr = {
 			.pixFmt = PIX_FMT_NV12,
 			//.outFrmRateNum = SENSOR_FRAME_RATE_NUM,
@@ -115,7 +115,7 @@ struct chn_conf chn[FS_CHN_NUM] = {
 
 			.picWidth = SENSOR_WIDTH_SECOND,
 			.picHeight = SENSOR_HEIGHT_SECOND,
-		   },
+		},
 		.framesource_chn =	{ DEV_ID_FS, CH2_INDEX, 0},
 		.imp_encoder = { DEV_ID_ENC, CH2_INDEX, 0},
 	},
@@ -142,7 +142,7 @@ struct chn_conf chn[FS_CHN_NUM] = {
 
 			.picWidth = SENSOR_WIDTH_SECOND,
 			.picHeight = SENSOR_HEIGHT_SECOND,
-		   },
+		},
 		.framesource_chn =	{ DEV_ID_FS, CH3_INDEX, 0},
 		.imp_encoder = { DEV_ID_ENC, CH3_INDEX, 0},
 	},
