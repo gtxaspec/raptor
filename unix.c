@@ -6,6 +6,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <signal.h>
+#include <pthread.h>
 
 #include "encoder.h"
 #include "system.h"
@@ -27,6 +28,33 @@ void signal_handler(int sig) {
 	unlink(SOCKET_PATH);
 	
 	exit(0);
+}
+
+void *handle_client(void *arg) {
+	int client_socket = *((int*)arg);
+	free(arg); // Free the allocated memory for the client socket
+
+	char buffer[config.uds_buffer_size]; // Temporary buffer for data to send
+
+	while (1) {
+		ring_buffer_size_t bytesAvailable = ring_buffer_num_items(&videoRingBuffer);
+		if (bytesAvailable > 0) {
+			ring_buffer_size_t bytesToRead = bytesAvailable < config.uds_buffer_size ? bytesAvailable : config.uds_buffer_size;
+			ring_buffer_size_t bytesRead = ring_buffer_dequeue_arr(&videoRingBuffer, buffer, bytesToRead);
+			if (bytesRead > 0) {
+				int sentBytes = send(client_socket, buffer, bytesRead, 0);
+				if (sentBytes < 0) {
+					perror("Error sending data to client");
+					break; // Break out of the loop on send error
+				}
+			}
+		}
+		usleep(1000); // Adjust sleep as needed for CPU
+	}
+
+	close(client_socket); // Close the client socket when done
+	printf("Client disconnected.\n");
+	return NULL;
 }
 
 int setup_uds() {
@@ -92,34 +120,26 @@ int setup_uds() {
 		}
 		printf("Client connected.\n");
 
-		char buffer[config.uds_buffer_size]; // Temporary buffer for data to send
+		// Allocate memory for client socket to pass to the thread
+		int *client_sock_ptr = malloc(sizeof(int));
+		*client_sock_ptr = client_socket;
 
-		while (1) {
-			ring_buffer_size_t bytesAvailable = ring_buffer_num_items(&videoRingBuffer);
-			if (bytesAvailable > 0) {
-				ring_buffer_size_t bytesToRead = bytesAvailable < config.uds_buffer_size ? bytesAvailable : config.uds_buffer_size;
-				ring_buffer_size_t bytesRead = ring_buffer_dequeue_arr(&videoRingBuffer, buffer, bytesToRead);
-				if (bytesRead > 0) {
-					int sentBytes = send(client_socket, buffer, bytesRead, 0);
-					if (sentBytes < 0) {
-						perror("Error sending data to client");
-						break; // Break out of the loop on send error
-					}
-				}
-			}
-			usleep(1000); // Adjust sleep as needed for CPU
+		// Create a thread to handle the new client
+		pthread_t client_thread;
+		if (pthread_create(&client_thread, NULL, handle_client, client_sock_ptr) != 0) {
+			perror("Failed to create thread");
+			close(client_socket); // Close the client socket if thread creation fails
+			free(client_sock_ptr); // Free the allocated memory in case of thread creation failure
+			continue; // Skip to the next iteration
 		}
-
-		if (client_socket != -1) {
-			close(client_socket); // Close the client socket when done
-			client_socket = -1;
-		}
-		printf("Client disconnected.\n");
+		// Optional, detach the thread
+		pthread_detach(client_thread);
 	}
 
 	close(server_socket);
 	free(ringBufferData); // Free allocated memory for the ring buffer
 	return 0;
+
 }
 
 void* video_feeder_thread(void *arg) {
