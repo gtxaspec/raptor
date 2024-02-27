@@ -6,6 +6,7 @@
 #include "ini.h"
 
 const config_option_t config_options[] = {
+	{"development", "debug", offsetof(configuration, debug), TYPE_STRING},
 	{"platform", "soc_family", offsetof(configuration, soc_family), TYPE_STRING},
 	{"sensor_1", "sensor_name", offsetof(configuration, sensor_1_name), TYPE_STRING},
 	{"sensor_1", "sensor_bus", offsetof(configuration, sensor_1_bus), TYPE_STRING},
@@ -15,7 +16,6 @@ const config_option_t config_options[] = {
 	{"sensor_1", "sensor_fps", offsetof(configuration, sensor_1_fps), TYPE_INT},
 	{"network", "buffer_size", offsetof(configuration, uds_buffer_size), TYPE_INT},
 	{"network", "ring_buffer_size", offsetof(configuration, ring_buffer_size), TYPE_INT},
-	{"development", "debug", offsetof(configuration, debug), TYPE_STRING},
 	{NULL, NULL, 0, 0} // Mark the end of the options
 };
 
@@ -43,6 +43,21 @@ int load_configuration(const char* filename, configuration* config)
 	if (ini_parse(filename, handler, config) < 0) {
 		return -1; // Failed to load file
 	}
+
+	if (strcmp(config->debug, "true") == 0){
+		printf("Config loaded from 'raptor.ini':\n");
+		printf("debug=%s\n", config->debug);
+		printf("soc_family=%s\n", config->soc_family);
+		printf("sensor_1_name=%s\n", config->sensor_1_name);
+		printf("sensor_1_frame_rate=%d\n", config->sensor_1_fps);
+		printf("sensor_1_bus=%s\n", config->sensor_1_bus);
+		printf("sensor_1_i2c_address=0x%x\n", config->sensor_1_i2c_address);
+		printf("sensor_1_width=%d\n", config->sensor_1_width);
+		printf("sensor_1_height=%d\n", config->sensor_1_height);
+		printf("socket_buffer_size=%d\n", config->uds_buffer_size);
+		printf("ring_buffer_size=%d\n\n", config->ring_buffer_size);
+	}
+
 	return 0; // Success
 }
 

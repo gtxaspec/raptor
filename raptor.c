@@ -40,9 +40,6 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	printf("Config loaded from 'raptor.ini': soc_family=%s, sensor=%s, frame_rate=%d, debug=%s, sensor_i2c=%x,sensor_width=%d\n\n",
-	config.soc_family, config.sensor_1_name, config.sensor_1_fps, config.debug, config.sensor_1_i2c_address, config.sensor_1_width);
-
 	// parse args
 	for (i = 0; i < argc; i++) {
 		char *arg = argv[i];
