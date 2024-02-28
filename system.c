@@ -11,6 +11,7 @@
 #include "unix.h"
 #include "config.h"
 #include "framesource.h"
+#include "libimp_dynamic_t31.h"
 
 #define TAG "encoder"
 
@@ -176,7 +177,6 @@ int isp_init()
 	strncpy(sensor_info.name, config.sensor_1_name, sizeof(sensor_info.name) - 1);
 	// Explicitly null-terminate to avoid string overflow issues
 	sensor_info.name[sizeof(sensor_info.name) - 1] = '\0';
-
 	//sensor_info.cbus_type = SENSOR_CUBS_TYPE;
 	if (strcmp(config.sensor_1_bus, "i2c") == 0) {
 		sensor_info.cbus_type = TX_SENSOR_CONTROL_INTERFACE_I2C;

@@ -9,6 +9,7 @@
 #include "version.h"
 #include "encoder.h"
 #include "config.h"
+#include "libimp_dynamic_t31.h"
 
 #define STRINGIFY(x) #x
 #define TOSTRING(x) STRINGIFY(x)
@@ -31,6 +32,8 @@ void handle_sigpipe(int sig) {
 
 int main(int argc, char *argv[])
 {
+	init_libimp_v1();
+
 	signal(SIGPIPE, handle_sigpipe);
 
 	int i, ret;
@@ -60,7 +63,7 @@ int main(int argc, char *argv[])
 	}
 
     printf("Raptor Video Daemon for %s Sensor: %s Version: %s\n", TOSTRING(SOC), config.sensor_1_name, VERSION);
-    IMP_System_GetCPUInfo();
+    //IMP_System_GetCPUInfo();
     ret = system_initalize();
 	if (ret < 0) {
 		IMP_LOG_ERR(TAG, "system init failed\n");

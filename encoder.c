@@ -13,6 +13,7 @@
 #include "encoder.h"
 #include "config.h"
 #include "framesource.h"
+#include "libimp_dynamic_t31.h"
 
 #define TAG "encoder"
 

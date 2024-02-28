@@ -2,6 +2,7 @@
 #include <imp/imp_framesource.h>
 #include "framesource.h"
 #include "encoder.h"
+#include "libimp_dynamic_t31.h"
 
 #define TAG "framesource"
 
