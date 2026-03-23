@@ -66,6 +66,7 @@ int main(int argc, char **argv)
 
 	rsd_server_t srv = {0};
 	srv.cfg = cfg;
+	srv.config_path = config_path;
 	srv.running = running;
 	srv.port = rss_config_get_int(cfg, "rtsp", "port", 554);
 	pthread_mutex_init(&srv.clients_lock, NULL);

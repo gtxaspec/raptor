@@ -77,6 +77,7 @@ typedef struct {
 	int                  epoll_fd;
 	rss_ctrl_t          *ctrl;
 	rss_config_t        *cfg;
+	const char          *config_path;
 
 	/* Clients */
 	rsd_client_t        *clients[RSD_MAX_CLIENTS];
