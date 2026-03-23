@@ -9,7 +9,7 @@
 #include <rss_ipc.h>
 #include <rss_common.h>
 
-#define RVD_MAX_STREAMS      2
+#define RVD_MAX_STREAMS      3   /* main, sub, jpeg */
 
 typedef struct {
 	rss_video_config_t  enc_cfg;
@@ -17,6 +17,7 @@ typedef struct {
 	rss_ring_t         *ring;
 	int                 chn;          /* encoder channel index */
 	bool                enabled;
+	bool                is_jpeg;      /* true for snapshot channel */
 } rvd_stream_t;
 
 typedef struct {
@@ -37,6 +38,11 @@ typedef struct {
 	/* Config */
 	rss_config_t        *cfg;
 	const char          *config_path;
+
+	/* JPEG snapshot */
+	int                  jpeg_stream;   /* stream index for JPEG, -1 if disabled */
+	int                  jpeg_quality;
+	char                 jpeg_path[64]; /* e.g. /tmp/snapshot.jpg */
 
 	volatile sig_atomic_t *running;
 } rvd_state_t;

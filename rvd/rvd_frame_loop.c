@@ -69,14 +69,23 @@ static void *encoder_thread(void *arg)
 		rss_iov_t iov[16];
 		uint32_t cnt = frame.nal_count;
 		if (cnt > 16) cnt = 16;
+		uint32_t total_len = 0;
 		for (uint32_t n = 0; n < cnt; n++) {
 			iov[n].data   = frame.nals[n].data;
 			iov[n].length = frame.nals[n].length;
+			total_len += frame.nals[n].length;
 		}
 		rss_ring_publish_iov(s->ring, iov, cnt,
 				     frame.timestamp,
 				     primary_nal_type(&frame),
 				     frame.is_key ? 1 : 0);
+
+		/* JPEG: also write snapshot file atomically */
+		if (s->is_jpeg && cnt > 0 && st->jpeg_path[0]) {
+			rss_write_file_atomic(st->jpeg_path,
+					      frame.nals[0].data,
+					      (int)total_len);
+		}
 
 		RSS_HAL_CALL(st->ops, enc_release_frame, st->hal_ctx,
 			     s->chn, &frame);
