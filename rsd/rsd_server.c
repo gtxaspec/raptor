@@ -284,7 +284,28 @@ static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf,
 			    int resp_buf_size, void *userdata)
 {
 	rsd_server_t *srv = userdata;
-	(void)cmd_json;
+
+	if (strstr(cmd_json, "\"config-save\"")) {
+		int ret = rss_config_save(srv->cfg, srv->config_path);
+		snprintf(resp_buf, resp_buf_size,
+			 "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
+		if (ret == 0)
+			RSS_INFO("running config saved to %s", srv->config_path);
+		return (int)strlen(resp_buf);
+	}
+
+	if (strstr(cmd_json, "\"config-show\"")) {
+		snprintf(resp_buf, resp_buf_size,
+			 "{\"status\":\"ok\",\"config\":{"
+			 "\"port\":%d,\"clients\":%d,"
+			 "\"max_clients\":%d,"
+			 "\"config_path\":\"%s\"}}",
+			 srv->port, srv->client_count,
+			 RSD_MAX_CLIENTS, srv->config_path);
+		return (int)strlen(resp_buf);
+	}
+
+	/* Default: status */
 	snprintf(resp_buf, resp_buf_size,
 		 "{\"status\":\"ok\",\"clients\":%d}", srv->client_count);
 	return (int)strlen(resp_buf);

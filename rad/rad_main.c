@@ -17,6 +17,8 @@
 #include <getopt.h>
 #include <arpa/inet.h>
 
+#include <sys/select.h>
+
 #include <raptor_hal.h>
 #include <rss_ipc.h>
 #include <rss_common.h>
@@ -84,6 +86,106 @@ static void pcm16_to_l16(const int16_t *pcm, uint8_t *out, int samples)
 		dst[i] = htons((uint16_t)pcm[i]);
 }
 
+/* ── Control socket handler ── */
+
+typedef struct {
+	rss_config_t        *cfg;
+	const char          *config_path;
+	const rss_hal_ops_t *ops;
+	rss_hal_ctx_t       *hal_ctx;
+	int                  ai_dev;
+	int                  volume;
+	int                  gain;
+	int                  sample_rate;
+	int                  codec_id;
+	const char          *codec_str;
+} rad_ctrl_ctx_t;
+
+static int json_get_int(const char *json, const char *key, int *out)
+{
+	char pattern[64];
+	snprintf(pattern, sizeof(pattern), "\"%s\":", key);
+	const char *p = strstr(json, pattern);
+	if (!p) return -1;
+	p += strlen(pattern);
+	while (*p == ' ') p++;
+	*out = atoi(p);
+	return 0;
+}
+
+#define CTRL_RESP(buf) return (int)strlen(buf)
+
+static int rad_ctrl_handler(const char *cmd_json, char *resp_buf,
+			    int resp_buf_size, void *userdata)
+{
+	rad_ctrl_ctx_t *ctx = userdata;
+	int val;
+
+	if (strstr(cmd_json, "\"set-volume\"")) {
+		if (json_get_int(cmd_json, "value", &val) == 0) {
+			RSS_HAL_CALL(ctx->ops, audio_set_volume,
+				     ctx->hal_ctx, ctx->ai_dev, 0, val);
+			ctx->volume = val;
+			rss_config_set_int(ctx->cfg, "audio", "volume", val);
+			snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"ok\"}");
+		} else {
+			snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"error\",\"reason\":\"need value\"}");
+		}
+		CTRL_RESP(resp_buf);
+	}
+
+	if (strstr(cmd_json, "\"set-gain\"")) {
+		if (json_get_int(cmd_json, "value", &val) == 0) {
+			RSS_HAL_CALL(ctx->ops, audio_set_gain,
+				     ctx->hal_ctx, ctx->ai_dev, 0, val);
+			ctx->gain = val;
+			rss_config_set_int(ctx->cfg, "audio", "gain", val);
+			snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"ok\"}");
+		} else {
+			snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"error\",\"reason\":\"need value\"}");
+		}
+		CTRL_RESP(resp_buf);
+	}
+
+	if (strstr(cmd_json, "\"config-save\"")) {
+		int ret = rss_config_save(ctx->cfg, ctx->config_path);
+		snprintf(resp_buf, resp_buf_size,
+			 "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
+		if (ret == 0)
+			RSS_INFO("running config saved to %s", ctx->config_path);
+		CTRL_RESP(resp_buf);
+	}
+
+	if (strstr(cmd_json, "\"config-show\"")) {
+		snprintf(resp_buf, resp_buf_size,
+			 "{\"status\":\"ok\",\"config\":{"
+			 "\"codec\":\"%s\",\"sample_rate\":%d,"
+			 "\"volume\":%d,\"gain\":%d,\"device\":%d,"
+			 "\"config_path\":\"%s\"}}",
+			 ctx->codec_str, ctx->sample_rate,
+			 ctx->volume, ctx->gain, ctx->ai_dev,
+			 ctx->config_path);
+		CTRL_RESP(resp_buf);
+	}
+
+	if (strstr(cmd_json, "\"status\"")) {
+		snprintf(resp_buf, resp_buf_size,
+			 "{\"status\":\"ok\",\"codec\":\"%s\","
+			 "\"sample_rate\":%d,\"volume\":%d,\"gain\":%d}",
+			 ctx->codec_str, ctx->sample_rate,
+			 ctx->volume, ctx->gain);
+		CTRL_RESP(resp_buf);
+	}
+
+	snprintf(resp_buf, resp_buf_size,
+		 "{\"status\":\"error\",\"reason\":\"unknown command\"}");
+	CTRL_RESP(resp_buf);
+}
+
 static void usage(const char *prog)
 {
 	fprintf(stderr,
@@ -140,6 +242,10 @@ int main(int argc, char **argv)
 	volatile sig_atomic_t *running = rss_signal_init();
 	RSS_INFO("rad starting");
 
+	rss_ctrl_t *ctrl = NULL;
+	rss_ring_t *ring = NULL;
+	uint8_t *encode_buf = NULL;
+
 	rss_hal_ctx_t *hal_ctx = rss_hal_create();
 	if (!hal_ctx) {
 		RSS_FATAL("rss_hal_create failed");
@@ -194,7 +300,7 @@ int main(int argc, char **argv)
 
 	/* Ring buffer — L16 frames are larger (2 bytes/sample vs 1) */
 	int ring_data_size = (codec_id == RAD_CODEC_L16) ? 256 * 1024 : 128 * 1024;
-	rss_ring_t *ring = rss_ring_create("audio", 32, ring_data_size);
+	ring = rss_ring_create("audio", 32, ring_data_size);
 	if (!ring) {
 		RSS_FATAL("failed to create audio ring");
 		goto cleanup;
@@ -206,20 +312,46 @@ int main(int argc, char **argv)
 	int encode_buf_size = (codec_id == RAD_CODEC_L16)
 		? audio_cfg.samples_per_frame * 2
 		: audio_cfg.samples_per_frame;
-	uint8_t *encode_buf = malloc(encode_buf_size);
+	encode_buf = malloc(encode_buf_size);
 	if (!encode_buf) {
 		RSS_FATAL("failed to allocate encode buffer");
 		goto cleanup;
 	}
 
+	/* Control socket */
+	rss_mkdir_p("/var/run/rss");
+	ctrl = rss_ctrl_listen("/var/run/rss/rad.sock");
+	if (!ctrl)
+		RSS_WARN("control socket failed (non-fatal)");
+
 	RSS_INFO("audio loop: %d samples/frame (%dms), %s",
 		 audio_cfg.samples_per_frame,
 		 1000 / 50, codec_str);
+
+	rad_ctrl_ctx_t ctrl_ctx = {
+		cfg, config_path, ops, hal_ctx,
+		ai_dev, volume, gain, sample_rate,
+		codec_id, codec_str
+	};
 
 	uint64_t frame_count = 0;
 	int64_t last_stats = rss_timestamp_us();
 
 	while (*running) {
+		/* Check control socket (non-blocking) */
+		if (ctrl) {
+			int ctrl_fd = rss_ctrl_get_fd(ctrl);
+			if (ctrl_fd >= 0) {
+				fd_set fds;
+				struct timeval tv = {0, 0};
+				FD_ZERO(&fds);
+				FD_SET(ctrl_fd, &fds);
+				if (select(ctrl_fd + 1, &fds, NULL, NULL, &tv) > 0)
+					rss_ctrl_accept_and_handle(ctrl,
+						rad_ctrl_handler, &ctrl_ctx);
+			}
+		}
+
 		rss_audio_frame_t frame;
 		ret = RSS_HAL_CALL(ops, audio_read_frame, hal_ctx,
 				   ai_dev, 0, &frame, true);
@@ -282,6 +414,8 @@ int main(int argc, char **argv)
 	RSS_INFO("rad shutting down");
 
 cleanup:
+	if (ctrl)
+		rss_ctrl_destroy(ctrl);
 	free(encode_buf);
 	if (ring)
 		rss_ring_destroy(ring);
