@@ -148,11 +148,19 @@ rsd_client_t_play(VSelf, Compy_Context *ctx, const Compy_Request *req)
 	self->waiting_keyframe = true;
 	self->video_read_seq = 0;
 
+	/* Request IDR from RVD so the client gets a keyframe ASAP */
+	{
+		char resp[128];
+		rss_ctrl_send_command("/var/run/rss/rvd.sock",
+				     "{\"cmd\":\"request-idr\"}",
+				     resp, sizeof(resp), 1000);
+	}
+
 	compy_header(ctx, COMPY_HEADER_SESSION,
 		     "%" PRIu64, self->session_id);
 	compy_respond_ok(ctx);
 
-	RSS_INFO("client PLAY");
+	RSS_INFO("client PLAY (IDR requested)");
 }
 
 static void

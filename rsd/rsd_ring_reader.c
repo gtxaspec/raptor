@@ -107,6 +107,13 @@ void *rsd_ring_reader_thread(void *arg)
 
 		srv->ring_read_seq = read_seq;
 
+		/* Copy frame data to local buffer before distributing.
+		 * The ring's data region is shared memory that the producer
+		 * can overwrite at any time. */
+		if (length > srv->frame_buf_size || !srv->frame_buf)
+			continue;
+		memcpy(srv->frame_buf, data, length);
+
 		/* Distribute frame to all playing clients */
 		pthread_mutex_lock(&srv->clients_lock);
 		for (int i = 0; i < srv->client_count; i++) {
@@ -120,7 +127,7 @@ void *rsd_ring_reader_thread(void *arg)
 				RSS_DEBUG("client got keyframe, starting stream");
 			}
 
-			rsd_send_video_frame(c, data, length,
+			rsd_send_video_frame(c, srv->frame_buf, length,
 					     meta.timestamp, meta.is_key);
 		}
 		pthread_mutex_unlock(&srv->clients_lock);

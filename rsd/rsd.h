@@ -59,6 +59,11 @@ typedef struct {
 	rss_ring_t          *ring_main;
 	uint64_t             ring_read_seq;
 
+	/* Frame copy buffer (ring data is shared memory that can be
+	 * overwritten by the producer; we copy before sending) */
+	uint8_t             *frame_buf;
+	uint32_t             frame_buf_size;
+
 	volatile sig_atomic_t *running;
 
 	int                  port;
