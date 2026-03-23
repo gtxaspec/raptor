@@ -295,6 +295,31 @@ rsd_client_t_play(VSelf, Compy_Context *ctx, const Compy_Request *req)
 				     resp, sizeof(resp), 1000);
 	}
 
+	/* Build RTP-Info header (RFC 2326 Section 12.33)
+	 * Tells the client the initial seq and rtptime for each stream
+	 * so it can correctly synchronize A/V from the first packet. */
+	{
+		char rtp_info[512];
+		int off = 0;
+
+		if (self->video.rtp) {
+			uint16_t vseq = Compy_RtpTransport_get_seq(self->video.rtp);
+			off += snprintf(rtp_info + off, sizeof(rtp_info) - off,
+				"url=rtsp://*/video;seq=%u;rtptime=0", vseq);
+		}
+		if (self->audio.rtp) {
+			uint16_t aseq = Compy_RtpTransport_get_seq(self->audio.rtp);
+			if (off > 0)
+				off += snprintf(rtp_info + off,
+					sizeof(rtp_info) - off, ",");
+			off += snprintf(rtp_info + off, sizeof(rtp_info) - off,
+				"url=rtsp://*/audio;seq=%u;rtptime=0", aseq);
+		}
+
+		if (off > 0)
+			compy_header(ctx, COMPY_HEADER_RTP_INFO, "%s", rtp_info);
+	}
+
 	compy_header(ctx, COMPY_HEADER_SESSION,
 		     "%" PRIu64, self->session_id);
 	compy_respond_ok(ctx);
