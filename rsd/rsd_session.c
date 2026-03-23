@@ -84,24 +84,94 @@ rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *req)
 		return;
 	}
 
-	/* TCP interleaved only for now */
-	if (tcfg.lower != Compy_LowerTransport_TCP) {
-		compy_respond(ctx, COMPY_STATUS_BAD_REQUEST,
-			      "Only TCP interleaved supported");
-		return;
+	Compy_Transport rtp_t, rtcp_t;
+
+	if (tcfg.lower == Compy_LowerTransport_TCP) {
+		/* TCP interleaved */
+		uint8_t rtp_ch = 0, rtcp_ch = 1;
+		ifLet(tcfg.interleaved, Compy_ChannelPair_Some, ch) {
+			rtp_ch = ch->rtp_channel;
+			rtcp_ch = ch->rtcp_channel;
+		}
+
+		Compy_Writer conn_writer = Compy_Context_get_writer(ctx);
+		rtp_t = compy_transport_tcp(conn_writer, rtp_ch, 0);
+		rtcp_t = compy_transport_tcp(conn_writer, rtcp_ch, 0);
+		self->is_tcp = true;
+
+		compy_header(ctx, COMPY_HEADER_TRANSPORT,
+			     "RTP/AVP/TCP;unicast;interleaved=%" PRIu8
+			     "-%" PRIu8, rtp_ch, rtcp_ch);
+
+		RSS_INFO("client SETUP: video TCP interleaved %u-%u",
+			 rtp_ch, rtcp_ch);
+	} else {
+		/* UDP */
+		uint16_t cli_rtp = 0, cli_rtcp = 0;
+		bool have_ports = false;
+		match(tcfg.client_port) {
+			of(Compy_PortPair_Some, pp) {
+				cli_rtp = pp->rtp_port;
+				cli_rtcp = pp->rtcp_port;
+				have_ports = true;
+			}
+			otherwise {}
+		}
+		if (!have_ports) {
+			compy_respond(ctx, COMPY_STATUS_BAD_REQUEST,
+				      "`client_port' not found");
+			return;
+		}
+
+		const void *client_ip = compy_sockaddr_ip(
+			(const struct sockaddr *)&self->addr);
+		if (!client_ip) {
+			compy_respond(ctx, COMPY_STATUS_BAD_REQUEST,
+				      "Cannot determine client IP");
+			return;
+		}
+
+		self->udp_rtp_fd = compy_dgram_socket(
+			AF_INET, client_ip, cli_rtp);
+		if (self->udp_rtp_fd < 0) {
+			compy_respond_internal_error(ctx);
+			return;
+		}
+
+		self->udp_rtcp_fd = compy_dgram_socket(
+			AF_INET, client_ip, cli_rtcp);
+		if (self->udp_rtcp_fd < 0) {
+			close(self->udp_rtp_fd);
+			self->udp_rtp_fd = -1;
+			compy_respond_internal_error(ctx);
+			return;
+		}
+
+		rtp_t = compy_transport_udp(self->udp_rtp_fd);
+		rtcp_t = compy_transport_udp(self->udp_rtcp_fd);
+		self->is_tcp = false;
+
+		/* Get server-side ports */
+		struct sockaddr_in local;
+		socklen_t llen = sizeof(local);
+		uint16_t srv_rtp = 0, srv_rtcp = 0;
+		if (getsockname(self->udp_rtp_fd,
+				(struct sockaddr *)&local, &llen) == 0)
+			srv_rtp = ntohs(local.sin_port);
+		llen = sizeof(local);
+		if (getsockname(self->udp_rtcp_fd,
+				(struct sockaddr *)&local, &llen) == 0)
+			srv_rtcp = ntohs(local.sin_port);
+
+		compy_header(ctx, COMPY_HEADER_TRANSPORT,
+			     "RTP/AVP/UDP;unicast;client_port=%"
+			     PRIu16 "-%" PRIu16
+			     ";server_port=%" PRIu16 "-%" PRIu16,
+			     cli_rtp, cli_rtcp, srv_rtp, srv_rtcp);
+
+		RSS_INFO("client SETUP: video UDP client=%u-%u server=%u-%u",
+			 cli_rtp, cli_rtcp, srv_rtp, srv_rtcp);
 	}
-
-	uint8_t rtp_ch = 0, rtcp_ch = 1;
-	ifLet(tcfg.interleaved, Compy_ChannelPair_Some, ch) {
-		rtp_ch = ch->rtp_channel;
-		rtcp_ch = ch->rtcp_channel;
-	}
-
-	/* Create transports using the context writer (same TCP connection) */
-	Compy_Writer conn_writer = Compy_Context_get_writer(ctx);
-
-	Compy_Transport rtp_t = compy_transport_tcp(conn_writer, rtp_ch, 0);
-	Compy_Transport rtcp_t = compy_transport_tcp(conn_writer, rtcp_ch, 0);
 
 	self->video.rtp = Compy_RtpTransport_new(rtp_t, RSD_VIDEO_PT,
 						 RSD_VIDEO_CLOCK);
@@ -121,15 +191,9 @@ rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *req)
 		}
 	}
 
-	compy_header(ctx, COMPY_HEADER_TRANSPORT,
-		     "RTP/AVP/TCP;unicast;interleaved=%" PRIu8 "-%" PRIu8,
-		     rtp_ch, rtcp_ch);
 	compy_header(ctx, COMPY_HEADER_SESSION,
 		     "%" PRIu64 ";timeout=60", self->session_id);
 	compy_respond_ok(ctx);
-
-	RSS_INFO("client SETUP: video TCP interleaved %u-%u",
-		 rtp_ch, rtcp_ch);
 }
 
 static void
