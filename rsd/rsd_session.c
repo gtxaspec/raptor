@@ -69,18 +69,31 @@ rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request *req)
 		(COMPY_SDP_ATTR, "tool:Raptor RSS"),
 		(COMPY_SDP_ATTR, "range:npt=now-"));
 
-	/* profile-level-id from ring header (set by RVD from encoder config) */
-	uint8_t profile_idc = hdr->profile ? hdr->profile : 100;
-	uint8_t level_idc   = hdr->level   ? hdr->level   : 40;
+	/* Store codec for NAL framing in ring reader */
+	self->video_codec = hdr->codec;
 
-	COMPY_SDP_DESCRIBE(ret, sdp_w,
-		(COMPY_SDP_MEDIA, "video 0 RTP/AVP %d", RSD_VIDEO_PT),
-		(COMPY_SDP_ATTR, "control:video"),
-		(COMPY_SDP_ATTR, "recvonly"),
-		(COMPY_SDP_ATTR, "rtpmap:%d H264/%d", RSD_VIDEO_PT, RSD_VIDEO_CLOCK),
-		(COMPY_SDP_ATTR, "fmtp:%d packetization-mode=1;profile-level-id=%02X00%02X",
-			RSD_VIDEO_PT, profile_idc, level_idc),
-		(COMPY_SDP_ATTR, "framerate:%u", hdr->fps_num));
+	if (hdr->codec == 1) {
+		/* H.265 / HEVC (RFC 7798) */
+		COMPY_SDP_DESCRIBE(ret, sdp_w,
+			(COMPY_SDP_MEDIA, "video 0 RTP/AVP %d", RSD_VIDEO_PT),
+			(COMPY_SDP_ATTR, "control:video"),
+			(COMPY_SDP_ATTR, "recvonly"),
+			(COMPY_SDP_ATTR, "rtpmap:%d H265/%d", RSD_VIDEO_PT, RSD_VIDEO_CLOCK),
+			(COMPY_SDP_ATTR, "framerate:%u", hdr->fps_num));
+	} else {
+		/* H.264 / AVC (RFC 6184) */
+		uint8_t profile_idc = hdr->profile ? hdr->profile : 100;
+		uint8_t level_idc   = hdr->level   ? hdr->level   : 40;
+
+		COMPY_SDP_DESCRIBE(ret, sdp_w,
+			(COMPY_SDP_MEDIA, "video 0 RTP/AVP %d", RSD_VIDEO_PT),
+			(COMPY_SDP_ATTR, "control:video"),
+			(COMPY_SDP_ATTR, "recvonly"),
+			(COMPY_SDP_ATTR, "rtpmap:%d H264/%d", RSD_VIDEO_PT, RSD_VIDEO_CLOCK),
+			(COMPY_SDP_ATTR, "fmtp:%d packetization-mode=1;profile-level-id=%02X00%02X",
+				RSD_VIDEO_PT, profile_idc, level_idc),
+			(COMPY_SDP_ATTR, "framerate:%u", hdr->fps_num));
+	}
 
 	if (g_srv->has_audio) {
 		const rss_ring_header_t *ahdr =

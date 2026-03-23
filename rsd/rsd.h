@@ -51,6 +51,7 @@ typedef struct rsd_client {
 	bool                 active;
 	bool                 is_tcp;
 	int                  stream_idx;    /* RSD_STREAM_MAIN or RSD_STREAM_SUB */
+	uint32_t             video_codec;   /* RSS_CODEC_H264 or RSS_CODEC_H265 */
 
 	/* UDP socket fds (for cleanup) */
 	int                  udp_rtp_fd;

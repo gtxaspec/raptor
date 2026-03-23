@@ -24,6 +24,9 @@ static void rsd_send_video_frame(rsd_client_t *c, const uint8_t *data,
 {
 	if (!c->video.nal || !c->video.playing) return;
 
+	bool is_h265 = (c->video_codec == 1);  /* RSS_CODEC_H265 */
+	int hdr_size = is_h265 ? 2 : 1;        /* H.265=2 bytes, H.264=1 byte */
+
 	const uint8_t *p = data;
 	const uint8_t *end = data + len;
 
@@ -46,19 +49,31 @@ static void rsd_send_video_frame(rsd_client_t *c, const uint8_t *data,
 		}
 
 		uint32_t nalu_len = (uint32_t)(nalu_end - nalu_start);
-		if (nalu_len < 1) {
+		if (nalu_len < (uint32_t)hdr_size) {
 			p = nalu_end;
 			continue;
 		}
 
-		/* Parse H.264 NAL header (first byte) */
-		uint8_t header_byte = nalu_start[0];
-
-		Compy_NalUnit nalu = {
-			.header = Compy_NalHeader_H264(
-				Compy_H264NalHeader_parse(header_byte)),
-			.payload = U8Slice99_new((uint8_t *)(nalu_start + 1), nalu_len - 1),
-		};
+		Compy_NalUnit nalu;
+		if (is_h265) {
+			nalu = (Compy_NalUnit){
+				.header = Compy_NalHeader_H265(
+					Compy_H265NalHeader_parse(
+						(uint8_t *)nalu_start)),
+				.payload = U8Slice99_new(
+					(uint8_t *)(nalu_start + 2),
+					nalu_len - 2),
+			};
+		} else {
+			nalu = (Compy_NalUnit){
+				.header = Compy_NalHeader_H264(
+					Compy_H264NalHeader_parse(
+						nalu_start[0])),
+				.payload = U8Slice99_new(
+					(uint8_t *)(nalu_start + 1),
+					nalu_len - 1),
+			};
+		}
 
 		(void)!Compy_NalTransport_send_packet(
 			c->video.nal,
