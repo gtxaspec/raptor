@@ -6,7 +6,7 @@
 #   ./build.sh rvd rsd      # rebuild just rvd and rsd
 #   ./build.sh clean        # clean only
 
-PROFILE="vanhua_z55i_t31x_gc4653_eth-3.10.14"
+PROFILE="wyze_cam3_t31al_gc2053_atbm6031-3.10.14-uclibc"
 BR_OUTPUT="$HOME/projects/thingino/thingino-firmware/output/master/$PROFILE"
 TOOLCHAIN="$BR_OUTPUT/host/bin"
 SYSROOT="$BR_OUTPUT/host/mipsel-thingino-linux-uclibc/sysroot"
