@@ -112,7 +112,13 @@ void *rsd_video_reader_thread(void *arg)
 			continue;
 		memcpy(rctx->frame_buf, data, length);
 
-		/* Compute relative RTP timestamp (90kHz video clock) */
+		/*
+		 * Video RTP timestamp: use relative HAL timestamps.
+		 * Unlike audio (which uses a sample counter for perfect
+		 * monotonicity), video uses actual frame timestamps because
+		 * frame intervals can vary slightly with encoder load.
+		 * Start from 0 to align with audio epoch.
+		 */
 		if (!rctx->base_ts_set) {
 			rctx->base_ts = meta.timestamp;
 			rctx->base_ts_set = true;
@@ -176,10 +182,14 @@ void *rsd_audio_reader_thread(void *arg)
 
 	/* Buffer for audio frames (L16@16kHz = 640 bytes/20ms) */
 	uint8_t audio_buf[4096];
-	int64_t audio_base_ts = 0;
-	bool audio_base_set = false;
-	uint32_t last_audio_rtp_ts = 0;
-	/* Samples per frame for monotonic increment fallback */
+	/*
+	 * Use a sample counter for audio RTP timestamps instead of
+	 * converting HAL microsecond timestamps. HAL timestamps have
+	 * sub-millisecond jitter that causes non-monotonic DTS at the
+	 * receiver. A counter incremented by samples_per_frame gives
+	 * perfectly monotonic timestamps with zero jitter.
+	 */
+	uint32_t audio_rtp_ts = 0;
 	uint32_t samples_per_frame = audio_clock / 50;  /* 20ms */
 
 	while (*srv->running) {
@@ -205,19 +215,8 @@ void *rsd_audio_reader_thread(void *arg)
 			if (length > sizeof(audio_buf)) continue;
 			memcpy(audio_buf, data, length);
 
-			/* Relative RTP timestamp */
-			if (!audio_base_set) {
-				audio_base_ts = meta.timestamp;
-				audio_base_set = true;
-			}
-			int64_t rel_us = meta.timestamp - audio_base_ts;
-			if (rel_us < 0) rel_us = 0;
-			uint32_t rtp_ts = (uint32_t)((rel_us * (int64_t)audio_clock) / 1000000LL);
-
-			/* Ensure strictly monotonic — SDK can give duplicate timestamps */
-			if (audio_base_set && rtp_ts <= last_audio_rtp_ts)
-				rtp_ts = last_audio_rtp_ts + samples_per_frame;
-			last_audio_rtp_ts = rtp_ts;
+			uint32_t rtp_ts = audio_rtp_ts;
+			audio_rtp_ts += samples_per_frame;
 
 			pthread_mutex_lock(&srv->clients_lock);
 			for (int i = 0; i < srv->client_count; i++) {
