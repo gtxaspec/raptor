@@ -95,9 +95,15 @@ static void accept_client(rsd_server_t *srv)
 		return;
 	}
 
-	set_nonblocking(fd);
+	/* Keep fd blocking for writes — non-blocking would drop RTP packets
+	 * when the send buffer fills (78KB keyframes need multiple writes).
+	 * Reads are handled by epoll with EPOLLIN. */
 	int one = 1;
 	setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+
+	/* Increase send buffer for large keyframes */
+	int sndbuf = 256 * 1024;
+	setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
 
 	rsd_client_t *client = calloc(1, sizeof(*client));
 	if (!client) { close(fd); return; }
@@ -165,6 +171,16 @@ int rsd_server_init(rsd_server_t *srv)
 			 hdr->codec == 0 ? "H.264" : "H.265",
 			 hdr->width, hdr->height,
 			 hdr->fps_num, hdr->fps_den);
+
+		/* Allocate frame copy buffer sized to largest possible frame */
+		srv->frame_buf_size = hdr->data_size / 2;
+		if (srv->frame_buf_size < 256 * 1024)
+			srv->frame_buf_size = 256 * 1024;
+		srv->frame_buf = malloc(srv->frame_buf_size);
+		if (!srv->frame_buf) {
+			RSS_FATAL("failed to allocate frame buffer");
+			return -1;
+		}
 	}
 
 	/* Create listen socket */
@@ -272,6 +288,9 @@ void rsd_server_deinit(rsd_server_t *srv)
 
 	if (srv->ring_main)
 		rss_ring_close(srv->ring_main);
+
+	free(srv->frame_buf);
+	srv->frame_buf = NULL;
 
 	if (srv->epoll_fd >= 0)
 		close(srv->epoll_fd);
