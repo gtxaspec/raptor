@@ -80,60 +80,61 @@ void rsd_send_video_frame(rsd_client_t *c, const uint8_t *data,
 	}
 }
 
-void *rsd_ring_reader_thread(void *arg)
-{
-	rsd_server_t *srv = arg;
+/* Global server pointer (set in rsd_server_run before threads start) */
+static rsd_server_t *g_srv_for_readers = NULL;
 
-	RSS_INFO("ring reader thread started");
+void rsd_set_server_for_readers(rsd_server_t *srv) { g_srv_for_readers = srv; }
+
+void *rsd_video_reader_thread(void *arg)
+{
+	rsd_ring_ctx_t *rctx = arg;
+	rsd_server_t *srv = g_srv_for_readers;
+	int stream_idx = rctx->idx;
+
+	RSS_INFO("video reader[%d] started", stream_idx);
 
 	while (*srv->running) {
-		/* Wait for new frame */
-		int ret = rss_ring_wait(srv->ring_main, 100);
+		int ret = rss_ring_wait(rctx->ring, 100);
 		if (ret != 0) continue;
 
 		const uint8_t *data;
 		uint32_t length;
 		rss_ring_slot_t meta;
-		uint64_t read_seq = srv->ring_read_seq;
+		uint64_t read_seq = rctx->read_seq;
 
-		ret = rss_ring_read(srv->ring_main, &read_seq, &data,
+		ret = rss_ring_read(rctx->ring, &read_seq, &data,
 				    &length, &meta);
 		if (ret == RSS_EOVERFLOW) {
-			RSS_DEBUG("ring reader: overflow, catching up");
-			srv->ring_read_seq = read_seq;
+			rctx->read_seq = read_seq;
 			continue;
 		}
 		if (ret != 0) continue;
 
-		srv->ring_read_seq = read_seq;
+		rctx->read_seq = read_seq;
 
-		/* Copy frame data to local buffer before distributing.
-		 * The ring's data region is shared memory that the producer
-		 * can overwrite at any time. */
-		if (length > srv->frame_buf_size || !srv->frame_buf)
+		if (length > rctx->frame_buf_size || !rctx->frame_buf)
 			continue;
-		memcpy(srv->frame_buf, data, length);
+		memcpy(rctx->frame_buf, data, length);
 
-		/* Distribute frame to all playing clients */
 		pthread_mutex_lock(&srv->clients_lock);
 		for (int i = 0; i < srv->client_count; i++) {
 			rsd_client_t *c = srv->clients[i];
 			if (!c || !c->video.playing) continue;
+			if (c->stream_idx != stream_idx) continue;
 
-			/* Wait for keyframe before sending first frame */
 			if (c->waiting_keyframe) {
 				if (!meta.is_key) continue;
 				c->waiting_keyframe = false;
-				RSS_DEBUG("client got keyframe, starting stream");
+				RSS_DEBUG("client[%d] got keyframe", stream_idx);
 			}
 
-			rsd_send_video_frame(c, srv->frame_buf, length,
+			rsd_send_video_frame(c, rctx->frame_buf, length,
 					     meta.timestamp, meta.is_key);
 		}
 		pthread_mutex_unlock(&srv->clients_lock);
 	}
 
-	RSS_INFO("ring reader thread exiting");
+	RSS_INFO("video reader[%d] exiting", stream_idx);
 	return NULL;
 }
 

@@ -179,29 +179,38 @@ int rsd_server_init(rsd_server_t *srv)
 	/* Wait for main ring to appear */
 	RSS_INFO("waiting for video ring...");
 	for (int i = 0; i < 100; i++) {
-		srv->ring_main = rss_ring_open("main");
-		if (srv->ring_main) break;
+		srv->video[RSD_STREAM_MAIN].ring = rss_ring_open("main");
+		if (srv->video[RSD_STREAM_MAIN].ring) break;
 		usleep(100000);
 	}
-	if (!srv->ring_main) {
+	if (!srv->video[RSD_STREAM_MAIN].ring) {
 		RSS_FATAL("video ring not available (is RVD running?)");
 		return -1;
 	}
+	srv->video[RSD_STREAM_MAIN].idx = RSD_STREAM_MAIN;
 
-	{
-		const rss_ring_header_t *hdr = rss_ring_get_header(srv->ring_main);
-		RSS_INFO("ring: %s %ux%u @ %u/%u fps",
-			 hdr->codec == 0 ? "H.264" : "H.265",
+	/* Try to open sub ring (optional) */
+	srv->video[RSD_STREAM_SUB].ring = rss_ring_open("sub");
+	srv->video[RSD_STREAM_SUB].idx = RSD_STREAM_SUB;
+	if (srv->video[RSD_STREAM_SUB].ring)
+		RSS_INFO("sub stream ring available");
+
+	/* Log and allocate frame buffers for each ring */
+	for (int s = 0; s < RSD_STREAM_COUNT; s++) {
+		if (!srv->video[s].ring) continue;
+
+		const rss_ring_header_t *hdr = rss_ring_get_header(srv->video[s].ring);
+		RSS_INFO("ring[%d]: %s %ux%u @ %u/%u fps",
+			 s, hdr->codec == 0 ? "H.264" : "H.265",
 			 hdr->width, hdr->height,
 			 hdr->fps_num, hdr->fps_den);
 
-		/* Allocate frame copy buffer sized to largest possible frame */
-		srv->frame_buf_size = hdr->data_size / 2;
-		if (srv->frame_buf_size < 256 * 1024)
-			srv->frame_buf_size = 256 * 1024;
-		srv->frame_buf = malloc(srv->frame_buf_size);
-		if (!srv->frame_buf) {
-			RSS_FATAL("failed to allocate frame buffer");
+		srv->video[s].frame_buf_size = hdr->data_size / 2;
+		if (srv->video[s].frame_buf_size < 256 * 1024)
+			srv->video[s].frame_buf_size = 256 * 1024;
+		srv->video[s].frame_buf = malloc(srv->video[s].frame_buf_size);
+		if (!srv->video[s].frame_buf) {
+			RSS_FATAL("failed to allocate frame buffer for stream %d", s);
 			return -1;
 		}
 	}
@@ -284,8 +293,13 @@ static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf,
 void rsd_server_run(rsd_server_t *srv)
 {
 	/* Start ring reader threads */
-	pthread_t video_tid, audio_tid;
-	pthread_create(&video_tid, NULL, rsd_ring_reader_thread, srv);
+	rsd_set_server_for_readers(srv);
+	pthread_t video_tid[RSD_STREAM_COUNT], audio_tid;
+	for (int s = 0; s < RSD_STREAM_COUNT; s++) {
+		if (srv->video[s].ring)
+			pthread_create(&video_tid[s], NULL,
+				       rsd_video_reader_thread, &srv->video[s]);
+	}
 	if (srv->has_audio)
 		pthread_create(&audio_tid, NULL, rsd_audio_reader_thread, srv);
 
@@ -308,7 +322,10 @@ void rsd_server_run(rsd_server_t *srv)
 		}
 	}
 
-	pthread_join(video_tid, NULL);
+	for (int s = 0; s < RSD_STREAM_COUNT; s++) {
+		if (srv->video[s].ring)
+			pthread_join(video_tid[s], NULL);
+	}
 	if (srv->has_audio)
 		pthread_join(audio_tid, NULL);
 }
@@ -322,13 +339,13 @@ void rsd_server_deinit(rsd_server_t *srv)
 	if (srv->ctrl)
 		rss_ctrl_destroy(srv->ctrl);
 
-	if (srv->ring_main)
-		rss_ring_close(srv->ring_main);
+	for (int s = 0; s < RSD_STREAM_COUNT; s++) {
+		if (srv->video[s].ring)
+			rss_ring_close(srv->video[s].ring);
+		free(srv->video[s].frame_buf);
+	}
 	if (srv->ring_audio)
 		rss_ring_close(srv->ring_audio);
-
-	free(srv->frame_buf);
-	srv->frame_buf = NULL;
 
 	if (srv->epoll_fd >= 0)
 		close(srv->epoll_fd);
