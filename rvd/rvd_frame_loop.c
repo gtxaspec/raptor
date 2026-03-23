@@ -118,6 +118,26 @@ static int json_get_int(const char *json, const char *key, int *out)
 	return 0;
 }
 
+/* Parse string value from JSON: "key":"value" into buf */
+static int json_get_str(const char *json, const char *key, char *buf, int bufsz)
+{
+	char pattern[64];
+	snprintf(pattern, sizeof(pattern), "\"%s\":\"", key);
+	const char *p = strstr(json, pattern);
+	if (!p)
+		return -1;
+	p += strlen(pattern);
+	const char *end = strchr(p, '"');
+	if (!end)
+		return -1;
+	int len = (int)(end - p);
+	if (len >= bufsz)
+		len = bufsz - 1;
+	memcpy(buf, p, len);
+	buf[len] = '\0';
+	return 0;
+}
+
 /*
  * Control handler return value = response length (not status code).
  * The IPC layer uses the return value as the number of bytes to send.
@@ -225,6 +245,21 @@ static int rvd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		} else {
 			snprintf(resp_buf, resp_buf_size,
 				 "{\"status\":\"error\",\"reason\":\"need channel, min, max\"}");
+		}
+		CTRL_RESP(resp_buf);
+	}
+
+	if (strstr(cmd_json, "\"config-get\"")) {
+		char section[64], key[64];
+		if (json_get_str(cmd_json, "section", section, sizeof(section)) == 0 &&
+		    json_get_str(cmd_json, "key", key, sizeof(key)) == 0) {
+			const char *val = rss_config_get_str(st->cfg, section, key, NULL);
+			if (val)
+				snprintf(resp_buf, resp_buf_size, "%s", val);
+			else
+				snprintf(resp_buf, resp_buf_size, "");
+		} else {
+			snprintf(resp_buf, resp_buf_size, "");
 		}
 		CTRL_RESP(resp_buf);
 	}
