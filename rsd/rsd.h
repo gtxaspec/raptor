@@ -17,9 +17,13 @@
 #define RSD_MAX_CLIENTS     8
 #define RSD_VIDEO_PT        96
 #define RSD_VIDEO_CLOCK     90000
-#define RSD_AUDIO_PT        0       /* PCMU */
-#define RSD_AUDIO_CLOCK     8000
 #define RSD_BUF_SIZE        4096
+
+/* Audio codec IDs (matches RAD ring codec field) */
+#define RSD_CODEC_PCMU      0
+#define RSD_CODEC_PCMA      8
+#define RSD_CODEC_L16       11
+#define RSD_AUDIO_PT_L16    97  /* dynamic PT for L16 */
 
 /* Stream index for per-ring state */
 #define RSD_STREAM_MAIN     0
