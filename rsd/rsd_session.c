@@ -13,6 +13,9 @@
 
 #include "rsd.h"
 
+/* Server pointer for SDP generation (set by rsd_handle_rtsp_data) */
+static rsd_server_t *g_srv = NULL;
+
 /* ── Controller method implementations ── */
 
 static void
@@ -56,6 +59,13 @@ rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request *req)
 		(COMPY_SDP_ATTR, "rtpmap:%d H264/%d", RSD_VIDEO_PT, RSD_VIDEO_CLOCK),
 		(COMPY_SDP_ATTR, "fmtp:%d packetization-mode=1", RSD_VIDEO_PT));
 
+	if (g_srv && g_srv->has_audio) {
+		COMPY_SDP_DESCRIBE(ret, sdp_w,
+			(COMPY_SDP_MEDIA, "audio 0 RTP/AVP %d", RSD_AUDIO_PT),
+			(COMPY_SDP_ATTR, "control:audio"),
+			(COMPY_SDP_ATTR, "recvonly"));
+	}
+
 	(void)ret;
 
 	compy_header(ctx, COMPY_HEADER_CONTENT_TYPE, "application/sdp");
@@ -67,6 +77,10 @@ static void
 rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *req)
 {
 	VSELF(rsd_client_t);
+
+	/* Determine stream type from URI */
+	bool is_audio = CharSlice99_primitive_ends_with(
+		req->start_line.uri, CharSlice99_from_str("/audio"));
 
 	/* Parse Transport header */
 	CharSlice99 transport_val;
@@ -173,11 +187,18 @@ rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *req)
 			 cli_rtp, cli_rtcp, srv_rtp, srv_rtcp);
 	}
 
-	self->video.rtp = Compy_RtpTransport_new(rtp_t, RSD_VIDEO_PT,
-						 RSD_VIDEO_CLOCK);
-	self->video.nal = Compy_NalTransport_new(self->video.rtp);
-	self->video.rtcp = Compy_Rtcp_new(self->video.rtp, rtcp_t,
-					  "raptor@camera");
+	if (is_audio) {
+		self->audio.rtp = Compy_RtpTransport_new(rtp_t, RSD_AUDIO_PT,
+							 RSD_AUDIO_CLOCK);
+		self->audio.rtcp = Compy_Rtcp_new(self->audio.rtp, rtcp_t,
+						  "raptor@camera");
+	} else {
+		self->video.rtp = Compy_RtpTransport_new(rtp_t, RSD_VIDEO_PT,
+							 RSD_VIDEO_CLOCK);
+		self->video.nal = Compy_NalTransport_new(self->video.rtp);
+		self->video.rtcp = Compy_Rtcp_new(self->video.rtp, rtcp_t,
+						  "raptor@camera");
+	}
 
 	/* Generate session ID */
 	if (!self->session_id) {
@@ -202,15 +223,19 @@ rsd_client_t_play(VSelf, Compy_Context *ctx, const Compy_Request *req)
 	VSELF(rsd_client_t);
 	(void)req;
 
-	if (!self->video.nal) {
+	if (!self->video.nal && !self->audio.rtp) {
 		compy_respond(ctx, COMPY_STATUS_METHOD_NOT_VALID_IN_THIS_STATE,
 			      "SETUP not done");
 		return;
 	}
 
-	self->video.playing = true;
-	self->waiting_keyframe = true;
-	self->video_read_seq = 0;
+	if (self->video.nal) {
+		self->video.playing = true;
+		self->waiting_keyframe = true;
+		self->video_read_seq = 0;
+	}
+	if (self->audio.rtp)
+		self->audio.playing = true;
 
 	/* Request IDR from RVD so the client gets a keyframe ASAP */
 	{
@@ -312,7 +337,7 @@ impl(Compy_Controller, rsd_client_t);
 void rsd_handle_rtsp_data(rsd_server_t *srv, rsd_client_t *client,
 			  const char *data, size_t len)
 {
-	(void)srv;
+	g_srv = srv;
 
 	/* Try to parse an RTSP request from the buffer */
 	Compy_Request req = Compy_Request_uninit();
