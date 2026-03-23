@@ -1,0 +1,3 @@
+[submodule "ingenic-headers"]
+	path = ingenic-headers
+	url = https://github.com/gtxaspec/ingenic-headers.git
