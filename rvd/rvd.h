@@ -9,8 +9,8 @@
 #include <rss_ipc.h>
 #include <rss_common.h>
 
-#define RVD_MAX_STREAMS    2
-#define RVD_SCRATCH_SIZE   (512 * 1024)   /* 512KB heap scratch for NAL concat */
+#define RVD_MAX_STREAMS      2
+#define RVD_SCRATCH_MIN      (256 * 1024)   /* 256KB floor */
 
 typedef struct {
 	rss_video_config_t  enc_cfg;
@@ -21,6 +21,7 @@ typedef struct {
 
 	/* Per-stream scratch buffer for NAL concatenation (thread-local) */
 	uint8_t             *scratch;
+	uint32_t             scratch_size;
 } rvd_stream_t;
 
 typedef struct {

@@ -205,7 +205,9 @@ int rsd_server_init(rsd_server_t *srv)
 			 hdr->width, hdr->height,
 			 hdr->fps_num, hdr->fps_den);
 
-		srv->video[s].frame_buf_size = hdr->data_size / 2;
+		/* Frame buffer: sized to largest possible slot payload.
+		 * data_size / slot_count = max bytes per frame in the ring. */
+		srv->video[s].frame_buf_size = hdr->data_size / hdr->slot_count;
 		if (srv->video[s].frame_buf_size < 256 * 1024)
 			srv->video[s].frame_buf_size = 256 * 1024;
 		srv->video[s].frame_buf = malloc(srv->video[s].frame_buf_size);
@@ -316,13 +318,19 @@ void rsd_server_run(rsd_server_t *srv)
 	/* Start ring reader threads */
 	rsd_set_server_for_readers(srv);
 	pthread_t video_tid[RSD_STREAM_COUNT], audio_tid;
+
+	pthread_attr_t attr;
+	pthread_attr_init(&attr);
+	pthread_attr_setstacksize(&attr, 128 * 1024);
+
 	for (int s = 0; s < RSD_STREAM_COUNT; s++) {
 		if (srv->video[s].ring)
-			pthread_create(&video_tid[s], NULL,
+			pthread_create(&video_tid[s], &attr,
 				       rsd_video_reader_thread, &srv->video[s]);
 	}
 	if (srv->has_audio)
-		pthread_create(&audio_tid, NULL, rsd_audio_reader_thread, srv);
+		pthread_create(&audio_tid, &attr, rsd_audio_reader_thread, srv);
+	pthread_attr_destroy(&attr);
 
 	struct epoll_event events[16];
 	int ctrl_fd = srv->ctrl ? rss_ctrl_get_fd(srv->ctrl) : -1;
