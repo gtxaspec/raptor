@@ -41,22 +41,37 @@ static void remove_client(rsd_server_t *srv, rsd_client_t *client)
 		 inet_ntoa(client->addr.sin_addr),
 		 ntohs(client->addr.sin_port));
 
-	/* Send RTCP BYE if playing */
-	if (client->video.rtcp && client->video.playing) {
+	/* Step 1: Remove from client list and stop playback under lock.
+	 * This ensures the ring reader threads won't access this client's
+	 * transports while we're freeing them. */
+	pthread_mutex_lock(&srv->clients_lock);
+	client->video.playing = false;
+	client->audio.playing = false;
+	for (int i = 0; i < srv->client_count; i++) {
+		if (srv->clients[i] == client) {
+			srv->clients[i] = srv->clients[srv->client_count - 1];
+			srv->clients[srv->client_count - 1] = NULL;
+			srv->client_count--;
+			break;
+		}
+	}
+	pthread_mutex_unlock(&srv->clients_lock);
+
+	/* Step 2: Now safe to free transports — ring readers won't touch them */
+
+	/* Send RTCP BYE */
+	if (client->video.rtcp) {
 		ssize_t bye_ret = Compy_Rtcp_send_bye(client->video.rtcp);
 		(void)bye_ret;
 	}
 
-	/* Clean up compy objects.
-	 * NalTransport owns its RtpTransport, so dropping the NalTransport
-	 * drops the RtpTransport chain too. Rtcp is independent. */
+	/* Video cleanup */
 	if (client->video.nal) {
 		VCALL(DYN(Compy_NalTransport, Compy_Droppable,
 			  client->video.nal), drop);
 		client->video.nal = NULL;
 		client->video.rtp = NULL;
 	}
-
 	if (client->video.rtcp) {
 		VCALL(DYN(Compy_Rtcp, Compy_Droppable,
 			  client->video.rtcp), drop);
@@ -81,21 +96,9 @@ static void remove_client(rsd_server_t *srv, rsd_client_t *client)
 	if (client->udp_rtcp_fd >= 0)
 		close(client->udp_rtcp_fd);
 
-	/* Remove from epoll */
+	/* Remove from epoll and close TCP fd */
 	epoll_ctl(srv->epoll_fd, EPOLL_CTL_DEL, client->fd, NULL);
 	close(client->fd);
-
-	/* Remove from client list */
-	pthread_mutex_lock(&srv->clients_lock);
-	for (int i = 0; i < srv->client_count; i++) {
-		if (srv->clients[i] == client) {
-			srv->clients[i] = srv->clients[srv->client_count - 1];
-			srv->clients[srv->client_count - 1] = NULL;
-			srv->client_count--;
-			break;
-		}
-	}
-	pthread_mutex_unlock(&srv->clients_lock);
 
 	free(client);
 }
