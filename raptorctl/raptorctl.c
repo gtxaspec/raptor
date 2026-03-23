@@ -116,22 +116,31 @@ int main(int argc, char **argv)
 		return 0;
 	}
 
-	/* raptorctl config save — tell all running daemons to save */
+	/* raptorctl config save — tell all daemons to save */
 	if (strcmp(argv[1], "config") == 0) {
 		if (argc < 3 || strcmp(argv[2], "save") != 0) {
 			fprintf(stderr, "Usage: raptorctl config save\n");
 			return 1;
 		}
-		int errors = 0;
+		int saved = 0;
 		for (int i = 0; daemons[i]; i++) {
-			if (rss_daemon_check(daemons[i]) <= 0)
-				continue;
-			printf("%s: ", daemons[i]);
-			fflush(stdout);
-			if (send_cmd(daemons[i], "{\"cmd\":\"config-save\"}") != 0)
-				errors++;
+			char sock_path[64];
+			char resp[2048];
+			snprintf(sock_path, sizeof(sock_path),
+				 "/var/run/rss/%s.sock", daemons[i]);
+			int ret = rss_ctrl_send_command(sock_path,
+				"{\"cmd\":\"config-save\"}",
+				resp, sizeof(resp), 2000);
+			if (ret >= 0) {
+				printf("%s: %s\n", daemons[i], resp);
+				saved++;
+			}
 		}
-		return errors > 0 ? 1 : 0;
+		if (saved == 0) {
+			fprintf(stderr, "No daemons responded\n");
+			return 1;
+		}
+		return 0;
 	}
 
 	if (!is_daemon(argv[1])) {
