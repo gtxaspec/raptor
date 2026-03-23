@@ -37,19 +37,23 @@ typedef struct {
 	size_t recv_len;
 } rhd_client_t;
 
+#define RHD_MAX_JPEG 2
+
 typedef struct {
 	int listen_fd;
 	int epoll_fd;
 	rss_config_t *cfg;
 	const char *config_path;
-	const char *snap_path;
+	char snap_paths[RHD_MAX_JPEG][64];
+	int snap_count;
 	int port;
 
 	rhd_client_t *clients[RHD_MAX_CLIENTS];
 	int client_count;
 
-	/* JPEG ring for MJPEG streaming */
-	rss_ring_t *jpeg_ring;
+	/* JPEG rings for MJPEG streaming */
+	rss_ring_t *jpeg_rings[RHD_MAX_JPEG];
+	int jpeg_ring_count;
 
 	volatile sig_atomic_t *running;
 } rhd_server_t;
@@ -143,6 +147,18 @@ static int find_client(rhd_server_t *srv, int fd)
 	return -1;
 }
 
+/* Parse ?stream=N query parameter, default 0 */
+static int parse_stream_param(const char *path)
+{
+	const char *p = strstr(path, "stream=");
+	if (p) {
+		int v = atoi(p + 7);
+		if (v >= 0 && v < RHD_MAX_JPEG)
+			return v;
+	}
+	return 0;
+}
+
 /* ── Request parsing ── */
 
 static void handle_request(rhd_server_t *srv, rhd_client_t *c)
@@ -161,9 +177,13 @@ static void handle_request(rhd_server_t *srv, rhd_client_t *c)
 		return;
 	}
 
-	if (strcmp(path, "/snap.jpg") == 0 || strcmp(path, "/snapshot.jpg") == 0) {
-		handle_snapshot(c->fd, srv->snap_path);
-	} else if (strcmp(path, "/mjpeg") == 0 || strcmp(path, "/mjpg") == 0) {
+	if (strncmp(path, "/snap", 5) == 0) {
+		int si = parse_stream_param(path);
+		if (si < srv->snap_count)
+			handle_snapshot(c->fd, srv->snap_paths[si]);
+		else
+			http_error(c->fd, "404 Not Found", "Stream not available");
+	} else if (strncmp(path, "/mjpeg", 6) == 0 || strncmp(path, "/mjpg", 5) == 0) {
 		/* Start MJPEG stream — don't close connection */
 		http_send_mjpeg_header(c->fd);
 		c->is_mjpeg = true;
@@ -171,7 +191,8 @@ static void handle_request(rhd_server_t *srv, rhd_client_t *c)
 	} else if (strcmp(path, "/") == 0) {
 		const char *html = "<html><body>"
 				   "<h3>Raptor</h3>"
-				   "<a href=\"/snap.jpg\">Snapshot</a><br>"
+				   "<a href=\"/snap.jpg\">Snapshot (main)</a><br>"
+				   "<a href=\"/snap.jpg?stream=1\">Snapshot (sub)</a><br>"
 				   "<a href=\"/mjpeg\">MJPEG Stream</a><br>"
 				   "<img src=\"/mjpeg\" width=\"640\">"
 				   "</body></html>";
@@ -240,31 +261,40 @@ static int server_init(rhd_server_t *srv)
 
 static void server_run(rhd_server_t *srv)
 {
-	uint64_t jpeg_read_seq = 0;
+	uint64_t jpeg_read_seqs[RHD_MAX_JPEG] = {0};
 	uint8_t *frame_buf = NULL;
-	uint32_t frame_buf_size = 0;
+	uint32_t frame_buf_size = 256 * 1024;
 
-	/* Try to open JPEG ring */
-	for (int i = 0; i < 30 && *srv->running; i++) {
-		srv->jpeg_ring = rss_ring_open("jpeg");
-		if (srv->jpeg_ring) {
-			const rss_ring_header_t *hdr = rss_ring_get_header(srv->jpeg_ring);
-			frame_buf_size = hdr->data_size / hdr->slot_count;
-			if (frame_buf_size < 256 * 1024)
-				frame_buf_size = 256 * 1024;
-			frame_buf = malloc(frame_buf_size);
-			RSS_INFO("jpeg ring available: %ux%u", hdr->width, hdr->height);
-			break;
+	/* Try to open JPEG rings */
+	for (int attempt = 0; attempt < 30 && *srv->running; attempt++) {
+		for (int j = 0; j < RHD_MAX_JPEG; j++) {
+			if (srv->jpeg_rings[j])
+				continue;
+			char name[16];
+			snprintf(name, sizeof(name), "jpeg%d", j);
+			srv->jpeg_rings[j] = rss_ring_open(name);
+			if (srv->jpeg_rings[j]) {
+				const rss_ring_header_t *hdr =
+					rss_ring_get_header(srv->jpeg_rings[j]);
+				RSS_INFO("%s ring available: %ux%u", name, hdr->width, hdr->height);
+				srv->jpeg_ring_count++;
+				uint32_t slot_sz = hdr->data_size / hdr->slot_count;
+				if (slot_sz > frame_buf_size)
+					frame_buf_size = slot_sz;
+			}
 		}
-		RSS_DEBUG("waiting for jpeg ring...");
+		if (srv->jpeg_ring_count > 0)
+			break;
+		RSS_DEBUG("waiting for jpeg rings...");
 		sleep(1);
 	}
+
+	frame_buf = malloc(frame_buf_size);
 
 	struct epoll_event events[16];
 
 	while (*srv->running) {
-		/* Check for new JPEG frames if ring is available and we have
-		 * MJPEG clients (or just periodically for readiness) */
+		/* Check for new JPEG frames from ring 0 for MJPEG streaming */
 		bool has_mjpeg_clients = false;
 		for (int i = 0; i < srv->client_count; i++)
 			if (srv->clients[i]->is_mjpeg) {
@@ -272,11 +302,12 @@ static void server_run(rhd_server_t *srv)
 				break;
 			}
 
-		if (has_mjpeg_clients && srv->jpeg_ring && frame_buf) {
+		if (has_mjpeg_clients && srv->jpeg_rings[0] && frame_buf) {
 			const uint8_t *data;
 			uint32_t len;
 			rss_ring_slot_t meta;
-			int ret = rss_ring_read(srv->jpeg_ring, &jpeg_read_seq, &data, &len, &meta);
+			int ret = rss_ring_read(srv->jpeg_rings[0], &jpeg_read_seqs[0], &data, &len,
+						&meta);
 			if (ret == 0 && len <= frame_buf_size) {
 				memcpy(frame_buf, data, len);
 				stream_mjpeg_frame(srv, frame_buf, len);
@@ -349,8 +380,8 @@ static void server_run(rhd_server_t *srv)
 		}
 
 		/* If we have MJPEG clients, wait for next frame from ring */
-		if (has_mjpeg_clients && srv->jpeg_ring) {
-			rss_ring_wait(srv->jpeg_ring, 100);
+		if (has_mjpeg_clients && srv->jpeg_rings[0]) {
+			rss_ring_wait(srv->jpeg_rings[0], 100);
 		}
 	}
 
@@ -359,8 +390,10 @@ static void server_run(rhd_server_t *srv)
 		remove_client(srv, i);
 
 	free(frame_buf);
-	if (srv->jpeg_ring)
-		rss_ring_close(srv->jpeg_ring);
+	for (int j = 0; j < RHD_MAX_JPEG; j++) {
+		if (srv->jpeg_rings[j])
+			rss_ring_close(srv->jpeg_rings[j]);
+	}
 	close(srv->listen_fd);
 	close(srv->epoll_fd);
 }
@@ -430,7 +463,9 @@ int main(int argc, char **argv)
 	srv.config_path = config_path;
 	srv.running = running;
 	srv.port = rss_config_get_int(cfg, "http", "port", 8080);
-	srv.snap_path = rss_config_get_str(cfg, "http", "snap_path", "/tmp/snapshot.jpg");
+	for (int j = 0; j < RHD_MAX_JPEG; j++)
+		snprintf(srv.snap_paths[j], sizeof(srv.snap_paths[j]), "/tmp/snapshot-%d.jpg", j);
+	srv.snap_count = RHD_MAX_JPEG;
 
 	if (server_init(&srv) < 0) {
 		rss_config_free(cfg);

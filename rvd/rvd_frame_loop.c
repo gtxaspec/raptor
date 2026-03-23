@@ -76,8 +76,14 @@ static void *encoder_thread(void *arg)
 				     frame.is_key ? 1 : 0);
 
 		/* JPEG: also write snapshot file atomically */
-		if (s->is_jpeg && cnt > 0 && st->jpeg_path[0]) {
-			rss_write_file_atomic(st->jpeg_path, frame.nals[0].data, (int)total_len);
+		if (s->is_jpeg && cnt > 0) {
+			for (int j = 0; j < st->jpeg_count; j++) {
+				if (st->jpeg_streams[j] == idx) {
+					rss_write_file_atomic(st->jpeg_paths[j], frame.nals[0].data,
+							      (int)total_len);
+					break;
+				}
+			}
 		}
 
 		RSS_HAL_CALL(st->ops, enc_release_frame, st->hal_ctx, s->chn, &frame);

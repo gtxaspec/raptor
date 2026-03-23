@@ -201,33 +201,43 @@ int rvd_pipeline_init(rvd_state_t *st)
 		st->stream_count = 2;
 	}
 
-	/* JPEG snapshot channel (optional).
+	/* JPEG snapshot channels (one per video stream).
 	 * Vendor SDK uses encoder channels 4+ for JPEG, registers into
-	 * video group 0, binds to same framesource as stream0. */
-	st->jpeg_stream = -1;
+	 * the corresponding video group. */
+	st->jpeg_count = 0;
+	for (int j = 0; j < RVD_MAX_JPEG; j++)
+		st->jpeg_streams[j] = -1;
+
 	if (rss_config_get_bool(cfg, "jpeg", "enabled", true)) {
-		int ji = st->stream_count;
 		st->jpeg_quality = rss_config_get_int(cfg, "jpeg", "quality", 75);
 		int jpeg_fps = rss_config_get_int(cfg, "jpeg", "fps", 1);
+		int video_count = st->stream_count; /* only video streams */
 
-		st->streams[ji].enc_cfg = (rss_video_config_t){
-			.codec = RSS_CODEC_JPEG,
-			.width = st->streams[0].enc_cfg.width,
-			.height = st->streams[0].enc_cfg.height,
-			.fps_num = jpeg_fps,
-			.fps_den = 1,
-			.bitrate = 0,
-		};
-		st->streams[ji].fs_cfg = st->streams[0].fs_cfg;
-		st->streams[ji].chn = 4; /* SDK convention: JPEG at channel 4+ */
-		st->streams[ji].is_jpeg = true;
-		st->jpeg_stream = ji;
-		st->stream_count = ji + 1;
+		for (int v = 0; v < video_count && v < RVD_MAX_JPEG; v++) {
+			int ji = st->stream_count;
+			int jpeg_chn = 4 + v; /* SDK: JPEG at chn 4+ */
 
-		snprintf(st->jpeg_path, sizeof(st->jpeg_path), "/tmp/snapshot.jpg");
-		RSS_INFO("jpeg: %ux%u @ %d fps, quality %d (enc chn 4)",
-			 st->streams[ji].enc_cfg.width, st->streams[ji].enc_cfg.height, jpeg_fps,
-			 st->jpeg_quality);
+			st->streams[ji].enc_cfg = (rss_video_config_t){
+				.codec = RSS_CODEC_JPEG,
+				.width = st->streams[v].enc_cfg.width,
+				.height = st->streams[v].enc_cfg.height,
+				.fps_num = jpeg_fps,
+				.fps_den = 1,
+				.bitrate = 0,
+			};
+			st->streams[ji].fs_cfg = st->streams[v].fs_cfg;
+			st->streams[ji].chn = jpeg_chn;
+			st->streams[ji].is_jpeg = true;
+			st->jpeg_streams[v] = ji;
+			st->stream_count = ji + 1;
+
+			snprintf(st->jpeg_paths[v], sizeof(st->jpeg_paths[v]),
+				 "/tmp/snapshot-%d.jpg", v);
+			RSS_INFO("jpeg%d: %ux%u @ %d fps, quality %d (enc chn %d)", v,
+				 st->streams[ji].enc_cfg.width, st->streams[ji].enc_cfg.height,
+				 jpeg_fps, st->jpeg_quality, jpeg_chn);
+		}
+		st->jpeg_count = video_count < RVD_MAX_JPEG ? video_count : RVD_MAX_JPEG;
 	}
 
 	/* H.265 fallback on SoCs without support */
@@ -281,11 +291,15 @@ int rvd_pipeline_init(rvd_state_t *st)
 		int chn = st->streams[i].chn;
 
 		if (st->streams[i].is_jpeg) {
-			/* Optional buffer sharing (before CreateChn per prudynt order) */
+			int video_grp = chn - 4; /* chn 4→grp 0, chn 5→grp 1 */
+
+			/* Optional buffer sharing (before CreateChn) */
 			if (rss_config_get_bool(cfg, "jpeg", "bufshare", true)) {
-				ret = RSS_HAL_CALL(st->ops, enc_set_bufshare, st->hal_ctx, chn, 0);
+				ret = RSS_HAL_CALL(st->ops, enc_set_bufshare, st->hal_ctx, chn,
+						   video_grp);
 				if (ret == RSS_OK)
-					RSS_DEBUG("jpeg bufshare chn %d -> group 0", chn);
+					RSS_DEBUG("jpeg bufshare chn %d -> group %d", chn,
+						  video_grp);
 				else
 					RSS_WARN("jpeg bufshare failed: %d (non-fatal)", ret);
 			}
@@ -298,10 +312,12 @@ int rvd_pipeline_init(rvd_state_t *st)
 				return ret;
 			}
 
-			/* Register JPEG into video group 0 */
-			ret = RSS_HAL_CALL(st->ops, enc_register_channel, st->hal_ctx, 0, chn);
+			/* Register JPEG into corresponding video group */
+			ret = RSS_HAL_CALL(st->ops, enc_register_channel, st->hal_ctx, video_grp,
+					   chn);
 			if (ret != RSS_OK) {
-				RSS_FATAL("enc_register_channel(0, %d) failed: %d", chn, ret);
+				RSS_FATAL("enc_register_channel(%d, %d) failed: %d", video_grp, chn,
+					  ret);
 				return ret;
 			}
 		} else {
@@ -407,18 +423,22 @@ int rvd_pipeline_init(rvd_state_t *st)
 			rvd_level_idc(st->streams[1].enc_cfg.width, st->streams[1].enc_cfg.height));
 	}
 
-	/* JPEG ring (small — only needs to hold a few frames) */
-	if (st->jpeg_stream >= 0) {
-		int ji = st->jpeg_stream;
-		st->streams[ji].ring = rss_ring_create("jpeg", 4, 512 * 1024);
+	/* JPEG rings (one per JPEG channel) */
+	for (int j = 0; j < st->jpeg_count; j++) {
+		int ji = st->jpeg_streams[j];
+		if (ji < 0)
+			continue;
+		char ring_name[16];
+		snprintf(ring_name, sizeof(ring_name), "jpeg%d", j);
+		st->streams[ji].ring = rss_ring_create(ring_name, 4, 512 * 1024);
 		if (!st->streams[ji].ring) {
-			RSS_FATAL("failed to create jpeg ring");
+			RSS_FATAL("failed to create %s ring", ring_name);
 			return RSS_ERR;
 		}
 		rss_ring_set_stream_info(
-			st->streams[ji].ring, 2, RSS_CODEC_JPEG, st->streams[ji].enc_cfg.width,
-			st->streams[ji].enc_cfg.height, st->streams[ji].enc_cfg.fps_num,
-			st->streams[ji].enc_cfg.fps_den, 0, 0);
+			st->streams[ji].ring, 0x20 + j, RSS_CODEC_JPEG,
+			st->streams[ji].enc_cfg.width, st->streams[ji].enc_cfg.height,
+			st->streams[ji].enc_cfg.fps_num, st->streams[ji].enc_cfg.fps_den, 0, 0);
 	}
 
 	/* ── 11. OSD consumer init (stub for now) ── */
