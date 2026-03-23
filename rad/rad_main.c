@@ -115,6 +115,7 @@ int main(int argc, char **argv)
 	int sample_rate = rss_config_get_int(cfg, "audio", "sample_rate", 8000);
 	int volume = rss_config_get_int(cfg, "audio", "volume", 80);
 	int gain = rss_config_get_int(cfg, "audio", "gain", 25);
+	int ai_dev = rss_config_get_int(cfg, "audio", "device", 1);
 
 	rss_audio_config_t audio_cfg = {
 		.sample_rate      = sample_rate,
@@ -131,8 +132,13 @@ int main(int argc, char **argv)
 		goto cleanup;
 	}
 
-	RSS_INFO("audio initialized: %d Hz, vol=%d, gain=%d",
-		 sample_rate, volume, gain);
+	/* Override volume/gain on the configured device
+	 * (HAL defaults to device 0, but analog mic is often device 1) */
+	RSS_HAL_CALL(ops, audio_set_volume, hal_ctx, ai_dev, 0, volume);
+	RSS_HAL_CALL(ops, audio_set_gain, hal_ctx, ai_dev, 0, gain);
+
+	RSS_INFO("audio initialized: dev=%d %d Hz, vol=%d, gain=%d",
+		 ai_dev, sample_rate, volume, gain);
 
 	/* Create audio ring buffer */
 	rss_ring_t *ring = rss_ring_create("audio", 32, 128 * 1024);
@@ -159,7 +165,7 @@ int main(int argc, char **argv)
 	while (*running) {
 		rss_audio_frame_t frame;
 		ret = RSS_HAL_CALL(ops, audio_read_frame, hal_ctx,
-				   0, 0, &frame, true);
+				   ai_dev, 0, &frame, true);
 		if (ret != RSS_OK) {
 			if (ret == RSS_ERR_TIMEOUT)
 				continue;
@@ -187,7 +193,7 @@ int main(int argc, char **argv)
 			/* Direct SDK call since the HAL vtable doesn't have
 			 * a clean release with frame parameter */
 			extern int IMP_AI_ReleaseFrame(int devId, int chnId, void *frame);
-			IMP_AI_ReleaseFrame(0, 0, frame._priv);
+			IMP_AI_ReleaseFrame(ai_dev, 0, frame._priv);
 			free(frame._priv);
 		}
 
