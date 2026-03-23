@@ -37,6 +37,11 @@ typedef struct rsd_client {
 	uint64_t             video_read_seq;
 	bool                 waiting_keyframe;
 	bool                 active;
+	bool                 is_tcp;
+
+	/* UDP socket fds (for cleanup) */
+	int                  udp_rtp_fd;
+	int                  udp_rtcp_fd;
 
 	/* RTSP parse buffer */
 	char                 recv_buf[RSD_BUF_SIZE];

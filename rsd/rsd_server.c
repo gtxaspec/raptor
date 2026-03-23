@@ -63,6 +63,12 @@ static void remove_client(rsd_server_t *srv, rsd_client_t *client)
 		client->video.rtcp = NULL;
 	}
 
+	/* Close UDP sockets if used */
+	if (client->udp_rtp_fd >= 0)
+		close(client->udp_rtp_fd);
+	if (client->udp_rtcp_fd >= 0)
+		close(client->udp_rtcp_fd);
+
 	/* Remove from epoll */
 	epoll_ctl(srv->epoll_fd, EPOLL_CTL_DEL, client->fd, NULL);
 	close(client->fd);
@@ -107,6 +113,8 @@ static void accept_client(rsd_server_t *srv)
 
 	rsd_client_t *client = calloc(1, sizeof(*client));
 	if (!client) { close(fd); return; }
+	client->udp_rtp_fd = -1;
+	client->udp_rtcp_fd = -1;
 
 	client->fd = fd;
 	client->addr = addr;
