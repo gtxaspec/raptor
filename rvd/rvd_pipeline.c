@@ -182,6 +182,35 @@ int rvd_pipeline_init(rvd_state_t *st)
 		st->stream_count = 2;
 	}
 
+	/* JPEG snapshot channel (optional, shares framesource with stream0) */
+	st->jpeg_stream = -1;
+	if (rss_config_get_bool(cfg, "jpeg", "enabled", true)) {
+		int ji = st->stream_count;
+		st->jpeg_quality = rss_config_get_int(cfg, "jpeg", "quality", 75);
+		int jpeg_fps = rss_config_get_int(cfg, "jpeg", "fps", 1);
+
+		st->streams[ji].enc_cfg = (rss_video_config_t){
+			.codec   = RSS_CODEC_JPEG,
+			.width   = st->streams[0].enc_cfg.width,
+			.height  = st->streams[0].enc_cfg.height,
+			.fps_num = jpeg_fps,
+			.fps_den = 1,
+			.bitrate = 0,  /* JPEG: quality, not bitrate */
+		};
+		/* Share framesource config with stream0 */
+		st->streams[ji].fs_cfg = st->streams[0].fs_cfg;
+		st->streams[ji].chn = ji;
+		st->streams[ji].is_jpeg = true;
+		st->jpeg_stream = ji;
+		st->stream_count = ji + 1;
+
+		snprintf(st->jpeg_path, sizeof(st->jpeg_path), "/tmp/snapshot.jpg");
+		RSS_INFO("jpeg: %ux%u @ %d fps, quality %d",
+			 st->streams[ji].enc_cfg.width,
+			 st->streams[ji].enc_cfg.height,
+			 jpeg_fps, st->jpeg_quality);
+	}
+
 	/* H.265 fallback on SoCs without support */
 	if (caps && !caps->has_h265) {
 		for (int i = 0; i < st->stream_count; i++) {
@@ -208,7 +237,10 @@ int rvd_pipeline_init(rvd_state_t *st)
 	}
 
 	/* ── 5. Create framesource channels ── */
+	/* JPEG shares framesource with stream0 — skip FS creation for it */
 	for (int i = 0; i < st->stream_count; i++) {
+		if (st->streams[i].is_jpeg)
+			continue;
 		ret = RSS_HAL_CALL(st->ops, fs_create_channel, st->hal_ctx,
 				   i, &st->streams[i].fs_cfg);
 		if (ret != RSS_OK) {
@@ -246,22 +278,33 @@ int rvd_pipeline_init(rvd_state_t *st)
 
 	/* ── 8. Bind pipeline: FS → Encoder ── */
 	for (int i = 0; i < st->stream_count; i++) {
-		rss_cell_t fs_out = { RSS_DEV_FS,  i, 0 };
+		/* JPEG shares framesource with stream0 — bind to FS(0) */
+		int fs_idx = st->streams[i].is_jpeg ? 0 : i;
+		rss_cell_t fs_out = { RSS_DEV_FS,  fs_idx, 0 };
 		rss_cell_t enc_in = { RSS_DEV_ENC, i, 0 };
 
 		ret = RSS_HAL_CALL(st->ops, bind, st->hal_ctx, &fs_out, &enc_in);
 		if (ret != RSS_OK) {
-			RSS_FATAL("bind FS(%d)->ENC(%d) failed: %d", i, i, ret);
+			RSS_FATAL("bind FS(%d)->ENC(%d) failed: %d", fs_idx, i, ret);
 			return ret;
 		}
 	}
 
+	/* Set up buffer sharing for JPEG channel (shares H.264 buffer) */
+	if (st->jpeg_stream >= 0) {
+		RSS_HAL_CALL(st->ops, enc_set_bufshare, st->hal_ctx,
+			     0, st->jpeg_stream);
+	}
+
 	/* ── 9. Enable framesource, start OSD, start encoder ── */
 	for (int i = 0; i < st->stream_count; i++) {
-		ret = RSS_HAL_CALL(st->ops, fs_enable_channel, st->hal_ctx, i);
-		if (ret != RSS_OK) {
-			RSS_FATAL("fs_enable_channel(%d) failed: %d", i, ret);
-			return ret;
+		/* JPEG shares framesource with stream0 — don't enable twice */
+		if (!st->streams[i].is_jpeg) {
+			ret = RSS_HAL_CALL(st->ops, fs_enable_channel, st->hal_ctx, i);
+			if (ret != RSS_OK) {
+				RSS_FATAL("fs_enable_channel(%d) failed: %d", i, ret);
+				return ret;
+			}
 		}
 
 		ret = RSS_HAL_CALL(st->ops, enc_start, st->hal_ctx, i);
@@ -271,12 +314,20 @@ int rvd_pipeline_init(rvd_state_t *st)
 		}
 
 		st->streams[i].enabled = true;
-		RSS_INFO("stream%d: %ux%u %s @ %u fps, %u bps",
-			 i, st->streams[i].enc_cfg.width,
-			 st->streams[i].enc_cfg.height,
-			 st->streams[i].enc_cfg.codec == RSS_CODEC_H265 ? "H.265" : "H.264",
-			 st->streams[i].enc_cfg.fps_num,
-			 st->streams[i].enc_cfg.bitrate);
+		if (st->streams[i].is_jpeg) {
+			RSS_INFO("stream%d: %ux%u JPEG @ %u fps, quality %d",
+				 i, st->streams[i].enc_cfg.width,
+				 st->streams[i].enc_cfg.height,
+				 st->streams[i].enc_cfg.fps_num,
+				 st->jpeg_quality);
+		} else {
+			RSS_INFO("stream%d: %ux%u %s @ %u fps, %u bps",
+				 i, st->streams[i].enc_cfg.width,
+				 st->streams[i].enc_cfg.height,
+				 st->streams[i].enc_cfg.codec == RSS_CODEC_H265 ? "H.265" : "H.264",
+				 st->streams[i].enc_cfg.fps_num,
+				 st->streams[i].enc_cfg.bitrate);
+		}
 	}
 
 	/* ── 10. Create SHM rings ── */
@@ -301,7 +352,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 				 rvd_level_idc(st->streams[0].enc_cfg.width,
 					       st->streams[0].enc_cfg.height));
 
-	if (st->stream_count > 1) {
+	if (st->stream_count > 1 && !st->streams[1].is_jpeg) {
 		st->streams[1].ring = rss_ring_create("sub", ring_sub_slots,
 						     ring_sub_mb * 1024 * 1024);
 		if (!st->streams[1].ring) {
@@ -319,6 +370,23 @@ int rvd_pipeline_init(rvd_state_t *st)
 						       st->streams[1].enc_cfg.height));
 	}
 
+	/* JPEG ring (small — only needs to hold a few frames) */
+	if (st->jpeg_stream >= 0) {
+		int ji = st->jpeg_stream;
+		st->streams[ji].ring = rss_ring_create("jpeg", 4, 512 * 1024);
+		if (!st->streams[ji].ring) {
+			RSS_FATAL("failed to create jpeg ring");
+			return RSS_ERR;
+		}
+		rss_ring_set_stream_info(st->streams[ji].ring, 2,
+					 RSS_CODEC_JPEG,
+					 st->streams[ji].enc_cfg.width,
+					 st->streams[ji].enc_cfg.height,
+					 st->streams[ji].enc_cfg.fps_num,
+					 st->streams[ji].enc_cfg.fps_den,
+					 0, 0);
+	}
+
 	/* ── 11. OSD consumer init (stub for now) ── */
 	rvd_osd_init(st);
 
@@ -334,17 +402,21 @@ void rvd_pipeline_deinit(rvd_state_t *st)
 		if (!st->streams[i].enabled) continue;
 
 		RSS_HAL_CALL(st->ops, enc_stop, st->hal_ctx, i);
-		RSS_HAL_CALL(st->ops, fs_disable_channel, st->hal_ctx, i);
+
+		int fs_idx = st->streams[i].is_jpeg ? 0 : i;
+		if (!st->streams[i].is_jpeg)
+			RSS_HAL_CALL(st->ops, fs_disable_channel, st->hal_ctx, i);
 
 		/* Unbind */
-		rss_cell_t fs_out = { RSS_DEV_FS,  i, 0 };
+		rss_cell_t fs_out = { RSS_DEV_FS,  fs_idx, 0 };
 		rss_cell_t enc_in = { RSS_DEV_ENC, i, 0 };
 		RSS_HAL_CALL(st->ops, unbind, st->hal_ctx, &fs_out, &enc_in);
 
 		RSS_HAL_CALL(st->ops, enc_unregister_channel, st->hal_ctx, i);
 		RSS_HAL_CALL(st->ops, enc_destroy_channel, st->hal_ctx, i);
 		RSS_HAL_CALL(st->ops, enc_destroy_group, st->hal_ctx, i);
-		RSS_HAL_CALL(st->ops, fs_destroy_channel, st->hal_ctx, i);
+		if (!st->streams[i].is_jpeg)
+			RSS_HAL_CALL(st->ops, fs_destroy_channel, st->hal_ctx, i);
 
 		if (st->streams[i].ring) {
 			rss_ring_destroy(st->streams[i].ring);
