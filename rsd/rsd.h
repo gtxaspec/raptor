@@ -68,6 +68,8 @@ typedef struct {
 	uint8_t             *frame_buf;
 	uint32_t             frame_buf_size;
 	int                  idx;           /* RSD_STREAM_MAIN or RSD_STREAM_SUB */
+	int64_t              base_ts;       /* first timestamp (for relative RTP ts) */
+	bool                 base_ts_set;
 } rsd_ring_ctx_t;
 
 /* Server state */
