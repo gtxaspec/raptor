@@ -119,7 +119,8 @@ int rvd_pipeline_init(rvd_state_t *st)
 	if (ret != RSS_OK)
 		RSS_WARN("isp_set_sensor_fps failed: %d (non-fatal)", ret);
 
-	/* ── 3c. Set ISP bypass to suppress isp-w02 log spam ── */
+	/* ── 3c. ISP tuning defaults (suppress isp-w02 spam, match prudynt) ── */
+	RSS_HAL_CALL(st->ops, isp_set_running_mode, st->hal_ctx, RSS_ISP_DAY);
 	RSS_HAL_CALL(st->ops, isp_set_bypass, st->hal_ctx, 1);
 
 	/* ── 3d. Read actual sensor resolution from /proc ── */
