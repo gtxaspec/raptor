@@ -182,7 +182,9 @@ int rvd_pipeline_init(rvd_state_t *st)
 		st->stream_count = 2;
 	}
 
-	/* JPEG snapshot channel (optional, shares framesource with stream0) */
+	/* JPEG snapshot channel (optional).
+	 * Vendor SDK uses encoder channels 4+ for JPEG, registers into
+	 * video group 0, binds to same framesource as stream0. */
 	st->jpeg_stream = -1;
 	if (rss_config_get_bool(cfg, "jpeg", "enabled", true)) {
 		int ji = st->stream_count;
@@ -195,17 +197,16 @@ int rvd_pipeline_init(rvd_state_t *st)
 			.height  = st->streams[0].enc_cfg.height,
 			.fps_num = jpeg_fps,
 			.fps_den = 1,
-			.bitrate = 0,  /* JPEG: quality, not bitrate */
+			.bitrate = 0,
 		};
-		/* Share framesource config with stream0 */
 		st->streams[ji].fs_cfg = st->streams[0].fs_cfg;
-		st->streams[ji].chn = ji;
+		st->streams[ji].chn = 4;  /* SDK convention: JPEG at channel 4+ */
 		st->streams[ji].is_jpeg = true;
 		st->jpeg_stream = ji;
 		st->stream_count = ji + 1;
 
 		snprintf(st->jpeg_path, sizeof(st->jpeg_path), "/tmp/snapshot.jpg");
-		RSS_INFO("jpeg: %ux%u @ %d fps, quality %d",
+		RSS_INFO("jpeg: %ux%u @ %d fps, quality %d (enc chn 4)",
 			 st->streams[ji].enc_cfg.width,
 			 st->streams[ji].enc_cfg.height,
 			 jpeg_fps, st->jpeg_quality);
@@ -256,91 +257,86 @@ int rvd_pipeline_init(rvd_state_t *st)
 	/* ── 6. (OSD deferred to Phase 4) ── */
 
 	/* ── 7. Create encoder groups and channels ── */
-	/* JPEG: bufshare BEFORE create, NO create_group, register into group 0 */
+	/* Video streams: create group, create chn, register chn in group.
+	 * JPEG: no group (registers into group 0), uses enc chn 4+ per SDK convention. */
 	for (int i = 0; i < st->stream_count; i++) {
-		if (st->streams[i].is_jpeg) {
-			/* Step 1: bufshare before create */
-			RSS_DEBUG("bufshare chn %d -> group 0", i);
-			ret = RSS_HAL_CALL(st->ops, enc_set_bufshare,
-					   st->hal_ctx, i, 0);
-			if (ret != RSS_OK)
-				RSS_WARN("enc_set_bufshare(%d, 0) failed: %d",
-					 i, ret);
+		int chn = st->streams[i].chn;
 
-			/* Step 2: create channel (no group) */
+		if (st->streams[i].is_jpeg) {
 			st->streams[i].enc_cfg.init_qp = st->jpeg_quality;
 			ret = RSS_HAL_CALL(st->ops, enc_create_channel,
-					   st->hal_ctx, i,
+					   st->hal_ctx, chn,
 					   &st->streams[i].enc_cfg);
 			if (ret != RSS_OK) {
 				RSS_FATAL("enc_create_channel(%d/JPEG) failed: %d",
-					  i, ret);
+					  chn, ret);
 				return ret;
 			}
 
-			/* Step 3: register into video group 0 */
-			RSS_DEBUG("registering JPEG chn %d in group 0", i);
+			/* Register JPEG into video group 0 */
 			ret = RSS_HAL_CALL(st->ops, enc_register_channel,
-					   st->hal_ctx, 0, i);
+					   st->hal_ctx, 0, chn);
 			if (ret != RSS_OK) {
 				RSS_FATAL("enc_register_channel(0, %d) failed: %d",
-					  i, ret);
+					  chn, ret);
 				return ret;
 			}
 		} else {
-			RSS_DEBUG("creating enc group %d", i);
 			ret = RSS_HAL_CALL(st->ops, enc_create_group,
-					   st->hal_ctx, i);
+					   st->hal_ctx, chn);
 			if (ret != RSS_OK) {
-				RSS_FATAL("enc_create_group(%d) failed: %d", i, ret);
+				RSS_FATAL("enc_create_group(%d) failed: %d", chn, ret);
 				return ret;
 			}
 
 			ret = RSS_HAL_CALL(st->ops, enc_create_channel,
-					   st->hal_ctx, i,
+					   st->hal_ctx, chn,
 					   &st->streams[i].enc_cfg);
 			if (ret != RSS_OK) {
-				RSS_FATAL("enc_create_channel(%d) failed: %d", i, ret);
+				RSS_FATAL("enc_create_channel(%d) failed: %d", chn, ret);
 				return ret;
 			}
 
-			RSS_DEBUG("registering enc chn %d in group %d", i, i);
 			ret = RSS_HAL_CALL(st->ops, enc_register_channel,
-					   st->hal_ctx, i, i);
+					   st->hal_ctx, chn, chn);
 			if (ret != RSS_OK) {
-				RSS_FATAL("enc_register_channel(%d) failed: %d", i, ret);
+				RSS_FATAL("enc_register_channel(%d) failed: %d", chn, ret);
 				return ret;
 			}
 		}
 	}
 
-	/* ── 8. Bind pipeline: FS → Encoder ── */
-	/* JPEG uses buffer sharing, not a direct FS binding */
+	/* ── 8. Bind pipeline: FS → Encoder (group level) ── */
+	/* JPEG is registered in group 0 — no separate bind needed.
+	 * The SDK bind is per-group, not per-channel. */
 	for (int i = 0; i < st->stream_count; i++) {
 		if (st->streams[i].is_jpeg)
 			continue;
-		rss_cell_t fs_out = { RSS_DEV_FS,  i, 0 };
-		rss_cell_t enc_in = { RSS_DEV_ENC, i, 0 };
+		int chn = st->streams[i].chn;
+		rss_cell_t fs_out = { RSS_DEV_FS,  chn, 0 };
+		rss_cell_t enc_in = { RSS_DEV_ENC, chn, 0 };
 
 		ret = RSS_HAL_CALL(st->ops, bind, st->hal_ctx, &fs_out, &enc_in);
 		if (ret != RSS_OK) {
-			RSS_FATAL("bind FS(%d)->ENC(%d) failed: %d", i, i, ret);
+			RSS_FATAL("bind FS(%d)->ENC(%d) failed: %d", chn, chn, ret);
 			return ret;
 		}
 	}
 
 	/* ── 9. Enable framesource, start OSD, start encoder ── */
 	for (int i = 0; i < st->stream_count; i++) {
+		int chn = st->streams[i].chn;
+
 		/* JPEG shares framesource with stream0 — don't enable twice */
 		if (!st->streams[i].is_jpeg) {
-			ret = RSS_HAL_CALL(st->ops, fs_enable_channel, st->hal_ctx, i);
+			ret = RSS_HAL_CALL(st->ops, fs_enable_channel, st->hal_ctx, chn);
 			if (ret != RSS_OK) {
-				RSS_FATAL("fs_enable_channel(%d) failed: %d", i, ret);
+				RSS_FATAL("fs_enable_channel(%d) failed: %d", chn, ret);
 				return ret;
 			}
 		}
 
-		ret = RSS_HAL_CALL(st->ops, enc_start, st->hal_ctx, i);
+		ret = RSS_HAL_CALL(st->ops, enc_start, st->hal_ctx, chn);
 		if (ret != RSS_OK) {
 			RSS_FATAL("enc_start(%d) failed: %d", i, ret);
 			return ret;
@@ -433,25 +429,23 @@ void rvd_pipeline_deinit(rvd_state_t *st)
 
 	for (int i = st->stream_count - 1; i >= 0; i--) {
 		if (!st->streams[i].enabled) continue;
+		int chn = st->streams[i].chn;
 
-		RSS_HAL_CALL(st->ops, enc_stop, st->hal_ctx, i);
+		RSS_HAL_CALL(st->ops, enc_stop, st->hal_ctx, chn);
 
 		if (!st->streams[i].is_jpeg) {
-			RSS_HAL_CALL(st->ops, fs_disable_channel, st->hal_ctx, i);
+			RSS_HAL_CALL(st->ops, fs_disable_channel, st->hal_ctx, chn);
 
-			rss_cell_t fs_out = { RSS_DEV_FS,  i, 0 };
-			rss_cell_t enc_in = { RSS_DEV_ENC, i, 0 };
+			rss_cell_t fs_out = { RSS_DEV_FS,  chn, 0 };
+			rss_cell_t enc_in = { RSS_DEV_ENC, chn, 0 };
 			RSS_HAL_CALL(st->ops, unbind, st->hal_ctx, &fs_out, &enc_in);
 		}
 
-		if (st->streams[i].is_jpeg) {
-			RSS_HAL_CALL(st->ops, enc_unregister_channel, st->hal_ctx, i);
-			RSS_HAL_CALL(st->ops, enc_destroy_channel, st->hal_ctx, i);
-		} else {
-			RSS_HAL_CALL(st->ops, enc_unregister_channel, st->hal_ctx, i);
-			RSS_HAL_CALL(st->ops, enc_destroy_channel, st->hal_ctx, i);
-			RSS_HAL_CALL(st->ops, enc_destroy_group, st->hal_ctx, i);
-			RSS_HAL_CALL(st->ops, fs_destroy_channel, st->hal_ctx, i);
+		RSS_HAL_CALL(st->ops, enc_unregister_channel, st->hal_ctx, chn);
+		RSS_HAL_CALL(st->ops, enc_destroy_channel, st->hal_ctx, chn);
+		if (!st->streams[i].is_jpeg) {
+			RSS_HAL_CALL(st->ops, enc_destroy_group, st->hal_ctx, chn);
+			RSS_HAL_CALL(st->ops, fs_destroy_channel, st->hal_ctx, chn);
 		}
 
 		if (st->streams[i].ring) {
