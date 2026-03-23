@@ -19,13 +19,14 @@
  * The ring data is a concatenation of NALUs with 4-byte start codes
  * (0x00 0x00 0x00 0x01) as written by RVD's linearize_frame().
  */
-static void rsd_send_video_frame(rsd_client_t *c, const uint8_t *data,
-				 uint32_t len, uint32_t rtp_ts)
+static void rsd_send_video_frame(rsd_client_t *c, const uint8_t *data, uint32_t len,
+				 uint32_t rtp_ts)
 {
-	if (!c->video.nal || !c->video.playing) return;
+	if (!c->video.nal || !c->video.playing)
+		return;
 
-	bool is_h265 = (c->video_codec == 1);  /* RSS_CODEC_H265 */
-	int hdr_size = is_h265 ? 2 : 1;        /* H.265=2 bytes, H.264=1 byte */
+	bool is_h265 = (c->video_codec == 1); /* RSS_CODEC_H265 */
+	int hdr_size = is_h265 ? 2 : 1;	      /* H.265=2 bytes, H.264=1 byte */
 
 	const uint8_t *p = data;
 	const uint8_t *end = data + len;
@@ -58,27 +59,19 @@ static void rsd_send_video_frame(rsd_client_t *c, const uint8_t *data,
 		if (is_h265) {
 			nalu = (Compy_NalUnit){
 				.header = Compy_NalHeader_H265(
-					Compy_H265NalHeader_parse(
-						(uint8_t *)nalu_start)),
-				.payload = U8Slice99_new(
-					(uint8_t *)(nalu_start + 2),
-					nalu_len - 2),
+					Compy_H265NalHeader_parse((uint8_t *)nalu_start)),
+				.payload = U8Slice99_new((uint8_t *)(nalu_start + 2), nalu_len - 2),
 			};
 		} else {
 			nalu = (Compy_NalUnit){
 				.header = Compy_NalHeader_H264(
-					Compy_H264NalHeader_parse(
-						nalu_start[0])),
-				.payload = U8Slice99_new(
-					(uint8_t *)(nalu_start + 1),
-					nalu_len - 1),
+					Compy_H264NalHeader_parse(nalu_start[0])),
+				.payload = U8Slice99_new((uint8_t *)(nalu_start + 1), nalu_len - 1),
 			};
 		}
 
-		(void)!Compy_NalTransport_send_packet(
-			c->video.nal,
-			Compy_RtpTimestamp_Raw(rtp_ts),
-			nalu);
+		(void)!Compy_NalTransport_send_packet(c->video.nal, Compy_RtpTimestamp_Raw(rtp_ts),
+						      nalu);
 
 		p = nalu_end;
 	}
@@ -94,7 +87,10 @@ static void rsd_send_video_frame(rsd_client_t *c, const uint8_t *data,
 /* Global server pointer (set in rsd_server_run before threads start) */
 static rsd_server_t *g_srv_for_readers = NULL;
 
-void rsd_set_server_for_readers(rsd_server_t *srv) { g_srv_for_readers = srv; }
+void rsd_set_server_for_readers(rsd_server_t *srv)
+{
+	g_srv_for_readers = srv;
+}
 
 void *rsd_video_reader_thread(void *arg)
 {
@@ -111,20 +107,21 @@ void *rsd_video_reader_thread(void *arg)
 
 	while (*srv->running) {
 		int ret = rss_ring_wait(rctx->ring, 100);
-		if (ret != 0) continue;
+		if (ret != 0)
+			continue;
 
 		const uint8_t *data;
 		uint32_t length;
 		rss_ring_slot_t meta;
 		uint64_t read_seq = rctx->read_seq;
 
-		ret = rss_ring_read(rctx->ring, &read_seq, &data,
-				    &length, &meta);
+		ret = rss_ring_read(rctx->ring, &read_seq, &data, &length, &meta);
 		if (ret == RSS_EOVERFLOW) {
 			rctx->read_seq = read_seq;
 			continue;
 		}
-		if (ret != 0) continue;
+		if (ret != 0)
+			continue;
 
 		rctx->read_seq = read_seq;
 
@@ -139,11 +136,14 @@ void *rsd_video_reader_thread(void *arg)
 		pthread_mutex_lock(&srv->clients_lock);
 		for (int i = 0; i < srv->client_count; i++) {
 			rsd_client_t *c = srv->clients[i];
-			if (!c || !c->video.playing) continue;
-			if (c->stream_idx != stream_idx) continue;
+			if (!c || !c->video.playing)
+				continue;
+			if (c->stream_idx != stream_idx)
+				continue;
 
 			if (c->waiting_keyframe) {
-				if (!meta.is_key) continue;
+				if (!meta.is_key)
+					continue;
 				c->waiting_keyframe = false;
 				RSS_DEBUG("client[%d] got keyframe", stream_idx);
 			}
@@ -159,17 +159,16 @@ void *rsd_video_reader_thread(void *arg)
 
 /* ── Audio ring reader thread ── */
 
-static void rsd_send_audio_frame(rsd_client_t *c, const uint8_t *data,
-				 uint32_t len, uint32_t rtp_ts)
+static void rsd_send_audio_frame(rsd_client_t *c, const uint8_t *data, uint32_t len,
+				 uint32_t rtp_ts)
 {
-	if (!c->audio.rtp || !c->audio.playing) return;
+	if (!c->audio.rtp || !c->audio.playing)
+		return;
 
-	(void)!Compy_RtpTransport_send_packet(
-		c->audio.rtp,
-		Compy_RtpTimestamp_Raw(rtp_ts),
-		false,                        /* no marker */
-		U8Slice99_empty(),            /* no payload header */
-		U8Slice99_new((uint8_t *)data, len));
+	(void)!Compy_RtpTransport_send_packet(c->audio.rtp, Compy_RtpTimestamp_Raw(rtp_ts),
+					      false,		 /* no marker */
+					      U8Slice99_empty(), /* no payload header */
+					      U8Slice99_new((uint8_t *)data, len));
 
 	/* Periodic RTCP SR */
 	int64_t now = rss_timestamp_us();
@@ -187,7 +186,7 @@ void *rsd_audio_reader_thread(void *arg)
 
 	/* Get clock rate from ring header */
 	const rss_ring_header_t *ahdr = rss_ring_get_header(srv->ring_audio);
-	uint32_t audio_clock = ahdr->fps_num;  /* fps_num holds sample_rate */
+	uint32_t audio_clock = ahdr->fps_num; /* fps_num holds sample_rate */
 
 	/* Buffer for audio frames (L16@16kHz = 640 bytes/20ms) */
 	uint8_t audio_buf[4096];
@@ -199,11 +198,12 @@ void *rsd_audio_reader_thread(void *arg)
 	 * perfectly monotonic timestamps with zero jitter.
 	 */
 	uint32_t audio_rtp_ts = 0;
-	uint32_t samples_per_frame = audio_clock / 50;  /* 20ms */
+	uint32_t samples_per_frame = audio_clock / 50; /* 20ms */
 
 	while (*srv->running) {
 		int ret = rss_ring_wait(srv->ring_audio, 100);
-		if (ret != 0) continue;
+		if (ret != 0)
+			continue;
 
 		for (int burst = 0; burst < 16; burst++) {
 			const uint8_t *data;
@@ -211,17 +211,18 @@ void *rsd_audio_reader_thread(void *arg)
 			rss_ring_slot_t meta;
 			uint64_t read_seq = srv->audio_read_seq;
 
-			ret = rss_ring_read(srv->ring_audio, &read_seq, &data,
-					    &length, &meta);
+			ret = rss_ring_read(srv->ring_audio, &read_seq, &data, &length, &meta);
 			if (ret == RSS_EOVERFLOW) {
 				srv->audio_read_seq = read_seq;
 				break;
 			}
-			if (ret != 0) break;
+			if (ret != 0)
+				break;
 
 			srv->audio_read_seq = read_seq;
 
-			if (length > sizeof(audio_buf)) continue;
+			if (length > sizeof(audio_buf))
+				continue;
 			memcpy(audio_buf, data, length);
 
 			uint32_t rtp_ts = audio_rtp_ts;
@@ -230,7 +231,8 @@ void *rsd_audio_reader_thread(void *arg)
 			pthread_mutex_lock(&srv->clients_lock);
 			for (int i = 0; i < srv->client_count; i++) {
 				rsd_client_t *c = srv->clients[i];
-				if (!c || !c->audio.playing) continue;
+				if (!c || !c->audio.playing)
+					continue;
 
 				rsd_send_audio_frame(c, audio_buf, length, rtp_ts);
 			}

@@ -33,32 +33,31 @@
 #include <rss_ipc.h>
 #include <rss_common.h>
 
-static const char *daemons[] = { "rvd", "rsd", "rad", "rod", "ric", NULL };
+static const char *daemons[] = {"rvd", "rsd", "rad", "rod", "ric", NULL};
 
 static void usage(void)
 {
-	fprintf(stderr,
-		"Usage: raptorctl <command>\n"
-		"\n"
-		"Commands:\n"
-		"  status                              Show daemon status\n"
-		"  config save                         Save running config to disk\n"
-		"  <daemon> status                     Show daemon details\n"
-		"  <daemon> config                     Show running config\n"
-		"  <daemon> <cmd> [args...]            Send command\n"
-		"\n"
-		"RVD commands:\n"
-		"  rvd set-bitrate <ch> <bps>          Change bitrate\n"
-		"  rvd set-gop <ch> <length>           Change GOP length\n"
-		"  rvd set-fps <ch> <fps>              Change frame rate\n"
-		"  rvd set-qp-bounds <ch> <min> <max>  Change QP range\n"
-		"  rvd request-idr [channel]           Request keyframe\n"
-		"\n"
-		"RAD commands:\n"
-		"  rad set-volume <val>                Change input volume\n"
-		"  rad set-gain <val>                  Change input gain\n"
-		"\n"
-		"Daemons: rvd, rsd, rad, rod, ric\n");
+	fprintf(stderr, "Usage: raptorctl <command>\n"
+			"\n"
+			"Commands:\n"
+			"  status                              Show daemon status\n"
+			"  config save                         Save running config to disk\n"
+			"  <daemon> status                     Show daemon details\n"
+			"  <daemon> config                     Show running config\n"
+			"  <daemon> <cmd> [args...]            Send command\n"
+			"\n"
+			"RVD commands:\n"
+			"  rvd set-bitrate <ch> <bps>          Change bitrate\n"
+			"  rvd set-gop <ch> <length>           Change GOP length\n"
+			"  rvd set-fps <ch> <fps>              Change frame rate\n"
+			"  rvd set-qp-bounds <ch> <min> <max>  Change QP range\n"
+			"  rvd request-idr [channel]           Request keyframe\n"
+			"\n"
+			"RAD commands:\n"
+			"  rad set-volume <val>                Change input volume\n"
+			"  rad set-gain <val>                  Change input gain\n"
+			"\n"
+			"Daemons: rvd, rsd, rad, rod, ric\n");
 }
 
 static void cmd_status(void)
@@ -87,11 +86,10 @@ static int send_cmd(const char *daemon, const char *json)
 	snprintf(sock_path, sizeof(sock_path), "/var/run/rss/%s.sock", daemon);
 
 	char resp[2048];
-	int ret = rss_ctrl_send_command(sock_path, json,
-					resp, sizeof(resp), 5000);
+	int ret = rss_ctrl_send_command(sock_path, json, resp, sizeof(resp), 5000);
 	if (ret < 0) {
-		fprintf(stderr, "Failed to send to %s: %s\n",
-			daemon, ret == -2 ? "timeout" : "connection failed");
+		fprintf(stderr, "Failed to send to %s: %s\n", daemon,
+			ret == -2 ? "timeout" : "connection failed");
 		return 1;
 	}
 
@@ -126,11 +124,9 @@ int main(int argc, char **argv)
 		for (int i = 0; daemons[i]; i++) {
 			char sock_path[64];
 			char resp[2048];
-			snprintf(sock_path, sizeof(sock_path),
-				 "/var/run/rss/%s.sock", daemons[i]);
-			int ret = rss_ctrl_send_command(sock_path,
-				"{\"cmd\":\"config-save\"}",
-				resp, sizeof(resp), 2000);
+			snprintf(sock_path, sizeof(sock_path), "/var/run/rss/%s.sock", daemons[i]);
+			int ret = rss_ctrl_send_command(sock_path, "{\"cmd\":\"config-save\"}",
+							resp, sizeof(resp), 2000);
 			if (ret >= 0) {
 				printf("%s: %s\n", daemons[i], resp);
 				saved++;
@@ -166,29 +162,26 @@ int main(int argc, char **argv)
 
 	} else if (strcmp(cmd, "request-idr") == 0) {
 		if (argc > 3)
-			snprintf(json, sizeof(json),
-				 "{\"cmd\":\"request-idr\",\"channel\":%s}",
+			snprintf(json, sizeof(json), "{\"cmd\":\"request-idr\",\"channel\":%s}",
 				 argv[3]);
 		else
-			snprintf(json, sizeof(json),
-				 "{\"cmd\":\"request-idr\"}");
+			snprintf(json, sizeof(json), "{\"cmd\":\"request-idr\"}");
 
 	} else if (strcmp(cmd, "set-bitrate") == 0) {
 		if (argc < 5) {
-			fprintf(stderr, "Usage: raptorctl %s set-bitrate <channel> <bps>\n", daemon);
+			fprintf(stderr, "Usage: raptorctl %s set-bitrate <channel> <bps>\n",
+				daemon);
 			return 1;
 		}
 		snprintf(json, sizeof(json),
-			 "{\"cmd\":\"set-bitrate\",\"channel\":%s,\"value\":%s}",
-			 argv[3], argv[4]);
+			 "{\"cmd\":\"set-bitrate\",\"channel\":%s,\"value\":%s}", argv[3], argv[4]);
 
 	} else if (strcmp(cmd, "set-gop") == 0) {
 		if (argc < 5) {
 			fprintf(stderr, "Usage: raptorctl %s set-gop <channel> <length>\n", daemon);
 			return 1;
 		}
-		snprintf(json, sizeof(json),
-			 "{\"cmd\":\"set-gop\",\"channel\":%s,\"value\":%s}",
+		snprintf(json, sizeof(json), "{\"cmd\":\"set-gop\",\"channel\":%s,\"value\":%s}",
 			 argv[3], argv[4]);
 
 	} else if (strcmp(cmd, "set-fps") == 0) {
@@ -196,13 +189,13 @@ int main(int argc, char **argv)
 			fprintf(stderr, "Usage: raptorctl %s set-fps <channel> <fps>\n", daemon);
 			return 1;
 		}
-		snprintf(json, sizeof(json),
-			 "{\"cmd\":\"set-fps\",\"channel\":%s,\"value\":%s}",
+		snprintf(json, sizeof(json), "{\"cmd\":\"set-fps\",\"channel\":%s,\"value\":%s}",
 			 argv[3], argv[4]);
 
 	} else if (strcmp(cmd, "set-qp-bounds") == 0) {
 		if (argc < 6) {
-			fprintf(stderr, "Usage: raptorctl %s set-qp-bounds <channel> <min> <max>\n", daemon);
+			fprintf(stderr, "Usage: raptorctl %s set-qp-bounds <channel> <min> <max>\n",
+				daemon);
 			return 1;
 		}
 		snprintf(json, sizeof(json),
@@ -214,16 +207,14 @@ int main(int argc, char **argv)
 			fprintf(stderr, "Usage: raptorctl %s set-volume <value>\n", daemon);
 			return 1;
 		}
-		snprintf(json, sizeof(json),
-			 "{\"cmd\":\"set-volume\",\"value\":%s}", argv[3]);
+		snprintf(json, sizeof(json), "{\"cmd\":\"set-volume\",\"value\":%s}", argv[3]);
 
 	} else if (strcmp(cmd, "set-gain") == 0) {
 		if (argc < 4) {
 			fprintf(stderr, "Usage: raptorctl %s set-gain <value>\n", daemon);
 			return 1;
 		}
-		snprintf(json, sizeof(json),
-			 "{\"cmd\":\"set-gain\",\"value\":%s}", argv[3]);
+		snprintf(json, sizeof(json), "{\"cmd\":\"set-gain\",\"value\":%s}", argv[3]);
 
 	} else {
 		/* Generic pass-through */

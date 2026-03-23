@@ -16,10 +16,14 @@
 static uint8_t rvd_profile_idc(int profile)
 {
 	switch (profile) {
-	case 0:  return 66;   /* Baseline */
-	case 1:  return 77;   /* Main */
-	case 2:  return 100;  /* High */
-	default: return 100;
+	case 0:
+		return 66; /* Baseline */
+	case 1:
+		return 77; /* Main */
+	case 2:
+		return 100; /* High */
+	default:
+		return 100;
 	}
 }
 
@@ -27,23 +31,34 @@ static uint8_t rvd_profile_idc(int profile)
 static uint8_t rvd_level_idc(int width, int height)
 {
 	int macroblocks = ((width + 15) / 16) * ((height + 15) / 16);
-	if (macroblocks <= 99)     return 10;  /* 1.0: up to 176x144 (QCIF) */
-	if (macroblocks <= 396)    return 13;  /* 1.3: up to 352x288 (CIF) */
-	if (macroblocks <= 792)    return 21;  /* 2.1: up to 480x360 */
-	if (macroblocks <= 1620)   return 30;  /* 3.0: up to 720x576 */
-	if (macroblocks <= 3600)   return 31;  /* 3.1: up to 1280x720 */
-	if (macroblocks <= 5120)   return 32;  /* 3.2: up to 1280x1024 */
-	if (macroblocks <= 8192)   return 40;  /* 4.0: up to 1920x1080 */
-	if (macroblocks <= 8704)   return 42;  /* 4.2: up to 2048x1088 */
-	if (macroblocks <= 22080)  return 50;  /* 5.0: up to 2560x1920 */
-	if (macroblocks <= 36864)  return 51;  /* 5.1: up to 4096x2160 */
-	return 52;                             /* 5.2 */
+	if (macroblocks <= 99)
+		return 10; /* 1.0: up to 176x144 (QCIF) */
+	if (macroblocks <= 396)
+		return 13; /* 1.3: up to 352x288 (CIF) */
+	if (macroblocks <= 792)
+		return 21; /* 2.1: up to 480x360 */
+	if (macroblocks <= 1620)
+		return 30; /* 3.0: up to 720x576 */
+	if (macroblocks <= 3600)
+		return 31; /* 3.1: up to 1280x720 */
+	if (macroblocks <= 5120)
+		return 32; /* 3.2: up to 1280x1024 */
+	if (macroblocks <= 8192)
+		return 40; /* 4.0: up to 1920x1080 */
+	if (macroblocks <= 8704)
+		return 42; /* 4.2: up to 2048x1088 */
+	if (macroblocks <= 22080)
+		return 50; /* 5.0: up to 2560x1920 */
+	if (macroblocks <= 36864)
+		return 51; /* 5.1: up to 4096x2160 */
+	return 52;	   /* 5.2 */
 }
 
 /* Parse codec string from config */
 static rss_codec_t parse_codec(const char *s)
 {
-	if (!s) return RSS_CODEC_H264;
+	if (!s)
+		return RSS_CODEC_H264;
 	if (strcasecmp(s, "h265") == 0 || strcasecmp(s, "hevc") == 0)
 		return RSS_CODEC_H265;
 	if (strcasecmp(s, "jpeg") == 0 || strcasecmp(s, "mjpeg") == 0)
@@ -54,17 +69,20 @@ static rss_codec_t parse_codec(const char *s)
 /* Parse rate control mode string */
 static rss_rc_mode_t parse_rc_mode(const char *s)
 {
-	if (!s) return RSS_RC_VBR;
-	if (strcasecmp(s, "cbr") == 0)       return RSS_RC_CBR;
-	if (strcasecmp(s, "fixqp") == 0)     return RSS_RC_FIXQP;
-	if (strcasecmp(s, "capped_vbr") == 0) return RSS_RC_CAPPED_VBR;
+	if (!s)
+		return RSS_RC_VBR;
+	if (strcasecmp(s, "cbr") == 0)
+		return RSS_RC_CBR;
+	if (strcasecmp(s, "fixqp") == 0)
+		return RSS_RC_FIXQP;
+	if (strcasecmp(s, "capped_vbr") == 0)
+		return RSS_RC_CAPPED_VBR;
 	return RSS_RC_VBR;
 }
 
 /* Load one stream's config from INI section */
-static void load_stream_config(rss_config_t *cfg, const char *section,
-			       rvd_stream_t *s, int default_w, int default_h,
-			       int default_fps, int default_br)
+static void load_stream_config(rss_config_t *cfg, const char *section, rvd_stream_t *s,
+			       int default_w, int default_h, int default_fps, int default_br)
 {
 	int w = rss_config_get_int(cfg, section, "width", default_w);
 	int h = rss_config_get_int(cfg, section, "height", default_h);
@@ -72,29 +90,29 @@ static void load_stream_config(rss_config_t *cfg, const char *section,
 
 	/* Framesource config */
 	s->fs_cfg = (rss_fs_config_t){
-		.width   = w,
-		.height  = h,
-		.pixfmt  = RSS_PIXFMT_NV12,
+		.width = w,
+		.height = h,
+		.pixfmt = RSS_PIXFMT_NV12,
 		.fps_num = fps,
 		.fps_den = 1,
-		.nr_vbs  = rss_config_get_int(cfg, section, "nr_vbs", 2),
+		.nr_vbs = rss_config_get_int(cfg, section, "nr_vbs", 2),
 	};
 
 	/* Encoder config */
 	s->enc_cfg = (rss_video_config_t){
-		.codec       = parse_codec(rss_config_get_str(cfg, section, "codec", "h264")),
-		.width       = w,
-		.height      = h,
-		.profile     = rss_config_get_int(cfg, section, "profile", 2),
-		.rc_mode     = parse_rc_mode(rss_config_get_str(cfg, section, "rc_mode", "vbr")),
-		.bitrate     = rss_config_get_int(cfg, section, "bitrate", default_br),
+		.codec = parse_codec(rss_config_get_str(cfg, section, "codec", "h264")),
+		.width = w,
+		.height = h,
+		.profile = rss_config_get_int(cfg, section, "profile", 2),
+		.rc_mode = parse_rc_mode(rss_config_get_str(cfg, section, "rc_mode", "vbr")),
+		.bitrate = rss_config_get_int(cfg, section, "bitrate", default_br),
 		.max_bitrate = rss_config_get_int(cfg, section, "max_bitrate", 0),
-		.fps_num     = fps,
-		.fps_den     = 1,
-		.gop_length  = rss_config_get_int(cfg, section, "gop", fps * 2),
-		.init_qp     = -1,
-		.min_qp      = rss_config_get_int(cfg, section, "min_qp", 15),
-		.max_qp      = rss_config_get_int(cfg, section, "max_qp", 45),
+		.fps_num = fps,
+		.fps_den = 1,
+		.gop_length = rss_config_get_int(cfg, section, "gop", fps * 2),
+		.init_qp = -1,
+		.min_qp = rss_config_get_int(cfg, section, "min_qp", 15),
+		.max_qp = rss_config_get_int(cfg, section, "max_qp", 45),
 	};
 }
 
@@ -113,14 +131,13 @@ int rvd_pipeline_init(rvd_state_t *st)
 
 	/* ── 2. Sensor config ── */
 	rss_sensor_config_t sensor = {0};
-	rss_strlcpy(sensor.name,
-		    rss_config_get_str(cfg, "sensor", "name", "gc2053"),
+	rss_strlcpy(sensor.name, rss_config_get_str(cfg, "sensor", "name", "gc2053"),
 		    sizeof(sensor.name));
-	sensor.i2c_addr    = rss_config_get_int(cfg, "sensor", "i2c_addr", 0x37);
+	sensor.i2c_addr = rss_config_get_int(cfg, "sensor", "i2c_addr", 0x37);
 	sensor.i2c_adapter = rss_config_get_int(cfg, "sensor", "i2c_adapter", 0);
-	sensor.rst_gpio    = rss_config_get_int(cfg, "sensor", "rst_gpio", -1);
-	sensor.pwdn_gpio   = rss_config_get_int(cfg, "sensor", "pwdn_gpio", -1);
-	sensor.power_gpio  = rss_config_get_int(cfg, "sensor", "power_gpio", -1);
+	sensor.rst_gpio = rss_config_get_int(cfg, "sensor", "rst_gpio", -1);
+	sensor.pwdn_gpio = rss_config_get_int(cfg, "sensor", "pwdn_gpio", -1);
+	sensor.power_gpio = rss_config_get_int(cfg, "sensor", "power_gpio", -1);
 
 	/* ── 3. Init HAL (brings up ISP + sensor) ── */
 	ret = RSS_HAL_CALL(st->ops, init, st->hal_ctx, &sensor);
@@ -130,13 +147,11 @@ int rvd_pipeline_init(rvd_state_t *st)
 	}
 
 	/* Check caps for codec fallback */
-	const rss_hal_caps_t *caps = st->ops->get_caps
-		? st->ops->get_caps(st->hal_ctx) : NULL;
+	const rss_hal_caps_t *caps = st->ops->get_caps ? st->ops->get_caps(st->hal_ctx) : NULL;
 
 	/* ── 3b. Set sensor FPS (required — SDK won't encode without this) ── */
 	int target_fps = rss_config_get_int(cfg, "stream0", "fps", 25);
-	ret = RSS_HAL_CALL(st->ops, isp_set_sensor_fps, st->hal_ctx,
-			   target_fps, 1);
+	ret = RSS_HAL_CALL(st->ops, isp_set_sensor_fps, st->hal_ctx, target_fps, 1);
 	if (ret != RSS_OK)
 		RSS_WARN("isp_set_sensor_fps failed: %d (non-fatal)", ret);
 
@@ -159,9 +174,15 @@ int rvd_pipeline_init(rvd_state_t *st)
 	{
 		char *s;
 		s = rss_read_file("/proc/jz/sensor/width", NULL);
-		if (s) { sensor_w = atoi(s); free(s); }
+		if (s) {
+			sensor_w = atoi(s);
+			free(s);
+		}
 		s = rss_read_file("/proc/jz/sensor/height", NULL);
-		if (s) { sensor_h = atoi(s); free(s); }
+		if (s) {
+			sensor_h = atoi(s);
+			free(s);
+		}
 	}
 	if (sensor_w > 0 && sensor_h > 0)
 		RSS_INFO("sensor resolution: %dx%d", sensor_w, sensor_h);
@@ -169,15 +190,13 @@ int rvd_pipeline_init(rvd_state_t *st)
 		RSS_WARN("could not read sensor resolution from /proc");
 
 	/* ── 4. Load stream configs ── */
-	load_stream_config(cfg, "stream0", &st->streams[0],
-			   1920, 1080, 25, 2000000);
+	load_stream_config(cfg, "stream0", &st->streams[0], 1920, 1080, 25, 2000000);
 	st->streams[0].chn = 0;
 	st->stream_count = 1;
 
 	/* Sub stream (optional) */
 	if (rss_config_get_bool(cfg, "stream1", "enabled", true)) {
-		load_stream_config(cfg, "stream1", &st->streams[1],
-				   640, 360, 25, 500000);
+		load_stream_config(cfg, "stream1", &st->streams[1], 640, 360, 25, 500000);
 		st->streams[1].chn = 1;
 		st->stream_count = 2;
 	}
@@ -192,24 +211,23 @@ int rvd_pipeline_init(rvd_state_t *st)
 		int jpeg_fps = rss_config_get_int(cfg, "jpeg", "fps", 1);
 
 		st->streams[ji].enc_cfg = (rss_video_config_t){
-			.codec   = RSS_CODEC_JPEG,
-			.width   = st->streams[0].enc_cfg.width,
-			.height  = st->streams[0].enc_cfg.height,
+			.codec = RSS_CODEC_JPEG,
+			.width = st->streams[0].enc_cfg.width,
+			.height = st->streams[0].enc_cfg.height,
 			.fps_num = jpeg_fps,
 			.fps_den = 1,
 			.bitrate = 0,
 		};
 		st->streams[ji].fs_cfg = st->streams[0].fs_cfg;
-		st->streams[ji].chn = 4;  /* SDK convention: JPEG at channel 4+ */
+		st->streams[ji].chn = 4; /* SDK convention: JPEG at channel 4+ */
 		st->streams[ji].is_jpeg = true;
 		st->jpeg_stream = ji;
 		st->stream_count = ji + 1;
 
 		snprintf(st->jpeg_path, sizeof(st->jpeg_path), "/tmp/snapshot.jpg");
 		RSS_INFO("jpeg: %ux%u @ %d fps, quality %d (enc chn 4)",
-			 st->streams[ji].enc_cfg.width,
-			 st->streams[ji].enc_cfg.height,
-			 jpeg_fps, st->jpeg_quality);
+			 st->streams[ji].enc_cfg.width, st->streams[ji].enc_cfg.height, jpeg_fps,
+			 st->jpeg_quality);
 	}
 
 	/* H.265 fallback on SoCs without support */
@@ -225,14 +243,14 @@ int rvd_pipeline_init(rvd_state_t *st)
 	/* ── 4b. Enable scaler for streams at lower resolution than sensor ── */
 	if (sensor_w > 0 && sensor_h > 0) {
 		for (int i = 0; i < st->stream_count; i++) {
-			if (st->streams[i].is_jpeg) continue; /* shares stream0's FS */
+			if (st->streams[i].is_jpeg)
+				continue; /* shares stream0's FS */
 			rss_fs_config_t *fs = &st->streams[i].fs_cfg;
 			if (fs->width != sensor_w || fs->height != sensor_h) {
 				fs->scaler.enable = true;
 				fs->scaler.out_width = fs->width;
 				fs->scaler.out_height = fs->height;
-				RSS_INFO("stream%d: scaler %dx%d -> %dx%d",
-					 i, sensor_w, sensor_h,
+				RSS_INFO("stream%d: scaler %dx%d -> %dx%d", i, sensor_w, sensor_h,
 					 fs->width, fs->height);
 			}
 		}
@@ -243,8 +261,8 @@ int rvd_pipeline_init(rvd_state_t *st)
 	for (int i = 0; i < st->stream_count; i++) {
 		if (st->streams[i].is_jpeg)
 			continue;
-		ret = RSS_HAL_CALL(st->ops, fs_create_channel, st->hal_ctx,
-				   i, &st->streams[i].fs_cfg);
+		ret = RSS_HAL_CALL(st->ops, fs_create_channel, st->hal_ctx, i,
+				   &st->streams[i].fs_cfg);
 		if (ret != RSS_OK) {
 			RSS_FATAL("fs_create_channel(%d) failed: %d", i, ret);
 			return ret;
@@ -265,8 +283,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 		if (st->streams[i].is_jpeg) {
 			/* Optional buffer sharing (before CreateChn per prudynt order) */
 			if (rss_config_get_bool(cfg, "jpeg", "bufshare", true)) {
-				ret = RSS_HAL_CALL(st->ops, enc_set_bufshare,
-						   st->hal_ctx, chn, 0);
+				ret = RSS_HAL_CALL(st->ops, enc_set_bufshare, st->hal_ctx, chn, 0);
 				if (ret == RSS_OK)
 					RSS_DEBUG("jpeg bufshare chn %d -> group 0", chn);
 				else
@@ -274,41 +291,34 @@ int rvd_pipeline_init(rvd_state_t *st)
 			}
 
 			st->streams[i].enc_cfg.init_qp = st->jpeg_quality;
-			ret = RSS_HAL_CALL(st->ops, enc_create_channel,
-					   st->hal_ctx, chn,
+			ret = RSS_HAL_CALL(st->ops, enc_create_channel, st->hal_ctx, chn,
 					   &st->streams[i].enc_cfg);
 			if (ret != RSS_OK) {
-				RSS_FATAL("enc_create_channel(%d/JPEG) failed: %d",
-					  chn, ret);
+				RSS_FATAL("enc_create_channel(%d/JPEG) failed: %d", chn, ret);
 				return ret;
 			}
 
 			/* Register JPEG into video group 0 */
-			ret = RSS_HAL_CALL(st->ops, enc_register_channel,
-					   st->hal_ctx, 0, chn);
+			ret = RSS_HAL_CALL(st->ops, enc_register_channel, st->hal_ctx, 0, chn);
 			if (ret != RSS_OK) {
-				RSS_FATAL("enc_register_channel(0, %d) failed: %d",
-					  chn, ret);
+				RSS_FATAL("enc_register_channel(0, %d) failed: %d", chn, ret);
 				return ret;
 			}
 		} else {
-			ret = RSS_HAL_CALL(st->ops, enc_create_group,
-					   st->hal_ctx, chn);
+			ret = RSS_HAL_CALL(st->ops, enc_create_group, st->hal_ctx, chn);
 			if (ret != RSS_OK) {
 				RSS_FATAL("enc_create_group(%d) failed: %d", chn, ret);
 				return ret;
 			}
 
-			ret = RSS_HAL_CALL(st->ops, enc_create_channel,
-					   st->hal_ctx, chn,
+			ret = RSS_HAL_CALL(st->ops, enc_create_channel, st->hal_ctx, chn,
 					   &st->streams[i].enc_cfg);
 			if (ret != RSS_OK) {
 				RSS_FATAL("enc_create_channel(%d) failed: %d", chn, ret);
 				return ret;
 			}
 
-			ret = RSS_HAL_CALL(st->ops, enc_register_channel,
-					   st->hal_ctx, chn, chn);
+			ret = RSS_HAL_CALL(st->ops, enc_register_channel, st->hal_ctx, chn, chn);
 			if (ret != RSS_OK) {
 				RSS_FATAL("enc_register_channel(%d) failed: %d", chn, ret);
 				return ret;
@@ -323,8 +333,8 @@ int rvd_pipeline_init(rvd_state_t *st)
 		if (st->streams[i].is_jpeg)
 			continue;
 		int chn = st->streams[i].chn;
-		rss_cell_t fs_out = { RSS_DEV_FS,  chn, 0 };
-		rss_cell_t enc_in = { RSS_DEV_ENC, chn, 0 };
+		rss_cell_t fs_out = {RSS_DEV_FS, chn, 0};
+		rss_cell_t enc_in = {RSS_DEV_ENC, chn, 0};
 
 		ret = RSS_HAL_CALL(st->ops, bind, st->hal_ctx, &fs_out, &enc_in);
 		if (ret != RSS_OK) {
@@ -354,18 +364,14 @@ int rvd_pipeline_init(rvd_state_t *st)
 
 		st->streams[i].enabled = true;
 		if (st->streams[i].is_jpeg) {
-			RSS_INFO("stream%d: %ux%u JPEG @ %u fps, quality %d",
-				 i, st->streams[i].enc_cfg.width,
-				 st->streams[i].enc_cfg.height,
-				 st->streams[i].enc_cfg.fps_num,
-				 st->jpeg_quality);
+			RSS_INFO("stream%d: %ux%u JPEG @ %u fps, quality %d", i,
+				 st->streams[i].enc_cfg.width, st->streams[i].enc_cfg.height,
+				 st->streams[i].enc_cfg.fps_num, st->jpeg_quality);
 		} else {
-			RSS_INFO("stream%d: %ux%u %s @ %u fps, %u bps",
-				 i, st->streams[i].enc_cfg.width,
-				 st->streams[i].enc_cfg.height,
+			RSS_INFO("stream%d: %ux%u %s @ %u fps, %u bps", i,
+				 st->streams[i].enc_cfg.width, st->streams[i].enc_cfg.height,
 				 st->streams[i].enc_cfg.codec == RSS_CODEC_H265 ? "H.265" : "H.264",
-				 st->streams[i].enc_cfg.fps_num,
-				 st->streams[i].enc_cfg.bitrate);
+				 st->streams[i].enc_cfg.fps_num, st->streams[i].enc_cfg.bitrate);
 		}
 	}
 
@@ -375,38 +381,30 @@ int rvd_pipeline_init(rvd_state_t *st)
 	int ring_sub_mb = rss_config_get_int(cfg, "ring", "sub_data_mb", 1);
 	int ring_sub_slots = rss_config_get_int(cfg, "ring", "sub_slots", 32);
 
-	st->streams[0].ring = rss_ring_create("main", ring_main_slots,
-					      ring_main_mb * 1024 * 1024);
+	st->streams[0].ring = rss_ring_create("main", ring_main_slots, ring_main_mb * 1024 * 1024);
 	if (!st->streams[0].ring) {
 		RSS_FATAL("failed to create main ring");
 		return RSS_ERR;
 	}
-	rss_ring_set_stream_info(st->streams[0].ring, 0,
-				 st->streams[0].enc_cfg.codec,
-				 st->streams[0].enc_cfg.width,
-				 st->streams[0].enc_cfg.height,
-				 st->streams[0].enc_cfg.fps_num,
-				 st->streams[0].enc_cfg.fps_den,
-				 rvd_profile_idc(st->streams[0].enc_cfg.profile),
-				 rvd_level_idc(st->streams[0].enc_cfg.width,
-					       st->streams[0].enc_cfg.height));
+	rss_ring_set_stream_info(
+		st->streams[0].ring, 0, st->streams[0].enc_cfg.codec, st->streams[0].enc_cfg.width,
+		st->streams[0].enc_cfg.height, st->streams[0].enc_cfg.fps_num,
+		st->streams[0].enc_cfg.fps_den, rvd_profile_idc(st->streams[0].enc_cfg.profile),
+		rvd_level_idc(st->streams[0].enc_cfg.width, st->streams[0].enc_cfg.height));
 
 	if (st->stream_count > 1 && !st->streams[1].is_jpeg) {
-		st->streams[1].ring = rss_ring_create("sub", ring_sub_slots,
-						     ring_sub_mb * 1024 * 1024);
+		st->streams[1].ring =
+			rss_ring_create("sub", ring_sub_slots, ring_sub_mb * 1024 * 1024);
 		if (!st->streams[1].ring) {
 			RSS_FATAL("failed to create sub ring");
 			return RSS_ERR;
 		}
-		rss_ring_set_stream_info(st->streams[1].ring, 1,
-					 st->streams[1].enc_cfg.codec,
-					 st->streams[1].enc_cfg.width,
-					 st->streams[1].enc_cfg.height,
-					 st->streams[1].enc_cfg.fps_num,
-					 st->streams[1].enc_cfg.fps_den,
-					 rvd_profile_idc(st->streams[1].enc_cfg.profile),
-					 rvd_level_idc(st->streams[1].enc_cfg.width,
-						       st->streams[1].enc_cfg.height));
+		rss_ring_set_stream_info(
+			st->streams[1].ring, 1, st->streams[1].enc_cfg.codec,
+			st->streams[1].enc_cfg.width, st->streams[1].enc_cfg.height,
+			st->streams[1].enc_cfg.fps_num, st->streams[1].enc_cfg.fps_den,
+			rvd_profile_idc(st->streams[1].enc_cfg.profile),
+			rvd_level_idc(st->streams[1].enc_cfg.width, st->streams[1].enc_cfg.height));
 	}
 
 	/* JPEG ring (small — only needs to hold a few frames) */
@@ -417,13 +415,10 @@ int rvd_pipeline_init(rvd_state_t *st)
 			RSS_FATAL("failed to create jpeg ring");
 			return RSS_ERR;
 		}
-		rss_ring_set_stream_info(st->streams[ji].ring, 2,
-					 RSS_CODEC_JPEG,
-					 st->streams[ji].enc_cfg.width,
-					 st->streams[ji].enc_cfg.height,
-					 st->streams[ji].enc_cfg.fps_num,
-					 st->streams[ji].enc_cfg.fps_den,
-					 0, 0);
+		rss_ring_set_stream_info(
+			st->streams[ji].ring, 2, RSS_CODEC_JPEG, st->streams[ji].enc_cfg.width,
+			st->streams[ji].enc_cfg.height, st->streams[ji].enc_cfg.fps_num,
+			st->streams[ji].enc_cfg.fps_den, 0, 0);
 	}
 
 	/* ── 11. OSD consumer init (stub for now) ── */
@@ -438,7 +433,8 @@ void rvd_pipeline_deinit(rvd_state_t *st)
 	rvd_osd_deinit(st);
 
 	for (int i = st->stream_count - 1; i >= 0; i--) {
-		if (!st->streams[i].enabled) continue;
+		if (!st->streams[i].enabled)
+			continue;
 		int chn = st->streams[i].chn;
 
 		RSS_HAL_CALL(st->ops, enc_stop, st->hal_ctx, chn);
@@ -446,8 +442,8 @@ void rvd_pipeline_deinit(rvd_state_t *st)
 		if (!st->streams[i].is_jpeg) {
 			RSS_HAL_CALL(st->ops, fs_disable_channel, st->hal_ctx, chn);
 
-			rss_cell_t fs_out = { RSS_DEV_FS,  chn, 0 };
-			rss_cell_t enc_in = { RSS_DEV_ENC, chn, 0 };
+			rss_cell_t fs_out = {RSS_DEV_FS, chn, 0};
+			rss_cell_t enc_in = {RSS_DEV_ENC, chn, 0};
 			RSS_HAL_CALL(st->ops, unbind, st->hal_ctx, &fs_out, &enc_in);
 		}
 

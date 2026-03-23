@@ -27,14 +27,16 @@ void rvd_osd_init(rvd_state_t *st)
 void rvd_osd_check(rvd_state_t *st)
 {
 	for (int i = 0; i < st->stream_count; i++) {
-		if (!st->osd_shm[i]) continue;
+		if (!st->osd_shm[i])
+			continue;
 
-		if (!rss_osd_check_dirty(st->osd_shm[i])) continue;
+		if (!rss_osd_check_dirty(st->osd_shm[i]))
+			continue;
 
 		uint32_t w, h;
-		const uint8_t *bitmap = rss_osd_get_active_buffer(
-			st->osd_shm[i], &w, &h);
-		if (!bitmap) continue;
+		const uint8_t *bitmap = rss_osd_get_active_buffer(st->osd_shm[i], &w, &h);
+		if (!bitmap)
+			continue;
 
 		/* TODO: Feed bitmap to HAL OSD region
 		 * RSS_HAL_CALL(st->ops, osd_update_region_data,

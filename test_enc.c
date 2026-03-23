@@ -40,7 +40,7 @@ int main(void)
 	printf("  ret=%d\n", ret);
 
 	printf("OSD_SetPoolSize\n");
-	IMP_OSD_SetPoolSize(512*1024);
+	IMP_OSD_SetPoolSize(512 * 1024);
 
 	printf("System_Init\n");
 	ret = IMP_System_Init();
@@ -74,15 +74,11 @@ int main(void)
 
 	/* Encoder */
 	memset(&encattr, 0, sizeof(encattr));
-	ret = IMP_Encoder_SetDefaultParam(&encattr,
-		IMP_ENC_PROFILE_AVC_HIGH,
-		IMP_ENC_RC_MODE_CBR,
-		2560, 1440,
-		25, 1,
-		30,   /* gop */
-		2,    /* maxSameSenceCnt */
-		-1,   /* initQP */
-		3000  /* bitrate in kbps */
+	ret = IMP_Encoder_SetDefaultParam(&encattr, IMP_ENC_PROFILE_AVC_HIGH, IMP_ENC_RC_MODE_CBR,
+					  2560, 1440, 25, 1, 30, /* gop */
+					  2,			 /* maxSameSenceCnt */
+					  -1,			 /* initQP */
+					  3000			 /* bitrate in kbps */
 	);
 	printf("SetDefaultParam ret=%d\n", ret);
 
@@ -123,7 +119,8 @@ int main(void)
 		if (ret == 0) {
 			IMPEncoderStream stream;
 			ret = IMP_Encoder_GetStream(0, &stream, 1);
-			printf("  GetStream ret=%d packs=%d\n", ret, ret==0 ? stream.packCount : -1);
+			printf("  GetStream ret=%d packs=%d\n", ret,
+			       ret == 0 ? stream.packCount : -1);
 			if (ret == 0)
 				IMP_Encoder_ReleaseStream(0, &stream);
 			break;

@@ -20,7 +20,8 @@
 static int set_nonblocking(int fd)
 {
 	int flags = fcntl(fd, F_GETFL, 0);
-	if (flags < 0) return -1;
+	if (flags < 0)
+		return -1;
 	return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
@@ -35,10 +36,10 @@ static rsd_client_t *find_client_by_fd(rsd_server_t *srv, int fd)
 
 static void remove_client(rsd_server_t *srv, rsd_client_t *client)
 {
-	if (!client) return;
+	if (!client)
+		return;
 
-	RSS_INFO("client %s:%d disconnected",
-		 inet_ntoa(client->addr.sin_addr),
+	RSS_INFO("client %s:%d disconnected", inet_ntoa(client->addr.sin_addr),
 		 ntohs(client->addr.sin_port));
 
 	/* Step 1: Remove from client list and stop playback under lock.
@@ -67,26 +68,22 @@ static void remove_client(rsd_server_t *srv, rsd_client_t *client)
 
 	/* Video cleanup */
 	if (client->video.nal) {
-		VCALL(DYN(Compy_NalTransport, Compy_Droppable,
-			  client->video.nal), drop);
+		VCALL(DYN(Compy_NalTransport, Compy_Droppable, client->video.nal), drop);
 		client->video.nal = NULL;
 		client->video.rtp = NULL;
 	}
 	if (client->video.rtcp) {
-		VCALL(DYN(Compy_Rtcp, Compy_Droppable,
-			  client->video.rtcp), drop);
+		VCALL(DYN(Compy_Rtcp, Compy_Droppable, client->video.rtcp), drop);
 		client->video.rtcp = NULL;
 	}
 
 	/* Audio cleanup */
 	if (client->audio.rtp) {
-		VCALL(DYN(Compy_RtpTransport, Compy_Droppable,
-			  client->audio.rtp), drop);
+		VCALL(DYN(Compy_RtpTransport, Compy_Droppable, client->audio.rtp), drop);
 		client->audio.rtp = NULL;
 	}
 	if (client->audio.rtcp) {
-		VCALL(DYN(Compy_Rtcp, Compy_Droppable,
-			  client->audio.rtcp), drop);
+		VCALL(DYN(Compy_Rtcp, Compy_Droppable, client->audio.rtcp), drop);
 		client->audio.rtcp = NULL;
 	}
 
@@ -108,7 +105,8 @@ static void accept_client(rsd_server_t *srv)
 	struct sockaddr_in addr;
 	socklen_t addrlen = sizeof(addr);
 	int fd = accept(srv->listen_fd, (struct sockaddr *)&addr, &addrlen);
-	if (fd < 0) return;
+	if (fd < 0)
+		return;
 
 	if (srv->client_count >= RSD_MAX_CLIENTS) {
 		RSS_WARN("max clients reached, rejecting");
@@ -127,7 +125,10 @@ static void accept_client(rsd_server_t *srv)
 	setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
 
 	rsd_client_t *client = calloc(1, sizeof(*client));
-	if (!client) { close(fd); return; }
+	if (!client) {
+		close(fd);
+		return;
+	}
 	client->udp_rtp_fd = -1;
 	client->udp_rtcp_fd = -1;
 
@@ -146,15 +147,15 @@ static void accept_client(rsd_server_t *srv)
 	srv->clients[srv->client_count++] = client;
 	pthread_mutex_unlock(&srv->clients_lock);
 
-	RSS_INFO("client %s:%d connected (%d/%d)",
-		 inet_ntoa(addr.sin_addr), ntohs(addr.sin_port),
+	RSS_INFO("client %s:%d connected (%d/%d)", inet_ntoa(addr.sin_addr), ntohs(addr.sin_port),
 		 srv->client_count, RSD_MAX_CLIENTS);
 }
 
 static void handle_client_data(rsd_server_t *srv, int fd)
 {
 	rsd_client_t *client = find_client_by_fd(srv, fd);
-	if (!client) return;
+	if (!client)
+		return;
 
 	/* Read into client's buffer */
 	size_t avail = sizeof(client->recv_buf) - client->recv_len;
@@ -180,7 +181,8 @@ int rsd_server_init(rsd_server_t *srv)
 	RSS_INFO("waiting for video ring...");
 	for (int i = 0; i < 100; i++) {
 		srv->video[RSD_STREAM_MAIN].ring = rss_ring_open("main");
-		if (srv->video[RSD_STREAM_MAIN].ring) break;
+		if (srv->video[RSD_STREAM_MAIN].ring)
+			break;
 		usleep(100000);
 	}
 	if (!srv->video[RSD_STREAM_MAIN].ring) {
@@ -197,13 +199,12 @@ int rsd_server_init(rsd_server_t *srv)
 
 	/* Log and allocate frame buffers for each ring */
 	for (int s = 0; s < RSD_STREAM_COUNT; s++) {
-		if (!srv->video[s].ring) continue;
+		if (!srv->video[s].ring)
+			continue;
 
 		const rss_ring_header_t *hdr = rss_ring_get_header(srv->video[s].ring);
-		RSS_INFO("ring[%d]: %s %ux%u @ %u/%u fps",
-			 s, hdr->codec == 0 ? "H.264" : "H.265",
-			 hdr->width, hdr->height,
-			 hdr->fps_num, hdr->fps_den);
+		RSS_INFO("ring[%d]: %s %ux%u @ %u/%u fps", s, hdr->codec == 0 ? "H.264" : "H.265",
+			 hdr->width, hdr->height, hdr->fps_num, hdr->fps_den);
 
 		/* Frame buffer: sized to largest possible slot payload.
 		 * data_size / slot_count = max bytes per frame in the ring. */
@@ -263,7 +264,7 @@ int rsd_server_init(rsd_server_t *srv)
 		return -1;
 	}
 
-	struct epoll_event ev = { .events = EPOLLIN, .data.fd = srv->listen_fd };
+	struct epoll_event ev = {.events = EPOLLIN, .data.fd = srv->listen_fd};
 	epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, srv->listen_fd, &ev);
 
 	/* Control socket */
@@ -273,7 +274,7 @@ int rsd_server_init(rsd_server_t *srv)
 	if (srv->ctrl) {
 		int ctrl_fd = rss_ctrl_get_fd(srv->ctrl);
 		if (ctrl_fd >= 0) {
-			ev = (struct epoll_event){ .events = EPOLLIN, .data.fd = ctrl_fd };
+			ev = (struct epoll_event){.events = EPOLLIN, .data.fd = ctrl_fd};
 			epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, ctrl_fd, &ev);
 		}
 	}
@@ -282,15 +283,13 @@ int rsd_server_init(rsd_server_t *srv)
 	return 0;
 }
 
-static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf,
-			    int resp_buf_size, void *userdata)
+static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, void *userdata)
 {
 	rsd_server_t *srv = userdata;
 
 	if (strstr(cmd_json, "\"config-save\"")) {
 		int ret = rss_config_save(srv->cfg, srv->config_path);
-		snprintf(resp_buf, resp_buf_size,
-			 "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
+		snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
 		if (ret == 0)
 			RSS_INFO("running config saved to %s", srv->config_path);
 		return (int)strlen(resp_buf);
@@ -302,14 +301,12 @@ static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf,
 			 "\"port\":%d,\"clients\":%d,"
 			 "\"max_clients\":%d,"
 			 "\"config_path\":\"%s\"}}",
-			 srv->port, srv->client_count,
-			 RSD_MAX_CLIENTS, srv->config_path);
+			 srv->port, srv->client_count, RSD_MAX_CLIENTS, srv->config_path);
 		return (int)strlen(resp_buf);
 	}
 
 	/* Default: status */
-	snprintf(resp_buf, resp_buf_size,
-		 "{\"status\":\"ok\",\"clients\":%d}", srv->client_count);
+	snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\",\"clients\":%d}", srv->client_count);
 	return (int)strlen(resp_buf);
 }
 
@@ -325,8 +322,8 @@ void rsd_server_run(rsd_server_t *srv)
 
 	for (int s = 0; s < RSD_STREAM_COUNT; s++) {
 		if (srv->video[s].ring)
-			pthread_create(&video_tid[s], &attr,
-				       rsd_video_reader_thread, &srv->video[s]);
+			pthread_create(&video_tid[s], &attr, rsd_video_reader_thread,
+				       &srv->video[s]);
 	}
 	if (srv->has_audio)
 		pthread_create(&audio_tid, &attr, rsd_audio_reader_thread, srv);
@@ -343,8 +340,7 @@ void rsd_server_run(rsd_server_t *srv)
 			if (fd == srv->listen_fd) {
 				accept_client(srv);
 			} else if (fd == ctrl_fd) {
-				rss_ctrl_accept_and_handle(srv->ctrl,
-					rsd_ctrl_handler, srv);
+				rss_ctrl_accept_and_handle(srv->ctrl, rsd_ctrl_handler, srv);
 			} else {
 				handle_client_data(srv, fd);
 			}

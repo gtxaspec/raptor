@@ -30,21 +30,29 @@ int main(int argc, char **argv)
 
 	while ((opt = getopt(argc, argv, "c:fdh")) != -1) {
 		switch (opt) {
-		case 'c': config_path = optarg; break;
-		case 'f': foreground = true; break;
-		case 'd': debug = true; break;
-		case 'h': usage(argv[0]); return 0;
-		default:  usage(argv[0]); return 1;
+		case 'c':
+			config_path = optarg;
+			break;
+		case 'f':
+			foreground = true;
+			break;
+		case 'd':
+			debug = true;
+			break;
+		case 'h':
+			usage(argv[0]);
+			return 0;
+		default:
+			usage(argv[0]);
+			return 1;
 		}
 	}
 
 	/* Seed PRNG for SSRC generation (compy requirement) */
 	srand(time(NULL));
 
-	rss_log_init("rsd",
-		     debug ? RSS_LOG_DEBUG : RSS_LOG_INFO,
-		     foreground ? RSS_LOG_TARGET_STDERR : RSS_LOG_TARGET_SYSLOG,
-		     NULL);
+	rss_log_init("rsd", debug ? RSS_LOG_DEBUG : RSS_LOG_INFO,
+		     foreground ? RSS_LOG_TARGET_STDERR : RSS_LOG_TARGET_SYSLOG, NULL);
 
 	rss_config_t *cfg = rss_config_load(config_path);
 	if (!cfg) {
