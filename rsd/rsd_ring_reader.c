@@ -19,14 +19,10 @@
  * The ring data is a concatenation of NALUs with 4-byte start codes
  * (0x00 0x00 0x00 0x01) as written by RVD's linearize_frame().
  */
-void rsd_send_video_frame(rsd_client_t *c, const uint8_t *data,
-			  uint32_t len, int64_t timestamp,
-			  bool is_key __attribute__((unused)))
+static void rsd_send_video_frame(rsd_client_t *c, const uint8_t *data,
+				 uint32_t len, uint32_t rtp_ts)
 {
 	if (!c->video.nal || !c->video.playing) return;
-
-	/* Convert timestamp from microseconds to RTP clock (90kHz) */
-	uint32_t rtp_ts = (uint32_t)((timestamp * 90000LL) / 1000000LL);
 
 	const uint8_t *p = data;
 	const uint8_t *end = data + len;
@@ -116,6 +112,15 @@ void *rsd_video_reader_thread(void *arg)
 			continue;
 		memcpy(rctx->frame_buf, data, length);
 
+		/* Compute relative RTP timestamp (90kHz video clock) */
+		if (!rctx->base_ts_set) {
+			rctx->base_ts = meta.timestamp;
+			rctx->base_ts_set = true;
+		}
+		int64_t rel_us = meta.timestamp - rctx->base_ts;
+		if (rel_us < 0) rel_us = 0;
+		uint32_t rtp_ts = (uint32_t)((rel_us * 90000LL) / 1000000LL);
+
 		pthread_mutex_lock(&srv->clients_lock);
 		for (int i = 0; i < srv->client_count; i++) {
 			rsd_client_t *c = srv->clients[i];
@@ -128,8 +133,7 @@ void *rsd_video_reader_thread(void *arg)
 				RSS_DEBUG("client[%d] got keyframe", stream_idx);
 			}
 
-			rsd_send_video_frame(c, rctx->frame_buf, length,
-					     meta.timestamp, meta.is_key);
+			rsd_send_video_frame(c, rctx->frame_buf, length, rtp_ts);
 		}
 		pthread_mutex_unlock(&srv->clients_lock);
 	}
@@ -141,13 +145,9 @@ void *rsd_video_reader_thread(void *arg)
 /* ── Audio ring reader thread ── */
 
 static void rsd_send_audio_frame(rsd_client_t *c, const uint8_t *data,
-				 uint32_t len, int64_t timestamp,
-				 uint32_t clock_rate)
+				 uint32_t len, uint32_t rtp_ts)
 {
 	if (!c->audio.rtp || !c->audio.playing) return;
-
-	/* Convert timestamp from microseconds to RTP clock */
-	uint32_t rtp_ts = (uint32_t)((timestamp * (int64_t)clock_rate) / 1000000LL);
 
 	(void)!Compy_RtpTransport_send_packet(
 		c->audio.rtp,
@@ -176,14 +176,13 @@ void *rsd_audio_reader_thread(void *arg)
 
 	/* Buffer for audio frames (L16@16kHz = 640 bytes/20ms) */
 	uint8_t audio_buf[4096];
+	int64_t audio_base_ts = 0;
+	bool audio_base_set = false;
 
 	while (*srv->running) {
 		int ret = rss_ring_wait(srv->ring_audio, 100);
 		if (ret != 0) continue;
 
-		/* Drain all available audio frames per wake-up.
-		 * Audio produces 50 frames/sec; reading one-at-a-time
-		 * with poll overhead causes the consumer to fall behind. */
 		for (int burst = 0; burst < 16; burst++) {
 			const uint8_t *data;
 			uint32_t length;
@@ -196,21 +195,28 @@ void *rsd_audio_reader_thread(void *arg)
 				srv->audio_read_seq = read_seq;
 				break;
 			}
-			if (ret != 0) break;  /* no more frames */
+			if (ret != 0) break;
 
 			srv->audio_read_seq = read_seq;
 
 			if (length > sizeof(audio_buf)) continue;
 			memcpy(audio_buf, data, length);
 
+			/* Relative RTP timestamp */
+			if (!audio_base_set) {
+				audio_base_ts = meta.timestamp;
+				audio_base_set = true;
+			}
+			int64_t rel_us = meta.timestamp - audio_base_ts;
+			if (rel_us < 0) rel_us = 0;
+			uint32_t rtp_ts = (uint32_t)((rel_us * (int64_t)audio_clock) / 1000000LL);
+
 			pthread_mutex_lock(&srv->clients_lock);
 			for (int i = 0; i < srv->client_count; i++) {
 				rsd_client_t *c = srv->clients[i];
 				if (!c || !c->audio.playing) continue;
 
-				rsd_send_audio_frame(c, audio_buf, length,
-						     meta.timestamp,
-						     audio_clock);
+				rsd_send_audio_frame(c, audio_buf, length, rtp_ts);
 			}
 			pthread_mutex_unlock(&srv->clients_lock);
 		}
