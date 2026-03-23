@@ -119,9 +119,19 @@ int rvd_pipeline_init(rvd_state_t *st)
 	if (ret != RSS_OK)
 		RSS_WARN("isp_set_sensor_fps failed: %d (non-fatal)", ret);
 
-	/* ── 3c. ISP tuning defaults (suppress isp-w02 spam, match prudynt) ── */
+	/* ── 3c. ISP tuning defaults (match prudynt init sequence) ── */
+	RSS_HAL_CALL(st->ops, isp_set_brightness, st->hal_ctx, 128);
+	RSS_HAL_CALL(st->ops, isp_set_contrast, st->hal_ctx, 128);
+	RSS_HAL_CALL(st->ops, isp_set_saturation, st->hal_ctx, 128);
+	RSS_HAL_CALL(st->ops, isp_set_sharpness, st->hal_ctx, 128);
+	RSS_HAL_CALL(st->ops, isp_set_sinter_strength, st->hal_ctx, 128);
+	RSS_HAL_CALL(st->ops, isp_set_temper_strength, st->hal_ctx, 128);
 	RSS_HAL_CALL(st->ops, isp_set_running_mode, st->hal_ctx, RSS_ISP_DAY);
-	RSS_HAL_CALL(st->ops, isp_set_bypass, st->hal_ctx, 1);
+	ret = RSS_HAL_CALL(st->ops, isp_set_bypass, st->hal_ctx, 1);
+	RSS_DEBUG("isp_set_bypass returned %d", ret);
+	RSS_HAL_CALL(st->ops, isp_set_antiflicker, st->hal_ctx, RSS_ANTIFLICKER_60HZ);
+	RSS_HAL_CALL(st->ops, isp_set_hflip, st->hal_ctx, 0);
+	RSS_HAL_CALL(st->ops, isp_set_vflip, st->hal_ctx, 0);
 
 	/* ── 3d. Read actual sensor resolution from /proc ── */
 	int sensor_w = 0, sensor_h = 0;
