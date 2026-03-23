@@ -118,39 +118,72 @@ int main(int argc, char **argv)
 		return 0;
 	}
 
-	/* raptorctl get <section> <key> [-c config] — read a config value */
+	/* Map config section to daemon that owns it */
+	static const struct {
+		const char *section;
+		const char *daemon;
+	} section_map[] = {
+		{"sensor", "rvd"}, {"stream0", "rvd"}, {"stream1", "rvd"}, {"jpeg", "rvd"},
+		{"ring", "rvd"},   {"audio", "rad"},   {"rtsp", "rsd"},	   {"http", "rhd"},
+		{"osd", "rod"},	   {"ircut", "ric"},   {"log", "rvd"},	   {NULL, NULL},
+	};
+
+	/* raptorctl get <section> <key> — query live value from daemon, fall back to file */
 	if (strcmp(argv[1], "get") == 0) {
 		if (argc < 4) {
-			fprintf(stderr, "Usage: raptorctl get <section> <key> [-c config]\n");
+			fprintf(stderr, "Usage: raptorctl get <section> <key>\n");
 			return 1;
 		}
+		const char *section = argv[2];
+		const char *key = argv[3];
+
+		/* Try daemon first */
+		const char *target = NULL;
+		for (int i = 0; section_map[i].section; i++) {
+			if (strcmp(section, section_map[i].section) == 0) {
+				target = section_map[i].daemon;
+				break;
+			}
+		}
+		if (target) {
+			char sock_path[64];
+			char resp[2048];
+			char cmd_json[256];
+			snprintf(sock_path, sizeof(sock_path), "/var/run/rss/%s.sock", target);
+			snprintf(cmd_json, sizeof(cmd_json),
+				 "{\"cmd\":\"config-get\",\"section\":\"%s\",\"key\":\"%s\"}",
+				 section, key);
+			int ret = rss_ctrl_send_command(sock_path, cmd_json, resp, sizeof(resp),
+							2000);
+			if (ret >= 0) {
+				printf("%s\n", resp);
+				return 0;
+			}
+		}
+
+		/* Fallback: read from config file */
 		const char *cfgpath = "/etc/raptor.conf";
-		if (argc >= 6 && strcmp(argv[4], "-c") == 0)
-			cfgpath = argv[5];
 		rss_config_t *cfg = rss_config_load(cfgpath);
 		if (!cfg) {
-			fprintf(stderr, "Failed to load %s\n", cfgpath);
+			fprintf(stderr, "Daemon not running, config not found\n");
 			return 1;
 		}
-		const char *val = rss_config_get_str(cfg, argv[2], argv[3], NULL);
+		const char *val = rss_config_get_str(cfg, section, key, NULL);
 		if (val)
 			printf("%s\n", val);
 		else
-			fprintf(stderr, "Key not found: [%s] %s\n", argv[2], argv[3]);
+			fprintf(stderr, "Key not found: [%s] %s\n", section, key);
 		rss_config_free(cfg);
 		return val ? 0 : 1;
 	}
 
-	/* raptorctl set <section> <key> <value> [-c config] — set + save a config value */
+	/* raptorctl set <section> <key> <value> — write to config file */
 	if (strcmp(argv[1], "set") == 0) {
 		if (argc < 5) {
-			fprintf(stderr,
-				"Usage: raptorctl set <section> <key> <value> [-c config]\n");
+			fprintf(stderr, "Usage: raptorctl set <section> <key> <value>\n");
 			return 1;
 		}
 		const char *cfgpath = "/etc/raptor.conf";
-		if (argc >= 7 && strcmp(argv[5], "-c") == 0)
-			cfgpath = argv[6];
 		rss_config_t *cfg = rss_config_load(cfgpath);
 		if (!cfg) {
 			fprintf(stderr, "Failed to load %s\n", cfgpath);
