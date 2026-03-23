@@ -76,10 +76,27 @@ rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request *req)
 		(COMPY_SDP_ATTR, "framerate:%u", hdr->fps_num));
 
 	if (g_srv->has_audio) {
-		COMPY_SDP_DESCRIBE(ret, sdp_w,
-			(COMPY_SDP_MEDIA, "audio 0 RTP/AVP %d", RSD_AUDIO_PT),
-			(COMPY_SDP_ATTR, "control:audio"),
-			(COMPY_SDP_ATTR, "recvonly"));
+		const rss_ring_header_t *ahdr =
+			rss_ring_get_header(g_srv->ring_audio);
+		int apt = (ahdr->codec == RSD_CODEC_PCMU) ? 0 :
+			  (ahdr->codec == RSD_CODEC_PCMA) ? 8 :
+			  RSD_AUDIO_PT_L16;
+		int aclk = ahdr->fps_num;  /* fps_num holds sample_rate */
+
+		if (apt <= 8) {
+			/* Static PT (PCMU=0, PCMA=8) — no rtpmap needed */
+			COMPY_SDP_DESCRIBE(ret, sdp_w,
+				(COMPY_SDP_MEDIA, "audio 0 RTP/AVP %d", apt),
+				(COMPY_SDP_ATTR, "control:audio"),
+				(COMPY_SDP_ATTR, "recvonly"));
+		} else {
+			/* Dynamic PT (L16) — need rtpmap */
+			COMPY_SDP_DESCRIBE(ret, sdp_w,
+				(COMPY_SDP_MEDIA, "audio 0 RTP/AVP %d", apt),
+				(COMPY_SDP_ATTR, "control:audio"),
+				(COMPY_SDP_ATTR, "rtpmap:%d L16/%d/1", apt, aclk),
+				(COMPY_SDP_ATTR, "recvonly"));
+		}
 	}
 
 	(void)ret;
@@ -204,8 +221,18 @@ rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *req)
 	}
 
 	if (is_audio) {
-		self->audio.rtp = Compy_RtpTransport_new(rtp_t, RSD_AUDIO_PT,
-							 RSD_AUDIO_CLOCK);
+		/* Determine PT and clock from ring metadata */
+		int apt = 0;
+		int aclk = 8000;
+		if (g_srv && g_srv->ring_audio) {
+			const rss_ring_header_t *ahdr =
+				rss_ring_get_header(g_srv->ring_audio);
+			apt = (ahdr->codec == RSD_CODEC_PCMU) ? 0 :
+			      (ahdr->codec == RSD_CODEC_PCMA) ? 8 :
+			      RSD_AUDIO_PT_L16;
+			aclk = ahdr->fps_num;
+		}
+		self->audio.rtp = Compy_RtpTransport_new(rtp_t, apt, aclk);
 		self->audio.rtcp = Compy_Rtcp_new(self->audio.rtp, rtcp_t,
 						  "raptor@camera");
 	} else {

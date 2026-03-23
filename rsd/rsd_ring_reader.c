@@ -141,12 +141,13 @@ void *rsd_video_reader_thread(void *arg)
 /* ── Audio ring reader thread ── */
 
 static void rsd_send_audio_frame(rsd_client_t *c, const uint8_t *data,
-				 uint32_t len, int64_t timestamp)
+				 uint32_t len, int64_t timestamp,
+				 uint32_t clock_rate)
 {
 	if (!c->audio.rtp || !c->audio.playing) return;
 
-	/* Convert timestamp from microseconds to RTP clock (8kHz for PCMU) */
-	uint32_t rtp_ts = (uint32_t)((timestamp * RSD_AUDIO_CLOCK) / 1000000LL);
+	/* Convert timestamp from microseconds to RTP clock */
+	uint32_t rtp_ts = (uint32_t)((timestamp * (int64_t)clock_rate) / 1000000LL);
 
 	(void)!Compy_RtpTransport_send_packet(
 		c->audio.rtp,
@@ -169,7 +170,11 @@ void *rsd_audio_reader_thread(void *arg)
 
 	RSS_INFO("audio reader thread started");
 
-	/* Small buffer for audio frames (PCMU, ~160 bytes per 20ms) */
+	/* Get clock rate from ring header */
+	const rss_ring_header_t *ahdr = rss_ring_get_header(srv->ring_audio);
+	uint32_t audio_clock = ahdr->fps_num;  /* fps_num holds sample_rate */
+
+	/* Buffer for audio frames (L16@16kHz = 640 bytes/20ms) */
 	uint8_t audio_buf[4096];
 
 	while (*srv->running) {
@@ -204,7 +209,8 @@ void *rsd_audio_reader_thread(void *arg)
 				if (!c || !c->audio.playing) continue;
 
 				rsd_send_audio_frame(c, audio_buf, length,
-						     meta.timestamp);
+						     meta.timestamp,
+						     audio_clock);
 			}
 			pthread_mutex_unlock(&srv->clients_lock);
 		}
