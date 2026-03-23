@@ -92,7 +92,7 @@ static void *encoder_thread(void *arg)
 
 		/* Linearize NALs into per-stream scratch buffer */
 		uint32_t len = linearize_frame(&frame, s->scratch,
-					       RVD_SCRATCH_SIZE);
+					       s->scratch_size);
 		if (len == 0) {
 			RSS_WARN("stream%d: frame too large for scratch", idx);
 			goto release;
@@ -327,23 +327,37 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running)
 {
 	st->running = running;
 
-	/* Allocate per-stream scratch buffers */
+	/* Allocate per-stream scratch buffers sized to bitrate.
+	 * Worst case: one keyframe at 4x average frame size. */
 	for (int i = 0; i < st->stream_count; i++) {
-		st->streams[i].scratch = malloc(RVD_SCRATCH_SIZE);
+		uint32_t br = st->streams[i].enc_cfg.bitrate;
+		uint32_t fps = st->streams[i].enc_cfg.fps_num;
+		if (fps == 0) fps = 25;
+		uint32_t sz = (br / fps) * 4 / 8;  /* 4x avg frame, bits→bytes */
+		if (sz < RVD_SCRATCH_MIN) sz = RVD_SCRATCH_MIN;
+		st->streams[i].scratch_size = sz;
+		st->streams[i].scratch = malloc(sz);
 		if (!st->streams[i].scratch) {
 			RSS_FATAL("failed to allocate scratch for stream %d", i);
 			return;
 		}
+		RSS_DEBUG("stream%d scratch: %u KB (bitrate=%u fps=%u)",
+			  i, sz / 1024, br, fps);
 	}
 
 	/* Start per-channel encoder threads */
 	pthread_t enc_tids[RVD_MAX_STREAMS];
 	enc_thread_arg_t enc_args[RVD_MAX_STREAMS];
 
+	pthread_attr_t attr;
+	pthread_attr_init(&attr);
+	pthread_attr_setstacksize(&attr, 128 * 1024);
+
 	for (int i = 0; i < st->stream_count; i++) {
 		enc_args[i] = (enc_thread_arg_t){ .st = st, .idx = i };
-		pthread_create(&enc_tids[i], NULL, encoder_thread, &enc_args[i]);
+		pthread_create(&enc_tids[i], &attr, encoder_thread, &enc_args[i]);
 	}
+	pthread_attr_destroy(&attr);
 
 	/* Main thread: handle control socket + OSD */
 	int epoll_fd = epoll_create1(0);
