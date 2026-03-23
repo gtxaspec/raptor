@@ -12,6 +12,34 @@
 
 #include "rvd.h"
 
+/* Map HAL profile enum (0=base,1=main,2=high) to H.264 profile_idc */
+static uint8_t rvd_profile_idc(int profile)
+{
+	switch (profile) {
+	case 0:  return 66;   /* Baseline */
+	case 1:  return 77;   /* Main */
+	case 2:  return 100;  /* High */
+	default: return 100;
+	}
+}
+
+/* Derive H.264 level_idc from resolution (Table A-1 in H.264 spec) */
+static uint8_t rvd_level_idc(int width, int height)
+{
+	int macroblocks = ((width + 15) / 16) * ((height + 15) / 16);
+	if (macroblocks <= 99)     return 10;  /* 1.0: up to 176x144 (QCIF) */
+	if (macroblocks <= 396)    return 13;  /* 1.3: up to 352x288 (CIF) */
+	if (macroblocks <= 792)    return 21;  /* 2.1: up to 480x360 */
+	if (macroblocks <= 1620)   return 30;  /* 3.0: up to 720x576 */
+	if (macroblocks <= 3600)   return 31;  /* 3.1: up to 1280x720 */
+	if (macroblocks <= 5120)   return 32;  /* 3.2: up to 1280x1024 */
+	if (macroblocks <= 8192)   return 40;  /* 4.0: up to 1920x1080 */
+	if (macroblocks <= 8704)   return 42;  /* 4.2: up to 2048x1088 */
+	if (macroblocks <= 22080)  return 50;  /* 5.0: up to 2560x1920 */
+	if (macroblocks <= 36864)  return 51;  /* 5.1: up to 4096x2160 */
+	return 52;                             /* 5.2 */
+}
+
 /* Parse codec string from config */
 static rss_codec_t parse_codec(const char *s)
 {
@@ -275,7 +303,10 @@ int rvd_pipeline_init(rvd_state_t *st)
 				 st->streams[0].enc_cfg.width,
 				 st->streams[0].enc_cfg.height,
 				 st->streams[0].enc_cfg.fps_num,
-				 st->streams[0].enc_cfg.fps_den);
+				 st->streams[0].enc_cfg.fps_den,
+				 rvd_profile_idc(st->streams[0].enc_cfg.profile),
+				 rvd_level_idc(st->streams[0].enc_cfg.width,
+					       st->streams[0].enc_cfg.height));
 
 	if (st->stream_count > 1) {
 		st->streams[1].ring = rss_ring_create("sub", ring_sub_slots,
@@ -289,7 +320,10 @@ int rvd_pipeline_init(rvd_state_t *st)
 					 st->streams[1].enc_cfg.width,
 					 st->streams[1].enc_cfg.height,
 					 st->streams[1].enc_cfg.fps_num,
-					 st->streams[1].enc_cfg.fps_den);
+					 st->streams[1].enc_cfg.fps_den,
+					 rvd_profile_idc(st->streams[1].enc_cfg.profile),
+					 rvd_level_idc(st->streams[1].enc_cfg.width,
+						       st->streams[1].enc_cfg.height));
 	}
 
 	/* ── 11. OSD consumer init (stub for now) ── */

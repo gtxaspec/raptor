@@ -69,26 +69,9 @@ rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request *req)
 		(COMPY_SDP_ATTR, "tool:Raptor RSS"),
 		(COMPY_SDP_ATTR, "range:npt=now-"));
 
-	/*
-	 * Determine H.264 profile-level-id from resolution:
-	 *   Baseline: 42 00 xx
-	 *   High:     64 00 xx
-	 * Level: 1080p+ = 40 (4.0), 720p = 1f (3.1), 360p = 1e (3.0)
-	 */
-	int profile_idc = 0x64;  /* High by default */
-	int level_idc;
-	if (hdr->width <= 640)
-		level_idc = 0x1e;      /* 3.0 for 360p */
-	else if (hdr->width <= 1280)
-		level_idc = 0x1f;      /* 3.1 for 720p */
-	else if (hdr->width <= 1920)
-		level_idc = 0x28;      /* 4.0 for 1080p */
-	else
-		level_idc = 0x33;      /* 5.1 for 1440p/4K */
-
-	/* Check if baseline from stream dimensions (sub stream) */
-	if (hdr->width <= 640)
-		profile_idc = 0x42;    /* Baseline for sub */
+	/* profile-level-id from ring header (set by RVD from encoder config) */
+	uint8_t profile_idc = hdr->profile ? hdr->profile : 100;
+	uint8_t level_idc   = hdr->level   ? hdr->level   : 40;
 
 	COMPY_SDP_DESCRIBE(ret, sdp_w,
 		(COMPY_SDP_MEDIA, "video 0 RTP/AVP %d", RSD_VIDEO_PT),
