@@ -33,30 +33,48 @@ static void sighandler(int sig)
 static const char *nal_type_str(uint16_t nal)
 {
 	switch (nal) {
-	case 0x10: return "H264_SPS";
-	case 0x11: return "H264_PPS";
-	case 0x12: return "H264_SEI";
-	case 0x13: return "H264_IDR";
-	case 0x14: return "H264_SLICE";
-	case 0x20: return "H265_VPS";
-	case 0x21: return "H265_SPS";
-	case 0x22: return "H265_PPS";
-	case 0x23: return "H265_SEI";
-	case 0x24: return "H265_IDR";
-	case 0x25: return "H265_SLICE";
-	case 0x30: return "JPEG";
-	default:   return "UNKNOWN";
+	case 0x10:
+		return "H264_SPS";
+	case 0x11:
+		return "H264_PPS";
+	case 0x12:
+		return "H264_SEI";
+	case 0x13:
+		return "H264_IDR";
+	case 0x14:
+		return "H264_SLICE";
+	case 0x20:
+		return "H265_VPS";
+	case 0x21:
+		return "H265_SPS";
+	case 0x22:
+		return "H265_PPS";
+	case 0x23:
+		return "H265_SEI";
+	case 0x24:
+		return "H265_IDR";
+	case 0x25:
+		return "H265_SLICE";
+	case 0x30:
+		return "JPEG";
+	default:
+		return "UNKNOWN";
 	}
 }
 
 static const char *codec_str(uint32_t codec)
 {
 	switch (codec) {
-	case 0: return "H.264";
-	case 1: return "H.265";
-	case 2: return "JPEG";
-	case 3: return "MJPEG";
-	default: return "unknown";
+	case 0:
+		return "H.264";
+	case 1:
+		return "H.265";
+	case 2:
+		return "JPEG";
+	case 3:
+		return "MJPEG";
+	default:
+		return "unknown";
 	}
 }
 
@@ -73,17 +91,10 @@ static void print_header(const rss_ring_header_t *hdr, const char *name)
 		"  Slots:     %u\n"
 		"  Data:      %u bytes (%.1f MB)\n"
 		"  Write seq: %" PRIu64 "\n",
-		name,
-		hdr->magic,
-		(hdr->magic == RSS_RING_MAGIC) ? "OK" : "BAD",
-		hdr->version,
-		hdr->stream_id,
-		codec_str(hdr->codec), hdr->codec,
-		hdr->width, hdr->height,
-		hdr->fps_num, hdr->fps_den,
-		hdr->slot_count,
-		hdr->data_size, (double)hdr->data_size / (1024.0 * 1024.0),
-		atomic_load(&hdr->write_seq));
+		name, hdr->magic, (hdr->magic == RSS_RING_MAGIC) ? "OK" : "BAD", hdr->version,
+		hdr->stream_id, codec_str(hdr->codec), hdr->codec, hdr->width, hdr->height,
+		hdr->fps_num, hdr->fps_den, hdr->slot_count, hdr->data_size,
+		(double)hdr->data_size / (1024.0 * 1024.0), atomic_load(&hdr->write_seq));
 }
 
 static void usage(const char *prog)
@@ -117,14 +128,24 @@ int main(int argc, char **argv)
 	int max_frames = 0;
 
 	int opt;
-	optind = 2;  /* skip ring name */
+	optind = 2; /* skip ring name */
 	while ((opt = getopt(argc, argv, "fdn:h")) != -1) {
 		switch (opt) {
-		case 'f': follow = true; break;
-		case 'd': dump_raw = true; break;
-		case 'n': max_frames = atoi(optarg); break;
-		case 'h': usage(argv[0]); return 0;
-		default:  usage(argv[0]); return 1;
+		case 'f':
+			follow = true;
+			break;
+		case 'd':
+			dump_raw = true;
+			break;
+		case 'n':
+			max_frames = atoi(optarg);
+			break;
+		case 'h':
+			usage(argv[0]);
+			return 0;
+		default:
+			usage(argv[0]);
+			return 1;
 		}
 	}
 
@@ -133,8 +154,7 @@ int main(int argc, char **argv)
 
 	rss_ring_t *ring = rss_ring_open(ring_name);
 	if (!ring) {
-		fprintf(stderr, "Cannot open ring '%s' -- not created yet?\n",
-			ring_name);
+		fprintf(stderr, "Cannot open ring '%s' -- not created yet?\n", ring_name);
 		return 1;
 	}
 
@@ -146,8 +166,7 @@ int main(int argc, char **argv)
 		return 0;
 	}
 
-	fprintf(stderr, "\n--- %s ---\n",
-		follow ? "following frames" : "dumping raw data");
+	fprintf(stderr, "\n--- %s ---\n", follow ? "following frames" : "dumping raw data");
 
 	uint64_t read_seq = 0;
 	uint64_t frame_count = 0;
@@ -157,7 +176,8 @@ int main(int argc, char **argv)
 
 	while (g_running) {
 		int ret = rss_ring_wait(ring, 1000);
-		if (ret != 0) continue;
+		if (ret != 0)
+			continue;
 
 		const uint8_t *data;
 		uint32_t length;
@@ -168,7 +188,8 @@ int main(int argc, char **argv)
 			fprintf(stderr, "[OVERFLOW] consumer fell behind\n");
 			continue;
 		}
-		if (ret != 0) continue;
+		if (ret != 0)
+			continue;
 
 		if (frame_count == 0)
 			first_ts = meta.timestamp;
@@ -182,11 +203,10 @@ int main(int argc, char **argv)
 			fflush(stdout);
 		} else {
 			fprintf(stderr,
-				"#%-6" PRIu64 " seq=%-8" PRIu64
-				" len=%-8u dt=%-8" PRId64 "us "
+				"#%-6" PRIu64 " seq=%-8" PRIu64 " len=%-8u dt=%-8" PRId64 "us "
 				"nal=%-12s key=%u\n",
-				frame_count, meta.seq, length, dt,
-				nal_type_str(meta.nal_type), meta.is_key);
+				frame_count, meta.seq, length, dt, nal_type_str(meta.nal_type),
+				meta.is_key);
 		}
 
 		frame_count++;
@@ -207,9 +227,8 @@ int main(int argc, char **argv)
 		"Avg FPS:  %.1f\n"
 		"Avg rate: %.0f bps (%.1f kbps)\n"
 		"Total:    %" PRIu64 " bytes (%.1f MB)\n",
-		frame_count, dur_sec, avg_fps,
-		avg_bps, avg_bps / 1000.0,
-		total_bytes, (double)total_bytes / (1024.0 * 1024.0));
+		frame_count, dur_sec, avg_fps, avg_bps, avg_bps / 1000.0, total_bytes,
+		(double)total_bytes / (1024.0 * 1024.0));
 
 	rss_ring_close(ring);
 	return 0;

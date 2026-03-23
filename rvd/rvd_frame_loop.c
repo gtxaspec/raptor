@@ -22,20 +22,18 @@ static uint16_t primary_nal_type(const rss_frame_t *frame)
 {
 	for (uint32_t i = frame->nal_count; i > 0; i--) {
 		rss_nal_type_t t = frame->nals[i - 1].type;
-		if (t == RSS_NAL_H264_IDR || t == RSS_NAL_H264_SLICE ||
-		    t == RSS_NAL_H265_IDR || t == RSS_NAL_H265_SLICE ||
-		    t == RSS_NAL_JPEG_FRAME)
+		if (t == RSS_NAL_H264_IDR || t == RSS_NAL_H264_SLICE || t == RSS_NAL_H265_IDR ||
+		    t == RSS_NAL_H265_SLICE || t == RSS_NAL_JPEG_FRAME)
 			return (uint16_t)t;
 	}
-	return frame->nal_count > 0 ? (uint16_t)frame->nals[0].type
-				    : (uint16_t)RSS_NAL_UNKNOWN;
+	return frame->nal_count > 0 ? (uint16_t)frame->nals[0].type : (uint16_t)RSS_NAL_UNKNOWN;
 }
 
 /* ── Per-channel encoder thread ── */
 
 typedef struct {
 	rvd_state_t *st;
-	int          idx;
+	int idx;
 } enc_thread_arg_t;
 
 static void *encoder_thread(void *arg)
@@ -45,8 +43,8 @@ static void *encoder_thread(void *arg)
 	int idx = a->idx;
 	rvd_stream_t *s = &st->streams[idx];
 
-	RSS_INFO("encoder thread[%d] started (chn=%d %ux%u)",
-		 idx, s->chn, s->enc_cfg.width, s->enc_cfg.height);
+	RSS_INFO("encoder thread[%d] started (chn=%d %ux%u)", idx, s->chn, s->enc_cfg.width,
+		 s->enc_cfg.height);
 
 	uint64_t frame_count = 0;
 	int64_t last_stats = rss_timestamp_us();
@@ -54,48 +52,41 @@ static void *encoder_thread(void *arg)
 	while (*st->running) {
 		/* Block until encoder has a frame (up to 1 second timeout).
 		 * Each thread blocks independently so channels don't starve. */
-		int ret = RSS_HAL_CALL(st->ops, enc_poll, st->hal_ctx,
-				       s->chn, 1000);
+		int ret = RSS_HAL_CALL(st->ops, enc_poll, st->hal_ctx, s->chn, 1000);
 		if (ret != RSS_OK)
 			continue;
 
 		rss_frame_t frame;
-		ret = RSS_HAL_CALL(st->ops, enc_get_frame, st->hal_ctx,
-				   s->chn, &frame);
+		ret = RSS_HAL_CALL(st->ops, enc_get_frame, st->hal_ctx, s->chn, &frame);
 		if (ret != RSS_OK)
 			continue;
 
 		/* Publish NALs directly to ring via scatter-gather */
 		rss_iov_t iov[16];
 		uint32_t cnt = frame.nal_count;
-		if (cnt > 16) cnt = 16;
+		if (cnt > 16)
+			cnt = 16;
 		uint32_t total_len = 0;
 		for (uint32_t n = 0; n < cnt; n++) {
-			iov[n].data   = frame.nals[n].data;
+			iov[n].data = frame.nals[n].data;
 			iov[n].length = frame.nals[n].length;
 			total_len += frame.nals[n].length;
 		}
-		rss_ring_publish_iov(s->ring, iov, cnt,
-				     frame.timestamp,
-				     primary_nal_type(&frame),
+		rss_ring_publish_iov(s->ring, iov, cnt, frame.timestamp, primary_nal_type(&frame),
 				     frame.is_key ? 1 : 0);
 
 		/* JPEG: also write snapshot file atomically */
 		if (s->is_jpeg && cnt > 0 && st->jpeg_path[0]) {
-			rss_write_file_atomic(st->jpeg_path,
-					      frame.nals[0].data,
-					      (int)total_len);
+			rss_write_file_atomic(st->jpeg_path, frame.nals[0].data, (int)total_len);
 		}
 
-		RSS_HAL_CALL(st->ops, enc_release_frame, st->hal_ctx,
-			     s->chn, &frame);
+		RSS_HAL_CALL(st->ops, enc_release_frame, st->hal_ctx, s->chn, &frame);
 
 		frame_count++;
 
 		int64_t now = rss_timestamp_us();
 		if (now - last_stats >= 30000000) {
-			RSS_INFO("stream%d: %llu frames",
-				 idx, (unsigned long long)frame_count);
+			RSS_INFO("stream%d: %llu frames", idx, (unsigned long long)frame_count);
 			last_stats = now;
 		}
 	}
@@ -112,9 +103,11 @@ static int json_get_int(const char *json, const char *key, int *out)
 	char pattern[64];
 	snprintf(pattern, sizeof(pattern), "\"%s\":", key);
 	const char *p = strstr(json, pattern);
-	if (!p) return -1;
+	if (!p)
+		return -1;
 	p += strlen(pattern);
-	while (*p == ' ') p++;
+	while (*p == ' ')
+		p++;
 	*out = atoi(p);
 	return 0;
 }
@@ -128,13 +121,13 @@ static int json_get_int(const char *json, const char *key, int *out)
 /* Map stream index to config section name */
 static const char *stream_section(int idx)
 {
-	static const char *names[] = { "stream0", "stream1" };
-	if (idx >= 0 && idx < 2) return names[idx];
+	static const char *names[] = {"stream0", "stream1"};
+	if (idx >= 0 && idx < 2)
+		return names[idx];
 	return "stream0";
 }
 
-static int rvd_ctrl_handler(const char *cmd_json, char *resp_buf,
-			    int resp_buf_size, void *userdata)
+static int rvd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, void *userdata)
 {
 	rvd_state_t *st = userdata;
 	int chn, val, val2;
@@ -143,9 +136,9 @@ static int rvd_ctrl_handler(const char *cmd_json, char *resp_buf,
 		int target = -1;
 		json_get_int(cmd_json, "channel", &target);
 		for (int i = 0; i < st->stream_count; i++) {
-			if (target >= 0 && i != target) continue;
-			RSS_HAL_CALL(st->ops, enc_request_idr, st->hal_ctx,
-				     st->streams[i].chn);
+			if (target >= 0 && i != target)
+				continue;
+			RSS_HAL_CALL(st->ops, enc_request_idr, st->hal_ctx, st->streams[i].chn);
 		}
 		snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
 		CTRL_RESP(resp_buf);
@@ -153,18 +146,16 @@ static int rvd_ctrl_handler(const char *cmd_json, char *resp_buf,
 
 	if (strstr(cmd_json, "\"set-bitrate\"")) {
 		if (json_get_int(cmd_json, "channel", &chn) == 0 &&
-		    json_get_int(cmd_json, "value", &val) == 0 &&
-		    chn >= 0 && chn < st->stream_count) {
-			int ret = RSS_HAL_CALL(st->ops, enc_set_bitrate,
-					      st->hal_ctx,
-					      st->streams[chn].chn, val);
+		    json_get_int(cmd_json, "value", &val) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			int ret = RSS_HAL_CALL(st->ops, enc_set_bitrate, st->hal_ctx,
+					       st->streams[chn].chn, val);
 			if (ret == 0) {
 				st->streams[chn].enc_cfg.bitrate = val;
-				rss_config_set_int(st->cfg, stream_section(chn),
-						   "bitrate", val);
+				rss_config_set_int(st->cfg, stream_section(chn), "bitrate", val);
 			}
-			snprintf(resp_buf, resp_buf_size,
-				 "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
+			snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\"}",
+				 ret == 0 ? "ok" : "error");
 		} else {
 			snprintf(resp_buf, resp_buf_size,
 				 "{\"status\":\"error\",\"reason\":\"need channel and value\"}");
@@ -174,18 +165,16 @@ static int rvd_ctrl_handler(const char *cmd_json, char *resp_buf,
 
 	if (strstr(cmd_json, "\"set-gop\"")) {
 		if (json_get_int(cmd_json, "channel", &chn) == 0 &&
-		    json_get_int(cmd_json, "value", &val) == 0 &&
-		    chn >= 0 && chn < st->stream_count) {
-			int ret = RSS_HAL_CALL(st->ops, enc_set_gop,
-					      st->hal_ctx,
-					      st->streams[chn].chn, val);
+		    json_get_int(cmd_json, "value", &val) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			int ret = RSS_HAL_CALL(st->ops, enc_set_gop, st->hal_ctx,
+					       st->streams[chn].chn, val);
 			if (ret == 0) {
 				st->streams[chn].enc_cfg.gop_length = val;
-				rss_config_set_int(st->cfg, stream_section(chn),
-						   "gop", val);
+				rss_config_set_int(st->cfg, stream_section(chn), "gop", val);
 			}
-			snprintf(resp_buf, resp_buf_size,
-				 "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
+			snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\"}",
+				 ret == 0 ? "ok" : "error");
 		} else {
 			snprintf(resp_buf, resp_buf_size,
 				 "{\"status\":\"error\",\"reason\":\"need channel and value\"}");
@@ -195,18 +184,16 @@ static int rvd_ctrl_handler(const char *cmd_json, char *resp_buf,
 
 	if (strstr(cmd_json, "\"set-fps\"")) {
 		if (json_get_int(cmd_json, "channel", &chn) == 0 &&
-		    json_get_int(cmd_json, "value", &val) == 0 &&
-		    chn >= 0 && chn < st->stream_count) {
-			int ret = RSS_HAL_CALL(st->ops, enc_set_fps,
-					      st->hal_ctx,
-					      st->streams[chn].chn, val, 1);
+		    json_get_int(cmd_json, "value", &val) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			int ret = RSS_HAL_CALL(st->ops, enc_set_fps, st->hal_ctx,
+					       st->streams[chn].chn, val, 1);
 			if (ret == 0) {
 				st->streams[chn].enc_cfg.fps_num = val;
-				rss_config_set_int(st->cfg, stream_section(chn),
-						   "fps", val);
+				rss_config_set_int(st->cfg, stream_section(chn), "fps", val);
 			}
-			snprintf(resp_buf, resp_buf_size,
-				 "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
+			snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\"}",
+				 ret == 0 ? "ok" : "error");
 		} else {
 			snprintf(resp_buf, resp_buf_size,
 				 "{\"status\":\"error\",\"reason\":\"need channel and value\"}");
@@ -217,21 +204,18 @@ static int rvd_ctrl_handler(const char *cmd_json, char *resp_buf,
 	if (strstr(cmd_json, "\"set-qp-bounds\"")) {
 		if (json_get_int(cmd_json, "channel", &chn) == 0 &&
 		    json_get_int(cmd_json, "min", &val) == 0 &&
-		    json_get_int(cmd_json, "max", &val2) == 0 &&
-		    chn >= 0 && chn < st->stream_count) {
-			int ret = RSS_HAL_CALL(st->ops, enc_set_qp_bounds,
-					      st->hal_ctx,
-					      st->streams[chn].chn, val, val2);
+		    json_get_int(cmd_json, "max", &val2) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			int ret = RSS_HAL_CALL(st->ops, enc_set_qp_bounds, st->hal_ctx,
+					       st->streams[chn].chn, val, val2);
 			if (ret == 0) {
 				st->streams[chn].enc_cfg.min_qp = val;
 				st->streams[chn].enc_cfg.max_qp = val2;
-				rss_config_set_int(st->cfg, stream_section(chn),
-						   "min_qp", val);
-				rss_config_set_int(st->cfg, stream_section(chn),
-						   "max_qp", val2);
+				rss_config_set_int(st->cfg, stream_section(chn), "min_qp", val);
+				rss_config_set_int(st->cfg, stream_section(chn), "max_qp", val2);
 			}
-			snprintf(resp_buf, resp_buf_size,
-				 "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
+			snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\"}",
+				 ret == 0 ? "ok" : "error");
 		} else {
 			snprintf(resp_buf, resp_buf_size,
 				 "{\"status\":\"error\",\"reason\":\"need channel, min, max\"}");
@@ -241,8 +225,7 @@ static int rvd_ctrl_handler(const char *cmd_json, char *resp_buf,
 
 	if (strstr(cmd_json, "\"config-save\"")) {
 		int ret = rss_config_save(st->cfg, st->config_path);
-		snprintf(resp_buf, resp_buf_size,
-			 "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
+		snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
 		if (ret == 0)
 			RSS_INFO("running config saved to %s", st->config_path);
 		CTRL_RESP(resp_buf);
@@ -254,52 +237,44 @@ static int rvd_ctrl_handler(const char *cmd_json, char *resp_buf,
 		for (int i = 0; i < st->stream_count; i++) {
 			rvd_stream_t *s = &st->streams[i];
 			uint32_t avg_br = 0;
-			RSS_HAL_CALL(st->ops, enc_get_avg_bitrate,
-				     st->hal_ctx, s->chn, &avg_br);
+			RSS_HAL_CALL(st->ops, enc_get_avg_bitrate, st->hal_ctx, s->chn, &avg_br);
 			off += snprintf(resp_buf + off, resp_buf_size - off,
-				"%s{\"chn\":%d,\"w\":%u,\"h\":%u,\"codec\":%u,"
-				"\"bitrate\":%u,\"avg_bitrate\":%u,\"gop\":%u,"
-				"\"fps\":%u,\"min_qp\":%d,\"max_qp\":%d,"
-				"\"rc_mode\":%u,\"profile\":%d}",
-				i > 0 ? "," : "",
-				s->chn, s->enc_cfg.width, s->enc_cfg.height,
-				s->enc_cfg.codec, s->enc_cfg.bitrate, avg_br,
-				s->enc_cfg.gop_length, s->enc_cfg.fps_num,
-				s->enc_cfg.min_qp, s->enc_cfg.max_qp,
-				s->enc_cfg.rc_mode, s->enc_cfg.profile);
+					"%s{\"chn\":%d,\"w\":%u,\"h\":%u,\"codec\":%u,"
+					"\"bitrate\":%u,\"avg_bitrate\":%u,\"gop\":%u,"
+					"\"fps\":%u,\"min_qp\":%d,\"max_qp\":%d,"
+					"\"rc_mode\":%u,\"profile\":%d}",
+					i > 0 ? "," : "", s->chn, s->enc_cfg.width,
+					s->enc_cfg.height, s->enc_cfg.codec, s->enc_cfg.bitrate,
+					avg_br, s->enc_cfg.gop_length, s->enc_cfg.fps_num,
+					s->enc_cfg.min_qp, s->enc_cfg.max_qp, s->enc_cfg.rc_mode,
+					s->enc_cfg.profile);
 		}
-		off += snprintf(resp_buf + off, resp_buf_size - off,
-				"],\"config_path\":\"%s\"}}", st->config_path);
+		off += snprintf(resp_buf + off, resp_buf_size - off, "],\"config_path\":\"%s\"}}",
+				st->config_path);
 		CTRL_RESP(resp_buf);
 	}
 
 	if (strstr(cmd_json, "\"status\"")) {
-		int off = snprintf(resp_buf, resp_buf_size,
-				   "{\"status\":\"ok\",\"streams\":[");
+		int off = snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\",\"streams\":[");
 		for (int i = 0; i < st->stream_count; i++) {
 			uint32_t avg_br = 0;
-			RSS_HAL_CALL(st->ops, enc_get_avg_bitrate,
-				     st->hal_ctx, st->streams[i].chn, &avg_br);
-			off += snprintf(resp_buf + off, resp_buf_size - off,
+			RSS_HAL_CALL(st->ops, enc_get_avg_bitrate, st->hal_ctx, st->streams[i].chn,
+				     &avg_br);
+			off += snprintf(
+				resp_buf + off, resp_buf_size - off,
 				"%s{\"chn\":%d,\"w\":%u,\"h\":%u,\"codec\":%u,"
 				"\"bitrate\":%u,\"avg_bitrate\":%u,\"gop\":%u,"
 				"\"fps\":%u}",
-				i > 0 ? "," : "",
-				st->streams[i].chn,
-				st->streams[i].enc_cfg.width,
-				st->streams[i].enc_cfg.height,
-				st->streams[i].enc_cfg.codec,
-				st->streams[i].enc_cfg.bitrate,
-				avg_br,
-				st->streams[i].enc_cfg.gop_length,
-				st->streams[i].enc_cfg.fps_num);
+				i > 0 ? "," : "", st->streams[i].chn, st->streams[i].enc_cfg.width,
+				st->streams[i].enc_cfg.height, st->streams[i].enc_cfg.codec,
+				st->streams[i].enc_cfg.bitrate, avg_br,
+				st->streams[i].enc_cfg.gop_length, st->streams[i].enc_cfg.fps_num);
 		}
 		snprintf(resp_buf + off, resp_buf_size - off, "]}");
 		CTRL_RESP(resp_buf);
 	}
 
-	snprintf(resp_buf, resp_buf_size,
-		 "{\"status\":\"error\",\"reason\":\"unknown command\"}");
+	snprintf(resp_buf, resp_buf_size, "{\"status\":\"error\",\"reason\":\"unknown command\"}");
 	CTRL_RESP(resp_buf);
 }
 
@@ -318,7 +293,7 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running)
 	pthread_attr_setstacksize(&attr, 128 * 1024);
 
 	for (int i = 0; i < st->stream_count; i++) {
-		enc_args[i] = (enc_thread_arg_t){ .st = st, .idx = i };
+		enc_args[i] = (enc_thread_arg_t){.st = st, .idx = i};
 		pthread_create(&enc_tids[i], &attr, encoder_thread, &enc_args[i]);
 	}
 	pthread_attr_destroy(&attr);
@@ -330,10 +305,7 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running)
 	if (st->ctrl && epoll_fd >= 0) {
 		ctrl_fd = rss_ctrl_get_fd(st->ctrl);
 		if (ctrl_fd >= 0) {
-			struct epoll_event ev = {
-				.events = EPOLLIN,
-				.data.fd = ctrl_fd
-			};
+			struct epoll_event ev = {.events = EPOLLIN, .data.fd = ctrl_fd};
 			epoll_ctl(epoll_fd, EPOLL_CTL_ADD, ctrl_fd, &ev);
 		}
 	}
@@ -348,8 +320,7 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running)
 			int n = epoll_wait(epoll_fd, events, 4, 100);
 			for (int i = 0; i < n; i++) {
 				if (events[i].data.fd == ctrl_fd)
-					rss_ctrl_accept_and_handle(st->ctrl,
-						rvd_ctrl_handler, st);
+					rss_ctrl_accept_and_handle(st->ctrl, rvd_ctrl_handler, st);
 			}
 		} else {
 			usleep(100000);
