@@ -171,13 +171,18 @@ int rvd_pipeline_init(rvd_state_t *st)
 		}
 	}
 
-	/* ── 4b. Log when scaler will be needed ── */
+	/* ── 4b. Enable scaler for streams at lower resolution than sensor ── */
 	if (sensor_w > 0 && sensor_h > 0) {
 		for (int i = 0; i < st->stream_count; i++) {
 			rss_fs_config_t *fs = &st->streams[i].fs_cfg;
-			if (fs->width != sensor_w || fs->height != sensor_h)
-				RSS_INFO("stream%d: ISP will scale %dx%d -> %dx%d",
-					 i, sensor_w, sensor_h, fs->width, fs->height);
+			if (fs->width != sensor_w || fs->height != sensor_h) {
+				fs->scaler.enable = true;
+				fs->scaler.out_width = fs->width;
+				fs->scaler.out_height = fs->height;
+				RSS_INFO("stream%d: scaler %dx%d -> %dx%d",
+					 i, sensor_w, sensor_h,
+					 fs->width, fs->height);
+			}
 		}
 	}
 
