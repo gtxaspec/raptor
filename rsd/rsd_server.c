@@ -287,7 +287,7 @@ static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf,
 	(void)cmd_json;
 	snprintf(resp_buf, resp_buf_size,
 		 "{\"status\":\"ok\",\"clients\":%d}", srv->client_count);
-	return 0;
+	return (int)strlen(resp_buf);
 }
 
 void rsd_server_run(rsd_server_t *srv)

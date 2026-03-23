@@ -124,29 +124,136 @@ release:
 
 /* ── Control socket handler ── */
 
+/* Parse integer value from JSON: "key":123 */
+static int json_get_int(const char *json, const char *key, int *out)
+{
+	char pattern[64];
+	snprintf(pattern, sizeof(pattern), "\"%s\":", key);
+	const char *p = strstr(json, pattern);
+	if (!p) return -1;
+	p += strlen(pattern);
+	while (*p == ' ') p++;
+	*out = atoi(p);
+	return 0;
+}
+
+/*
+ * Control handler return value = response length (not status code).
+ * The IPC layer uses the return value as the number of bytes to send.
+ */
+#define CTRL_RESP(buf) return (int)strlen(buf)
+
 static int rvd_ctrl_handler(const char *cmd_json, char *resp_buf,
 			    int resp_buf_size, void *userdata)
 {
 	rvd_state_t *st = userdata;
+	int chn, val, val2;
 
 	if (strstr(cmd_json, "\"request-idr\"")) {
-		for (int i = 0; i < st->stream_count; i++)
+		int target = -1;
+		json_get_int(cmd_json, "channel", &target);
+		for (int i = 0; i < st->stream_count; i++) {
+			if (target >= 0 && i != target) continue;
 			RSS_HAL_CALL(st->ops, enc_request_idr, st->hal_ctx,
 				     st->streams[i].chn);
+		}
 		snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
-		return 0;
+		CTRL_RESP(resp_buf);
+	}
+
+	if (strstr(cmd_json, "\"set-bitrate\"")) {
+		if (json_get_int(cmd_json, "channel", &chn) == 0 &&
+		    json_get_int(cmd_json, "value", &val) == 0 &&
+		    chn >= 0 && chn < st->stream_count) {
+			int ret = RSS_HAL_CALL(st->ops, enc_set_bitrate,
+					      st->hal_ctx,
+					      st->streams[chn].chn, val);
+			snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
+		} else {
+			snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"error\",\"reason\":\"need channel and value\"}");
+		}
+		CTRL_RESP(resp_buf);
+	}
+
+	if (strstr(cmd_json, "\"set-gop\"")) {
+		if (json_get_int(cmd_json, "channel", &chn) == 0 &&
+		    json_get_int(cmd_json, "value", &val) == 0 &&
+		    chn >= 0 && chn < st->stream_count) {
+			int ret = RSS_HAL_CALL(st->ops, enc_set_gop,
+					      st->hal_ctx,
+					      st->streams[chn].chn, val);
+			snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
+		} else {
+			snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"error\",\"reason\":\"need channel and value\"}");
+		}
+		CTRL_RESP(resp_buf);
+	}
+
+	if (strstr(cmd_json, "\"set-fps\"")) {
+		if (json_get_int(cmd_json, "channel", &chn) == 0 &&
+		    json_get_int(cmd_json, "value", &val) == 0 &&
+		    chn >= 0 && chn < st->stream_count) {
+			int ret = RSS_HAL_CALL(st->ops, enc_set_fps,
+					      st->hal_ctx,
+					      st->streams[chn].chn, val, 1);
+			snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
+		} else {
+			snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"error\",\"reason\":\"need channel and value\"}");
+		}
+		CTRL_RESP(resp_buf);
+	}
+
+	if (strstr(cmd_json, "\"set-qp-bounds\"")) {
+		if (json_get_int(cmd_json, "channel", &chn) == 0 &&
+		    json_get_int(cmd_json, "min", &val) == 0 &&
+		    json_get_int(cmd_json, "max", &val2) == 0 &&
+		    chn >= 0 && chn < st->stream_count) {
+			int ret = RSS_HAL_CALL(st->ops, enc_set_qp_bounds,
+					      st->hal_ctx,
+					      st->streams[chn].chn, val, val2);
+			snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
+		} else {
+			snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"error\",\"reason\":\"need channel, min, max\"}");
+		}
+		CTRL_RESP(resp_buf);
 	}
 
 	if (strstr(cmd_json, "\"status\"")) {
-		snprintf(resp_buf, resp_buf_size,
-			 "{\"status\":\"ok\",\"streams\":%d}",
-			 st->stream_count);
-		return 0;
+		int off = snprintf(resp_buf, resp_buf_size,
+				   "{\"status\":\"ok\",\"streams\":[");
+		for (int i = 0; i < st->stream_count; i++) {
+			uint32_t avg_br = 0;
+			RSS_HAL_CALL(st->ops, enc_get_avg_bitrate,
+				     st->hal_ctx, st->streams[i].chn, &avg_br);
+			off += snprintf(resp_buf + off, resp_buf_size - off,
+				"%s{\"chn\":%d,\"w\":%u,\"h\":%u,\"codec\":%u,"
+				"\"bitrate\":%u,\"avg_bitrate\":%u,\"gop\":%u,"
+				"\"fps\":%u}",
+				i > 0 ? "," : "",
+				st->streams[i].chn,
+				st->streams[i].enc_cfg.width,
+				st->streams[i].enc_cfg.height,
+				st->streams[i].enc_cfg.codec,
+				st->streams[i].enc_cfg.bitrate,
+				avg_br,
+				st->streams[i].enc_cfg.gop_length,
+				st->streams[i].enc_cfg.fps_num);
+		}
+		snprintf(resp_buf + off, resp_buf_size - off, "]}");
+		CTRL_RESP(resp_buf);
 	}
 
 	snprintf(resp_buf, resp_buf_size,
 		 "{\"status\":\"error\",\"reason\":\"unknown command\"}");
-	return 0;
+	CTRL_RESP(resp_buf);
 }
 
 /* ── Main frame loop: launches threads, handles control socket ── */
