@@ -3,6 +3,8 @@
  *
  * Usage:
  *   raptorctl status                       Check which daemons are running
+ *   raptorctl get <section> <key>          Read a config value
+ *   raptorctl set <section> <key> <value>  Set a config value (writes to file)
  *   raptorctl config save                  Save running config to disk
  *   raptorctl <daemon> <command> [args]    Send command to daemon
  *
@@ -41,6 +43,8 @@ static void usage(void)
 			"\n"
 			"Commands:\n"
 			"  status                              Show daemon status\n"
+			"  get <section> <key>                 Read config value\n"
+			"  set <section> <key> <value>         Set config value\n"
 			"  config save                         Save running config to disk\n"
 			"  <daemon> status                     Show daemon details\n"
 			"  <daemon> config                     Show running config\n"
@@ -111,6 +115,54 @@ int main(int argc, char **argv)
 
 	if (strcmp(argv[1], "status") == 0) {
 		cmd_status();
+		return 0;
+	}
+
+	/* raptorctl get <section> <key> [-c config] — read a config value */
+	if (strcmp(argv[1], "get") == 0) {
+		if (argc < 4) {
+			fprintf(stderr, "Usage: raptorctl get <section> <key> [-c config]\n");
+			return 1;
+		}
+		const char *cfgpath = "/etc/raptor.conf";
+		if (argc >= 6 && strcmp(argv[4], "-c") == 0)
+			cfgpath = argv[5];
+		rss_config_t *cfg = rss_config_load(cfgpath);
+		if (!cfg) {
+			fprintf(stderr, "Failed to load %s\n", cfgpath);
+			return 1;
+		}
+		const char *val = rss_config_get_str(cfg, argv[2], argv[3], NULL);
+		if (val)
+			printf("%s\n", val);
+		else
+			fprintf(stderr, "Key not found: [%s] %s\n", argv[2], argv[3]);
+		rss_config_free(cfg);
+		return val ? 0 : 1;
+	}
+
+	/* raptorctl set <section> <key> <value> [-c config] — set + save a config value */
+	if (strcmp(argv[1], "set") == 0) {
+		if (argc < 5) {
+			fprintf(stderr,
+				"Usage: raptorctl set <section> <key> <value> [-c config]\n");
+			return 1;
+		}
+		const char *cfgpath = "/etc/raptor.conf";
+		if (argc >= 7 && strcmp(argv[5], "-c") == 0)
+			cfgpath = argv[6];
+		rss_config_t *cfg = rss_config_load(cfgpath);
+		if (!cfg) {
+			fprintf(stderr, "Failed to load %s\n", cfgpath);
+			return 1;
+		}
+		rss_config_set_str(cfg, argv[2], argv[3], argv[4]);
+		int ret = rss_config_save(cfg, cfgpath);
+		rss_config_free(cfg);
+		if (ret != 0) {
+			fprintf(stderr, "Failed to save %s\n", cfgpath);
+			return 1;
+		}
 		return 0;
 	}
 
