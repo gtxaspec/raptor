@@ -263,6 +263,16 @@ int rvd_pipeline_init(rvd_state_t *st)
 		int chn = st->streams[i].chn;
 
 		if (st->streams[i].is_jpeg) {
+			/* Optional buffer sharing (before CreateChn per prudynt order) */
+			if (rss_config_get_bool(cfg, "jpeg", "bufshare", true)) {
+				ret = RSS_HAL_CALL(st->ops, enc_set_bufshare,
+						   st->hal_ctx, chn, 0);
+				if (ret == RSS_OK)
+					RSS_DEBUG("jpeg bufshare chn %d -> group 0", chn);
+				else
+					RSS_WARN("jpeg bufshare failed: %d (non-fatal)", ret);
+			}
+
 			st->streams[i].enc_cfg.init_qp = st->jpeg_quality;
 			ret = RSS_HAL_CALL(st->ops, enc_create_channel,
 					   st->hal_ctx, chn,
