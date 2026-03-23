@@ -103,13 +103,6 @@ int rvd_pipeline_init(rvd_state_t *st)
 	rss_config_t *cfg = st->cfg;
 	int ret;
 
-	/* Allocate scratch buffer for NAL concatenation */
-	st->scratch = malloc(RVD_SCRATCH_SIZE);
-	if (!st->scratch) {
-		RSS_FATAL("failed to allocate scratch buffer");
-		return RSS_ERR_NOMEM;
-	}
-
 	/* ── 1. Create HAL ── */
 	st->hal_ctx = rss_hal_create();
 	if (!st->hal_ctx) {
@@ -365,6 +358,5 @@ void rvd_pipeline_deinit(rvd_state_t *st)
 		st->hal_ctx = NULL;
 	}
 
-	free(st->scratch);
-	st->scratch = NULL;
+	/* Scratch buffers freed in rvd_frame_loop */
 }

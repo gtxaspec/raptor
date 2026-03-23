@@ -18,6 +18,9 @@ typedef struct {
 	rss_ring_t         *ring;
 	int                 chn;          /* encoder channel index */
 	bool                enabled;
+
+	/* Per-stream scratch buffer for NAL concatenation (thread-local) */
+	uint8_t             *scratch;
 } rvd_stream_t;
 
 typedef struct {
@@ -38,8 +41,7 @@ typedef struct {
 	/* Config */
 	rss_config_t        *cfg;
 
-	/* NAL concatenation scratch buffer */
-	uint8_t             *scratch;
+	volatile sig_atomic_t *running;
 } rvd_state_t;
 
 /* rvd_pipeline.c */
