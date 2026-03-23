@@ -87,7 +87,12 @@ void *rsd_video_reader_thread(void *arg)
 	rsd_server_t *srv = g_srv_for_readers;
 	int stream_idx = rctx->idx;
 
-	RSS_INFO("video reader[%d] started", stream_idx);
+	/* Get FPS from ring header for counter-based timestamps */
+	const rss_ring_header_t *vhdr = rss_ring_get_header(rctx->ring);
+	uint32_t video_ts_inc = 90000 / (vhdr->fps_num ? vhdr->fps_num : 25);
+	uint32_t video_rtp_ts = 0;
+
+	RSS_INFO("video reader[%d] started (ts_inc=%u)", stream_idx, video_ts_inc);
 
 	while (*srv->running) {
 		int ret = rss_ring_wait(rctx->ring, 100);
@@ -112,20 +117,9 @@ void *rsd_video_reader_thread(void *arg)
 			continue;
 		memcpy(rctx->frame_buf, data, length);
 
-		/*
-		 * Video RTP timestamp: use relative HAL timestamps.
-		 * Unlike audio (which uses a sample counter for perfect
-		 * monotonicity), video uses actual frame timestamps because
-		 * frame intervals can vary slightly with encoder load.
-		 * Start from 0 to align with audio epoch.
-		 */
-		if (!rctx->base_ts_set) {
-			rctx->base_ts = meta.timestamp;
-			rctx->base_ts_set = true;
-		}
-		int64_t rel_us = meta.timestamp - rctx->base_ts;
-		if (rel_us < 0) rel_us = 0;
-		uint32_t rtp_ts = (uint32_t)((rel_us * 90000LL) / 1000000LL);
+		/* Counter-based RTP timestamp for perfect monotonicity */
+		uint32_t rtp_ts = video_rtp_ts;
+		video_rtp_ts += video_ts_inc;
 
 		pthread_mutex_lock(&srv->clients_lock);
 		for (int i = 0; i < srv->client_count; i++) {
