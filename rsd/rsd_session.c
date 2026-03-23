@@ -30,17 +30,32 @@ rsd_client_t_options(VSelf, Compy_Context *ctx, const Compy_Request *req)
 	compy_respond_ok(ctx);
 }
 
+/* Detect stream index from URI */
+static int detect_stream_idx(CharSlice99 uri)
+{
+	if (CharSlice99_primitive_ends_with(uri, CharSlice99_from_str("/stream1")) ||
+	    CharSlice99_primitive_ends_with(uri, CharSlice99_from_str("/sub")))
+		return RSD_STREAM_SUB;
+	return RSD_STREAM_MAIN;
+}
+
 static void
 rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request *req)
 {
 	VSELF(rsd_client_t);
-	(void)req;
-	(void)self;
 
-	/*
-	 * Build SDP. We read stream metadata from a global ring pointer
-	 * set by the server. For now we pass it via a file-scope variable.
-	 */
+	/* Determine which stream from URI */
+	self->stream_idx = detect_stream_idx(req->start_line.uri);
+
+	/* Check if the requested stream's ring exists */
+	if (!g_srv || !g_srv->video[self->stream_idx].ring) {
+		compy_respond(ctx, COMPY_STATUS_NOT_FOUND, "Stream not available");
+		return;
+	}
+
+	const rss_ring_header_t *hdr =
+		rss_ring_get_header(g_srv->video[self->stream_idx].ring);
+
 	char sdp[2048] = {0};
 	Compy_Writer sdp_w = compy_string_writer(sdp);
 	ssize_t ret = 0;
@@ -57,9 +72,10 @@ rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request *req)
 		(COMPY_SDP_ATTR, "control:video"),
 		(COMPY_SDP_ATTR, "recvonly"),
 		(COMPY_SDP_ATTR, "rtpmap:%d H264/%d", RSD_VIDEO_PT, RSD_VIDEO_CLOCK),
-		(COMPY_SDP_ATTR, "fmtp:%d packetization-mode=1", RSD_VIDEO_PT));
+		(COMPY_SDP_ATTR, "fmtp:%d packetization-mode=1", RSD_VIDEO_PT),
+		(COMPY_SDP_ATTR, "framerate:%u", hdr->fps_num));
 
-	if (g_srv && g_srv->has_audio) {
+	if (g_srv->has_audio) {
 		COMPY_SDP_DESCRIBE(ret, sdp_w,
 			(COMPY_SDP_MEDIA, "audio 0 RTP/AVP %d", RSD_AUDIO_PT),
 			(COMPY_SDP_ATTR, "control:audio"),
