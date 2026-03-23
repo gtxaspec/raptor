@@ -40,6 +40,7 @@ typedef struct {
 
 	/* Config */
 	rss_config_t        *cfg;
+	const char          *config_path;
 
 	volatile sig_atomic_t *running;
 } rvd_state_t;

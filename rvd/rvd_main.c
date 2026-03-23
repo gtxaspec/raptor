@@ -76,6 +76,7 @@ int main(int argc, char **argv)
 	/* Initialize state */
 	rvd_state_t st = {0};
 	st.cfg = cfg;
+	st.config_path = config_path;
 
 	/* Set up video pipeline */
 	int ret = rvd_pipeline_init(&st);

@@ -143,6 +143,14 @@ static int json_get_int(const char *json, const char *key, int *out)
  */
 #define CTRL_RESP(buf) return (int)strlen(buf)
 
+/* Map stream index to config section name */
+static const char *stream_section(int idx)
+{
+	static const char *names[] = { "stream0", "stream1" };
+	if (idx >= 0 && idx < 2) return names[idx];
+	return "stream0";
+}
+
 static int rvd_ctrl_handler(const char *cmd_json, char *resp_buf,
 			    int resp_buf_size, void *userdata)
 {
@@ -168,6 +176,11 @@ static int rvd_ctrl_handler(const char *cmd_json, char *resp_buf,
 			int ret = RSS_HAL_CALL(st->ops, enc_set_bitrate,
 					      st->hal_ctx,
 					      st->streams[chn].chn, val);
+			if (ret == 0) {
+				st->streams[chn].enc_cfg.bitrate = val;
+				rss_config_set_int(st->cfg, stream_section(chn),
+						   "bitrate", val);
+			}
 			snprintf(resp_buf, resp_buf_size,
 				 "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
 		} else {
@@ -184,6 +197,11 @@ static int rvd_ctrl_handler(const char *cmd_json, char *resp_buf,
 			int ret = RSS_HAL_CALL(st->ops, enc_set_gop,
 					      st->hal_ctx,
 					      st->streams[chn].chn, val);
+			if (ret == 0) {
+				st->streams[chn].enc_cfg.gop_length = val;
+				rss_config_set_int(st->cfg, stream_section(chn),
+						   "gop", val);
+			}
 			snprintf(resp_buf, resp_buf_size,
 				 "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
 		} else {
@@ -200,6 +218,11 @@ static int rvd_ctrl_handler(const char *cmd_json, char *resp_buf,
 			int ret = RSS_HAL_CALL(st->ops, enc_set_fps,
 					      st->hal_ctx,
 					      st->streams[chn].chn, val, 1);
+			if (ret == 0) {
+				st->streams[chn].enc_cfg.fps_num = val;
+				rss_config_set_int(st->cfg, stream_section(chn),
+						   "fps", val);
+			}
 			snprintf(resp_buf, resp_buf_size,
 				 "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
 		} else {
@@ -217,12 +240,54 @@ static int rvd_ctrl_handler(const char *cmd_json, char *resp_buf,
 			int ret = RSS_HAL_CALL(st->ops, enc_set_qp_bounds,
 					      st->hal_ctx,
 					      st->streams[chn].chn, val, val2);
+			if (ret == 0) {
+				st->streams[chn].enc_cfg.min_qp = val;
+				st->streams[chn].enc_cfg.max_qp = val2;
+				rss_config_set_int(st->cfg, stream_section(chn),
+						   "min_qp", val);
+				rss_config_set_int(st->cfg, stream_section(chn),
+						   "max_qp", val2);
+			}
 			snprintf(resp_buf, resp_buf_size,
 				 "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
 		} else {
 			snprintf(resp_buf, resp_buf_size,
 				 "{\"status\":\"error\",\"reason\":\"need channel, min, max\"}");
 		}
+		CTRL_RESP(resp_buf);
+	}
+
+	if (strstr(cmd_json, "\"config-save\"")) {
+		int ret = rss_config_save(st->cfg, st->config_path);
+		snprintf(resp_buf, resp_buf_size,
+			 "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
+		if (ret == 0)
+			RSS_INFO("running config saved to %s", st->config_path);
+		CTRL_RESP(resp_buf);
+	}
+
+	if (strstr(cmd_json, "\"config-show\"")) {
+		int off = snprintf(resp_buf, resp_buf_size,
+				   "{\"status\":\"ok\",\"config\":{\"streams\":[");
+		for (int i = 0; i < st->stream_count; i++) {
+			rvd_stream_t *s = &st->streams[i];
+			uint32_t avg_br = 0;
+			RSS_HAL_CALL(st->ops, enc_get_avg_bitrate,
+				     st->hal_ctx, s->chn, &avg_br);
+			off += snprintf(resp_buf + off, resp_buf_size - off,
+				"%s{\"chn\":%d,\"w\":%u,\"h\":%u,\"codec\":%u,"
+				"\"bitrate\":%u,\"avg_bitrate\":%u,\"gop\":%u,"
+				"\"fps\":%u,\"min_qp\":%d,\"max_qp\":%d,"
+				"\"rc_mode\":%u,\"profile\":%d}",
+				i > 0 ? "," : "",
+				s->chn, s->enc_cfg.width, s->enc_cfg.height,
+				s->enc_cfg.codec, s->enc_cfg.bitrate, avg_br,
+				s->enc_cfg.gop_length, s->enc_cfg.fps_num,
+				s->enc_cfg.min_qp, s->enc_cfg.max_qp,
+				s->enc_cfg.rc_mode, s->enc_cfg.profile);
+		}
+		off += snprintf(resp_buf + off, resp_buf_size - off,
+				"],\"config_path\":\"%s\"}}", st->config_path);
 		CTRL_RESP(resp_buf);
 	}
 
