@@ -79,11 +79,9 @@ static uint8_t pcm16_to_alaw(int16_t pcm)
 
 static void pcm16_to_l16(const int16_t *pcm, uint8_t *out, int samples)
 {
-	for (int i = 0; i < samples; i++) {
-		uint16_t be = htons((uint16_t)pcm[i]);
-		out[i * 2]     = (uint8_t)(be >> 8);
-		out[i * 2 + 1] = (uint8_t)(be & 0xff);
-	}
+	uint16_t *dst = (uint16_t *)out;
+	for (int i = 0; i < samples; i++)
+		dst[i] = htons((uint16_t)pcm[i]);
 }
 
 static void usage(const char *prog)
