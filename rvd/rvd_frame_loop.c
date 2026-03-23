@@ -147,12 +147,10 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running)
 	int64_t last_stats = rss_timestamp_us();
 
 	while (*running) {
-		/* Poll main stream with timeout */
-		process_channel(st, 0, 100);
-
-		/* Poll sub stream non-blocking */
-		if (st->stream_count > 1)
-			process_channel(st, 1, 0);
+		/* Poll all streams. Use short timeout so we service
+		 * both channels frequently at 25fps (40ms per frame). */
+		for (int i = 0; i < st->stream_count; i++)
+			process_channel(st, i, 20);
 
 		/* Check OSD updates */
 		rvd_osd_check(st);
