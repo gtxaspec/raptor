@@ -199,7 +199,8 @@ int main(int argc, char **argv)
 		RSS_FATAL("failed to create audio ring");
 		goto cleanup;
 	}
-	rss_ring_set_stream_info(ring, 0x10, codec_id, 0, 0, sample_rate, 1);
+	rss_ring_set_stream_info(ring, 0x10, codec_id, 0, 0,
+				 sample_rate, 1, 0, 0);
 
 	/* Encode buffer: L16 = 2 bytes/sample, G.711 = 1 byte/sample */
 	int encode_buf_size = (codec_id == RAD_CODEC_L16)
