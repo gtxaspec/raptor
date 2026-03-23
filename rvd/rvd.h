@@ -9,7 +9,8 @@
 #include <rss_ipc.h>
 #include <rss_common.h>
 
-#define RVD_MAX_STREAMS 3 /* main, sub, jpeg */
+#define RVD_MAX_STREAMS 4 /* main, sub, jpeg0, jpeg1 */
+#define RVD_MAX_JPEG	2
 
 typedef struct {
 	rss_video_config_t enc_cfg;
@@ -39,10 +40,11 @@ typedef struct {
 	rss_config_t *cfg;
 	const char *config_path;
 
-	/* JPEG snapshot */
-	int jpeg_stream; /* stream index for JPEG, -1 if disabled */
+	/* JPEG snapshots (one per video stream) */
+	int jpeg_streams[RVD_MAX_JPEG]; /* stream indices, -1 if disabled */
+	int jpeg_count;
 	int jpeg_quality;
-	char jpeg_path[64]; /* e.g. /tmp/snapshot.jpg */
+	char jpeg_paths[RVD_MAX_JPEG][64]; /* /tmp/snapshot-0.jpg, etc */
 
 	volatile sig_atomic_t *running;
 } rvd_state_t;
