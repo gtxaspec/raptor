@@ -175,35 +175,38 @@ void *rsd_audio_reader_thread(void *arg)
 		int ret = rss_ring_wait(srv->ring_audio, 100);
 		if (ret != 0) continue;
 
-		const uint8_t *data;
-		uint32_t length;
-		rss_ring_slot_t meta;
-		uint64_t read_seq = srv->audio_read_seq;
+		/* Drain all available audio frames per wake-up.
+		 * Audio produces 50 frames/sec; reading one-at-a-time
+		 * with poll overhead causes the consumer to fall behind. */
+		for (int burst = 0; burst < 16; burst++) {
+			const uint8_t *data;
+			uint32_t length;
+			rss_ring_slot_t meta;
+			uint64_t read_seq = srv->audio_read_seq;
 
-		ret = rss_ring_read(srv->ring_audio, &read_seq, &data,
-				    &length, &meta);
-		if (ret == RSS_EOVERFLOW) {
+			ret = rss_ring_read(srv->ring_audio, &read_seq, &data,
+					    &length, &meta);
+			if (ret == RSS_EOVERFLOW) {
+				srv->audio_read_seq = read_seq;
+				break;
+			}
+			if (ret != 0) break;  /* no more frames */
+
 			srv->audio_read_seq = read_seq;
-			continue;
+
+			if (length > sizeof(audio_buf)) continue;
+			memcpy(audio_buf, data, length);
+
+			pthread_mutex_lock(&srv->clients_lock);
+			for (int i = 0; i < srv->client_count; i++) {
+				rsd_client_t *c = srv->clients[i];
+				if (!c || !c->audio.playing) continue;
+
+				rsd_send_audio_frame(c, audio_buf, length,
+						     meta.timestamp);
+			}
+			pthread_mutex_unlock(&srv->clients_lock);
 		}
-		if (ret != 0) continue;
-
-		srv->audio_read_seq = read_seq;
-
-		/* Copy audio data */
-		if (length > sizeof(audio_buf)) continue;
-		memcpy(audio_buf, data, length);
-
-		/* Distribute to all playing clients */
-		pthread_mutex_lock(&srv->clients_lock);
-		for (int i = 0; i < srv->client_count; i++) {
-			rsd_client_t *c = srv->clients[i];
-			if (!c || !c->audio.playing) continue;
-
-			rsd_send_audio_frame(c, audio_buf, length,
-					     meta.timestamp);
-		}
-		pthread_mutex_unlock(&srv->clients_lock);
 	}
 
 	RSS_INFO("audio reader thread exiting");
