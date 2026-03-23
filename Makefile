@@ -71,7 +71,7 @@ LDFLAGS_HAL := $(LDFLAGS_SYSROOT) -limp -lalog -lsysutils -luclibcshim -lpthread
 LDFLAGS     := $(LDFLAGS_SYSROOT) -lpthread -lrt -latomic
 
 # Targets
-DAEMONS := rvd rsd rad rod ric
+DAEMONS := rvd rsd rad rhd rod ric
 TOOLS   := raptorctl ringdump
 
 .PHONY: all clean libs $(DAEMONS) $(TOOLS) install
@@ -117,6 +117,12 @@ rad: $(LIB_HAL) $(LIB_IPC) $(LIB_COMMON)
 	$(Q)$(MAKE) -C rad CC="$(CC)" CFLAGS="$(CFLAGS)" \
 		LIBS="$(LIB_HAL) $(LIB_IPC) $(LIB_COMMON)" \
 		LDFLAGS="$(LDFLAGS_HAL)" Q="$(Q)"
+
+rhd: $(LIB_IPC) $(LIB_COMMON)
+	@echo "  BUILD   rhd"
+	$(Q)$(MAKE) -C rhd CC="$(CC)" CFLAGS="$(CFLAGS)" \
+		LIBS="$(LIB_IPC) $(LIB_COMMON)" \
+		LDFLAGS="$(LDFLAGS)" Q="$(Q)"
 
 rod: $(LIB_IPC) $(LIB_COMMON)
 	@echo "  BUILD   rod"
