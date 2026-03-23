@@ -17,6 +17,8 @@
 #define RSD_MAX_CLIENTS     8
 #define RSD_VIDEO_PT        96
 #define RSD_VIDEO_CLOCK     90000
+#define RSD_AUDIO_PT        0       /* PCMU */
+#define RSD_AUDIO_CLOCK     8000
 #define RSD_BUF_SIZE        4096
 
 /* Per-client stream state */
@@ -34,6 +36,7 @@ typedef struct rsd_client {
 	struct sockaddr_in   addr;
 	uint64_t             session_id;
 	rsd_stream_t         video;
+	rsd_stream_t         audio;
 	uint64_t             video_read_seq;
 	bool                 waiting_keyframe;
 	bool                 active;
@@ -60,9 +63,12 @@ typedef struct {
 	int                  client_count;
 	pthread_mutex_t      clients_lock;
 
-	/* Ring */
+	/* Rings */
 	rss_ring_t          *ring_main;
+	rss_ring_t          *ring_audio;
 	uint64_t             ring_read_seq;
+	uint64_t             audio_read_seq;
+	bool                 has_audio;
 
 	/* Frame copy buffer (ring data is shared memory that can be
 	 * overwritten by the producer; we copy before sending) */
@@ -85,7 +91,6 @@ void rsd_handle_rtsp_data(rsd_server_t *srv, rsd_client_t *client,
 
 /* rsd_ring_reader.c */
 void *rsd_ring_reader_thread(void *arg);
-void rsd_send_video_frame(rsd_client_t *c, const uint8_t *data,
-			  uint32_t len, int64_t timestamp, bool is_key);
+void *rsd_audio_reader_thread(void *arg);
 
 #endif /* RSD_H */

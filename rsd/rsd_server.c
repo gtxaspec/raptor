@@ -63,6 +63,18 @@ static void remove_client(rsd_server_t *srv, rsd_client_t *client)
 		client->video.rtcp = NULL;
 	}
 
+	/* Audio cleanup */
+	if (client->audio.rtp) {
+		VCALL(DYN(Compy_RtpTransport, Compy_Droppable,
+			  client->audio.rtp), drop);
+		client->audio.rtp = NULL;
+	}
+	if (client->audio.rtcp) {
+		VCALL(DYN(Compy_Rtcp, Compy_Droppable,
+			  client->audio.rtcp), drop);
+		client->audio.rtcp = NULL;
+	}
+
 	/* Close UDP sockets if used */
 	if (client->udp_rtp_fd >= 0)
 		close(client->udp_rtp_fd);
@@ -191,6 +203,15 @@ int rsd_server_init(rsd_server_t *srv)
 		}
 	}
 
+	/* Try to open audio ring (optional — RAD may not be running) */
+	srv->ring_audio = rss_ring_open("audio");
+	if (srv->ring_audio) {
+		srv->has_audio = true;
+		RSS_INFO("audio ring available");
+	} else {
+		RSS_INFO("no audio ring (RAD not running?)");
+	}
+
 	/* Create listen socket */
 	srv->listen_fd = socket(AF_INET, SOCK_STREAM, 0);
 	if (srv->listen_fd < 0) {
@@ -259,9 +280,11 @@ static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf,
 
 void rsd_server_run(rsd_server_t *srv)
 {
-	/* Start ring reader thread */
-	pthread_t reader_tid;
-	pthread_create(&reader_tid, NULL, rsd_ring_reader_thread, srv);
+	/* Start ring reader threads */
+	pthread_t video_tid, audio_tid;
+	pthread_create(&video_tid, NULL, rsd_ring_reader_thread, srv);
+	if (srv->has_audio)
+		pthread_create(&audio_tid, NULL, rsd_audio_reader_thread, srv);
 
 	struct epoll_event events[16];
 	int ctrl_fd = srv->ctrl ? rss_ctrl_get_fd(srv->ctrl) : -1;
@@ -282,7 +305,9 @@ void rsd_server_run(rsd_server_t *srv)
 		}
 	}
 
-	pthread_join(reader_tid, NULL);
+	pthread_join(video_tid, NULL);
+	if (srv->has_audio)
+		pthread_join(audio_tid, NULL);
 }
 
 void rsd_server_deinit(rsd_server_t *srv)
@@ -296,6 +321,8 @@ void rsd_server_deinit(rsd_server_t *srv)
 
 	if (srv->ring_main)
 		rss_ring_close(srv->ring_main);
+	if (srv->ring_audio)
+		rss_ring_close(srv->ring_audio);
 
 	free(srv->frame_buf);
 	srv->frame_buf = NULL;

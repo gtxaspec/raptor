@@ -1,4 +1,4 @@
-SRCS := rad_main.c rad_audio_loop.c
+SRCS := rad_main.c
 OBJS := $(SRCS:.c=.o)
 BIN  := rad
 

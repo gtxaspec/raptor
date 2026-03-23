@@ -136,3 +136,76 @@ void *rsd_ring_reader_thread(void *arg)
 	RSS_INFO("ring reader thread exiting");
 	return NULL;
 }
+
+/* ── Audio ring reader thread ── */
+
+static void rsd_send_audio_frame(rsd_client_t *c, const uint8_t *data,
+				 uint32_t len, int64_t timestamp)
+{
+	if (!c->audio.rtp || !c->audio.playing) return;
+
+	/* Convert timestamp from microseconds to RTP clock (8kHz for PCMU) */
+	uint32_t rtp_ts = (uint32_t)((timestamp * RSD_AUDIO_CLOCK) / 1000000LL);
+
+	(void)!Compy_RtpTransport_send_packet(
+		c->audio.rtp,
+		Compy_RtpTimestamp_Raw(rtp_ts),
+		false,                        /* no marker */
+		U8Slice99_empty(),            /* no payload header */
+		U8Slice99_new((uint8_t *)data, len));
+
+	/* Periodic RTCP SR */
+	int64_t now = rss_timestamp_us();
+	if (c->audio.rtcp && now - c->audio.last_rtcp > 5000000) {
+		(void)!Compy_Rtcp_send_sr(c->audio.rtcp);
+		c->audio.last_rtcp = now;
+	}
+}
+
+void *rsd_audio_reader_thread(void *arg)
+{
+	rsd_server_t *srv = arg;
+
+	RSS_INFO("audio reader thread started");
+
+	/* Small buffer for audio frames (PCMU, ~160 bytes per 20ms) */
+	uint8_t audio_buf[4096];
+
+	while (*srv->running) {
+		int ret = rss_ring_wait(srv->ring_audio, 100);
+		if (ret != 0) continue;
+
+		const uint8_t *data;
+		uint32_t length;
+		rss_ring_slot_t meta;
+		uint64_t read_seq = srv->audio_read_seq;
+
+		ret = rss_ring_read(srv->ring_audio, &read_seq, &data,
+				    &length, &meta);
+		if (ret == RSS_EOVERFLOW) {
+			srv->audio_read_seq = read_seq;
+			continue;
+		}
+		if (ret != 0) continue;
+
+		srv->audio_read_seq = read_seq;
+
+		/* Copy audio data */
+		if (length > sizeof(audio_buf)) continue;
+		memcpy(audio_buf, data, length);
+
+		/* Distribute to all playing clients */
+		pthread_mutex_lock(&srv->clients_lock);
+		for (int i = 0; i < srv->client_count; i++) {
+			rsd_client_t *c = srv->clients[i];
+			if (!c || !c->audio.playing) continue;
+
+			rsd_send_audio_frame(c, audio_buf, length,
+					     meta.timestamp);
+		}
+		pthread_mutex_unlock(&srv->clients_lock);
+	}
+
+	RSS_INFO("audio reader thread exiting");
+	return NULL;
+}
