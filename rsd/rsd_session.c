@@ -65,14 +65,38 @@ rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request *req)
 		(COMPY_SDP_ORIGIN, "Raptor 1 1 IN IP4 0.0.0.0"),
 		(COMPY_SDP_SESSION_NAME, "Raptor Live"),
 		(COMPY_SDP_CONNECTION, "IN IP4 0.0.0.0"),
-		(COMPY_SDP_TIME, "0 0"));
+		(COMPY_SDP_TIME, "0 0"),
+		(COMPY_SDP_ATTR, "tool:Raptor RSS"),
+		(COMPY_SDP_ATTR, "range:npt=now-"));
+
+	/*
+	 * Determine H.264 profile-level-id from resolution:
+	 *   Baseline: 42 00 xx
+	 *   High:     64 00 xx
+	 * Level: 1080p+ = 40 (4.0), 720p = 1f (3.1), 360p = 1e (3.0)
+	 */
+	int profile_idc = 0x64;  /* High by default */
+	int level_idc;
+	if (hdr->width <= 640)
+		level_idc = 0x1e;      /* 3.0 for 360p */
+	else if (hdr->width <= 1280)
+		level_idc = 0x1f;      /* 3.1 for 720p */
+	else if (hdr->width <= 1920)
+		level_idc = 0x28;      /* 4.0 for 1080p */
+	else
+		level_idc = 0x33;      /* 5.1 for 1440p/4K */
+
+	/* Check if baseline from stream dimensions (sub stream) */
+	if (hdr->width <= 640)
+		profile_idc = 0x42;    /* Baseline for sub */
 
 	COMPY_SDP_DESCRIBE(ret, sdp_w,
 		(COMPY_SDP_MEDIA, "video 0 RTP/AVP %d", RSD_VIDEO_PT),
 		(COMPY_SDP_ATTR, "control:video"),
 		(COMPY_SDP_ATTR, "recvonly"),
 		(COMPY_SDP_ATTR, "rtpmap:%d H264/%d", RSD_VIDEO_PT, RSD_VIDEO_CLOCK),
-		(COMPY_SDP_ATTR, "fmtp:%d packetization-mode=1", RSD_VIDEO_PT),
+		(COMPY_SDP_ATTR, "fmtp:%d packetization-mode=1;profile-level-id=%02X00%02X",
+			RSD_VIDEO_PT, profile_idc, level_idc),
 		(COMPY_SDP_ATTR, "framerate:%u", hdr->fps_num));
 
 	if (g_srv->has_audio) {

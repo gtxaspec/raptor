@@ -178,6 +178,9 @@ void *rsd_audio_reader_thread(void *arg)
 	uint8_t audio_buf[4096];
 	int64_t audio_base_ts = 0;
 	bool audio_base_set = false;
+	uint32_t last_audio_rtp_ts = 0;
+	/* Samples per frame for monotonic increment fallback */
+	uint32_t samples_per_frame = audio_clock / 50;  /* 20ms */
 
 	while (*srv->running) {
 		int ret = rss_ring_wait(srv->ring_audio, 100);
@@ -210,6 +213,11 @@ void *rsd_audio_reader_thread(void *arg)
 			int64_t rel_us = meta.timestamp - audio_base_ts;
 			if (rel_us < 0) rel_us = 0;
 			uint32_t rtp_ts = (uint32_t)((rel_us * (int64_t)audio_clock) / 1000000LL);
+
+			/* Ensure strictly monotonic — SDK can give duplicate timestamps */
+			if (audio_base_set && rtp_ts <= last_audio_rtp_ts)
+				rtp_ts = last_audio_rtp_ts + samples_per_frame;
+			last_audio_rtp_ts = rtp_ts;
 
 			pthread_mutex_lock(&srv->clients_lock);
 			for (int i = 0; i < srv->client_count; i++) {
