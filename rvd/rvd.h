@@ -10,7 +10,6 @@
 #include <rss_common.h>
 
 #define RVD_MAX_STREAMS      2
-#define RVD_SCRATCH_MIN      (256 * 1024)   /* 256KB floor */
 
 typedef struct {
 	rss_video_config_t  enc_cfg;
@@ -18,10 +17,6 @@ typedef struct {
 	rss_ring_t         *ring;
 	int                 chn;          /* encoder channel index */
 	bool                enabled;
-
-	/* Per-stream scratch buffer for NAL concatenation (thread-local) */
-	uint8_t             *scratch;
-	uint32_t             scratch_size;
 } rvd_stream_t;
 
 typedef struct {

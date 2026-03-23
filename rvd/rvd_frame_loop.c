@@ -16,31 +16,6 @@
 #include "rvd.h"
 
 /*
- * Concatenate all NAL units from a frame into the scratch buffer.
- *
- * The HAL returns NAL data that already includes Annex B start codes
- * (00 00 00 01), so we simply concatenate the packs as-is.
- *
- * Returns total length, or 0 on overflow.
- */
-static uint32_t linearize_frame(const rss_frame_t *frame,
-				uint8_t *buf, uint32_t buf_size)
-{
-	uint32_t off = 0;
-
-	for (uint32_t i = 0; i < frame->nal_count; i++) {
-		uint32_t needed = frame->nals[i].length;
-		if (off + needed > buf_size)
-			return 0;  /* overflow */
-
-		memcpy(buf + off, frame->nals[i].data, frame->nals[i].length);
-		off += frame->nals[i].length;
-	}
-
-	return off;
-}
-
-/*
  * Determine the primary NAL type for ring metadata.
  */
 static uint16_t primary_nal_type(const rss_frame_t *frame)
@@ -90,21 +65,19 @@ static void *encoder_thread(void *arg)
 		if (ret != RSS_OK)
 			continue;
 
-		/* Linearize NALs into per-stream scratch buffer */
-		uint32_t len = linearize_frame(&frame, s->scratch,
-					       s->scratch_size);
-		if (len == 0) {
-			RSS_WARN("stream%d: frame too large for scratch", idx);
-			goto release;
+		/* Publish NALs directly to ring via scatter-gather */
+		rss_iov_t iov[16];
+		uint32_t cnt = frame.nal_count;
+		if (cnt > 16) cnt = 16;
+		for (uint32_t n = 0; n < cnt; n++) {
+			iov[n].data   = frame.nals[n].data;
+			iov[n].length = frame.nals[n].length;
 		}
+		rss_ring_publish_iov(s->ring, iov, cnt,
+				     frame.timestamp,
+				     primary_nal_type(&frame),
+				     frame.is_key ? 1 : 0);
 
-		/* Publish to ring — immediately release the SDK buffer */
-		rss_ring_publish(s->ring, s->scratch, len,
-				 frame.timestamp,
-				 primary_nal_type(&frame),
-				 frame.is_key ? 1 : 0);
-
-release:
 		RSS_HAL_CALL(st->ops, enc_release_frame, st->hal_ctx,
 			     s->chn, &frame);
 
@@ -327,24 +300,6 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running)
 {
 	st->running = running;
 
-	/* Allocate per-stream scratch buffers sized to bitrate.
-	 * Worst case: one keyframe at 4x average frame size. */
-	for (int i = 0; i < st->stream_count; i++) {
-		uint32_t br = st->streams[i].enc_cfg.bitrate;
-		uint32_t fps = st->streams[i].enc_cfg.fps_num;
-		if (fps == 0) fps = 25;
-		uint32_t sz = (br / fps) * 4 / 8;  /* 4x avg frame, bits→bytes */
-		if (sz < RVD_SCRATCH_MIN) sz = RVD_SCRATCH_MIN;
-		st->streams[i].scratch_size = sz;
-		st->streams[i].scratch = malloc(sz);
-		if (!st->streams[i].scratch) {
-			RSS_FATAL("failed to allocate scratch for stream %d", i);
-			return;
-		}
-		RSS_DEBUG("stream%d scratch: %u KB (bitrate=%u fps=%u)",
-			  i, sz / 1024, br, fps);
-	}
-
 	/* Start per-channel encoder threads */
 	pthread_t enc_tids[RVD_MAX_STREAMS];
 	enc_thread_arg_t enc_args[RVD_MAX_STREAMS];
@@ -398,10 +353,4 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running)
 
 	if (epoll_fd >= 0)
 		close(epoll_fd);
-
-	/* Free scratch buffers */
-	for (int i = 0; i < st->stream_count; i++) {
-		free(st->streams[i].scratch);
-		st->streams[i].scratch = NULL;
-	}
 }
