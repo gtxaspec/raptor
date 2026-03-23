@@ -1,14 +1,16 @@
 /*
- * rvd_frame_loop.c -- Encoder polling and ring buffer publishing
+ * rvd_frame_loop.c -- Per-channel encoder threads
  *
- * The hot loop: polls the hardware encoder for completed frames,
- * linearizes NAL units with Annex B start codes, and publishes
- * each frame to the SHM ring buffer.
+ * Each encoder channel runs in a dedicated thread, as recommended by
+ * the Ingenic SDK documentation (T31 Bitrate Control API Reference,
+ * Section 10.3b). This prevents one channel's enc_poll from starving
+ * the other and eliminates frame drops on dual-stream setups.
  */
 
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <pthread.h>
 #include <sys/epoll.h>
 
 #include "rvd.h"
@@ -40,8 +42,6 @@ static uint32_t linearize_frame(const rss_frame_t *frame,
 
 /*
  * Determine the primary NAL type for ring metadata.
- * For keyframes this is the IDR NAL; for non-key frames it's the slice.
- * We look past SPS/PPS/VPS/SEI to find the actual picture NAL.
  */
 static uint16_t primary_nal_type(const rss_frame_t *frame)
 {
@@ -52,51 +52,83 @@ static uint16_t primary_nal_type(const rss_frame_t *frame)
 		    t == RSS_NAL_JPEG_FRAME)
 			return (uint16_t)t;
 	}
-	/* Fallback: first NAL type */
 	return frame->nal_count > 0 ? (uint16_t)frame->nals[0].type
 				    : (uint16_t)RSS_NAL_UNKNOWN;
 }
 
-/* Process one encoder channel: poll, get frame, publish to ring */
-static void process_channel(rvd_state_t *st, int idx, uint32_t timeout_ms)
+/* ── Per-channel encoder thread ── */
+
+typedef struct {
+	rvd_state_t *st;
+	int          idx;
+} enc_thread_arg_t;
+
+static void *encoder_thread(void *arg)
 {
+	enc_thread_arg_t *a = arg;
+	rvd_state_t *st = a->st;
+	int idx = a->idx;
 	rvd_stream_t *s = &st->streams[idx];
-	if (!s->enabled || !s->ring) return;
 
-	int ret = RSS_HAL_CALL(st->ops, enc_poll, st->hal_ctx, s->chn, timeout_ms);
-	if (ret != RSS_OK) {
-		RSS_DEBUG("stream%d: enc_poll returned %d", idx, ret);
-		return;
-	}
+	RSS_INFO("encoder thread[%d] started (chn=%d %ux%u)",
+		 idx, s->chn, s->enc_cfg.width, s->enc_cfg.height);
 
-	rss_frame_t frame;
-	ret = RSS_HAL_CALL(st->ops, enc_get_frame, st->hal_ctx, s->chn, &frame);
-	if (ret != RSS_OK) return;
+	uint64_t frame_count = 0;
+	int64_t last_stats = rss_timestamp_us();
 
-	/* Linearize NALs into scratch buffer */
-	uint32_t len = linearize_frame(&frame, st->scratch, RVD_SCRATCH_SIZE);
-	if (len == 0) {
-		RSS_WARN("stream%d: frame too large for scratch buffer", idx);
-		goto release;
-	}
+	while (*st->running) {
+		/* Block until encoder has a frame (up to 1 second timeout).
+		 * Each thread blocks independently so channels don't starve. */
+		int ret = RSS_HAL_CALL(st->ops, enc_poll, st->hal_ctx,
+				       s->chn, 1000);
+		if (ret != RSS_OK)
+			continue;
 
-	/* Publish to ring */
-	rss_ring_publish(s->ring, st->scratch, len,
-			 frame.timestamp,
-			 primary_nal_type(&frame),
-			 frame.is_key ? 1 : 0);
+		rss_frame_t frame;
+		ret = RSS_HAL_CALL(st->ops, enc_get_frame, st->hal_ctx,
+				   s->chn, &frame);
+		if (ret != RSS_OK)
+			continue;
+
+		/* Linearize NALs into per-stream scratch buffer */
+		uint32_t len = linearize_frame(&frame, s->scratch,
+					       RVD_SCRATCH_SIZE);
+		if (len == 0) {
+			RSS_WARN("stream%d: frame too large for scratch", idx);
+			goto release;
+		}
+
+		/* Publish to ring — immediately release the SDK buffer */
+		rss_ring_publish(s->ring, s->scratch, len,
+				 frame.timestamp,
+				 primary_nal_type(&frame),
+				 frame.is_key ? 1 : 0);
 
 release:
-	RSS_HAL_CALL(st->ops, enc_release_frame, st->hal_ctx, s->chn, &frame);
+		RSS_HAL_CALL(st->ops, enc_release_frame, st->hal_ctx,
+			     s->chn, &frame);
+
+		frame_count++;
+
+		int64_t now = rss_timestamp_us();
+		if (now - last_stats >= 30000000) {
+			RSS_INFO("stream%d: %llu frames",
+				 idx, (unsigned long long)frame_count);
+			last_stats = now;
+		}
+	}
+
+	RSS_INFO("encoder thread[%d] exiting", idx);
+	return NULL;
 }
 
-/* Control socket handler */
+/* ── Control socket handler ── */
+
 static int rvd_ctrl_handler(const char *cmd_json, char *resp_buf,
 			    int resp_buf_size, void *userdata)
 {
 	rvd_state_t *st = userdata;
 
-	/* Simple command dispatch -- look for "cmd" field */
 	if (strstr(cmd_json, "\"request-idr\"")) {
 		for (int i = 0; i < st->stream_count; i++)
 			RSS_HAL_CALL(st->ops, enc_request_idr, st->hal_ctx,
@@ -106,14 +138,9 @@ static int rvd_ctrl_handler(const char *cmd_json, char *resp_buf,
 	}
 
 	if (strstr(cmd_json, "\"status\"")) {
-		const rss_ring_header_t *hdr = NULL;
-		if (st->streams[0].ring)
-			hdr = rss_ring_get_header(st->streams[0].ring);
 		snprintf(resp_buf, resp_buf_size,
-			 "{\"status\":\"ok\",\"streams\":%d,\"write_seq\":%llu}",
-			 st->stream_count,
-			 hdr ? (unsigned long long)__atomic_load_n(
-				 &hdr->write_seq, __ATOMIC_RELAXED) : 0ULL);
+			 "{\"status\":\"ok\",\"streams\":%d}",
+			 st->stream_count);
 		return 0;
 	}
 
@@ -122,17 +149,35 @@ static int rvd_ctrl_handler(const char *cmd_json, char *resp_buf,
 	return 0;
 }
 
+/* ── Main frame loop: launches threads, handles control socket ── */
+
 void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running)
 {
-	int epoll_fd = epoll_create1(0);
-	if (epoll_fd < 0) {
-		RSS_FATAL("epoll_create1 failed");
-		return;
+	st->running = running;
+
+	/* Allocate per-stream scratch buffers */
+	for (int i = 0; i < st->stream_count; i++) {
+		st->streams[i].scratch = malloc(RVD_SCRATCH_SIZE);
+		if (!st->streams[i].scratch) {
+			RSS_FATAL("failed to allocate scratch for stream %d", i);
+			return;
+		}
 	}
 
-	/* Add control socket to epoll (if available) */
+	/* Start per-channel encoder threads */
+	pthread_t enc_tids[RVD_MAX_STREAMS];
+	enc_thread_arg_t enc_args[RVD_MAX_STREAMS];
+
+	for (int i = 0; i < st->stream_count; i++) {
+		enc_args[i] = (enc_thread_arg_t){ .st = st, .idx = i };
+		pthread_create(&enc_tids[i], NULL, encoder_thread, &enc_args[i]);
+	}
+
+	/* Main thread: handle control socket + OSD */
+	int epoll_fd = epoll_create1(0);
 	int ctrl_fd = -1;
-	if (st->ctrl) {
+
+	if (st->ctrl && epoll_fd >= 0) {
 		ctrl_fd = rss_ctrl_get_fd(st->ctrl);
 		if (ctrl_fd >= 0) {
 			struct epoll_event ev = {
@@ -143,39 +188,34 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running)
 		}
 	}
 
-	uint64_t frame_count = 0;
-	int64_t last_stats = rss_timestamp_us();
-
 	while (*running) {
-		/* Poll all streams. Use short timeout so we service
-		 * both channels frequently at 25fps (40ms per frame). */
-		for (int i = 0; i < st->stream_count; i++)
-			process_channel(st, i, 20);
-
 		/* Check OSD updates */
 		rvd_osd_check(st);
 
-		/* Check control socket (non-blocking) */
-		if (ctrl_fd >= 0) {
+		/* Check control socket */
+		if (epoll_fd >= 0) {
 			struct epoll_event events[4];
-			int n = epoll_wait(epoll_fd, events, 4, 0);
+			int n = epoll_wait(epoll_fd, events, 4, 100);
 			for (int i = 0; i < n; i++) {
 				if (events[i].data.fd == ctrl_fd)
 					rss_ctrl_accept_and_handle(st->ctrl,
 						rvd_ctrl_handler, st);
 			}
-		}
-
-		frame_count++;
-
-		/* Periodic stats */
-		int64_t now = rss_timestamp_us();
-		if (now - last_stats >= 30000000) {  /* every 30s */
-			RSS_INFO("frames processed: %llu",
-				 (unsigned long long)frame_count);
-			last_stats = now;
+		} else {
+			usleep(100000);
 		}
 	}
 
-	close(epoll_fd);
+	/* Wait for encoder threads */
+	for (int i = 0; i < st->stream_count; i++)
+		pthread_join(enc_tids[i], NULL);
+
+	if (epoll_fd >= 0)
+		close(epoll_fd);
+
+	/* Free scratch buffers */
+	for (int i = 0; i < st->stream_count; i++) {
+		free(st->streams[i].scratch);
+		st->streams[i].scratch = NULL;
+	}
 }
