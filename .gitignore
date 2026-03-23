@@ -1,0 +1,12 @@
+*.o
+*.d
+*.a
+# Binaries
+rvd/rvd
+rsd/rsd
+rad/rad
+rod/rod
+ric/ric
+raptorctl/raptorctl
+ringdump/ringdump
+test_enc
