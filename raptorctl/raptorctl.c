@@ -3,18 +3,27 @@
  *
  * Usage:
  *   raptorctl status                       Check which daemons are running
+ *   raptorctl config save                  Save running config to disk
  *   raptorctl <daemon> <command> [args]    Send command to daemon
  *
  * RVD commands:
  *   raptorctl rvd status                   Show encoder channel stats
+ *   raptorctl rvd config                   Show running config
  *   raptorctl rvd request-idr [channel]    Request keyframe
  *   raptorctl rvd set-bitrate <ch> <bps>   Change bitrate
  *   raptorctl rvd set-gop <ch> <length>    Change GOP length
  *   raptorctl rvd set-fps <ch> <fps>       Change frame rate
  *   raptorctl rvd set-qp-bounds <ch> <min> <max>  Change QP range
  *
+ * RAD commands:
+ *   raptorctl rad status                   Show audio status
+ *   raptorctl rad config                   Show running config
+ *   raptorctl rad set-volume <val>         Change input volume
+ *   raptorctl rad set-gain <val>           Change input gain
+ *
  * RSD commands:
  *   raptorctl rsd status                   Show client count
+ *   raptorctl rsd config                   Show running config
  */
 
 #include <stdio.h>
@@ -33,16 +42,21 @@ static void usage(void)
 		"\n"
 		"Commands:\n"
 		"  status                              Show daemon status\n"
+		"  config save                         Save running config to disk\n"
 		"  <daemon> status                     Show daemon details\n"
+		"  <daemon> config                     Show running config\n"
 		"  <daemon> <cmd> [args...]            Send command\n"
 		"\n"
 		"RVD commands:\n"
-		"  rvd status                          Encoder channel stats\n"
-		"  rvd request-idr [channel]           Request keyframe\n"
 		"  rvd set-bitrate <ch> <bps>          Change bitrate\n"
 		"  rvd set-gop <ch> <length>           Change GOP length\n"
 		"  rvd set-fps <ch> <fps>              Change frame rate\n"
 		"  rvd set-qp-bounds <ch> <min> <max>  Change QP range\n"
+		"  rvd request-idr [channel]           Request keyframe\n"
+		"\n"
+		"RAD commands:\n"
+		"  rad set-volume <val>                Change input volume\n"
+		"  rad set-gain <val>                  Change input gain\n"
 		"\n"
 		"Daemons: rvd, rsd, rad, rod, ric\n");
 }
@@ -102,6 +116,24 @@ int main(int argc, char **argv)
 		return 0;
 	}
 
+	/* raptorctl config save — tell all running daemons to save */
+	if (strcmp(argv[1], "config") == 0) {
+		if (argc < 3 || strcmp(argv[2], "save") != 0) {
+			fprintf(stderr, "Usage: raptorctl config save\n");
+			return 1;
+		}
+		int errors = 0;
+		for (int i = 0; daemons[i]; i++) {
+			if (rss_daemon_check(daemons[i]) <= 0)
+				continue;
+			printf("%s: ", daemons[i]);
+			fflush(stdout);
+			if (send_cmd(daemons[i], "{\"cmd\":\"config-save\"}") != 0)
+				errors++;
+		}
+		return errors > 0 ? 1 : 0;
+	}
+
 	if (!is_daemon(argv[1])) {
 		fprintf(stderr, "Unknown daemon: %s\n", argv[1]);
 		usage();
@@ -119,6 +151,9 @@ int main(int argc, char **argv)
 
 	if (strcmp(cmd, "status") == 0) {
 		snprintf(json, sizeof(json), "{\"cmd\":\"status\"}");
+
+	} else if (strcmp(cmd, "config") == 0) {
+		snprintf(json, sizeof(json), "{\"cmd\":\"config-show\"}");
 
 	} else if (strcmp(cmd, "request-idr") == 0) {
 		if (argc > 3)
@@ -164,6 +199,22 @@ int main(int argc, char **argv)
 		snprintf(json, sizeof(json),
 			 "{\"cmd\":\"set-qp-bounds\",\"channel\":%s,\"min\":%s,\"max\":%s}",
 			 argv[3], argv[4], argv[5]);
+
+	} else if (strcmp(cmd, "set-volume") == 0) {
+		if (argc < 4) {
+			fprintf(stderr, "Usage: raptorctl %s set-volume <value>\n", daemon);
+			return 1;
+		}
+		snprintf(json, sizeof(json),
+			 "{\"cmd\":\"set-volume\",\"value\":%s}", argv[3]);
+
+	} else if (strcmp(cmd, "set-gain") == 0) {
+		if (argc < 4) {
+			fprintf(stderr, "Usage: raptorctl %s set-gain <value>\n", daemon);
+			return 1;
+		}
+		snprintf(json, sizeof(json),
+			 "{\"cmd\":\"set-gain\",\"value\":%s}", argv[3]);
 
 	} else {
 		/* Generic pass-through */
