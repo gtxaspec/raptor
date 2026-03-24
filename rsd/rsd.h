@@ -99,6 +99,9 @@ typedef struct {
 	volatile sig_atomic_t *running;
 
 	int port;
+
+	/* Digest auth (NULL = no auth required) */
+	Compy_Auth *auth;
 } rsd_server_t;
 
 /* rsd_server.c */
