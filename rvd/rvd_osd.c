@@ -280,7 +280,7 @@ void rvd_osd_init(rvd_state_t *st)
 		}
 
 		/* Privacy text region (centered, hidden until privacy mode) */
-		if (create_region(st, s, RVD_OSD_PRIVACY, OSD_TEXT_W, th))
+		if (create_region(st, s, RVD_OSD_PRIVACY, OSD_TIME_W, th))
 			region_count++;
 
 		RSS_INFO("osd stream%d: %d regions created", s, region_count);
@@ -374,10 +374,12 @@ void rvd_osd_check(rvd_state_t *st)
 					/* Exact match — flat copy */
 					memcpy(reg->local_buf, bitmap, w * h * 4);
 				} else {
-					/* SHM smaller than region — row-by-row with padding */
+					/* SHM smaller than region — center horizontally */
+					uint32_t x_off = (reg->width - w) / 2;
 					memset(reg->local_buf, 0, reg->width * reg->height * 4);
 					for (uint32_t row = 0; row < h; row++)
-						memcpy(reg->local_buf + row * reg->width * 4,
+						memcpy(reg->local_buf +
+							       (row * reg->width + x_off) * 4,
 						       bitmap + row * w * 4, w * 4);
 				}
 				RSS_HAL_CALL(st->ops, osd_update_region_data, st->hal_ctx,
