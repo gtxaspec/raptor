@@ -26,6 +26,11 @@
  * RSD commands:
  *   raptorctl rsd status                   Show client count
  *   raptorctl rsd config                   Show running config
+ *
+ * ROD commands:
+ *   raptorctl rod status                   Show OSD region status
+ *   raptorctl rod config                   Show running config
+ *   raptorctl rod set-text <text>          Change OSD text string
  */
 
 #include <stdio.h>
@@ -60,6 +65,9 @@ static void usage(void)
 			"RAD commands:\n"
 			"  rad set-volume <val>                Change input volume\n"
 			"  rad set-gain <val>                  Change input gain\n"
+			"\n"
+			"ROD commands:\n"
+			"  rod set-text <text>                 Change OSD text string\n"
 			"\n"
 			"Daemons: rvd, rsd, rad, rod, ric\n");
 }
@@ -300,6 +308,13 @@ int main(int argc, char **argv)
 			return 1;
 		}
 		snprintf(json, sizeof(json), "{\"cmd\":\"set-gain\",\"value\":%s}", argv[3]);
+
+	} else if (strcmp(cmd, "set-text") == 0) {
+		if (argc < 4) {
+			fprintf(stderr, "Usage: raptorctl %s set-text <text>\n", daemon);
+			return 1;
+		}
+		snprintf(json, sizeof(json), "{\"cmd\":\"set-text\",\"value\":\"%s\"}", argv[3]);
 
 	} else {
 		/* Generic pass-through */
