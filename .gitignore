@@ -6,8 +6,10 @@ rvd/rvd
 rsd/rsd
 rad/rad
 rod/rod
+rhd/rhd
 ric/ric
+rmr/rmr
 raptorctl/raptorctl
 ringdump/ringdump
 test_enc
-rmr/rmr
+asan-out/

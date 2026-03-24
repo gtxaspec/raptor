@@ -348,9 +348,9 @@ static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			if (v)
 				snprintf(resp_buf, resp_buf_size, "%s", v);
 			else
-				snprintf(resp_buf, resp_buf_size, "");
+				resp_buf[0] = '\0';
 		} else {
-			snprintf(resp_buf, resp_buf_size, "");
+			resp_buf[0] = '\0';
 		}
 		return (int)strlen(resp_buf);
 	}
