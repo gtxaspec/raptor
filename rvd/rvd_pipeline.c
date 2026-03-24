@@ -225,7 +225,15 @@ int rvd_pipeline_init(rvd_state_t *st)
 		int jpeg_fps = rss_config_get_int(cfg, "jpeg", "fps", 1);
 		int video_count = st->stream_count; /* only video streams */
 
+		/* Per-stream JPEG enable: jpeg0_enabled, jpeg1_enabled (default true) */
 		for (int v = 0; v < video_count && v < RVD_MAX_JPEG; v++) {
+			char key[20];
+			snprintf(key, sizeof(key), "jpeg%d_enabled", v);
+			if (!rss_config_get_bool(cfg, "jpeg", key, true)) {
+				RSS_INFO("jpeg%d: disabled by config", v);
+				continue;
+			}
+
 			int ji = st->stream_count;
 			int jpeg_chn = 4 + v; /* SDK: JPEG at chn 4+ */
 
@@ -242,12 +250,12 @@ int rvd_pipeline_init(rvd_state_t *st)
 			st->streams[ji].is_jpeg = true;
 			st->jpeg_streams[v] = ji;
 			st->stream_count = ji + 1;
+			st->jpeg_count++;
 
 			RSS_INFO("jpeg%d: %ux%u @ %d fps, quality %d (enc chn %d)", v,
 				 st->streams[ji].enc_cfg.width, st->streams[ji].enc_cfg.height,
 				 jpeg_fps, st->jpeg_quality, jpeg_chn);
 		}
-		st->jpeg_count = video_count < RVD_MAX_JPEG ? video_count : RVD_MAX_JPEG;
 	}
 
 	/* H.265 fallback on SoCs without support */
