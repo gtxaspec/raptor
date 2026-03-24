@@ -231,8 +231,6 @@ int rvd_pipeline_init(rvd_state_t *st)
 			st->jpeg_streams[v] = ji;
 			st->stream_count = ji + 1;
 
-			snprintf(st->jpeg_paths[v], sizeof(st->jpeg_paths[v]),
-				 "/tmp/snapshot-%d.jpg", v);
 			RSS_INFO("jpeg%d: %ux%u @ %d fps, quality %d (enc chn %d)", v,
 				 st->streams[ji].enc_cfg.width, st->streams[ji].enc_cfg.height,
 				 jpeg_fps, st->jpeg_quality, jpeg_chn);
