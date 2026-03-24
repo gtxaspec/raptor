@@ -104,8 +104,6 @@ void *rsd_video_reader_thread(void *arg)
 	uint32_t video_rtp_ts = 0;
 
 	RSS_INFO("video reader[%d] started (ts_inc=%u)", stream_idx, video_ts_inc);
-	uint64_t reader_frames = 0;
-
 	while (*srv->running) {
 		int ret = rss_ring_wait(rctx->ring, 100);
 		if (ret != 0)
@@ -119,19 +117,12 @@ void *rsd_video_reader_thread(void *arg)
 		ret = rss_ring_read(rctx->ring, &read_seq, &data, &length, &meta);
 		if (ret == RSS_EOVERFLOW) {
 			rctx->read_seq = read_seq;
-			RSS_WARN("reader[%d] overflow -> seq %llu", stream_idx,
-				 (unsigned long long)read_seq);
 			continue;
 		}
 		if (ret != 0)
 			continue;
 
 		rctx->read_seq = read_seq;
-		if (reader_frames < 5 || meta.is_key)
-			RSS_INFO("reader[%d] seq=%llu len=%u key=%d clients=%d", stream_idx,
-				 (unsigned long long)read_seq, length, meta.is_key,
-				 srv->client_count);
-		reader_frames++;
 
 		if (length > rctx->frame_buf_size || !rctx->frame_buf)
 			continue;

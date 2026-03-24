@@ -134,15 +134,8 @@ static bool create_region(rvd_state_t *st, int s, int r, uint32_t w, uint32_t h)
 				memcpy(reg->local_buf + row * w * 4, fd + row * lw * 4, lw * 4);
 			RSS_INFO("logo %s (%dx%d) loaded into %ux%u region", lp, lw, lh, w, h);
 		} else {
-			/* Test: fill with solid white rectangle */
-			RSS_WARN("logo %s load failed, using solid test (size=%d expected=%d)", lp,
-				 fsz, lw * lh * 4);
-			for (uint32_t i = 0; i < buf_size; i += 4) {
-				reg->local_buf[i + 0] = 0xFF; /* B */
-				reg->local_buf[i + 1] = 0xFF; /* G */
-				reg->local_buf[i + 2] = 0xFF; /* R */
-				reg->local_buf[i + 3] = 0x80; /* A = 50% */
-			}
+			RSS_WARN("logo load failed: %s (got %d bytes, expected %d)", lp, fsz,
+				 lw * lh * 4);
 		}
 		free(fd);
 	}
