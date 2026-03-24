@@ -109,12 +109,15 @@ void *rsd_video_reader_thread(void *arg)
 		if (ret != 0)
 			continue;
 
-		const uint8_t *data;
 		uint32_t length;
 		rss_ring_slot_t meta;
 		uint64_t read_seq = rctx->read_seq;
 
-		ret = rss_ring_read(rctx->ring, &read_seq, &data, &length, &meta);
+		if (!rctx->frame_buf)
+			continue;
+
+		ret = rss_ring_read(rctx->ring, &read_seq, rctx->frame_buf, rctx->frame_buf_size,
+				    &length, &meta);
 		if (ret == RSS_EOVERFLOW) {
 			rctx->read_seq = read_seq;
 			continue;
@@ -123,10 +126,6 @@ void *rsd_video_reader_thread(void *arg)
 			continue;
 
 		rctx->read_seq = read_seq;
-
-		if (length > rctx->frame_buf_size || !rctx->frame_buf)
-			continue;
-		memcpy(rctx->frame_buf, data, length);
 
 		/* Counter-based RTP timestamp for perfect monotonicity */
 		uint32_t rtp_ts = video_rtp_ts;
@@ -209,12 +208,12 @@ void *rsd_audio_reader_thread(void *arg)
 			continue;
 
 		for (int burst = 0; burst < 16; burst++) {
-			const uint8_t *data;
 			uint32_t length;
 			rss_ring_slot_t meta;
 			uint64_t read_seq = srv->audio_read_seq;
 
-			ret = rss_ring_read(srv->ring_audio, &read_seq, &data, &length, &meta);
+			ret = rss_ring_read(srv->ring_audio, &read_seq, audio_buf,
+					    sizeof(audio_buf), &length, &meta);
 			if (ret == RSS_EOVERFLOW) {
 				srv->audio_read_seq = read_seq;
 				break;
@@ -223,10 +222,6 @@ void *rsd_audio_reader_thread(void *arg)
 				break;
 
 			srv->audio_read_seq = read_seq;
-
-			if (length > sizeof(audio_buf))
-				continue;
-			memcpy(audio_buf, data, length);
 
 			uint32_t rtp_ts = audio_rtp_ts;
 			audio_rtp_ts += samples_per_frame;

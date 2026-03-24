@@ -303,13 +303,11 @@ static void server_run(rhd_server_t *srv)
 			}
 
 		if (has_mjpeg_clients && srv->jpeg_rings[0] && frame_buf) {
-			const uint8_t *data;
 			uint32_t len;
 			rss_ring_slot_t meta;
-			int ret = rss_ring_read(srv->jpeg_rings[0], &jpeg_read_seqs[0], &data, &len,
-						&meta);
-			if (ret == 0 && len <= frame_buf_size) {
-				memcpy(frame_buf, data, len);
+			int ret = rss_ring_read(srv->jpeg_rings[0], &jpeg_read_seqs[0], frame_buf,
+						frame_buf_size, &len, &meta);
+			if (ret == 0) {
 				stream_mjpeg_frame(srv, frame_buf, len);
 			} else if (ret == RSS_EOVERFLOW) {
 				/* skip to latest */
