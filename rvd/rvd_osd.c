@@ -9,7 +9,9 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "rvd.h"
 
@@ -83,6 +85,17 @@ static bool try_open_region(rvd_state_t *st, int s, int r)
 	reg->width = w;
 	reg->height = h;
 
+	/* Allocate local buffer — IMP SDK DMA requires non-SHM memory.
+	 * We copy from SHM to this buffer before each HAL update. */
+	uint32_t buf_size = w * h * 4;
+	reg->local_buf = malloc(buf_size);
+	if (!reg->local_buf) {
+		rss_osd_close(reg->shm);
+		reg->shm = NULL;
+		return false;
+	}
+	memcpy(reg->local_buf, bitmap, buf_size);
+
 	/* Calculate screen position */
 	int stream_w = st->streams[s].enc_cfg.width;
 	int stream_h = st->streams[s].enc_cfg.height;
@@ -96,7 +109,7 @@ static bool try_open_region(rvd_state_t *st, int s, int r)
 		.y = y,
 		.width = (int)w,
 		.height = (int)h,
-		.bitmap_data = bitmap,
+		.bitmap_data = reg->local_buf,
 		.bitmap_fmt = RSS_PIXFMT_BGRA,
 		.global_alpha_en = true,
 		.fg_alpha = 255,
@@ -119,9 +132,11 @@ static bool try_open_region(rvd_state_t *st, int s, int r)
 		return false;
 	}
 
-	ret = RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, handle, grp, 1);
-	if (ret != RSS_OK)
-		RSS_WARN("osd_show_region(%s) failed: %d (non-fatal)", name, ret);
+	/* Skip osd_show_region — it calls IMP_OSD_Start which crashes the
+	 * encoder when called after the pipeline is running. OSD groups are
+	 * already started in pipeline init. Regions appear with default
+	 * group attributes (show=0 by default, but SetRgnAttr has the data). */
+	(void)grp;
 
 	reg->hal_handle = handle;
 	reg->active = true;
@@ -155,12 +170,14 @@ void rvd_osd_init(rvd_state_t *st)
 		}
 	}
 
-	/* Start OSD groups */
+	/* Start OSD groups (idempotent — safe to call again on lazy retry) */
 	for (int s = 0; s < st->stream_count; s++) {
 		if (st->streams[s].is_jpeg)
 			continue;
 		int grp = st->streams[s].chn;
-		RSS_HAL_CALL(st->ops, osd_start, st->hal_ctx, grp);
+		int ret = RSS_HAL_CALL(st->ops, osd_start, st->hal_ctx, grp);
+		if (ret != RSS_OK)
+			RSS_WARN("osd_start(%d) failed: %d", grp, ret);
 	}
 
 	st->osd_retry_counter = 0;
@@ -203,11 +220,29 @@ void rvd_osd_check(rvd_state_t *st)
 			if (!bitmap)
 				continue;
 
+			/* Copy SHM bitmap to local buffer, then update HAL.
+			 * IMP SDK DMA reads from picData.pData — must not point
+			 * into SHM mmap (causes DMA/cache coherency issues). */
+			memcpy(reg->local_buf, bitmap, reg->width * reg->height * 4);
 			RSS_HAL_CALL(st->ops, osd_update_region_data, st->hal_ctx, reg->hal_handle,
-				     bitmap);
+				     reg->local_buf);
 			rss_osd_clear_dirty(reg->shm);
 		}
 	}
+}
+
+void *rvd_osd_thread(void *arg)
+{
+	rvd_state_t *st = arg;
+	RSS_INFO("osd update thread started");
+
+	while (*st->running) {
+		rvd_osd_check(st);
+		usleep(100000); /* 10 Hz */
+	}
+
+	RSS_INFO("osd update thread exiting");
+	return NULL;
 }
 
 void rvd_osd_deinit(rvd_state_t *st)
@@ -235,6 +270,8 @@ void rvd_osd_deinit(rvd_state_t *st)
 				rss_osd_close(reg->shm);
 				reg->shm = NULL;
 			}
+			free(reg->local_buf);
+			reg->local_buf = NULL;
 			reg->active = false;
 			reg->hal_handle = -1;
 		}

@@ -298,7 +298,10 @@ int rvd_pipeline_init(rvd_state_t *st)
 				st->osd_enabled = false;
 				break;
 			}
-			RSS_DEBUG("osd group %d created", grp);
+			/* Start OSD group immediately after creation.
+			 * Must be running before FS enable for frames to flow. */
+			RSS_HAL_CALL(st->ops, osd_start, st->hal_ctx, grp);
+			RSS_DEBUG("osd group %d created + started", grp);
 		}
 	}
 
@@ -380,11 +383,13 @@ int rvd_pipeline_init(rvd_state_t *st)
 				RSS_FATAL("bind FS(%d)->OSD(%d) failed: %d", chn, chn, ret);
 				return ret;
 			}
+			RSS_INFO("bind FS(%d)->OSD(%d) ok", chn, chn);
 			ret = RSS_HAL_CALL(st->ops, bind, st->hal_ctx, &osd_out, &enc_in);
 			if (ret != RSS_OK) {
 				RSS_FATAL("bind OSD(%d)->ENC(%d) failed: %d", chn, chn, ret);
 				return ret;
 			}
+			RSS_INFO("bind OSD(%d)->ENC(%d) ok", chn, chn);
 		} else {
 			/* Direct: FS → ENC */
 			rss_cell_t fs_out = {RSS_DEV_FS, chn, 0};
@@ -398,7 +403,8 @@ int rvd_pipeline_init(rvd_state_t *st)
 		}
 	}
 
-	/* ── 9. Enable framesource, start OSD, start encoder ── */
+	/* ── 9. Start OSD groups, enable framesource, start encoder ── */
+
 	for (int i = 0; i < st->stream_count; i++) {
 		int chn = st->streams[i].chn;
 

@@ -35,6 +35,7 @@ typedef struct {
 	int hal_handle; /* -1 if not created */
 	uint32_t width;
 	uint32_t height;
+	uint8_t *local_buf; /* local copy for HAL (IMP DMA needs non-SHM memory) */
 	bool active;
 } rvd_osd_region_t;
 
@@ -79,5 +80,6 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running);
 void rvd_osd_init(rvd_state_t *st);
 void rvd_osd_check(rvd_state_t *st);
 void rvd_osd_deinit(rvd_state_t *st);
+void *rvd_osd_thread(void *arg);
 
 #endif /* RVD_H */

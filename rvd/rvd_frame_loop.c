@@ -72,8 +72,12 @@ static void *encoder_thread(void *arg)
 			iov[n].length = frame.nals[n].length;
 			total_len += frame.nals[n].length;
 		}
-		rss_ring_publish_iov(s->ring, iov, cnt, frame.timestamp, primary_nal_type(&frame),
-				     frame.is_key ? 1 : 0);
+		uint16_t pnt = primary_nal_type(&frame);
+		if (frame_count < 3 || frame.is_key)
+			RSS_DEBUG("stream%d: frame %llu nals=%u key=%d nal_type=%u len=%u", idx,
+				  (unsigned long long)frame_count, cnt, frame.is_key, pnt,
+				  total_len);
+		rss_ring_publish_iov(s->ring, iov, cnt, frame.timestamp, pnt, frame.is_key ? 1 : 0);
 
 		/* JPEG: also write snapshot file atomically */
 		if (s->is_jpeg && cnt > 0) {
@@ -339,7 +343,20 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running)
 	}
 	pthread_attr_destroy(&attr);
 
-	/* Main thread: handle control socket + OSD */
+	/* OSD update thread — runs HAL OSD calls in isolation to avoid
+	 * interfering with the encoder/ring path. IMP_OSD_UpdateRgnAttrData
+	 * shares internal SDK state with the encoder and can block the
+	 * futex wake that ring consumers depend on. */
+	pthread_t osd_tid = 0;
+	if (st->osd_enabled) {
+		pthread_attr_t osd_attr;
+		pthread_attr_init(&osd_attr);
+		pthread_attr_setstacksize(&osd_attr, 128 * 1024);
+		pthread_create(&osd_tid, &osd_attr, rvd_osd_thread, st);
+		pthread_attr_destroy(&osd_attr);
+	}
+
+	/* Main thread: handle control socket */
 	int epoll_fd = epoll_create1(0);
 	int ctrl_fd = -1;
 
@@ -352,9 +369,6 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running)
 	}
 
 	while (*running) {
-		/* Check OSD updates */
-		rvd_osd_check(st);
-
 		/* Check control socket */
 		if (epoll_fd >= 0) {
 			struct epoll_event events[4];
@@ -371,6 +385,9 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running)
 	/* Wait for encoder threads */
 	for (int i = 0; i < st->stream_count; i++)
 		pthread_join(enc_tids[i], NULL);
+
+	if (osd_tid)
+		pthread_join(osd_tid, NULL);
 
 	if (epoll_fd >= 0)
 		close(epoll_fd);
