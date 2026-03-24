@@ -152,9 +152,9 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			if (v)
 				snprintf(resp_buf, resp_buf_size, "%s", v);
 			else
-				snprintf(resp_buf, resp_buf_size, "");
+				resp_buf[0] = '\0';
 		} else {
-			snprintf(resp_buf, resp_buf_size, "");
+			resp_buf[0] = '\0';
 		}
 		CTRL_RESP(resp_buf);
 	}
@@ -466,10 +466,6 @@ int main(int argc, char **argv)
 		else
 			RSS_WARN("agc failed: %d", ret);
 	}
-#else
-	bool ns_enabled = false;
-	bool hpf_enabled = false;
-	bool agc_enabled = false;
 #endif
 
 	/* Ring buffer — L16 frames are larger (2 bytes/sample vs 1) */

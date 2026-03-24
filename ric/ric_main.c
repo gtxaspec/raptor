@@ -280,7 +280,6 @@ int main(int argc, char **argv)
 	if (st.ctrl)
 		rss_ctrl_destroy(st.ctrl);
 
-cleanup:
 	rss_config_free(cfg);
 	if (!foreground)
 		rss_daemon_cleanup("ric");
