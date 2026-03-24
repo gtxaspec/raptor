@@ -21,8 +21,7 @@ static const char *region_names[] = {"time", "uptime", "text", "logo"};
 #define OSD_MARGIN 10
 
 /* Region sizes must be >= ROD's rendered bitmap dimensions.
- * Over-allocating is fine — transparent padding is invisible.
- * These cover font_size up to 32 with 40 chars max. */
+ * Over-allocating is fine — transparent padding is invisible. */
 #define OSD_TEXT_W 1024
 #define OSD_TEXT_H 48
 #define OSD_LOGO_W 210
@@ -86,13 +85,16 @@ static bool create_region(rvd_state_t *st, int s, int r, uint32_t w, uint32_t h)
 	int x, y;
 	calc_position(stream_w, stream_h, (int)w, (int)h, r, &x, &y);
 
+	/* Per vendor SDK sample: pData = NULL at init, show = 0.
+	 * Actual data set at runtime via UpdateRgnAttrData.
+	 * ShowRgn called from update thread after first bitmap ready. */
 	rss_osd_region_t attr = {
 		.type = RSS_OSD_PIC,
 		.x = x,
 		.y = y,
 		.width = (int)w,
 		.height = (int)h,
-		.bitmap_data = reg->local_buf,
+		.bitmap_data = NULL,
 		.bitmap_fmt = RSS_PIXFMT_BGRA,
 		.global_alpha_en = true,
 		.fg_alpha = 255,
@@ -119,10 +121,9 @@ static bool create_region(rvd_state_t *st, int s, int r, uint32_t w, uint32_t h)
 		return false;
 	}
 
-	/* Set group-level region attributes (alpha, layer, visibility) */
-	ret = RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, handle, grp, 1);
-	if (ret != RSS_OK)
-		RSS_WARN("osd_show_region(s%d/%s) failed: %d (non-fatal)", s, region_names[r], ret);
+	/* Init with show=0 (hidden). ShowRgn(1) called from update thread
+	 * after first bitmap is ready, matching vendor SDK sample. */
+	RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, handle, grp, 0);
 
 	reg->hal_handle = handle;
 	reg->active = true;
@@ -256,22 +257,13 @@ void rvd_osd_check(rvd_state_t *st)
 			if (!bitmap)
 				continue;
 
-			/* Use SetRgnAttr instead of UpdateRgnAttrData — the
-			 * latter causes encoder deadlock on T31 SDK. */
 			if (w <= reg->width && h <= reg->height) {
 				memset(reg->local_buf, 0, reg->width * reg->height * 4);
 				for (uint32_t row = 0; row < h; row++)
 					memcpy(reg->local_buf + row * reg->width * 4,
 					       bitmap + row * w * 4, w * 4);
-				rss_osd_region_t attr = {
-					.type = RSS_OSD_PIC,
-					.width = (int)reg->width,
-					.height = (int)reg->height,
-					.bitmap_data = reg->local_buf,
-					.bitmap_fmt = RSS_PIXFMT_BGRA,
-				};
-				RSS_HAL_CALL(st->ops, osd_set_region_attr, st->hal_ctx,
-					     reg->hal_handle, &attr);
+				RSS_HAL_CALL(st->ops, osd_update_region_data, st->hal_ctx,
+					     reg->hal_handle, reg->local_buf);
 			}
 			rss_osd_clear_dirty(reg->shm);
 		}
@@ -285,6 +277,21 @@ void *rvd_osd_thread(void *arg)
 
 	/* Wait for pipeline to be fully initialized before polling */
 	sleep(2);
+
+	/* Show all regions first (vendor pattern: ShowRgn before UpdateRgnAttrData) */
+	for (int s = 0; s < st->stream_count; s++) {
+		if (st->streams[s].is_jpeg)
+			continue;
+		int grp = st->streams[s].chn;
+		for (int r = 0; r < RVD_OSD_REGIONS; r++) {
+			rvd_osd_region_t *reg = &st->osd_regions[s][r];
+			if (!reg->active)
+				continue;
+			RSS_HAL_CALL(st->ops, osd_show, st->hal_ctx, reg->hal_handle, grp, true);
+			reg->shown = true;
+		}
+	}
+	RSS_INFO("osd regions shown");
 
 	while (*st->running) {
 		rvd_osd_check(st);

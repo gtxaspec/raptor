@@ -37,6 +37,7 @@ typedef struct {
 	uint32_t height;
 	uint8_t *local_buf; /* local copy for HAL (IMP DMA needs non-SHM memory) */
 	bool active;
+	bool shown; /* true after first ShowRgn(1) from update thread */
 } rvd_osd_region_t;
 
 typedef struct {
