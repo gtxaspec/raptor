@@ -15,7 +15,9 @@
 #define ROD_MAX_STREAMS	     2
 #define ROD_MAX_REGIONS	     4
 #define ROD_GLYPH_CACHE_SIZE 128
-#define ROD_MAX_TEXT_CHARS   24 /* max chars for pre-allocated width */
+#define ROD_TIME_CHARS   20 /* "2026-03-23 23:59:59" */
+#define ROD_UPTIME_CHARS 12 /* "12345d 23h 59m" */
+#define ROD_TEXT_CHARS   14 /* camera name */
 
 /* Region roles — determines position in RVD */
 #define ROD_REGION_TIME	  0 /* top-left */

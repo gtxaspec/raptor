@@ -20,12 +20,14 @@ static const char *region_names[] = {"time", "uptime", "text", "logo"};
 
 #define OSD_MARGIN 10
 
-/* Region sizes — must be >= ROD's SHM dimensions.
- * ROD at font_size=24, 24 chars: ~530px wide, ~34px tall. */
-#define OSD_TEXT_W 540
-#define OSD_TEXT_H 36
-#define OSD_LOGO_W 210
-#define OSD_LOGO_H 64
+/* Per-role region widths — sized to content, not max.
+ * Must be >= ROD's SHM dimensions for that role. */
+#define OSD_TIME_W   450 /* "2026-03-23 23:59:59" ≈ 420px at size 24 */
+#define OSD_UPTIME_W 280 /* "12345d 23h 59m 59s" ≈ 260px */
+#define OSD_TEXT_W   320 /* camera name */
+#define OSD_TEXT_H   36
+#define OSD_LOGO_W   210
+#define OSD_LOGO_H   64
 
 static void calc_position(int stream_w, int stream_h, int region_w, int region_h, int role,
 			  int *out_x, int *out_y)
@@ -191,19 +193,15 @@ void rvd_osd_init(rvd_state_t *st)
 			st->osd_regions[s][r].local_buf = NULL;
 		}
 
-		/* Scale text dimensions for sub stream.
-		 * Must be >= ROD's SHM sizes to avoid buffer overflows. */
-		uint32_t tw = OSD_TEXT_W;
+		/* Per-role region sizes, scaled for sub stream */
+		int scale_num = (s > 0) ? st->streams[s].enc_cfg.height : 1;
+		int scale_den = (s > 0) ? st->streams[0].enc_cfg.height : 1;
+		if (scale_den == 0)
+			scale_den = 1;
+
 		uint32_t th = OSD_TEXT_H;
 		if (s > 0) {
-			int scale_num = st->streams[s].enc_cfg.height;
-			int scale_den = st->streams[0].enc_cfg.height;
-			if (scale_den == 0)
-				scale_den = 1;
-			tw = tw * scale_num / scale_den;
 			th = th * scale_num / scale_den;
-			if (tw < 480)
-				tw = 480; /* min for sub stream */
 			if (th < 20)
 				th = 20;
 		}
@@ -211,16 +209,25 @@ void rvd_osd_init(rvd_state_t *st)
 		int region_count = 0;
 
 		if (rss_config_get_bool(cfg, "osd", "time_enabled", true)) {
+			uint32_t tw = OSD_TIME_W;
+			if (s > 0)
+				tw = tw * scale_num / scale_den;
 			if (create_region(st, s, RVD_OSD_TIME, tw, th))
 				region_count++;
 		}
 
 		if (rss_config_get_bool(cfg, "osd", "uptime_enabled", true)) {
+			uint32_t tw = OSD_UPTIME_W;
+			if (s > 0)
+				tw = tw * scale_num / scale_den;
 			if (create_region(st, s, RVD_OSD_UPTIME, tw, th))
 				region_count++;
 		}
 
 		if (rss_config_get_bool(cfg, "osd", "text_enabled", true)) {
+			uint32_t tw = OSD_TEXT_W;
+			if (s > 0)
+				tw = tw * scale_num / scale_den;
 			if (create_region(st, s, RVD_OSD_TEXT, tw, th))
 				region_count++;
 		}
