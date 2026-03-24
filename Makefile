@@ -130,10 +130,10 @@ rod: $(LIB_IPC) $(LIB_COMMON)
 		LIBS="$(LIB_IPC) $(LIB_COMMON) -lschrift" \
 		LDFLAGS="$(LDFLAGS)" Q="$(Q)"
 
-ric: $(LIB_HAL) $(LIB_COMMON)
+ric: $(LIB_HAL) $(LIB_IPC) $(LIB_COMMON)
 	@echo "  BUILD   ric"
 	$(Q)$(MAKE) -C ric CC="$(CC)" CFLAGS="$(CFLAGS)" \
-		LIBS="$(LIB_HAL) $(LIB_COMMON)" \
+		LIBS="$(LIB_HAL) $(LIB_IPC) $(LIB_COMMON)" \
 		LDFLAGS="$(LDFLAGS_HAL)" Q="$(Q)"
 
 # -- Tools --
