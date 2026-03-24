@@ -96,9 +96,10 @@ int rod_render_init(rod_state_t *st, int stream_idx, int font_size)
 			max_adv = g->advance;
 	}
 
-	/* Max text width: enough for longest expected string + stroke padding */
+	/* Max text width: used for per-role sizing in create_shms.
+	 * Store max_advance * 24 as a reference for char-count scaling. */
 	int pad = st->cfg.font_stroke > 0 ? st->cfg.font_stroke * 2 : 0;
-	f->max_text_width = ROD_MAX_TEXT_CHARS * max_adv + pad;
+	f->max_text_width = 24 * max_adv + pad;
 
 	/* Ensure even dimensions (SDK may require 2-aligned) */
 	f->max_text_width = (f->max_text_width + 1) & ~1;

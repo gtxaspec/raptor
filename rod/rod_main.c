@@ -101,18 +101,22 @@ static void create_shms(rod_state_t *st)
 {
 	for (int s = 0; s < st->stream_count; s++) {
 		rod_font_t *f = &st->fonts[s];
+		int adv = f->max_text_width / 24; /* approximate per-char advance */
+		if (adv < 10)
+			adv = 10;
+		int pad = st->cfg.font_stroke > 0 ? st->cfg.font_stroke * 2 : 0;
 
 		if (st->cfg.time_enabled)
-			create_region_shm(st, s, ROD_REGION_TIME, f->max_text_width,
-					  f->text_height);
+			create_region_shm(st, s, ROD_REGION_TIME,
+					  ROD_TIME_CHARS * adv + pad, f->text_height);
 
 		if (st->cfg.uptime_enabled)
-			create_region_shm(st, s, ROD_REGION_UPTIME, f->max_text_width,
-					  f->text_height);
+			create_region_shm(st, s, ROD_REGION_UPTIME,
+					  ROD_UPTIME_CHARS * adv + pad, f->text_height);
 
 		if (st->cfg.text_enabled)
-			create_region_shm(st, s, ROD_REGION_TEXT, f->max_text_width,
-					  f->text_height);
+			create_region_shm(st, s, ROD_REGION_TEXT,
+					  ROD_TEXT_CHARS * adv + pad, f->text_height);
 
 		if (st->cfg.logo_enabled) {
 			int lw, lh;
