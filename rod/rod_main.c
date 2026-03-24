@@ -107,16 +107,16 @@ static void create_shms(rod_state_t *st)
 		int pad = st->cfg.font_stroke > 0 ? st->cfg.font_stroke * 2 : 0;
 
 		if (st->cfg.time_enabled)
-			create_region_shm(st, s, ROD_REGION_TIME,
-					  ROD_TIME_CHARS * adv + pad, f->text_height);
+			create_region_shm(st, s, ROD_REGION_TIME, ROD_TIME_CHARS * adv + pad,
+					  f->text_height);
 
 		if (st->cfg.uptime_enabled)
-			create_region_shm(st, s, ROD_REGION_UPTIME,
-					  ROD_UPTIME_CHARS * adv + pad, f->text_height);
+			create_region_shm(st, s, ROD_REGION_UPTIME, ROD_UPTIME_CHARS * adv + pad,
+					  f->text_height);
 
 		if (st->cfg.text_enabled)
-			create_region_shm(st, s, ROD_REGION_TEXT,
-					  ROD_TEXT_CHARS * adv + pad, f->text_height);
+			create_region_shm(st, s, ROD_REGION_TEXT, ROD_TEXT_CHARS * adv + pad,
+					  f->text_height);
 
 		if (st->cfg.logo_enabled) {
 			int lw, lh;
@@ -159,6 +159,19 @@ static void render_logo(rod_state_t *st, int s)
 	reg->needs_update = false;
 }
 
+/* Per-role text alignment: time=left, uptime=right, text=center */
+static int role_align(int role)
+{
+	switch (role) {
+	case ROD_REGION_UPTIME:
+		return 2; /* right */
+	case ROD_REGION_TEXT:
+		return 1; /* center */
+	default:
+		return 0; /* left */
+	}
+}
+
 static void render_text_region(rod_state_t *st, int s, int role, const char *text)
 {
 	rod_region_t *reg = &st->regions[s][role];
@@ -169,7 +182,7 @@ static void render_text_region(rod_state_t *st, int s, int role, const char *tex
 	if (!buf)
 		return;
 
-	rod_draw_text(st, s, buf, reg->width, reg->height, text);
+	rod_draw_text(st, s, buf, reg->width, reg->height, text, role_align(role));
 	rss_osd_publish(reg->shm);
 }
 
