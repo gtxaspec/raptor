@@ -44,8 +44,8 @@ static void calc_position(int stream_w, int stream_h, int region_w, int region_h
 		*out_y = (stream_h - region_h) / 2;
 		break;
 	case RVD_OSD_LOGO: /* bottom-right */
-		*out_x = stream_w - region_w - OSD_MARGIN;
-		*out_y = stream_h - region_h - OSD_MARGIN;
+		*out_x = stream_w - region_w - 40;
+		*out_y = stream_h - region_h - 40;
 		break;
 	default:
 		*out_x = OSD_MARGIN;
@@ -86,10 +86,11 @@ static bool create_region(rvd_state_t *st, int s, int r, uint32_t w, uint32_t h)
 		const char *lp;
 		int lw, lh;
 		if (s == 0) {
-			lp = rss_config_get_str(st->cfg, "osd", "logo_path",
-						"/usr/share/images/thingino_210x64.bgra");
-			lw = rss_config_get_int(st->cfg, "osd", "logo_width", 210);
-			lh = rss_config_get_int(st->cfg, "osd", "logo_height", 64);
+			/* Use 100x30 logo for now — 210x64 garbles on main stream
+			 * (likely SDK IPU limitation with larger BGRA bitmaps) */
+			lp = "/usr/share/images/thingino_100x30.bgra";
+			lw = 100;
+			lh = 30;
 		} else {
 			lp = "/usr/share/images/thingino_100x30.bgra";
 			lw = 100;
@@ -226,13 +227,9 @@ void rvd_osd_init(rvd_state_t *st)
 		}
 
 		if (rss_config_get_bool(cfg, "osd", "logo_enabled", true)) {
-			uint32_t lw = rss_config_get_int(cfg, "osd", "logo_width", OSD_LOGO_W);
-			uint32_t lh = rss_config_get_int(cfg, "osd", "logo_height", OSD_LOGO_H);
-			if (s > 0) {
-				/* Sub stream logo — use smaller variant size */
-				lw = 100;
-				lh = 30;
-			}
+			/* Use 100x30 for both streams until 210x64 garble is resolved */
+			uint32_t lw = 100;
+			uint32_t lh = 30;
 			if (create_region(st, s, RVD_OSD_LOGO, lw, lh))
 				region_count++;
 		}
