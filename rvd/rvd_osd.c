@@ -16,7 +16,7 @@
 
 #include "rvd.h"
 
-static const char *region_names[] = {"time", "uptime", "text", "logo"};
+static const char *region_names[] = {"time", "uptime", "text", "logo", "privacy"};
 
 #define OSD_MARGIN 10
 
@@ -31,10 +31,9 @@ static const char *region_names[] = {"time", "uptime", "text", "logo"};
 
 /* Default position names per role */
 static const char *default_pos[] = {
-	[RVD_OSD_TIME] = "top_left",
-	[RVD_OSD_UPTIME] = "top_right",
-	[RVD_OSD_TEXT] = "top_center",
-	[RVD_OSD_LOGO] = "bottom_right",
+	[RVD_OSD_TIME] = "top_left",   [RVD_OSD_UPTIME] = "top_right",
+	[RVD_OSD_TEXT] = "top_center", [RVD_OSD_LOGO] = "bottom_right",
+	[RVD_OSD_PRIVACY] = "center",
 };
 
 /*
@@ -280,6 +279,10 @@ void rvd_osd_init(rvd_state_t *st)
 				region_count++;
 		}
 
+		/* Privacy text region (centered, hidden until privacy mode) */
+		if (create_region(st, s, RVD_OSD_PRIVACY, OSD_TEXT_W, th))
+			region_count++;
+
 		RSS_INFO("osd stream%d: %d regions created", s, region_count);
 
 		/* Privacy cover region (full-frame black, initially hidden) */
@@ -393,11 +396,19 @@ void rvd_osd_set_privacy(rvd_state_t *st, bool enable)
 	for (int s = 0; s < st->stream_count; s++) {
 		if (st->streams[s].is_jpeg)
 			continue;
-		int ph = st->privacy_handles[s];
-		if (ph < 0)
-			continue;
 		int grp = st->streams[s].chn;
-		RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, ph, grp, enable ? 1 : 0, 0);
+
+		/* Show/hide cover */
+		int ph = st->privacy_handles[s];
+		if (ph >= 0)
+			RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, ph, grp, enable ? 1 : 0,
+				     0);
+
+		/* Show/hide privacy text region */
+		rvd_osd_region_t *preg = &st->osd_regions[s][RVD_OSD_PRIVACY];
+		if (preg->active && preg->hal_handle >= 0)
+			RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, preg->hal_handle, grp,
+				     enable ? 1 : 0, RVD_OSD_PRIVACY + 1);
 	}
 
 	st->privacy_active = enable;
@@ -420,6 +431,9 @@ void *rvd_osd_thread(void *arg)
 		for (int r = 0; r < RVD_OSD_REGIONS; r++) {
 			rvd_osd_region_t *reg = &st->osd_regions[s][r];
 			if (!reg->active)
+				continue;
+			/* Privacy text starts hidden — shown only during privacy mode */
+			if (r == RVD_OSD_PRIVACY)
 				continue;
 			RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, reg->hal_handle, grp, 1,
 				     r + 1);
