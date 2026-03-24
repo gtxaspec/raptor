@@ -124,15 +124,16 @@ static void handle_snapshot(int fd, rss_ring_t *ring, uint8_t *buf, uint32_t buf
 		return;
 	}
 
-	/* Read the latest frame from the ring. Start from seq 0 —
-	 * ring_read will EOVERFLOW to the latest available frame. */
+	/* Read the latest frame. Start from seq 0 to trigger EOVERFLOW
+	 * which advances seq to the latest. Then back up by 1 to read
+	 * the most recently completed frame (not the one being written). */
 	uint64_t seq = 0;
 	uint32_t length;
 	rss_ring_slot_t meta;
 	int ret = rss_ring_read(ring, &seq, buf, buf_size, &length, &meta);
 
-	if (ret == RSS_EOVERFLOW) {
-		/* Normal — seq jumped to latest. Read again from there. */
+	if (ret == RSS_EOVERFLOW && seq > 0) {
+		seq--;
 		ret = rss_ring_read(ring, &seq, buf, buf_size, &length, &meta);
 	}
 
