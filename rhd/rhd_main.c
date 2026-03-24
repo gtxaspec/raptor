@@ -4,7 +4,7 @@
  * Minimal HTTP server for JPEG snapshots and MJPEG streaming.
  *
  * Endpoints:
- *   /snap.jpg   — latest JPEG snapshot (from file)
+ *   /snap.jpg   — latest JPEG snapshot (from JPEG ring)
  *   /mjpeg      — MJPEG stream (from jpeg ring)
  *
  * Dual-stack IPv6 (serves both IPv4 and IPv6 clients).
@@ -44,16 +44,18 @@ typedef struct {
 	int epoll_fd;
 	rss_config_t *cfg;
 	const char *config_path;
-	char snap_paths[RHD_MAX_JPEG][64];
-	int snap_count;
 	int port;
 
 	rhd_client_t *clients[RHD_MAX_CLIENTS];
 	int client_count;
 
-	/* JPEG rings for MJPEG streaming */
+	/* JPEG rings for snapshot + MJPEG streaming */
 	rss_ring_t *jpeg_rings[RHD_MAX_JPEG];
 	int jpeg_ring_count;
+
+	/* Snapshot read buffer (shared, single-threaded) */
+	uint8_t *snap_buf;
+	uint32_t snap_buf_size;
 
 	volatile sig_atomic_t *running;
 } rhd_server_t;
@@ -113,19 +115,33 @@ static int http_send_mjpeg_frame(int fd, const uint8_t *data, uint32_t len)
 	return 0;
 }
 
-/* ── Snapshot handler ── */
+/* ── Snapshot handler — serve latest JPEG from ring ── */
 
-static void handle_snapshot(int fd, const char *snap_path)
+static void handle_snapshot(int fd, rss_ring_t *ring, uint8_t *buf, uint32_t buf_size)
 {
-	int file_size;
-	char *data = rss_read_file(snap_path, &file_size);
-	if (!data || file_size <= 0) {
-		http_error(fd, "503 Service Unavailable", "No snapshot available yet");
-		free(data);
+	if (!ring || !buf) {
+		http_error(fd, "503 Service Unavailable", "JPEG ring not available");
 		return;
 	}
-	http_send(fd, "200 OK", "image/jpeg", data, file_size);
-	free(data);
+
+	/* Read the latest frame from the ring. Start from seq 0 —
+	 * ring_read will EOVERFLOW to the latest available frame. */
+	uint64_t seq = 0;
+	uint32_t length;
+	rss_ring_slot_t meta;
+	int ret = rss_ring_read(ring, &seq, buf, buf_size, &length, &meta);
+
+	if (ret == RSS_EOVERFLOW) {
+		/* Normal — seq jumped to latest. Read again from there. */
+		ret = rss_ring_read(ring, &seq, buf, buf_size, &length, &meta);
+	}
+
+	if (ret != 0 || length == 0) {
+		http_error(fd, "503 Service Unavailable", "No snapshot available yet");
+		return;
+	}
+
+	http_send(fd, "200 OK", "image/jpeg", buf, (int)length);
 }
 
 /* ── Client management ── */
@@ -179,8 +195,9 @@ static void handle_request(rhd_server_t *srv, rhd_client_t *c)
 
 	if (strncmp(path, "/snap", 5) == 0) {
 		int si = parse_stream_param(path);
-		if (si < srv->snap_count)
-			handle_snapshot(c->fd, srv->snap_paths[si]);
+		if (si < srv->jpeg_ring_count && srv->jpeg_rings[si])
+			handle_snapshot(c->fd, srv->jpeg_rings[si], srv->snap_buf,
+					srv->snap_buf_size);
 		else
 			http_error(c->fd, "404 Not Found", "Stream not available");
 	} else if (strncmp(path, "/mjpeg", 6) == 0 || strncmp(path, "/mjpg", 5) == 0) {
@@ -291,6 +308,10 @@ static void server_run(rhd_server_t *srv)
 
 	frame_buf = malloc(frame_buf_size);
 
+	/* Snapshot buffer (shared with handle_request, single-threaded) */
+	srv->snap_buf_size = frame_buf_size;
+	srv->snap_buf = malloc(srv->snap_buf_size);
+
 	struct epoll_event events[16];
 
 	while (*srv->running) {
@@ -388,6 +409,7 @@ static void server_run(rhd_server_t *srv)
 		remove_client(srv, i);
 
 	free(frame_buf);
+	free(srv->snap_buf);
 	for (int j = 0; j < RHD_MAX_JPEG; j++) {
 		if (srv->jpeg_rings[j])
 			rss_ring_close(srv->jpeg_rings[j]);
@@ -461,9 +483,6 @@ int main(int argc, char **argv)
 	srv.config_path = config_path;
 	srv.running = running;
 	srv.port = rss_config_get_int(cfg, "http", "port", 8080);
-	for (int j = 0; j < RHD_MAX_JPEG; j++)
-		snprintf(srv.snap_paths[j], sizeof(srv.snap_paths[j]), "/tmp/snapshot-%d.jpg", j);
-	srv.snap_count = RHD_MAX_JPEG;
 
 	if (server_init(&srv) < 0) {
 		rss_config_free(cfg);

@@ -71,7 +71,6 @@ typedef struct {
 	int jpeg_streams[RVD_MAX_JPEG]; /* stream indices, -1 if disabled */
 	int jpeg_count;
 	int jpeg_quality;
-	char jpeg_paths[RVD_MAX_JPEG][64]; /* /tmp/snapshot-0.jpg, etc */
 
 	volatile sig_atomic_t *running;
 } rvd_state_t;
