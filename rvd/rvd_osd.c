@@ -5,8 +5,23 @@
  * transparent placeholder bitmaps. At runtime, polls OSD SHM for
  * bitmap updates from ROD and calls osd_update_region_data.
  *
- * IMP SDK constraint: CreateRgn/RegisterRgn must be called before the
- * encoder starts. Only UpdateRgnAttrData is safe at runtime.
+ * WARNING: The IMP SDK OSD init sequence is order-sensitive and
+ * underdocumented. The sequence below was derived from the vendor
+ * sample (libimp-samples-musl/T31/libimp/sample-OSD.c) and verified
+ * by trial-and-error. Deviations cause silent failures:
+ *
+ *   - CreateRgn with non-NULL attr → crash
+ *   - SetRgnAttr before RegisterRgn → garbled bitmap
+ *   - OSD_Start called from show_region → encoder deadlock
+ *   - UpdateRgnAttrData with SHM mmap pointer → encoder hang
+ *   - Regions created after encoder start → segfault
+ *   - Multiple regions at same layer → garbled rendering
+ *   - BGRA bitmaps > 100px wide → garbled on main stream
+ *
+ * Correct sequence (must not change without re-testing on device):
+ *   CreateGroup → CreateRgn(NULL) → RegisterRgn → SetRgnAttr(pData=NULL)
+ *   → SetGrpRgnAttr(show=0) → OSD_Start → System_Bind → FS_Enable
+ *   → [runtime] UpdateRgnAttrData with heap buffer → ShowRgn from thread
  */
 
 #include <stdio.h>
