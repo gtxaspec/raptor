@@ -41,9 +41,9 @@ static void calc_position(int stream_w, int stream_h, int region_w, int region_h
 		*out_x = stream_w - region_w - OSD_MARGIN;
 		*out_y = OSD_MARGIN;
 		break;
-	case RVD_OSD_TEXT: /* middle-center */
+	case RVD_OSD_TEXT: /* center-top */
 		*out_x = (stream_w - region_w) / 2;
-		*out_y = (stream_h - region_h) / 2;
+		*out_y = OSD_MARGIN;
 		break;
 	case RVD_OSD_LOGO: /* bottom-right */
 		*out_x = stream_w - region_w - 40;
