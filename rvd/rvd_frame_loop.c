@@ -72,12 +72,8 @@ static void *encoder_thread(void *arg)
 			iov[n].length = frame.nals[n].length;
 			total_len += frame.nals[n].length;
 		}
-		uint16_t pnt = primary_nal_type(&frame);
-		if (frame_count < 3 || frame.is_key)
-			RSS_DEBUG("stream%d: frame %llu nals=%u key=%d nal_type=%u len=%u", idx,
-				  (unsigned long long)frame_count, cnt, frame.is_key, pnt,
-				  total_len);
-		rss_ring_publish_iov(s->ring, iov, cnt, frame.timestamp, pnt, frame.is_key ? 1 : 0);
+		rss_ring_publish_iov(s->ring, iov, cnt, frame.timestamp, primary_nal_type(&frame),
+				     frame.is_key ? 1 : 0);
 
 		/* JPEG: also write snapshot file atomically */
 		if (s->is_jpeg && cnt > 0) {
