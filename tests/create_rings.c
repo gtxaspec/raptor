@@ -65,10 +65,73 @@ int main(void)
 		for (int i = 0; i < 4; i++)
 			rss_ring_publish_iov(jpeg1, &iov, 1, i * 40000, 0x30, 1);
 
-	RSS_INFO("published fake JPEG frames, waiting... (Ctrl-C to stop)");
+	RSS_INFO("published fake JPEG frames");
 
-	while (g_running)
-		sleep(1);
+	/* Continuously publish fake H.264 to main ring at ~25fps.
+	 * IDR every 50 frames (2 seconds). Annex B format with
+	 * start codes, matching real encoder output. */
+	uint8_t idr_frame[4096];
+	uint8_t p_frame[512];
+
+	/* IDR: [start_code][SPS][start_code][PPS][start_code][IDR_slice] */
+	static const uint8_t sps[] = {0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0xC0, 0x1E,
+				      0xD9, 0x00, 0xA0, 0x47, 0xFE, 0xC8};
+	static const uint8_t pps[] = {0x00, 0x00, 0x00, 0x01, 0x68, 0xCE, 0x38, 0x80};
+	uint32_t idr_off = 0;
+	memcpy(idr_frame, sps, sizeof(sps));
+	idr_off += sizeof(sps);
+	memcpy(idr_frame + idr_off, pps, sizeof(pps));
+	idr_off += sizeof(pps);
+	idr_frame[idr_off++] = 0x00;
+	idr_frame[idr_off++] = 0x00;
+	idr_frame[idr_off++] = 0x00;
+	idr_frame[idr_off++] = 0x01;
+	idr_frame[idr_off++] = 0x65; /* IDR slice */
+	memset(idr_frame + idr_off, 0xAB, sizeof(idr_frame) - idr_off);
+	uint32_t idr_len = sizeof(idr_frame);
+
+	/* P-frame: [start_code][P_slice] */
+	p_frame[0] = 0x00;
+	p_frame[1] = 0x00;
+	p_frame[2] = 0x00;
+	p_frame[3] = 0x01;
+	p_frame[4] = 0x41; /* P-slice */
+	memset(p_frame + 5, 0xCD, sizeof(p_frame) - 5);
+	uint32_t p_len = sizeof(p_frame);
+
+	/* Audio frame (320 samples * 2 bytes = 640 bytes, 20ms at 16kHz) */
+	uint8_t audio_frame[640];
+	memset(audio_frame, 0x80, sizeof(audio_frame));
+
+	int64_t ts = 0;
+	int64_t ats = 0;
+	uint32_t frame_num = 0;
+
+	RSS_INFO("publishing fake H.264+audio at 25fps...");
+
+	while (g_running) {
+		bool is_key = (frame_num % 50 == 0);
+		const uint8_t *data = is_key ? idr_frame : p_frame;
+		uint32_t len = is_key ? idr_len : p_len;
+		uint16_t nal = is_key ? 0x13 : 0x14; /* RSS_NAL_H264_IDR / SLICE */
+
+		rss_iov_t viov = {.data = data, .length = len};
+		if (main_ring)
+			rss_ring_publish_iov(main_ring, &viov, 1, ts, nal, is_key ? 1 : 0);
+
+		/* 2 audio frames per video frame */
+		rss_iov_t aiov = {.data = audio_frame, .length = sizeof(audio_frame)};
+		if (audio)
+			for (int a = 0; a < 2; a++) {
+				rss_ring_publish_iov(audio, &aiov, 1, ats, 11, 0);
+				ats += 320; /* 320 samples = 20ms */
+			}
+
+		ts += 40000; /* 40ms = 25fps in microseconds */
+		frame_num++;
+
+		usleep(40000); /* ~25fps */
+	}
 
 	/* Cleanup */
 	if (main_ring)

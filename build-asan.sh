@@ -98,6 +98,14 @@ $CC $CFLAGS -c "$RAPTOR_DIR/rod/rod_render.c" -o "$OUT/rod_render.o"
 $CC -o "$OUT/rod" "$OUT/rod_main.o" "$OUT/rod_render.o" $LIBS -lschrift -lm $LDFLAGS
 echo "  -> rod"
 
+echo "=== RMR ==="
+$CC $CFLAGS -c "$RAPTOR_DIR/rmr/rmr_main.c" -o "$OUT/rmr_main.o"
+$CC $CFLAGS -c "$RAPTOR_DIR/rmr/rmr_mux.c" -o "$OUT/rmr_mux.o"
+$CC $CFLAGS -c "$RAPTOR_DIR/rmr/rmr_nal.c" -o "$OUT/rmr_nal.o"
+$CC $CFLAGS -c "$RAPTOR_DIR/rmr/rmr_storage.c" -o "$OUT/rmr_storage.o"
+$CC -o "$OUT/rmr" "$OUT"/rmr_main.o "$OUT"/rmr_mux.o "$OUT"/rmr_nal.o "$OUT"/rmr_storage.o $LIBS $LDFLAGS
+echo "  -> rmr"
+
 echo "=== raptorctl ==="
 $CC $CFLAGS -c "$RAPTOR_DIR/raptorctl/raptorctl.c" -o "$OUT/raptorctl.o"
 $CC -o "$OUT/raptorctl" "$OUT/raptorctl.o" $LIBS $LDFLAGS
