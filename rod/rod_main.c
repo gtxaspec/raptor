@@ -410,14 +410,19 @@ int main(int argc, char **argv)
 	st.running = running;
 	load_config(&st);
 
-	/* Init fonts per stream */
+	/* Init fonts per stream — check for per-stream font_size override */
 	for (int s = 0; s < st.stream_count; s++) {
-		int fs = st.cfg.font_size;
-		if (s > 0) {
-			/* Scale font for sub stream */
-			fs = fs * st.stream_h[s] / st.stream_h[0];
-			if (fs < 12)
-				fs = 12;
+		char key[32];
+		snprintf(key, sizeof(key), "stream%d_font_size", s);
+		int fs = rss_config_get_int(cfg, "osd", key, 0);
+		if (fs <= 0) {
+			/* No per-stream override — auto-scale from global */
+			fs = st.cfg.font_size;
+			if (s > 0) {
+				fs = fs * st.stream_h[s] / st.stream_h[0];
+				if (fs < 12)
+					fs = 12;
+			}
 		}
 		if (rod_render_init(&st, s, fs) < 0) {
 			RSS_FATAL("font init failed for stream %d", s);

@@ -29,31 +29,61 @@ static const char *region_names[] = {"time", "uptime", "text", "logo"};
 #define OSD_LOGO_W   210
 #define OSD_LOGO_H   64
 
-static void calc_position(int stream_w, int stream_h, int region_w, int region_h, int role,
-			  int *out_x, int *out_y)
+/* Default position names per role */
+static const char *default_pos[] = {
+	[RVD_OSD_TIME] = "top_left",
+	[RVD_OSD_UPTIME] = "top_right",
+	[RVD_OSD_TEXT] = "top_center",
+	[RVD_OSD_LOGO] = "bottom_right",
+};
+
+/*
+ * Parse position string: named ("top_left", "bottom_right", etc.)
+ * or coordinates ("100,50").
+ */
+static void calc_position(int stream_w, int stream_h, int region_w, int region_h,
+			  const char *pos_str, int *out_x, int *out_y)
 {
-	switch (role) {
-	case RVD_OSD_TIME: /* top-left */
+	/* Try x,y coordinates first */
+	if (pos_str) {
+		int x, y;
+		if (sscanf(pos_str, "%d,%d", &x, &y) == 2) {
+			*out_x = x;
+			*out_y = y;
+			goto clamp;
+		}
+	}
+
+	/* Named positions */
+	const char *p = pos_str ? pos_str : "top_left";
+
+	if (strcmp(p, "top_left") == 0) {
 		*out_x = OSD_MARGIN;
 		*out_y = OSD_MARGIN;
-		break;
-	case RVD_OSD_UPTIME: /* top-right */
-		*out_x = stream_w - region_w - OSD_MARGIN;
-		*out_y = OSD_MARGIN;
-		break;
-	case RVD_OSD_TEXT: /* center-top */
+	} else if (strcmp(p, "top_center") == 0) {
 		*out_x = (stream_w - region_w) / 2;
 		*out_y = OSD_MARGIN;
-		break;
-	case RVD_OSD_LOGO: /* bottom-right */
-		*out_x = stream_w - region_w - 40;
-		*out_y = stream_h - region_h - 40;
-		break;
-	default:
+	} else if (strcmp(p, "top_right") == 0) {
+		*out_x = stream_w - region_w - OSD_MARGIN;
+		*out_y = OSD_MARGIN;
+	} else if (strcmp(p, "bottom_left") == 0) {
+		*out_x = OSD_MARGIN;
+		*out_y = stream_h - region_h - OSD_MARGIN;
+	} else if (strcmp(p, "bottom_center") == 0) {
+		*out_x = (stream_w - region_w) / 2;
+		*out_y = stream_h - region_h - OSD_MARGIN;
+	} else if (strcmp(p, "bottom_right") == 0) {
+		*out_x = stream_w - region_w - OSD_MARGIN;
+		*out_y = stream_h - region_h - OSD_MARGIN;
+	} else if (strcmp(p, "center") == 0) {
+		*out_x = (stream_w - region_w) / 2;
+		*out_y = (stream_h - region_h) / 2;
+	} else {
 		*out_x = OSD_MARGIN;
 		*out_y = OSD_MARGIN;
-		break;
 	}
+
+clamp:
 	if (*out_x < 0)
 		*out_x = 0;
 	if (*out_y < 0)
@@ -119,8 +149,14 @@ static bool create_region(rvd_state_t *st, int s, int r, uint32_t w, uint32_t h)
 
 	int stream_w = st->streams[s].enc_cfg.width;
 	int stream_h = st->streams[s].enc_cfg.height;
+
+	/* Read per-stream position from config: stream0_time_pos, stream1_logo_pos, etc. */
+	char pos_key[32];
+	snprintf(pos_key, sizeof(pos_key), "stream%d_%s_pos", s, region_names[r]);
+	const char *pos_str = rss_config_get_str(st->cfg, "osd", pos_key, default_pos[r]);
+
 	int x, y;
-	calc_position(stream_w, stream_h, (int)w, (int)h, r, &x, &y);
+	calc_position(stream_w, stream_h, (int)w, (int)h, pos_str, &x, &y);
 
 	rss_osd_region_t attr = {
 		.type = RSS_OSD_PIC,
