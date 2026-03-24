@@ -5,9 +5,9 @@
 #ifndef RIC_H
 #define RIC_H
 
-#include <raptor_hal.h>
 #include <rss_ipc.h>
 #include <rss_common.h>
+#include <imp/imp_isp.h>
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -47,10 +47,6 @@ typedef struct {
 /* Global state */
 typedef struct {
 	ric_config_t cfg;
-
-	/* HAL */
-	rss_hal_ctx_t *hal_ctx;
-	const rss_hal_ops_t *ops;
 
 	/* Current state */
 	ric_mode_t current_mode;

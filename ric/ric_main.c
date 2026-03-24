@@ -115,28 +115,29 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 	if (strstr(cmd_json, "\"config-show\"")) {
-		rss_exposure_t exp = {0};
-		RSS_HAL_CALL(st->ops, isp_get_exposure, st->hal_ctx, &exp);
+		IMPISPEVAttr ev = {0};
+		IMP_ISP_Tuning_GetEVAttr(&ev);
 		snprintf(resp_buf, resp_buf_size,
 			 "{\"status\":\"ok\",\"mode\":\"%s\",\"state\":\"%s\","
-			 "\"total_gain\":%u,\"exposure_us\":%u,"
+			 "\"again\":%u,\"dgain\":%u,\"ev\":%u,"
 			 "\"night_threshold\":%d,\"day_threshold\":%d}",
 			 st->cfg.opmode == RIC_AUTO
 				 ? "auto"
 				 : (st->cfg.opmode == RIC_FORCE_DAY ? "day" : "night"),
-			 st->current_mode == RIC_MODE_DAY ? "day" : "night", exp.total_gain,
-			 exp.exposure_time, st->cfg.night_threshold, st->cfg.day_threshold);
+			 st->current_mode == RIC_MODE_DAY ? "day" : "night", ev.again, ev.dgain,
+			 ev.ev, st->cfg.night_threshold, st->cfg.day_threshold);
 		return (int)strlen(resp_buf);
 	}
 
 	/* Default: status */
-	rss_exposure_t exp = {0};
-	RSS_HAL_CALL(st->ops, isp_get_exposure, st->hal_ctx, &exp);
+	IMPISPEVAttr ev = {0};
+	IMP_ISP_Tuning_GetEVAttr(&ev);
 	snprintf(resp_buf, resp_buf_size,
-		 "{\"status\":\"ok\",\"mode\":\"%s\",\"state\":\"%s\",\"gain\":%u}",
+		 "{\"status\":\"ok\",\"mode\":\"%s\",\"state\":\"%s\","
+		 "\"again\":%u,\"dgain\":%u}",
 		 st->cfg.opmode == RIC_AUTO ? "auto"
 					    : (st->cfg.opmode == RIC_FORCE_DAY ? "day" : "night"),
-		 st->current_mode == RIC_MODE_DAY ? "day" : "night", exp.total_gain);
+		 st->current_mode == RIC_MODE_DAY ? "day" : "night", ev.again, ev.dgain);
 	return (int)strlen(resp_buf);
 }
 
@@ -213,20 +214,14 @@ int main(int argc, char **argv)
 	st.current_mode = RIC_MODE_DAY;
 	load_config(&st);
 
-	/* Init HAL (for ISP exposure queries) */
-	st.hal_ctx = rss_hal_create();
-	if (!st.hal_ctx) {
-		RSS_FATAL("rss_hal_create failed");
-		goto cleanup;
-	}
-	st.ops = rss_hal_get_ops(st.hal_ctx);
-
-	/* Wait for RVD to initialize ISP (HAL is shared) */
+	/* Wait for RVD to initialize ISP before querying exposure.
+	 * RIC uses libimp tuning functions directly (no HAL init needed —
+	 * libimp.so is shared, ISP already initialized by RVD). */
 	RSS_INFO("waiting for ISP...");
 	for (int i = 0; i < 100 && *running; i++) {
-		rss_exposure_t exp;
-		if (RSS_HAL_CALL(st.ops, isp_get_exposure, st.hal_ctx, &exp) == RSS_OK) {
-			RSS_INFO("ISP ready (gain=%u)", exp.total_gain);
+		IMPISPEVAttr ev;
+		if (IMP_ISP_Tuning_GetEVAttr(&ev) == 0) {
+			RSS_INFO("ISP ready (again=%u dgain=%u)", ev.again, ev.dgain);
 			break;
 		}
 		usleep(100000);
@@ -284,8 +279,6 @@ int main(int argc, char **argv)
 		rss_ctrl_destroy(st.ctrl);
 
 cleanup:
-	if (st.hal_ctx)
-		rss_hal_destroy(st.hal_ctx);
 	rss_config_free(cfg);
 	if (!foreground)
 		rss_daemon_cleanup("ric");
