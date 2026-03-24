@@ -207,13 +207,17 @@ static void handle_request(rhd_server_t *srv, rhd_client_t *c)
 		c->is_mjpeg = true;
 		return; /* keep alive */
 	} else if (strcmp(path, "/") == 0) {
-		const char *html = "<html><body>"
-				   "<h3>Raptor</h3>"
-				   "<a href=\"/snap.jpg\">Snapshot (main)</a><br>"
-				   "<a href=\"/snap.jpg?stream=1\">Snapshot (sub)</a><br>"
-				   "<a href=\"/mjpeg\">MJPEG Stream</a><br>"
-				   "<img src=\"/mjpeg\" width=\"640\">"
-				   "</body></html>";
+		const char *html =
+			"<html><head><title>Raptor</title></head>"
+			"<body "
+			"style=\"background:#1a1a1a;color:#ccc;font-family:sans-serif;margin:"
+			"20px\">"
+			"<h3 style=\"color:#fff\">Raptor</h3>"
+			"<a style=\"color:#6af\" href=\"/snap.jpg\">Snapshot (main)</a> | "
+			"<a style=\"color:#6af\" href=\"/snap.jpg?stream=1\">Snapshot (sub)</a> | "
+			"<a style=\"color:#6af\" href=\"/mjpeg\">MJPEG Stream</a><br><br>"
+			"<img src=\"/mjpeg\" style=\"max-width:100%;border:1px solid #333\">"
+			"</body></html>";
 		http_send(c->fd, "200 OK", "text/html", html, (int)strlen(html));
 	} else {
 		http_error(c->fd, "404 Not Found", "Not found");
@@ -329,10 +333,16 @@ static void server_run(rhd_server_t *srv)
 			rss_ring_slot_t meta;
 			int ret = rss_ring_read(srv->jpeg_rings[0], &jpeg_read_seqs[0], frame_buf,
 						frame_buf_size, &len, &meta);
+			if (ret == RSS_EOVERFLOW && jpeg_read_seqs[0] > 0) {
+				/* Fell behind — back up 1 to read latest completed frame */
+				jpeg_read_seqs[0]--;
+				ret = rss_ring_read(srv->jpeg_rings[0], &jpeg_read_seqs[0],
+						    frame_buf, frame_buf_size, &len, &meta);
+			}
 			if (ret == 0) {
 				stream_mjpeg_frame(srv, frame_buf, len);
 			} else if (ret == RSS_EOVERFLOW) {
-				/* skip to latest */
+				/* still overflow after retry — skip */
 			}
 		}
 
