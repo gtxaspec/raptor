@@ -149,11 +149,23 @@ int rvd_pipeline_init(rvd_state_t *st)
 	/* Check caps for codec fallback */
 	const rss_hal_caps_t *caps = st->ops->get_caps ? st->ops->get_caps(st->hal_ctx) : NULL;
 
-	/* ── 3b. Set sensor FPS (required — SDK won't encode without this) ── */
-	int target_fps = rss_config_get_int(cfg, "stream0", "fps", 25);
-	ret = RSS_HAL_CALL(st->ops, isp_set_sensor_fps, st->hal_ctx, target_fps, 1);
+	/* ── 3b. Set sensor FPS ── */
+	int sensor_fps = rss_config_get_int(cfg, "sensor", "fps", 0);
+	if (sensor_fps <= 0) {
+		/* Auto-detect from procfs (like prudynt) */
+		char *s = rss_read_file("/proc/jz/sensor/max_fps", NULL);
+		if (s) {
+			sensor_fps = atoi(s);
+			free(s);
+		}
+		if (sensor_fps <= 0)
+			sensor_fps = 25; /* fallback */
+	}
+	ret = RSS_HAL_CALL(st->ops, isp_set_sensor_fps, st->hal_ctx, sensor_fps, 1);
 	if (ret != RSS_OK)
 		RSS_WARN("isp_set_sensor_fps failed: %d (non-fatal)", ret);
+	else
+		RSS_INFO("sensor fps: %d", sensor_fps);
 
 	/* ── 3c. ISP tuning defaults (match prudynt init sequence) ── */
 	RSS_HAL_CALL(st->ops, isp_set_brightness, st->hal_ctx, 128);
