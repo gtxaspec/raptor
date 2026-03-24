@@ -193,15 +193,15 @@ void rvd_osd_init(rvd_state_t *st)
 			st->osd_regions[s][r].local_buf = NULL;
 		}
 
-		/* Per-role region sizes, scaled for sub stream */
-		int scale_num = (s > 0) ? st->streams[s].enc_cfg.height : 1;
-		int scale_den = (s > 0) ? st->streams[0].enc_cfg.height : 1;
-		if (scale_den == 0)
-			scale_den = 1;
-
+		/* Same region widths for all streams — text is smaller on sub
+		 * (font_size scaled) but bitmap width stays the same.
+		 * Height scaled to match font. */
 		uint32_t th = OSD_TEXT_H;
 		if (s > 0) {
-			th = th * scale_num / scale_den;
+			int sh = st->streams[s].enc_cfg.height;
+			int mh = st->streams[0].enc_cfg.height;
+			if (mh > 0)
+				th = th * sh / mh;
 			if (th < 20)
 				th = 20;
 		}
@@ -209,26 +209,17 @@ void rvd_osd_init(rvd_state_t *st)
 		int region_count = 0;
 
 		if (rss_config_get_bool(cfg, "osd", "time_enabled", true)) {
-			uint32_t tw = OSD_TIME_W;
-			if (s > 0)
-				tw = tw * scale_num / scale_den;
-			if (create_region(st, s, RVD_OSD_TIME, tw, th))
+			if (create_region(st, s, RVD_OSD_TIME, OSD_TIME_W, th))
 				region_count++;
 		}
 
 		if (rss_config_get_bool(cfg, "osd", "uptime_enabled", true)) {
-			uint32_t tw = OSD_UPTIME_W;
-			if (s > 0)
-				tw = tw * scale_num / scale_den;
-			if (create_region(st, s, RVD_OSD_UPTIME, tw, th))
+			if (create_region(st, s, RVD_OSD_UPTIME, OSD_UPTIME_W, th))
 				region_count++;
 		}
 
 		if (rss_config_get_bool(cfg, "osd", "text_enabled", true)) {
-			uint32_t tw = OSD_TEXT_W;
-			if (s > 0)
-				tw = tw * scale_num / scale_den;
-			if (create_region(st, s, RVD_OSD_TEXT, tw, th))
+			if (create_region(st, s, RVD_OSD_TEXT, OSD_TEXT_W, th))
 				region_count++;
 		}
 
