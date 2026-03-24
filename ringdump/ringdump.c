@@ -174,16 +174,27 @@ int main(int argc, char **argv)
 	int64_t last_ts = 0;
 	uint64_t total_bytes = 0;
 
+	/* Allocate read buffer based on ring slot capacity */
+	const rss_ring_header_t *rhdr = rss_ring_get_header(ring);
+	uint32_t buf_size = rhdr->data_size / rhdr->slot_count;
+	if (buf_size < 256 * 1024)
+		buf_size = 256 * 1024;
+	uint8_t *frame_buf = malloc(buf_size);
+	if (!frame_buf) {
+		fprintf(stderr, "Failed to allocate %u byte read buffer\n", buf_size);
+		rss_ring_close(ring);
+		return 1;
+	}
+
 	while (g_running) {
 		int ret = rss_ring_wait(ring, 1000);
 		if (ret != 0)
 			continue;
 
-		const uint8_t *data;
 		uint32_t length;
 		rss_ring_slot_t meta;
 
-		ret = rss_ring_read(ring, &read_seq, &data, &length, &meta);
+		ret = rss_ring_read(ring, &read_seq, frame_buf, buf_size, &length, &meta);
 		if (ret == RSS_EOVERFLOW) {
 			fprintf(stderr, "[OVERFLOW] consumer fell behind\n");
 			continue;
@@ -199,7 +210,7 @@ int main(int argc, char **argv)
 		total_bytes += length;
 
 		if (dump_raw) {
-			fwrite(data, 1, length, stdout);
+			fwrite(frame_buf, 1, length, stdout);
 			fflush(stdout);
 		} else {
 			fprintf(stderr,
@@ -230,6 +241,7 @@ int main(int argc, char **argv)
 		frame_count, dur_sec, avg_fps, avg_bps, avg_bps / 1000.0, total_bytes,
 		(double)total_bytes / (1024.0 * 1024.0));
 
+	free(frame_buf);
 	rss_ring_close(ring);
 	return 0;
 }
