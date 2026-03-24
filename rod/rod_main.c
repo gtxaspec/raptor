@@ -118,8 +118,9 @@ static void create_shms(rod_state_t *st)
 			create_region_shm(st, s, ROD_REGION_TEXT, ROD_TEXT_CHARS * adv + pad,
 					  f->text_height);
 
-		/* Privacy text region (always created, rendered once) */
-		create_region_shm(st, s, ROD_REGION_PRIVACY, ROD_TEXT_CHARS * adv + pad,
+		/* Privacy text region — use full text width so centering
+		 * works correctly within the RVD region */
+		create_region_shm(st, s, ROD_REGION_PRIVACY, ROD_TIME_CHARS * adv + pad,
 				  f->text_height);
 
 		if (st->cfg.logo_enabled) {
