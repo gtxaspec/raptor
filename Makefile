@@ -38,6 +38,10 @@ else
 CFLAGS += -Os
 endif
 
+ifeq ($(AUDIO_EFFECTS),1)
+CFLAGS += -DRAPTOR_AUDIO_EFFECTS
+endif
+
 ifeq ($(V),1)
 Q :=
 else
@@ -68,7 +72,7 @@ endif
 
 # System libs for HAL-linked daemons
 LDFLAGS_HAL := $(LDFLAGS_SYSROOT) -limp -lalog -lsysutils -luclibcshim -lpthread -lrt -lm -ldl -latomic
-LDFLAGS     := $(LDFLAGS_SYSROOT) -lpthread -lrt -latomic
+LDFLAGS     := $(LDFLAGS_SYSROOT) -luclibcshim -lpthread -lrt -latomic
 
 # Targets
 DAEMONS := rvd rsd rad rhd rod ric rmr

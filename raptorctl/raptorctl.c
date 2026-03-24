@@ -22,6 +22,9 @@
  *   raptorctl rad config                   Show running config
  *   raptorctl rad set-volume <val>         Change input volume
  *   raptorctl rad set-gain <val>           Change input gain
+ *   raptorctl rad set-ns <0|1> [level]    Noise suppression on/off
+ *   raptorctl rad set-hpf <0|1>           High-pass filter on/off
+ *   raptorctl rad set-agc <0|1> [t] [c]   AGC on/off
  *
  * RSD commands:
  *   raptorctl rsd status                   Show client count
@@ -66,6 +69,10 @@ static void usage(void)
 			"RAD commands:\n"
 			"  rad set-volume <val>                Change input volume\n"
 			"  rad set-gain <val>                  Change input gain\n"
+			"  rad set-ns <0|1> [level]            Noise suppression "
+			"(low/moderate/high/veryhigh)\n"
+			"  rad set-hpf <0|1>                   High-pass filter\n"
+			"  rad set-agc <0|1> [target] [comp]   Automatic gain control\n"
 			"\n"
 			"ROD commands:\n"
 			"  rod set-text <text>                 Change OSD text string\n"
@@ -312,6 +319,42 @@ int main(int argc, char **argv)
 			return 1;
 		}
 		snprintf(json, sizeof(json), "{\"cmd\":\"set-gain\",\"value\":%s}", argv[3]);
+
+	} else if (strcmp(cmd, "set-ns") == 0) {
+		if (argc < 4) {
+			fprintf(stderr,
+				"Usage: raptorctl %s set-ns <0|1> [low|moderate|high|veryhigh]\n",
+				daemon);
+			return 1;
+		}
+		if (argc >= 5)
+			snprintf(json, sizeof(json),
+				 "{\"cmd\":\"set-ns\",\"value\":%s,\"level\":\"%s\"}", argv[3],
+				 argv[4]);
+		else
+			snprintf(json, sizeof(json), "{\"cmd\":\"set-ns\",\"value\":%s}", argv[3]);
+
+	} else if (strcmp(cmd, "set-hpf") == 0) {
+		if (argc < 4) {
+			fprintf(stderr, "Usage: raptorctl %s set-hpf <0|1>\n", daemon);
+			return 1;
+		}
+		snprintf(json, sizeof(json), "{\"cmd\":\"set-hpf\",\"value\":%s}", argv[3]);
+
+	} else if (strcmp(cmd, "set-agc") == 0) {
+		if (argc < 4) {
+			fprintf(stderr,
+				"Usage: raptorctl %s set-agc <0|1> [target] [compression]\n",
+				daemon);
+			return 1;
+		}
+		if (argc >= 6)
+			snprintf(json, sizeof(json),
+				 "{\"cmd\":\"set-agc\",\"value\":%s,\"target\":%s,\"compression\":%"
+				 "s}",
+				 argv[3], argv[4], argv[5]);
+		else
+			snprintf(json, sizeof(json), "{\"cmd\":\"set-agc\",\"value\":%s}", argv[3]);
 
 	} else if (strcmp(cmd, "privacy") == 0) {
 		if (argc > 3)
