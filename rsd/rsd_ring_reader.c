@@ -145,10 +145,14 @@ void *rsd_video_reader_thread(void *arg)
 				if (!meta.is_key)
 					continue;
 				c->waiting_keyframe = false;
-				RSS_DEBUG("client[%d] got keyframe", stream_idx);
+				c->video_ts_offset = rtp_ts;
+				c->video_ts_base_set = true;
+				RSS_DEBUG("client[%d] got keyframe (ts_offset=%u)", stream_idx,
+					  rtp_ts);
 			}
 
-			rsd_send_video_frame(c, rctx->frame_buf, length, rtp_ts);
+			uint32_t client_ts = rtp_ts - c->video_ts_offset;
+			rsd_send_video_frame(c, rctx->frame_buf, length, client_ts);
 		}
 		pthread_mutex_unlock(&srv->clients_lock);
 	}
@@ -234,7 +238,12 @@ void *rsd_audio_reader_thread(void *arg)
 				if (!c || !c->audio.playing)
 					continue;
 
-				rsd_send_audio_frame(c, audio_buf, length, rtp_ts);
+				if (!c->audio_ts_base_set) {
+					c->audio_ts_offset = rtp_ts;
+					c->audio_ts_base_set = true;
+				}
+				uint32_t client_ts = rtp_ts - c->audio_ts_offset;
+				rsd_send_audio_frame(c, audio_buf, length, client_ts);
 			}
 			pthread_mutex_unlock(&srv->clients_lock);
 		}

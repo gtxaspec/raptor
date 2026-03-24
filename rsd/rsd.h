@@ -49,6 +49,10 @@ typedef struct rsd_client {
 	uint64_t video_read_seq;
 	bool waiting_keyframe;
 	bool active;
+	uint32_t video_ts_offset; /* subtracted from global RTP ts for per-client zero-base */
+	bool video_ts_base_set;	  /* true after first keyframe sets the offset */
+	uint32_t audio_ts_offset;
+	bool audio_ts_base_set;
 	bool is_tcp;
 	int stream_idx;	      /* RSD_STREAM_MAIN or RSD_STREAM_SUB */
 	uint32_t video_codec; /* RSS_CODEC_H264 or RSS_CODEC_H265 */
