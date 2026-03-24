@@ -15,7 +15,7 @@
 #define ROD_MAX_STREAMS	     2
 #define ROD_MAX_REGIONS	     4
 #define ROD_GLYPH_CACHE_SIZE 128
-#define ROD_MAX_TEXT_CHARS   40 /* max chars for pre-allocated width */
+#define ROD_MAX_TEXT_CHARS   24 /* max chars for pre-allocated width */
 
 /* Region roles — determines position in RVD */
 #define ROD_REGION_TIME	  0 /* top-left */
