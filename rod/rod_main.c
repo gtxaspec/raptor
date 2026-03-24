@@ -77,8 +77,8 @@ static void create_region_shm(rod_state_t *st, int s, int role, uint32_t w, uint
 	char name[64];
 	snprintf(name, sizeof(name), "osd_%d_%s", s, region_names[role]);
 
-	/* Ensure even dimensions */
-	w = (w + 1) & ~1;
+	/* Ensure 4-aligned width (SDK DMA requirement) */
+	w = (w + 3) & ~3;
 	h = (h + 1) & ~1;
 
 	rss_osd_shm_t *shm = rss_osd_create(name, w, h);
@@ -137,6 +137,8 @@ static void render_logo(rod_state_t *st, int s)
 		return;
 
 	uint8_t *logo = (s == 0) ? st->logo_data : st->logo_sub_data;
+	int logo_w = (s == 0) ? st->cfg.logo_width : st->logo_sub_w;
+	int logo_h = (s == 0) ? st->cfg.logo_height : st->logo_sub_h;
 	if (!logo)
 		return;
 
@@ -144,7 +146,11 @@ static void render_logo(rod_state_t *st, int s)
 	if (!buf)
 		return;
 
-	memcpy(buf, logo, reg->width * reg->height * 4);
+	/* Clear then row-copy (region may be wider than logo due to alignment) */
+	memset(buf, 0, reg->width * reg->height * 4);
+	for (int row = 0; row < logo_h && row < (int)reg->height; row++)
+		memcpy(buf + row * reg->width * 4, logo + row * logo_w * 4, logo_w * 4);
+
 	rss_osd_publish(reg->shm);
 	reg->needs_update = false;
 }

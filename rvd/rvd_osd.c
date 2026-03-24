@@ -20,10 +20,10 @@ static const char *region_names[] = {"time", "uptime", "text", "logo"};
 
 #define OSD_MARGIN 10
 
-/* Region sizes must be >= ROD's rendered bitmap dimensions.
- * Over-allocating is fine — transparent padding is invisible. */
-#define OSD_TEXT_W 1024
-#define OSD_TEXT_H 48
+/* Region sizes — must be >= ROD's SHM dimensions.
+ * ROD at font_size=24, 24 chars: ~530px wide, ~34px tall. */
+#define OSD_TEXT_W 540
+#define OSD_TEXT_H 36
 #define OSD_LOGO_W 210
 #define OSD_LOGO_H 64
 
@@ -39,8 +39,8 @@ static void calc_position(int stream_w, int stream_h, int region_w, int region_h
 		*out_x = stream_w - region_w - OSD_MARGIN;
 		*out_y = OSD_MARGIN;
 		break;
-	case RVD_OSD_TEXT: /* middle-left */
-		*out_x = OSD_MARGIN;
+	case RVD_OSD_TEXT: /* middle-center */
+		*out_x = (stream_w - region_w) / 2;
 		*out_y = (stream_h - region_h) / 2;
 		break;
 	case RVD_OSD_LOGO: /* bottom-right */
@@ -68,8 +68,8 @@ static bool create_region(rvd_state_t *st, int s, int r, uint32_t w, uint32_t h)
 {
 	rvd_osd_region_t *reg = &st->osd_regions[s][r];
 
-	/* Ensure even dimensions */
-	w = (w + 1) & ~1;
+	/* Ensure 4-aligned dimensions (SDK may require this for DMA) */
+	w = (w + 3) & ~3;
 	h = (h + 1) & ~1;
 
 	uint32_t buf_size = w * h * 4;
@@ -80,21 +80,53 @@ static bool create_region(rvd_state_t *st, int s, int r, uint32_t w, uint32_t h)
 	reg->width = w;
 	reg->height = h;
 
+	/* For logo, pre-load the BGRA file into local_buf so SetRgnAttr
+	 * gets valid bitmap data (vendor pattern for static images). */
+	if (r == RVD_OSD_LOGO) {
+		const char *lp;
+		int lw, lh;
+		if (s == 0) {
+			lp = rss_config_get_str(st->cfg, "osd", "logo_path",
+						"/usr/share/images/thingino_210x64.bgra");
+			lw = rss_config_get_int(st->cfg, "osd", "logo_width", 210);
+			lh = rss_config_get_int(st->cfg, "osd", "logo_height", 64);
+		} else {
+			lp = "/usr/share/images/thingino_100x30.bgra";
+			lw = 100;
+			lh = 30;
+		}
+		int fsz;
+		char *fd = rss_read_file(lp, &fsz);
+		if (fd && fsz == lw * lh * 4) {
+			for (int row = 0; row < lh && row < (int)h; row++)
+				memcpy(reg->local_buf + row * w * 4, fd + row * lw * 4, lw * 4);
+			RSS_INFO("logo %s (%dx%d) loaded into %ux%u region", lp, lw, lh, w, h);
+		} else {
+			/* Test: fill with solid white rectangle */
+			RSS_WARN("logo %s load failed, using solid test (size=%d expected=%d)", lp,
+				 fsz, lw * lh * 4);
+			for (uint32_t i = 0; i < buf_size; i += 4) {
+				reg->local_buf[i + 0] = 0xFF; /* B */
+				reg->local_buf[i + 1] = 0xFF; /* G */
+				reg->local_buf[i + 2] = 0xFF; /* R */
+				reg->local_buf[i + 3] = 0x80; /* A = 50% */
+			}
+		}
+		free(fd);
+	}
+
 	int stream_w = st->streams[s].enc_cfg.width;
 	int stream_h = st->streams[s].enc_cfg.height;
 	int x, y;
 	calc_position(stream_w, stream_h, (int)w, (int)h, r, &x, &y);
 
-	/* Per vendor SDK sample: pData = NULL at init, show = 0.
-	 * Actual data set at runtime via UpdateRgnAttrData.
-	 * ShowRgn called from update thread after first bitmap ready. */
 	rss_osd_region_t attr = {
 		.type = RSS_OSD_PIC,
 		.x = x,
 		.y = y,
 		.width = (int)w,
 		.height = (int)h,
-		.bitmap_data = NULL,
+		.bitmap_data = reg->local_buf,
 		.bitmap_fmt = RSS_PIXFMT_BGRA,
 		.global_alpha_en = true,
 		.fg_alpha = 255,
@@ -258,10 +290,16 @@ void rvd_osd_check(rvd_state_t *st)
 				continue;
 
 			if (w <= reg->width && h <= reg->height) {
-				memset(reg->local_buf, 0, reg->width * reg->height * 4);
-				for (uint32_t row = 0; row < h; row++)
-					memcpy(reg->local_buf + row * reg->width * 4,
-					       bitmap + row * w * 4, w * 4);
+				if (w == reg->width && h == reg->height) {
+					/* Exact match — flat copy */
+					memcpy(reg->local_buf, bitmap, w * h * 4);
+				} else {
+					/* SHM smaller than region — row-by-row with padding */
+					memset(reg->local_buf, 0, reg->width * reg->height * 4);
+					for (uint32_t row = 0; row < h; row++)
+						memcpy(reg->local_buf + row * reg->width * 4,
+						       bitmap + row * w * 4, w * 4);
+				}
 				RSS_HAL_CALL(st->ops, osd_update_region_data, st->hal_ctx,
 					     reg->hal_handle, reg->local_buf);
 			}
