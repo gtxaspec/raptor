@@ -81,7 +81,7 @@ void ric_set_mode(ric_state_t *st, ric_mode_t mode)
 		}
 		if (st->cfg.gpio_irled >= 0)
 			gpio_set(st->cfg.gpio_irled, 1);
-		RSS_HAL_CALL(st->ops, isp_set_running_mode, st->hal_ctx, RSS_ISP_NIGHT);
+		IMP_ISP_Tuning_SetISPRunningMode(IMPISP_RUNNING_MODE_NIGHT);
 		RSS_INFO("switched to NIGHT mode");
 	} else {
 		/* Day: close IR-cut filter, disable IR LEDs, ISP day mode */
@@ -98,7 +98,7 @@ void ric_set_mode(ric_state_t *st, ric_mode_t mode)
 		}
 		if (st->cfg.gpio_irled >= 0)
 			gpio_set(st->cfg.gpio_irled, 0);
-		RSS_HAL_CALL(st->ops, isp_set_running_mode, st->hal_ctx, RSS_ISP_DAY);
+		IMP_ISP_Tuning_SetISPRunningMode(IMPISP_RUNNING_MODE_DAY);
 		RSS_INFO("switched to DAY mode");
 	}
 
@@ -116,12 +116,12 @@ void ric_poll_exposure(ric_state_t *st)
 	if (st->cfg.opmode != RIC_AUTO)
 		return;
 
-	rss_exposure_t exp;
-	int ret = RSS_HAL_CALL(st->ops, isp_get_exposure, st->hal_ctx, &exp);
-	if (ret != RSS_OK)
+	IMPISPEVAttr ev;
+	if (IMP_ISP_Tuning_GetEVAttr(&ev) != 0)
 		return;
 
-	uint32_t gain = exp.total_gain;
+	/* Use ev.ev as the brightness metric (matches vendor sample) */
+	uint32_t gain = ev.again + ev.dgain;
 
 	if (st->current_mode == RIC_MODE_DAY) {
 		/* Check for night transition */
