@@ -120,6 +120,7 @@ void *rsd_video_reader_thread(void *arg)
 				    &length, &meta);
 		if (ret == RSS_EOVERFLOW) {
 			rctx->read_seq = read_seq;
+			rss_ring_request_idr(rctx->ring);
 			continue;
 		}
 		if (ret != 0)

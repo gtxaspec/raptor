@@ -50,6 +50,10 @@ static void *encoder_thread(void *arg)
 	int64_t last_stats = rss_timestamp_us();
 
 	while (*st->running) {
+		/* Check for consumer IDR request (set via ring header flag) */
+		if (s->ring && rss_ring_check_idr(s->ring))
+			RSS_HAL_CALL(st->ops, enc_request_idr, st->hal_ctx, s->chn);
+
 		/* Block until encoder has a frame (up to 1 second timeout).
 		 * Each thread blocks independently so channels don't starve. */
 		int ret = RSS_HAL_CALL(st->ops, enc_poll, st->hal_ctx, s->chn, 1000);
