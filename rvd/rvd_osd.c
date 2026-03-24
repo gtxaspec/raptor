@@ -86,11 +86,10 @@ static bool create_region(rvd_state_t *st, int s, int r, uint32_t w, uint32_t h)
 		const char *lp;
 		int lw, lh;
 		if (s == 0) {
-			/* Use 100x30 logo for now — 210x64 garbles on main stream
-			 * (likely SDK IPU limitation with larger BGRA bitmaps) */
-			lp = "/usr/share/images/thingino_100x30.bgra";
-			lw = 100;
-			lh = 30;
+			lp = rss_config_get_str(st->cfg, "osd", "logo_path",
+						"/usr/share/images/thingino_100x30.bgra");
+			lw = rss_config_get_int(st->cfg, "osd", "logo_width", 100);
+			lh = rss_config_get_int(st->cfg, "osd", "logo_height", 30);
 		} else {
 			lp = "/usr/share/images/thingino_100x30.bgra";
 			lw = 100;
@@ -159,8 +158,8 @@ static bool create_region(rvd_state_t *st, int s, int r, uint32_t w, uint32_t h)
 	if (ret != RSS_OK)
 		RSS_WARN("osd_set_region_attr(s%d/%s) failed: %d", s, region_names[r], ret);
 
-	/* Init with show=0 (hidden). ShowRgn(1) called from update thread. */
-	RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, handle, grp, 0);
+	/* Init with show=0. Layer r+1 (1-based, matching prudynt convention). */
+	RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, handle, grp, 0, r + 1);
 
 	reg->hal_handle = handle;
 	reg->active = true;
@@ -227,9 +226,12 @@ void rvd_osd_init(rvd_state_t *st)
 		}
 
 		if (rss_config_get_bool(cfg, "osd", "logo_enabled", true)) {
-			/* Use 100x30 for both streams until 210x64 garble is resolved */
-			uint32_t lw = 100;
-			uint32_t lh = 30;
+			uint32_t lw = rss_config_get_int(cfg, "osd", "logo_width", OSD_LOGO_W);
+			uint32_t lh = rss_config_get_int(cfg, "osd", "logo_height", OSD_LOGO_H);
+			if (s > 0) {
+				lw = 100;
+				lh = 30;
+			}
 			if (create_region(st, s, RVD_OSD_LOGO, lw, lh))
 				region_count++;
 		}
@@ -326,7 +328,8 @@ void *rvd_osd_thread(void *arg)
 			rvd_osd_region_t *reg = &st->osd_regions[s][r];
 			if (!reg->active)
 				continue;
-			RSS_HAL_CALL(st->ops, osd_show, st->hal_ctx, reg->hal_handle, grp, true);
+			RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, reg->hal_handle, grp, 1,
+				     r + 1);
 			reg->shown = true;
 		}
 	}
@@ -356,7 +359,7 @@ void rvd_osd_deinit(rvd_state_t *st)
 			rvd_osd_region_t *reg = &st->osd_regions[s][r];
 			if (reg->active && reg->hal_handle >= 0) {
 				RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, reg->hal_handle,
-					     grp, 0);
+					     grp, 0, r + 1);
 				RSS_HAL_CALL(st->ops, osd_unregister_region, st->hal_ctx,
 					     reg->hal_handle, grp);
 				RSS_HAL_CALL(st->ops, osd_destroy_region, st->hal_ctx,
