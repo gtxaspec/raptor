@@ -281,8 +281,38 @@ void rvd_osd_init(rvd_state_t *st)
 		}
 
 		RSS_INFO("osd stream%d: %d regions created", s, region_count);
+
+		/* Privacy cover region (full-frame black, initially hidden) */
+		int stream_w = st->streams[s].enc_cfg.width;
+		int stream_h = st->streams[s].enc_cfg.height;
+		/* Privacy cover color from config (default black) */
+		uint32_t pcol = (uint32_t)strtoul(
+			rss_config_get_str(st->cfg, "osd", "privacy_color", "0xFF000000"), NULL, 0);
+		rss_osd_region_t cover = {
+			.type = RSS_OSD_COVER,
+			.x = 0,
+			.y = 0,
+			.width = stream_w,
+			.height = stream_h,
+			.cover_color = pcol,
+			.bitmap_fmt = RSS_PIXFMT_BGRA,
+			.layer = 0, /* below text regions (1-4) so text shows on top */
+		};
+		int ph = -1;
+		int pret = RSS_HAL_CALL(st->ops, osd_create_region, st->hal_ctx, &ph, &cover);
+		if (pret == RSS_OK) {
+			int grp = st->streams[s].chn;
+			RSS_HAL_CALL(st->ops, osd_register_region, st->hal_ctx, ph, grp);
+			RSS_HAL_CALL(st->ops, osd_set_region_attr, st->hal_ctx, ph, &cover);
+			RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, ph, grp, 0, 0);
+			st->privacy_handles[s] = ph;
+			RSS_DEBUG("privacy cover region stream%d handle=%d", s, ph);
+		} else {
+			st->privacy_handles[s] = -1;
+		}
 	}
 
+	st->privacy_active = false;
 	st->osd_retry_counter = 0;
 }
 
@@ -353,6 +383,25 @@ void rvd_osd_check(rvd_state_t *st)
 			rss_osd_clear_dirty(reg->shm);
 		}
 	}
+}
+
+void rvd_osd_set_privacy(rvd_state_t *st, bool enable)
+{
+	if (!st->osd_enabled)
+		return;
+
+	for (int s = 0; s < st->stream_count; s++) {
+		if (st->streams[s].is_jpeg)
+			continue;
+		int ph = st->privacy_handles[s];
+		if (ph < 0)
+			continue;
+		int grp = st->streams[s].chn;
+		RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, ph, grp, enable ? 1 : 0, 0);
+	}
+
+	st->privacy_active = enable;
+	RSS_INFO("privacy mode %s", enable ? "ON" : "OFF");
 }
 
 void *rvd_osd_thread(void *arg)

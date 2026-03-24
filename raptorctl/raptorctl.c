@@ -61,6 +61,7 @@ static void usage(void)
 			"  rvd set-fps <ch> <fps>              Change frame rate\n"
 			"  rvd set-qp-bounds <ch> <min> <max>  Change QP range\n"
 			"  rvd request-idr [channel]           Request keyframe\n"
+			"  rvd privacy [on|off]                Toggle privacy mode\n"
 			"\n"
 			"RAD commands:\n"
 			"  rad set-volume <val>                Change input volume\n"
@@ -308,6 +309,13 @@ int main(int argc, char **argv)
 			return 1;
 		}
 		snprintf(json, sizeof(json), "{\"cmd\":\"set-gain\",\"value\":%s}", argv[3]);
+
+	} else if (strcmp(cmd, "privacy") == 0) {
+		if (argc > 3)
+			snprintf(json, sizeof(json), "{\"cmd\":\"privacy\",\"value\":\"%s\"}",
+				 argv[3]);
+		else
+			snprintf(json, sizeof(json), "{\"cmd\":\"privacy\"}");
 
 	} else if (strcmp(cmd, "set-text") == 0) {
 		if (argc < 4) {

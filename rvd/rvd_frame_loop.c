@@ -295,6 +295,31 @@ static int rvd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		CTRL_RESP(resp_buf);
 	}
 
+	if (strstr(cmd_json, "\"privacy\"")) {
+		char val_str[8];
+		bool enable;
+		if (json_get_str(cmd_json, "value", val_str, sizeof(val_str)) == 0)
+			enable = (strcmp(val_str, "on") == 0 || strcmp(val_str, "1") == 0);
+		else
+			enable = !st->privacy_active;
+		rvd_osd_set_privacy(st, enable);
+		/* Tell ROD to show "Privacy Mode" or restore original text */
+		{
+			char rod_resp[128];
+			const char *text = enable ? "Privacy Mode"
+						  : rss_config_get_str(st->cfg, "osd",
+								       "text_string", "Camera");
+			char rod_cmd[128];
+			snprintf(rod_cmd, sizeof(rod_cmd),
+				 "{\"cmd\":\"set-text\",\"value\":\"%s\"}", text);
+			rss_ctrl_send_command("/var/run/rss/rod.sock", rod_cmd, rod_resp,
+					      sizeof(rod_resp), 1000);
+		}
+		snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\",\"privacy\":\"%s\"}",
+			 st->privacy_active ? "on" : "off");
+		CTRL_RESP(resp_buf);
+	}
+
 	if (strstr(cmd_json, "\"status\"")) {
 		int off = snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\",\"streams\":[");
 		for (int i = 0; i < st->stream_count; i++) {
