@@ -77,8 +77,8 @@ static void create_region_shm(rod_state_t *st, int s, int role, uint32_t w, uint
 	char name[64];
 	snprintf(name, sizeof(name), "osd_%d_%s", s, region_names[role]);
 
-	/* Ensure 4-aligned width (SDK DMA requirement) */
-	w = (w + 3) & ~3;
+	/* Ensure even dimensions */
+	w = (w + 1) & ~1;
 	h = (h + 1) & ~1;
 
 	rss_osd_shm_t *shm = rss_osd_create(name, w, h);

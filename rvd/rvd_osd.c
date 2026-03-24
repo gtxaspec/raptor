@@ -68,8 +68,8 @@ static bool create_region(rvd_state_t *st, int s, int r, uint32_t w, uint32_t h)
 {
 	rvd_osd_region_t *reg = &st->osd_regions[s][r];
 
-	/* Ensure 4-aligned dimensions (SDK may require this for DMA) */
-	w = (w + 3) & ~3;
+	/* Ensure even dimensions */
+	w = (w + 1) & ~1;
 	h = (h + 1) & ~1;
 
 	uint32_t buf_size = w * h * 4;
@@ -153,8 +153,12 @@ static bool create_region(rvd_state_t *st, int s, int r, uint32_t w, uint32_t h)
 		return false;
 	}
 
-	/* Init with show=0 (hidden). ShowRgn(1) called from update thread
-	 * after first bitmap is ready, matching vendor SDK sample. */
+	/* SetRgnAttr AFTER RegisterRgn (vendor SDK sample order) */
+	ret = RSS_HAL_CALL(st->ops, osd_set_region_attr, st->hal_ctx, handle, &attr);
+	if (ret != RSS_OK)
+		RSS_WARN("osd_set_region_attr(s%d/%s) failed: %d", s, region_names[r], ret);
+
+	/* Init with show=0 (hidden). ShowRgn(1) called from update thread. */
 	RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, handle, grp, 0);
 
 	reg->hal_handle = handle;
