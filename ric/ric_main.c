@@ -115,29 +115,32 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 	if (strstr(cmd_json, "\"config-show\"")) {
-		IMPISPEVAttr ev = {0};
-		IMP_ISP_Tuning_GetEVAttr(&ev);
+		char exp_resp[256] = {0};
+		rss_ctrl_send_command("/var/run/rss/rvd.sock", "{\"cmd\":\"get-exposure\"}",
+				      exp_resp, sizeof(exp_resp), 1000);
 		snprintf(resp_buf, resp_buf_size,
 			 "{\"status\":\"ok\",\"mode\":\"%s\",\"state\":\"%s\","
-			 "\"again\":%u,\"dgain\":%u,\"ev\":%u,"
+			 "\"exposure\":%s,"
 			 "\"night_threshold\":%d,\"day_threshold\":%d}",
 			 st->cfg.opmode == RIC_AUTO
 				 ? "auto"
 				 : (st->cfg.opmode == RIC_FORCE_DAY ? "day" : "night"),
-			 st->current_mode == RIC_MODE_DAY ? "day" : "night", ev.again, ev.dgain,
-			 ev.ev, st->cfg.night_threshold, st->cfg.day_threshold);
+			 st->current_mode == RIC_MODE_DAY ? "day" : "night",
+			 exp_resp[0] ? exp_resp : "null", st->cfg.night_threshold,
+			 st->cfg.day_threshold);
 		return (int)strlen(resp_buf);
 	}
 
 	/* Default: status */
-	IMPISPEVAttr ev = {0};
-	IMP_ISP_Tuning_GetEVAttr(&ev);
+	char exp_resp[256] = {0};
+	rss_ctrl_send_command("/var/run/rss/rvd.sock", "{\"cmd\":\"get-exposure\"}", exp_resp,
+			      sizeof(exp_resp), 1000);
 	snprintf(resp_buf, resp_buf_size,
-		 "{\"status\":\"ok\",\"mode\":\"%s\",\"state\":\"%s\","
-		 "\"again\":%u,\"dgain\":%u}",
+		 "{\"status\":\"ok\",\"mode\":\"%s\",\"state\":\"%s\",\"exposure\":%s}",
 		 st->cfg.opmode == RIC_AUTO ? "auto"
 					    : (st->cfg.opmode == RIC_FORCE_DAY ? "day" : "night"),
-		 st->current_mode == RIC_MODE_DAY ? "day" : "night", ev.again, ev.dgain);
+		 st->current_mode == RIC_MODE_DAY ? "day" : "night",
+		 exp_resp[0] ? exp_resp : "null");
 	return (int)strlen(resp_buf);
 }
 
@@ -214,17 +217,16 @@ int main(int argc, char **argv)
 	st.current_mode = RIC_MODE_DAY;
 	load_config(&st);
 
-	/* Wait for RVD to initialize ISP before querying exposure.
-	 * RIC uses libimp tuning functions directly (no HAL init needed —
-	 * libimp.so is shared, ISP already initialized by RVD). */
-	RSS_INFO("waiting for ISP...");
+	/* Wait for RVD control socket to be available */
+	RSS_INFO("waiting for RVD...");
 	for (int i = 0; i < 100 && *running; i++) {
-		IMPISPEVAttr ev;
-		if (IMP_ISP_Tuning_GetEVAttr(&ev) == 0) {
-			RSS_INFO("ISP ready (again=%u dgain=%u)", ev.again, ev.dgain);
+		char resp[256];
+		if (rss_ctrl_send_command("/var/run/rss/rvd.sock", "{\"cmd\":\"get-exposure\"}",
+					  resp, sizeof(resp), 1000) >= 0) {
+			RSS_INFO("RVD ready (%s)", resp);
 			break;
 		}
-		usleep(100000);
+		usleep(500000);
 	}
 
 	/* Init GPIOs */

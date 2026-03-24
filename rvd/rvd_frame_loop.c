@@ -301,6 +301,28 @@ static int rvd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		CTRL_RESP(resp_buf);
 	}
 
+	if (strstr(cmd_json, "\"get-exposure\"")) {
+		rss_exposure_t exp = {0};
+		RSS_HAL_CALL(st->ops, isp_get_exposure, st->hal_ctx, &exp);
+		snprintf(resp_buf, resp_buf_size,
+			 "{\"total_gain\":%u,\"exposure_us\":%u,\"ae_luma\":%u}", exp.total_gain,
+			 exp.exposure_time, exp.ae_luma);
+		CTRL_RESP(resp_buf);
+	}
+
+	if (strstr(cmd_json, "\"set-running-mode\"")) {
+		char val[8];
+		if (json_get_str(cmd_json, "value", val, sizeof(val)) == 0) {
+			int mode = (strcmp(val, "night") == 0) ? 1 : 0;
+			RSS_HAL_CALL(st->ops, isp_set_running_mode, st->hal_ctx, mode);
+			snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\",\"mode\":\"%s\"}",
+				 mode ? "night" : "day");
+		} else {
+			snprintf(resp_buf, resp_buf_size, "{\"status\":\"error\"}");
+		}
+		CTRL_RESP(resp_buf);
+	}
+
 	if (strstr(cmd_json, "\"status\"")) {
 		int off = snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\",\"streams\":[");
 		for (int i = 0; i < st->stream_count; i++) {

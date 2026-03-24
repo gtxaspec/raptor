@@ -6,6 +6,8 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
 
@@ -81,7 +83,12 @@ void ric_set_mode(ric_state_t *st, ric_mode_t mode)
 		}
 		if (st->cfg.gpio_irled >= 0)
 			gpio_set(st->cfg.gpio_irled, 1);
-		IMP_ISP_Tuning_SetISPRunningMode(IMPISP_RUNNING_MODE_NIGHT);
+		{
+			char resp[128];
+			rss_ctrl_send_command("/var/run/rss/rvd.sock",
+					      "{\"cmd\":\"set-running-mode\",\"value\":\"night\"}",
+					      resp, sizeof(resp), 2000);
+		}
 		RSS_INFO("switched to NIGHT mode");
 	} else {
 		/* Day: close IR-cut filter, disable IR LEDs, ISP day mode */
@@ -98,7 +105,12 @@ void ric_set_mode(ric_state_t *st, ric_mode_t mode)
 		}
 		if (st->cfg.gpio_irled >= 0)
 			gpio_set(st->cfg.gpio_irled, 0);
-		IMP_ISP_Tuning_SetISPRunningMode(IMPISP_RUNNING_MODE_DAY);
+		{
+			char resp[128];
+			rss_ctrl_send_command("/var/run/rss/rvd.sock",
+					      "{\"cmd\":\"set-running-mode\",\"value\":\"day\"}",
+					      resp, sizeof(resp), 2000);
+		}
 		RSS_INFO("switched to DAY mode");
 	}
 
@@ -111,17 +123,34 @@ void ric_set_mode(ric_state_t *st, ric_mode_t mode)
  * Poll ISP exposure and decide day/night transition.
  * Uses total_gain with hysteresis debounce.
  */
+/* Parse integer from simple JSON: "key":123 */
+static int json_parse_uint(const char *json, const char *key, uint32_t *out)
+{
+	char pattern[64];
+	snprintf(pattern, sizeof(pattern), "\"%s\":", key);
+	const char *p = strstr(json, pattern);
+	if (!p)
+		return -1;
+	p += strlen(pattern);
+	*out = (uint32_t)strtoul(p, NULL, 10);
+	return 0;
+}
+
 void ric_poll_exposure(ric_state_t *st)
 {
 	if (st->cfg.opmode != RIC_AUTO)
 		return;
 
-	IMPISPEVAttr ev;
-	if (IMP_ISP_Tuning_GetEVAttr(&ev) != 0)
+	/* Query RVD for ISP exposure data via control socket */
+	char resp[256];
+	int ret = rss_ctrl_send_command("/var/run/rss/rvd.sock", "{\"cmd\":\"get-exposure\"}", resp,
+					sizeof(resp), 1000);
+	if (ret < 0)
 		return;
 
-	/* Use ev.ev as the brightness metric (matches vendor sample) */
-	uint32_t gain = ev.again + ev.dgain;
+	uint32_t total_gain = 0;
+	json_parse_uint(resp, "total_gain", &total_gain);
+	uint32_t gain = total_gain;
 
 	if (st->current_mode == RIC_MODE_DAY) {
 		/* Check for night transition */
