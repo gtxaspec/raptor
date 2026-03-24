@@ -137,7 +137,7 @@ static void handle_snapshot(int fd, rss_ring_t *ring, uint8_t *buf, uint32_t buf
 		ret = rss_ring_read(ring, &seq, buf, buf_size, &length, &meta);
 	}
 
-	if (ret != 0 || length == 0) {
+	if (ret != 0 || length < 2 || buf[0] != 0xFF || buf[1] != 0xD8) {
 		http_error(fd, "503 Service Unavailable", "No snapshot available yet");
 		return;
 	}
@@ -339,7 +339,7 @@ static void server_run(rhd_server_t *srv)
 				ret = rss_ring_read(srv->jpeg_rings[0], &jpeg_read_seqs[0],
 						    frame_buf, frame_buf_size, &len, &meta);
 			}
-			if (ret == 0) {
+			if (ret == 0 && len >= 2 && frame_buf[0] == 0xFF && frame_buf[1] == 0xD8) {
 				stream_mjpeg_frame(srv, frame_buf, len);
 			} else if (ret == RSS_EOVERFLOW) {
 				/* still overflow after retry — skip */
