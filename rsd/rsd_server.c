@@ -17,6 +17,32 @@
 
 #include "rsd.h"
 
+/* Format client address for logging (IPv4-mapped shown as plain IPv4) */
+static const char *client_addr_str(const struct sockaddr_storage *ss, char *buf, size_t bufsz)
+{
+	if (ss->ss_family == AF_INET) {
+		inet_ntop(AF_INET, &((const struct sockaddr_in *)ss)->sin_addr, buf, bufsz);
+	} else if (ss->ss_family == AF_INET6) {
+		const struct sockaddr_in6 *s6 = (const struct sockaddr_in6 *)ss;
+		if (IN6_IS_ADDR_V4MAPPED(&s6->sin6_addr))
+			inet_ntop(AF_INET, &s6->sin6_addr.s6_addr[12], buf, bufsz);
+		else
+			inet_ntop(AF_INET6, &s6->sin6_addr, buf, bufsz);
+	} else {
+		snprintf(buf, bufsz, "???");
+	}
+	return buf;
+}
+
+static uint16_t client_port(const struct sockaddr_storage *ss)
+{
+	if (ss->ss_family == AF_INET)
+		return ntohs(((const struct sockaddr_in *)ss)->sin_port);
+	if (ss->ss_family == AF_INET6)
+		return ntohs(((const struct sockaddr_in6 *)ss)->sin6_port);
+	return 0;
+}
+
 static int set_nonblocking(int fd)
 {
 	int flags = fcntl(fd, F_GETFL, 0);
@@ -39,8 +65,10 @@ static void remove_client(rsd_server_t *srv, rsd_client_t *client)
 	if (!client)
 		return;
 
-	RSS_INFO("client %s:%d disconnected", inet_ntoa(client->addr.sin_addr),
-		 ntohs(client->addr.sin_port));
+	char addrstr[INET6_ADDRSTRLEN];
+	RSS_INFO("client %s:%u disconnected",
+		 client_addr_str(&client->addr, addrstr, sizeof(addrstr)),
+		 client_port(&client->addr));
 
 	/* Step 1: Remove from client list and stop playback under lock.
 	 * This ensures the ring reader threads won't access this client's
@@ -102,7 +130,7 @@ static void remove_client(rsd_server_t *srv, rsd_client_t *client)
 
 static void accept_client(rsd_server_t *srv)
 {
-	struct sockaddr_in addr;
+	struct sockaddr_storage addr;
 	socklen_t addrlen = sizeof(addr);
 	int fd = accept(srv->listen_fd, (struct sockaddr *)&addr, &addrlen);
 	if (fd < 0)
@@ -147,8 +175,9 @@ static void accept_client(rsd_server_t *srv)
 	srv->clients[srv->client_count++] = client;
 	pthread_mutex_unlock(&srv->clients_lock);
 
-	RSS_INFO("client %s:%d connected (%d/%d)", inet_ntoa(addr.sin_addr), ntohs(addr.sin_port),
-		 srv->client_count, RSD_MAX_CLIENTS);
+	char addrstr[INET6_ADDRSTRLEN];
+	RSS_INFO("client %s:%u connected (%d/%d)", client_addr_str(&addr, addrstr, sizeof(addrstr)),
+		 client_port(&addr), srv->client_count, RSD_MAX_CLIENTS);
 }
 
 static void handle_client_data(rsd_server_t *srv, int fd)
@@ -227,8 +256,8 @@ int rsd_server_init(rsd_server_t *srv)
 		RSS_INFO("no audio ring (RAD not running?)");
 	}
 
-	/* Create listen socket */
-	srv->listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+	/* Create dual-stack IPv6 listen socket */
+	srv->listen_fd = socket(AF_INET6, SOCK_STREAM, 0);
 	if (srv->listen_fd < 0) {
 		RSS_FATAL("socket failed: %s", strerror(errno));
 		return -1;
@@ -236,12 +265,17 @@ int rsd_server_init(rsd_server_t *srv)
 
 	int one = 1;
 	setsockopt(srv->listen_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+
+	/* Dual-stack: accept both IPv4 and IPv6 */
+	int zero = 0;
+	setsockopt(srv->listen_fd, IPPROTO_IPV6, IPV6_V6ONLY, &zero, sizeof(zero));
+
 	set_nonblocking(srv->listen_fd);
 
-	struct sockaddr_in addr = {
-		.sin_family = AF_INET,
-		.sin_port = htons(srv->port),
-		.sin_addr.s_addr = INADDR_ANY,
+	struct sockaddr_in6 addr = {
+		.sin6_family = AF_INET6,
+		.sin6_port = htons(srv->port),
+		.sin6_addr = in6addr_any,
 	};
 
 	if (bind(srv->listen_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
@@ -279,7 +313,7 @@ int rsd_server_init(rsd_server_t *srv)
 		}
 	}
 
-	RSS_INFO("RTSP server listening on port %d", srv->port);
+	RSS_INFO("RTSP server listening on port %d (dual-stack)", srv->port);
 	return 0;
 }
 

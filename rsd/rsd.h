@@ -42,7 +42,7 @@ typedef struct {
 /* Per-client state */
 typedef struct rsd_client {
 	int fd;
-	struct sockaddr_in addr;
+	struct sockaddr_storage addr;
 	uint64_t session_id;
 	rsd_stream_t video;
 	rsd_stream_t audio;
