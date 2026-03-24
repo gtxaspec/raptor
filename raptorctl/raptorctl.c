@@ -70,6 +70,9 @@ static void usage(void)
 			"ROD commands:\n"
 			"  rod set-text <text>                 Change OSD text string\n"
 			"\n"
+			"RIC commands:\n"
+			"  ric mode <auto|day|night>           Set day/night mode\n"
+			"\n"
 			"Daemons: rvd, rsd, rad, rod, ric\n");
 }
 
@@ -323,6 +326,13 @@ int main(int argc, char **argv)
 			return 1;
 		}
 		snprintf(json, sizeof(json), "{\"cmd\":\"set-text\",\"value\":\"%s\"}", argv[3]);
+
+	} else if (strcmp(cmd, "mode") == 0) {
+		if (argc < 4) {
+			fprintf(stderr, "Usage: raptorctl %s mode <auto|day|night>\n", daemon);
+			return 1;
+		}
+		snprintf(json, sizeof(json), "{\"cmd\":\"mode\",\"value\":\"%s\"}", argv[3]);
 
 	} else {
 		/* Generic pass-through */
