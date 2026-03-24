@@ -54,6 +54,10 @@ typedef struct {
 	rvd_osd_region_t osd_regions[RVD_MAX_STREAMS][RVD_OSD_REGIONS];
 	int osd_retry_counter;
 
+	/* Privacy mode (full-frame black cover) */
+	int privacy_handles[RVD_MAX_STREAMS]; /* HAL region handles, -1 if none */
+	bool privacy_active;
+
 	/* Control */
 	rss_ctrl_t *ctrl;
 
@@ -82,5 +86,6 @@ void rvd_osd_init(rvd_state_t *st);
 void rvd_osd_check(rvd_state_t *st);
 void rvd_osd_deinit(rvd_state_t *st);
 void *rvd_osd_thread(void *arg);
+void rvd_osd_set_privacy(rvd_state_t *st, bool enable);
 
 #endif /* RVD_H */
