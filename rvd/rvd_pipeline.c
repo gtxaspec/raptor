@@ -298,12 +298,13 @@ int rvd_pipeline_init(rvd_state_t *st)
 				st->osd_enabled = false;
 				break;
 			}
-			/* Start OSD group immediately after creation.
-			 * Must be running before FS enable for frames to flow. */
-			RSS_HAL_CALL(st->ops, osd_start, st->hal_ctx, grp);
-			RSS_DEBUG("osd group %d created + started", grp);
+			/* OSD group started via osd_show_region in rvd_osd_init */
+			RSS_DEBUG("osd group %d created", grp);
 		}
 	}
+
+	/* ── 6b. Create OSD regions (before encoder start) ── */
+	rvd_osd_init(st);
 
 	/* ── 7. Create encoder groups and channels ── */
 	/* Video streams: create group, create chn, register chn in group.
@@ -403,8 +404,21 @@ int rvd_pipeline_init(rvd_state_t *st)
 		}
 	}
 
-	/* ── 9. Start OSD groups, enable framesource, start encoder ── */
+	/* ── 9. Start OSD groups (after bind, before FS enable per SDK spec) ── */
+	if (st->osd_enabled) {
+		for (int i = 0; i < st->stream_count; i++) {
+			if (st->streams[i].is_jpeg)
+				continue;
+			int grp = st->streams[i].chn;
+			ret = RSS_HAL_CALL(st->ops, osd_start, st->hal_ctx, grp);
+			if (ret != RSS_OK)
+				RSS_WARN("osd_start(%d) failed: %d", grp, ret);
+			else
+				RSS_INFO("osd_start(%d) ok", grp);
+		}
+	}
 
+	/* ── 10. Enable framesource, start encoder ── */
 	for (int i = 0; i < st->stream_count; i++) {
 		int chn = st->streams[i].chn;
 
@@ -486,8 +500,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 			st->streams[ji].enc_cfg.fps_num, st->streams[ji].enc_cfg.fps_den, 0, 0);
 	}
 
-	/* ── 11. OSD consumer init (stub for now) ── */
-	rvd_osd_init(st);
+	/* OSD regions already created in step 6b */
 
 	RSS_INFO("pipeline ready: %d streams", st->stream_count);
 	return RSS_OK;
