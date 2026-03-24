@@ -97,6 +97,11 @@ typedef struct {
 	int sample_rate;
 	int codec_id;
 	const char *codec_str;
+#ifdef RAPTOR_AUDIO_EFFECTS
+	bool ns_enabled;
+	bool hpf_enabled;
+	bool agc_enabled;
+#endif
 } rad_ctrl_ctx_t;
 
 static int json_get_int(const char *json, const char *key, int *out)
@@ -180,6 +185,84 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		CTRL_RESP(resp_buf);
 	}
 
+#ifdef RAPTOR_AUDIO_EFFECTS
+	if (strstr(cmd_json, "\"set-ns\"")) {
+		char level[16] = "";
+		json_get_str(cmd_json, "level", level, sizeof(level));
+		if (json_get_int(cmd_json, "value", &val) == 0) {
+			int ret = RSS_OK;
+			if (val && !ctx->ns_enabled) {
+				rss_ns_level_t ns = RSS_NS_MODERATE;
+				if (strcasecmp(level, "low") == 0)
+					ns = RSS_NS_LOW;
+				else if (strcasecmp(level, "high") == 0)
+					ns = RSS_NS_HIGH;
+				else if (strcasecmp(level, "veryhigh") == 0)
+					ns = RSS_NS_VERYHIGH;
+				ret = RSS_HAL_CALL(ctx->ops, audio_enable_ns, ctx->hal_ctx, ns);
+			} else if (!val && ctx->ns_enabled) {
+				ret = RSS_HAL_CALL(ctx->ops, audio_disable_ns, ctx->hal_ctx);
+			}
+			if (ret == RSS_OK)
+				ctx->ns_enabled = !!val;
+			snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\",\"ns\":%s}",
+				 ret == RSS_OK ? "ok" : "error",
+				 ctx->ns_enabled ? "true" : "false");
+		} else {
+			snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"error\",\"reason\":\"need value (0/1)\"}");
+		}
+		CTRL_RESP(resp_buf);
+	}
+
+	if (strstr(cmd_json, "\"set-hpf\"")) {
+		if (json_get_int(cmd_json, "value", &val) == 0) {
+			int ret = RSS_OK;
+			if (val && !ctx->hpf_enabled)
+				ret = RSS_HAL_CALL(ctx->ops, audio_enable_hpf, ctx->hal_ctx);
+			else if (!val && ctx->hpf_enabled)
+				ret = RSS_HAL_CALL(ctx->ops, audio_disable_hpf, ctx->hal_ctx);
+			if (ret == RSS_OK)
+				ctx->hpf_enabled = !!val;
+			snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\",\"hpf\":%s}",
+				 ret == RSS_OK ? "ok" : "error",
+				 ctx->hpf_enabled ? "true" : "false");
+		} else {
+			snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"error\",\"reason\":\"need value (0/1)\"}");
+		}
+		CTRL_RESP(resp_buf);
+	}
+
+	if (strstr(cmd_json, "\"set-agc\"")) {
+		if (json_get_int(cmd_json, "value", &val) == 0) {
+			int ret = RSS_OK;
+			if (val) {
+				int target = 10, compression = 0;
+				json_get_int(cmd_json, "target", &target);
+				json_get_int(cmd_json, "compression", &compression);
+				rss_agc_config_t agc_cfg = {
+					.target_level_dbfs = target,
+					.compression_gain_db = compression,
+				};
+				ret = RSS_HAL_CALL(ctx->ops, audio_enable_agc, ctx->hal_ctx,
+						   &agc_cfg);
+			} else if (ctx->agc_enabled) {
+				ret = RSS_HAL_CALL(ctx->ops, audio_disable_agc, ctx->hal_ctx);
+			}
+			if (ret == RSS_OK)
+				ctx->agc_enabled = !!val;
+			snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\",\"agc\":%s}",
+				 ret == RSS_OK ? "ok" : "error",
+				 ctx->agc_enabled ? "true" : "false");
+		} else {
+			snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"error\",\"reason\":\"need value (0/1)\"}");
+		}
+		CTRL_RESP(resp_buf);
+	}
+#endif /* RAPTOR_AUDIO_EFFECTS */
+
 	if (strstr(cmd_json, "\"config-save\"")) {
 		int ret = rss_config_save(ctx->cfg, ctx->config_path);
 		snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
@@ -202,8 +285,18 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	if (strstr(cmd_json, "\"status\"")) {
 		snprintf(resp_buf, resp_buf_size,
 			 "{\"status\":\"ok\",\"codec\":\"%s\","
-			 "\"sample_rate\":%d,\"volume\":%d,\"gain\":%d}",
-			 ctx->codec_str, ctx->sample_rate, ctx->volume, ctx->gain);
+			 "\"sample_rate\":%d,\"volume\":%d,\"gain\":%d"
+#ifdef RAPTOR_AUDIO_EFFECTS
+			 ",\"ns\":%s,\"hpf\":%s,\"agc\":%s"
+#endif
+			 "}",
+			 ctx->codec_str, ctx->sample_rate, ctx->volume, ctx->gain
+#ifdef RAPTOR_AUDIO_EFFECTS
+			 ,
+			 ctx->ns_enabled ? "true" : "false", ctx->hpf_enabled ? "true" : "false",
+			 ctx->agc_enabled ? "true" : "false"
+#endif
+		);
 		CTRL_RESP(resp_buf);
 	}
 
@@ -330,6 +423,55 @@ int main(int argc, char **argv)
 	RSS_INFO("audio: dev=%d %d Hz %s vol=%d gain=%d", ai_dev, sample_rate, codec_str, volume,
 		 gain);
 
+	/* ── Audio effects (libaudioProcess.so) ── */
+#ifdef RAPTOR_AUDIO_EFFECTS
+	bool ns_enabled = rss_config_get_bool(cfg, "audio", "ns_enabled", false);
+	if (ns_enabled) {
+		const char *ns_str = rss_config_get_str(cfg, "audio", "ns_level", "moderate");
+		rss_ns_level_t ns_level = RSS_NS_MODERATE;
+		if (strcasecmp(ns_str, "low") == 0)
+			ns_level = RSS_NS_LOW;
+		else if (strcasecmp(ns_str, "high") == 0)
+			ns_level = RSS_NS_HIGH;
+		else if (strcasecmp(ns_str, "veryhigh") == 0)
+			ns_level = RSS_NS_VERYHIGH;
+		ret = RSS_HAL_CALL(ops, audio_enable_ns, hal_ctx, ns_level);
+		if (ret == RSS_OK)
+			RSS_INFO("noise suppression: %s", ns_str);
+		else
+			RSS_WARN("noise suppression failed: %d", ret);
+	}
+
+	bool hpf_enabled = rss_config_get_bool(cfg, "audio", "hpf_enabled", false);
+	if (hpf_enabled) {
+		ret = RSS_HAL_CALL(ops, audio_enable_hpf, hal_ctx);
+		if (ret == RSS_OK)
+			RSS_INFO("high-pass filter enabled");
+		else
+			RSS_WARN("high-pass filter failed: %d", ret);
+	}
+
+	bool agc_enabled = rss_config_get_bool(cfg, "audio", "agc_enabled", false);
+	if (agc_enabled) {
+		rss_agc_config_t agc_cfg = {
+			.target_level_dbfs =
+				rss_config_get_int(cfg, "audio", "agc_target_dbfs", 10),
+			.compression_gain_db =
+				rss_config_get_int(cfg, "audio", "agc_compression_db", 0),
+		};
+		ret = RSS_HAL_CALL(ops, audio_enable_agc, hal_ctx, &agc_cfg);
+		if (ret == RSS_OK)
+			RSS_INFO("agc: target=%d dBfs, compression=%d dB",
+				 agc_cfg.target_level_dbfs, agc_cfg.compression_gain_db);
+		else
+			RSS_WARN("agc failed: %d", ret);
+	}
+#else
+	bool ns_enabled = false;
+	bool hpf_enabled = false;
+	bool agc_enabled = false;
+#endif
+
 	/* Ring buffer — L16 frames are larger (2 bytes/sample vs 1) */
 	int ring_data_size = (codec_id == RAD_CODEC_L16) ? 256 * 1024 : 128 * 1024;
 	ring = rss_ring_create("audio", 32, ring_data_size);
@@ -357,8 +499,13 @@ int main(int argc, char **argv)
 	RSS_INFO("audio loop: %d samples/frame (%dms), %s", audio_cfg.samples_per_frame, 1000 / 50,
 		 codec_str);
 
-	rad_ctrl_ctx_t ctrl_ctx = {cfg,	   config_path, ops,	     hal_ctx,  ai_dev,
-				   volume, gain,	sample_rate, codec_id, codec_str};
+	rad_ctrl_ctx_t ctrl_ctx = {
+		cfg,	    config_path, ops,	      hal_ctx,	ai_dev,
+		volume,	    gain,	 sample_rate, codec_id, codec_str,
+#ifdef RAPTOR_AUDIO_EFFECTS
+		ns_enabled, hpf_enabled, agc_enabled,
+#endif
+	};
 
 	uint64_t frame_count = 0;
 	int64_t last_stats = rss_timestamp_us();
