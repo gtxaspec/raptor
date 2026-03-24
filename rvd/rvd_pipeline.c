@@ -487,7 +487,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 			continue;
 		char ring_name[16];
 		snprintf(ring_name, sizeof(ring_name), "jpeg%d", j);
-		st->streams[ji].ring = rss_ring_create(ring_name, 4, 512 * 1024);
+		st->streams[ji].ring = rss_ring_create(ring_name, 16, 2 * 1024 * 1024);
 		if (!st->streams[ji].ring) {
 			RSS_FATAL("failed to create %s ring", ring_name);
 			return RSS_ERR;
