@@ -55,7 +55,7 @@ echo "Building for $PLATFORM ($PROFILE)"
 
 if [ $# -eq 0 ]; then
     make $MAKE_ARGS distclean
-    exec make -j$(nproc) $MAKE_ARGS rvd rsd rad rhd rod ric raptorctl ringdump
+    exec make -j$(nproc) $MAKE_ARGS rvd rsd rad rhd rod ric rmr raptorctl ringdump
 else
     exec make -j$(nproc) $MAKE_ARGS "$@"
 fi
