@@ -18,7 +18,7 @@ MAKE_ARGS="PLATFORM=T31 CROSS_COMPILE=mipsel-linux- SYSROOT=$SYSROOT"
 if [ $# -eq 0 ]; then
     # Full clean rebuild
     make $MAKE_ARGS distclean
-    exec make -j$(nproc) $MAKE_ARGS rvd rsd rad rhd raptorctl ringdump
+    exec make -j$(nproc) $MAKE_ARGS rvd rsd rad rhd rod raptorctl ringdump
 else
     exec make -j$(nproc) $MAKE_ARGS "$@"
 fi

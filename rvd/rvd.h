@@ -9,8 +9,16 @@
 #include <rss_ipc.h>
 #include <rss_common.h>
 
-#define RVD_MAX_STREAMS 4 /* main, sub, jpeg0, jpeg1 */
-#define RVD_MAX_JPEG	2
+#define RVD_MAX_STREAMS	       4 /* main, sub, jpeg0, jpeg1 */
+#define RVD_MAX_JPEG	       2
+#define RVD_OSD_REGIONS	       4
+#define RVD_OSD_RETRY_INTERVAL 50 /* check ticks (~5s at 10Hz) */
+
+/* OSD region roles (must match ROD naming) */
+#define RVD_OSD_TIME   0
+#define RVD_OSD_UPTIME 1
+#define RVD_OSD_TEXT   2
+#define RVD_OSD_LOGO   3
 
 typedef struct {
 	rss_video_config_t enc_cfg;
@@ -20,6 +28,15 @@ typedef struct {
 	bool enabled;
 	bool is_jpeg; /* true for snapshot channel */
 } rvd_stream_t;
+
+/* Per-OSD-region state */
+typedef struct {
+	rss_osd_shm_t *shm;
+	int hal_handle; /* -1 if not created */
+	uint32_t width;
+	uint32_t height;
+	bool active;
+} rvd_osd_region_t;
 
 typedef struct {
 	/* HAL */
@@ -31,7 +48,9 @@ typedef struct {
 	int stream_count;
 
 	/* OSD */
-	rss_osd_shm_t *osd_shm[RVD_MAX_STREAMS];
+	bool osd_enabled;
+	rvd_osd_region_t osd_regions[RVD_MAX_STREAMS][RVD_OSD_REGIONS];
+	int osd_retry_counter;
 
 	/* Control */
 	rss_ctrl_t *ctrl;

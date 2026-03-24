@@ -282,7 +282,25 @@ int rvd_pipeline_init(rvd_state_t *st)
 		RSS_HAL_CALL(st->ops, fs_set_frame_depth, st->hal_ctx, i, 0);
 	}
 
-	/* ── 6. (OSD deferred to Phase 4) ── */
+	/* ── 6. OSD pipeline (if enabled) ── */
+	st->osd_enabled = rss_config_get_bool(cfg, "osd", "enabled", true);
+	if (st->osd_enabled) {
+		RSS_HAL_CALL(st->ops, osd_set_pool_size, st->hal_ctx, 1 * 1024 * 1024);
+
+		for (int i = 0; i < st->stream_count; i++) {
+			if (st->streams[i].is_jpeg)
+				continue;
+			int grp = st->streams[i].chn;
+			ret = RSS_HAL_CALL(st->ops, osd_create_group, st->hal_ctx, grp);
+			if (ret != RSS_OK) {
+				RSS_WARN("osd_create_group(%d) failed: %d, disabling OSD", grp,
+					 ret);
+				st->osd_enabled = false;
+				break;
+			}
+			RSS_DEBUG("osd group %d created", grp);
+		}
+	}
 
 	/* ── 7. Create encoder groups and channels ── */
 	/* Video streams: create group, create chn, register chn in group.
@@ -342,20 +360,41 @@ int rvd_pipeline_init(rvd_state_t *st)
 		}
 	}
 
-	/* ── 8. Bind pipeline: FS → Encoder (group level) ── */
+	/* ── 8. Bind pipeline ── */
 	/* JPEG is registered in group 0 — no separate bind needed.
 	 * The SDK bind is per-group, not per-channel. */
 	for (int i = 0; i < st->stream_count; i++) {
 		if (st->streams[i].is_jpeg)
 			continue;
 		int chn = st->streams[i].chn;
-		rss_cell_t fs_out = {RSS_DEV_FS, chn, 0};
-		rss_cell_t enc_in = {RSS_DEV_ENC, chn, 0};
 
-		ret = RSS_HAL_CALL(st->ops, bind, st->hal_ctx, &fs_out, &enc_in);
-		if (ret != RSS_OK) {
-			RSS_FATAL("bind FS(%d)->ENC(%d) failed: %d", chn, chn, ret);
-			return ret;
+		if (st->osd_enabled) {
+			/* FS → OSD → ENC */
+			rss_cell_t fs_out = {RSS_DEV_FS, chn, 0};
+			rss_cell_t osd_in = {RSS_DEV_OSD, chn, 0};
+			rss_cell_t osd_out = {RSS_DEV_OSD, chn, 0};
+			rss_cell_t enc_in = {RSS_DEV_ENC, chn, 0};
+
+			ret = RSS_HAL_CALL(st->ops, bind, st->hal_ctx, &fs_out, &osd_in);
+			if (ret != RSS_OK) {
+				RSS_FATAL("bind FS(%d)->OSD(%d) failed: %d", chn, chn, ret);
+				return ret;
+			}
+			ret = RSS_HAL_CALL(st->ops, bind, st->hal_ctx, &osd_out, &enc_in);
+			if (ret != RSS_OK) {
+				RSS_FATAL("bind OSD(%d)->ENC(%d) failed: %d", chn, chn, ret);
+				return ret;
+			}
+		} else {
+			/* Direct: FS → ENC */
+			rss_cell_t fs_out = {RSS_DEV_FS, chn, 0};
+			rss_cell_t enc_in = {RSS_DEV_ENC, chn, 0};
+
+			ret = RSS_HAL_CALL(st->ops, bind, st->hal_ctx, &fs_out, &enc_in);
+			if (ret != RSS_OK) {
+				RSS_FATAL("bind FS(%d)->ENC(%d) failed: %d", chn, chn, ret);
+				return ret;
+			}
 		}
 	}
 
@@ -462,15 +501,26 @@ void rvd_pipeline_deinit(rvd_state_t *st)
 		if (!st->streams[i].is_jpeg) {
 			RSS_HAL_CALL(st->ops, fs_disable_channel, st->hal_ctx, chn);
 
-			rss_cell_t fs_out = {RSS_DEV_FS, chn, 0};
-			rss_cell_t enc_in = {RSS_DEV_ENC, chn, 0};
-			RSS_HAL_CALL(st->ops, unbind, st->hal_ctx, &fs_out, &enc_in);
+			if (st->osd_enabled) {
+				rss_cell_t osd_out = {RSS_DEV_OSD, chn, 0};
+				rss_cell_t enc_in = {RSS_DEV_ENC, chn, 0};
+				RSS_HAL_CALL(st->ops, unbind, st->hal_ctx, &osd_out, &enc_in);
+				rss_cell_t fs_out = {RSS_DEV_FS, chn, 0};
+				rss_cell_t osd_in = {RSS_DEV_OSD, chn, 0};
+				RSS_HAL_CALL(st->ops, unbind, st->hal_ctx, &fs_out, &osd_in);
+			} else {
+				rss_cell_t fs_out = {RSS_DEV_FS, chn, 0};
+				rss_cell_t enc_in = {RSS_DEV_ENC, chn, 0};
+				RSS_HAL_CALL(st->ops, unbind, st->hal_ctx, &fs_out, &enc_in);
+			}
 		}
 
 		RSS_HAL_CALL(st->ops, enc_unregister_channel, st->hal_ctx, chn);
 		RSS_HAL_CALL(st->ops, enc_destroy_channel, st->hal_ctx, chn);
 		if (!st->streams[i].is_jpeg) {
 			RSS_HAL_CALL(st->ops, enc_destroy_group, st->hal_ctx, chn);
+			if (st->osd_enabled)
+				RSS_HAL_CALL(st->ops, osd_destroy_group, st->hal_ctx, chn);
 			RSS_HAL_CALL(st->ops, fs_destroy_channel, st->hal_ctx, chn);
 		}
 
