@@ -177,19 +177,20 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 			return;
 		}
 
-		const void *client_ip = compy_sockaddr_ip((const struct sockaddr *)&self->addr);
+		const struct sockaddr *sa = (const struct sockaddr *)&self->addr;
+		const void *client_ip = compy_sockaddr_ip(sa);
 		if (!client_ip) {
 			compy_respond(ctx, COMPY_STATUS_BAD_REQUEST, "Cannot determine client IP");
 			return;
 		}
 
-		self->udp_rtp_fd = compy_dgram_socket(AF_INET, client_ip, cli_rtp);
+		self->udp_rtp_fd = compy_dgram_socket(sa->sa_family, client_ip, cli_rtp);
 		if (self->udp_rtp_fd < 0) {
 			compy_respond_internal_error(ctx);
 			return;
 		}
 
-		self->udp_rtcp_fd = compy_dgram_socket(AF_INET, client_ip, cli_rtcp);
+		self->udp_rtcp_fd = compy_dgram_socket(sa->sa_family, client_ip, cli_rtcp);
 		if (self->udp_rtcp_fd < 0) {
 			close(self->udp_rtp_fd);
 			self->udp_rtp_fd = -1;
@@ -202,14 +203,22 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 		self->is_tcp = false;
 
 		/* Get server-side ports */
-		struct sockaddr_in local;
+		struct sockaddr_storage local;
 		socklen_t llen = sizeof(local);
 		uint16_t srv_rtp = 0, srv_rtcp = 0;
-		if (getsockname(self->udp_rtp_fd, (struct sockaddr *)&local, &llen) == 0)
-			srv_rtp = ntohs(local.sin_port);
+		if (getsockname(self->udp_rtp_fd, (struct sockaddr *)&local, &llen) == 0) {
+			if (local.ss_family == AF_INET6)
+				srv_rtp = ntohs(((struct sockaddr_in6 *)&local)->sin6_port);
+			else
+				srv_rtp = ntohs(((struct sockaddr_in *)&local)->sin_port);
+		}
 		llen = sizeof(local);
-		if (getsockname(self->udp_rtcp_fd, (struct sockaddr *)&local, &llen) == 0)
-			srv_rtcp = ntohs(local.sin_port);
+		if (getsockname(self->udp_rtcp_fd, (struct sockaddr *)&local, &llen) == 0) {
+			if (local.ss_family == AF_INET6)
+				srv_rtcp = ntohs(((struct sockaddr_in6 *)&local)->sin6_port);
+			else
+				srv_rtcp = ntohs(((struct sockaddr_in *)&local)->sin_port);
+		}
 
 		compy_header(ctx, COMPY_HEADER_TRANSPORT,
 			     "RTP/AVP/UDP;unicast;client_port=%" PRIu16 "-%" PRIu16
