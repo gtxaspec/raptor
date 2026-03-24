@@ -15,9 +15,9 @@
 #define ROD_MAX_STREAMS	     2
 #define ROD_MAX_REGIONS	     4
 #define ROD_GLYPH_CACHE_SIZE 128
-#define ROD_TIME_CHARS   20 /* "2026-03-23 23:59:59" */
-#define ROD_UPTIME_CHARS 12 /* "12345d 23h 59m" */
-#define ROD_TEXT_CHARS   14 /* camera name */
+#define ROD_TIME_CHARS	     20 /* "2026-03-23 23:59:59" */
+#define ROD_UPTIME_CHARS     12 /* "12345d 23h 59m" */
+#define ROD_TEXT_CHARS	     14 /* camera name */
 
 /* Region roles — determines position in RVD */
 #define ROD_REGION_TIME	  0 /* top-left */
@@ -113,8 +113,9 @@ typedef struct {
 int rod_render_init(rod_state_t *st, int stream_idx, int font_size);
 void rod_render_deinit(rod_state_t *st, int stream_idx);
 rod_glyph_t *rod_glyph_lookup(rod_font_t *font, uint32_t codepoint);
+/* align: 0=left, 1=center, 2=right */
 void rod_draw_text(rod_state_t *st, int stream_idx, uint8_t *buf, uint32_t buf_w, uint32_t buf_h,
-		   const char *text);
+		   const char *text, int align);
 int rod_load_logo(const char *path, int expected_w, int expected_h, uint8_t **out_data);
 
 #endif /* ROD_H */

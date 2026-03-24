@@ -182,8 +182,23 @@ static int draw_string(rod_font_t *font, uint8_t *buf, uint32_t buf_w, uint32_t 
 	return pen_x;
 }
 
+/*
+ * Measure text width without rendering.
+ */
+static int measure_text(rod_font_t *f, const char *text)
+{
+	int w = 0;
+	while (*text) {
+		rod_glyph_t *g = rod_glyph_lookup(f, (uint32_t)(uint8_t)*text);
+		if (g)
+			w += g->advance;
+		text++;
+	}
+	return w;
+}
+
 void rod_draw_text(rod_state_t *st, int stream_idx, uint8_t *buf, uint32_t buf_w, uint32_t buf_h,
-		   const char *text)
+		   const char *text, int align)
 {
 	rod_font_t *f = &st->fonts[stream_idx];
 	int stroke = st->cfg.font_stroke;
@@ -198,7 +213,19 @@ void rod_draw_text(rod_state_t *st, int stream_idx, uint8_t *buf, uint32_t buf_w
 	uint8_t txt_g = (uint8_t)((c >> 8) & 0xFF);
 	uint8_t txt_r = (uint8_t)((c >> 16) & 0xFF);
 
-	int pen_x = stroke > 0 ? stroke : 0;
+	int pad = stroke > 0 ? stroke : 0;
+	int text_w = measure_text(f, text);
+	int pen_x;
+
+	if (align == 2) /* right */
+		pen_x = (int)buf_w - text_w - pad;
+	else if (align == 1) /* center */
+		pen_x = ((int)buf_w - text_w) / 2;
+	else /* left */
+		pen_x = pad;
+
+	if (pen_x < pad)
+		pen_x = pad;
 
 	if (stroke > 0) {
 		/* Stroke: render text at 4 offsets in black */
