@@ -7,7 +7,6 @@
 
 #include <rss_ipc.h>
 #include <rss_common.h>
-#include <imp/imp_isp.h>
 
 #include <stdbool.h>
 #include <stdint.h>

@@ -132,9 +132,9 @@ rod: $(LIB_IPC) $(LIB_COMMON)
 
 ric: $(LIB_IPC) $(LIB_COMMON)
 	@echo "  BUILD   ric"
-	$(Q)$(MAKE) -C ric CC="$(CC)" CFLAGS="$(CFLAGS) -I$(CURDIR)/ingenic-headers/$(PLATFORM)/1.1.4/zh" \
+	$(Q)$(MAKE) -C ric CC="$(CC)" CFLAGS="$(CFLAGS)" \
 		LIBS="$(LIB_IPC) $(LIB_COMMON)" \
-		LDFLAGS="$(LDFLAGS_HAL)" Q="$(Q)"
+		LDFLAGS="$(LDFLAGS)" Q="$(Q)"
 
 # -- Tools --
 
