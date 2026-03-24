@@ -303,18 +303,6 @@ static int rvd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		else
 			enable = !st->privacy_active;
 		rvd_osd_set_privacy(st, enable);
-		/* Tell ROD to show "Privacy Mode" or restore original text */
-		{
-			char rod_resp[128];
-			const char *text = enable ? "Privacy Mode"
-						  : rss_config_get_str(st->cfg, "osd",
-								       "text_string", "Camera");
-			char rod_cmd[128];
-			snprintf(rod_cmd, sizeof(rod_cmd),
-				 "{\"cmd\":\"set-text\",\"value\":\"%s\"}", text);
-			rss_ctrl_send_command("/var/run/rss/rod.sock", rod_cmd, rod_resp,
-					      sizeof(rod_resp), 1000);
-		}
 		snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\",\"privacy\":\"%s\"}",
 			 st->privacy_active ? "on" : "off");
 		CTRL_RESP(resp_buf);

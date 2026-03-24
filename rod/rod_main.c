@@ -18,7 +18,7 @@
 
 #include "rod.h"
 
-static const char *region_names[] = {"time", "uptime", "text", "logo"};
+static const char *region_names[] = {"time", "uptime", "text", "logo", "privacy"};
 
 /* Parse 0xAARRGGBB hex color string */
 static uint32_t parse_color(const char *s)
@@ -118,6 +118,10 @@ static void create_shms(rod_state_t *st)
 			create_region_shm(st, s, ROD_REGION_TEXT, ROD_TEXT_CHARS * adv + pad,
 					  f->text_height);
 
+		/* Privacy text region (always created, rendered once) */
+		create_region_shm(st, s, ROD_REGION_PRIVACY, ROD_TEXT_CHARS * adv + pad,
+				  f->text_height);
+
 		if (st->cfg.logo_enabled) {
 			int lw, lh;
 			if (s == 0) {
@@ -166,6 +170,7 @@ static int role_align(int role)
 	case ROD_REGION_UPTIME:
 		return 2; /* right */
 	case ROD_REGION_TEXT:
+	case ROD_REGION_PRIVACY:
 		return 1; /* center */
 	default:
 		return 0; /* left */
@@ -238,6 +243,12 @@ static void render_tick(rod_state_t *st)
 		if (st->cfg.text_enabled && st->regions[s][ROD_REGION_TEXT].needs_update) {
 			render_text_region(st, s, ROD_REGION_TEXT, st->cfg.text_string);
 			st->regions[s][ROD_REGION_TEXT].needs_update = false;
+		}
+
+		/* Privacy text (once) */
+		if (st->regions[s][ROD_REGION_PRIVACY].needs_update) {
+			render_text_region(st, s, ROD_REGION_PRIVACY, "Privacy Mode");
+			st->regions[s][ROD_REGION_PRIVACY].needs_update = false;
 		}
 
 		/* Logo (once) */

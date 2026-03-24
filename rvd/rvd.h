@@ -11,14 +11,15 @@
 
 #define RVD_MAX_STREAMS	       4 /* main, sub, jpeg0, jpeg1 */
 #define RVD_MAX_JPEG	       2
-#define RVD_OSD_REGIONS	       4
+#define RVD_OSD_REGIONS	       5
 #define RVD_OSD_RETRY_INTERVAL 50 /* check ticks (~5s at 10Hz) */
 
 /* OSD region roles (must match ROD naming) */
-#define RVD_OSD_TIME   0
-#define RVD_OSD_UPTIME 1
-#define RVD_OSD_TEXT   2
-#define RVD_OSD_LOGO   3
+#define RVD_OSD_TIME	0
+#define RVD_OSD_UPTIME	1
+#define RVD_OSD_TEXT	2
+#define RVD_OSD_LOGO	3
+#define RVD_OSD_PRIVACY 4
 
 typedef struct {
 	rss_video_config_t enc_cfg;
