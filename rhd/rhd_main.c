@@ -58,7 +58,50 @@ typedef struct {
 	uint32_t snap_buf_size;
 
 	volatile sig_atomic_t *running;
+
+	/* Basic auth (empty = no auth) */
+	char auth_user[128];
+	char auth_pass[128];
 } rhd_server_t;
+
+/* ── Base64 decode (RFC 4648) ── */
+
+static const uint8_t b64_table[256] = {
+	['A'] = 0,  ['B'] = 1,	['C'] = 2,  ['D'] = 3,	['E'] = 4,  ['F'] = 5,	['G'] = 6,
+	['H'] = 7,  ['I'] = 8,	['J'] = 9,  ['K'] = 10, ['L'] = 11, ['M'] = 12, ['N'] = 13,
+	['O'] = 14, ['P'] = 15, ['Q'] = 16, ['R'] = 17, ['S'] = 18, ['T'] = 19, ['U'] = 20,
+	['V'] = 21, ['W'] = 22, ['X'] = 23, ['Y'] = 24, ['Z'] = 25, ['a'] = 26, ['b'] = 27,
+	['c'] = 28, ['d'] = 29, ['e'] = 30, ['f'] = 31, ['g'] = 32, ['h'] = 33, ['i'] = 34,
+	['j'] = 35, ['k'] = 36, ['l'] = 37, ['m'] = 38, ['n'] = 39, ['o'] = 40, ['p'] = 41,
+	['q'] = 42, ['r'] = 43, ['s'] = 44, ['t'] = 45, ['u'] = 46, ['v'] = 47, ['w'] = 48,
+	['x'] = 49, ['y'] = 50, ['z'] = 51, ['0'] = 52, ['1'] = 53, ['2'] = 54, ['3'] = 55,
+	['4'] = 56, ['5'] = 57, ['6'] = 58, ['7'] = 59, ['8'] = 60, ['9'] = 61, ['+'] = 62,
+	['/'] = 63,
+};
+
+static int base64_decode(const char *in, size_t in_len, char *out, size_t out_max)
+{
+	size_t out_len = 0;
+	uint32_t buf = 0;
+	int bits = 0;
+
+	for (size_t i = 0; i < in_len && in[i] != '='; i++) {
+		uint8_t v = b64_table[(uint8_t)in[i]];
+		if (!v && in[i] != 'A')
+			continue; /* skip invalid chars */
+		buf = (buf << 6) | v;
+		bits += 6;
+		if (bits >= 8) {
+			bits -= 8;
+			if (out_len >= out_max)
+				return -1;
+			out[out_len++] = (char)(buf >> bits);
+		}
+	}
+	if (out_len < out_max)
+		out[out_len] = '\0';
+	return (int)out_len;
+}
 
 /* ── HTTP response helpers ── */
 
@@ -82,6 +125,54 @@ static void http_send(int fd, const char *status, const char *content_type, cons
 static void http_error(int fd, const char *status, const char *msg)
 {
 	http_send(fd, status, "text/plain", msg, (int)strlen(msg));
+}
+
+static void http_401(int fd)
+{
+	const char *body = "Unauthorized";
+	char header[512];
+	int hlen = snprintf(header, sizeof(header),
+			    "HTTP/1.1 401 Unauthorized\r\n"
+			    "WWW-Authenticate: Basic realm=\"Raptor\"\r\n"
+			    "Content-Type: text/plain\r\n"
+			    "Content-Length: %d\r\n"
+			    "Connection: close\r\n"
+			    "\r\n",
+			    (int)strlen(body));
+	write(fd, header, hlen);
+	write(fd, body, strlen(body));
+}
+
+/* Check HTTP Basic auth. Returns true if authorized. */
+static bool http_check_auth(const rhd_server_t *srv, const char *request)
+{
+	/* No auth configured — allow all */
+	if (!srv->auth_user[0])
+		return true;
+
+	const char *auth = strstr(request, "Authorization: Basic ");
+	if (!auth)
+		return false;
+	auth += 21; /* skip "Authorization: Basic " */
+
+	/* Find end of base64 value */
+	const char *end = auth;
+	while (*end && *end != '\r' && *end != '\n' && *end != ' ')
+		end++;
+
+	char decoded[256];
+	int dlen = base64_decode(auth, (size_t)(end - auth), decoded, sizeof(decoded) - 1);
+	if (dlen <= 0)
+		return false;
+	decoded[dlen] = '\0';
+
+	/* decoded is "username:password" */
+	char *colon = strchr(decoded, ':');
+	if (!colon)
+		return false;
+	*colon = '\0';
+
+	return strcmp(decoded, srv->auth_user) == 0 && strcmp(colon + 1, srv->auth_pass) == 0;
 }
 
 static void http_send_mjpeg_header(int fd)
@@ -124,9 +215,9 @@ static void handle_snapshot(int fd, rss_ring_t *ring, uint8_t *buf, uint32_t buf
 		return;
 	}
 
-	/* Read the latest frame. Start from seq 0 to trigger EOVERFLOW
-	 * which advances seq to the latest. Then back up by 1 to read
-	 * the most recently completed frame (not the one being written). */
+	/* Read the latest completed frame from the ring.
+	 * Start at seq 0 to trigger EOVERFLOW which advances seq to
+	 * the current write position, then back up by 1. */
 	uint64_t seq = 0;
 	uint32_t length;
 	rss_ring_slot_t meta;
@@ -191,6 +282,11 @@ static void handle_request(rhd_server_t *srv, rhd_client_t *c)
 
 	if (strcmp(method, "GET") != 0) {
 		http_error(c->fd, "405 Method Not Allowed", "GET only");
+		return;
+	}
+
+	if (!http_check_auth(srv, c->recv_buf)) {
+		http_401(c->fd);
 		return;
 	}
 
@@ -285,7 +381,7 @@ static void server_run(rhd_server_t *srv)
 {
 	uint64_t jpeg_read_seqs[RHD_MAX_JPEG] = {0};
 	uint8_t *frame_buf = NULL;
-	uint32_t frame_buf_size = 256 * 1024;
+	uint32_t frame_buf_size = 0;
 
 	/* Try to open JPEG rings */
 	for (int attempt = 0; attempt < 30 && *srv->running; attempt++) {
@@ -300,9 +396,8 @@ static void server_run(rhd_server_t *srv)
 					rss_ring_get_header(srv->jpeg_rings[j]);
 				RSS_INFO("%s ring available: %ux%u", name, hdr->width, hdr->height);
 				srv->jpeg_ring_count++;
-				uint32_t slot_sz = hdr->data_size / hdr->slot_count;
-				if (slot_sz > frame_buf_size)
-					frame_buf_size = slot_sz;
+				if (hdr->data_size > frame_buf_size)
+					frame_buf_size = hdr->data_size;
 			}
 		}
 		if (srv->jpeg_ring_count > 0)
@@ -494,6 +589,15 @@ int main(int argc, char **argv)
 	srv.config_path = config_path;
 	srv.running = running;
 	srv.port = rss_config_get_int(cfg, "http", "port", 8080);
+
+	/* Basic auth — enabled when both username and password are set */
+	const char *http_user = rss_config_get_str(cfg, "http", "username", "");
+	const char *http_pass = rss_config_get_str(cfg, "http", "password", "");
+	if (http_user[0] && http_pass[0]) {
+		strncpy(srv.auth_user, http_user, sizeof(srv.auth_user) - 1);
+		strncpy(srv.auth_pass, http_pass, sizeof(srv.auth_pass) - 1);
+		RSS_INFO("HTTP Basic auth enabled");
+	}
 
 	if (server_init(&srv) < 0) {
 		rss_config_free(cfg);

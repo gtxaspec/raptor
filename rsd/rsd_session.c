@@ -365,8 +365,11 @@ static Compy_ControlFlow rsd_client_t_before(VSelf, Compy_Context *ctx, const Co
 {
 	VSELF(rsd_client_t);
 	(void)self;
-	(void)ctx;
-	(void)req;
+
+	if (g_srv && g_srv->auth) {
+		if (compy_auth_check(g_srv->auth, ctx, req) != 0)
+			return Compy_ControlFlow_Break;
+	}
 
 	return Compy_ControlFlow_Continue;
 }

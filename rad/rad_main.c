@@ -418,11 +418,7 @@ int main(int argc, char **argv)
 		if (out_len > 0)
 			rss_ring_publish(ring, encode_buf, out_len, frame.timestamp, codec_id, 0);
 
-		if (frame._priv) {
-			extern int IMP_AI_ReleaseFrame(int devId, int chnId, void *frame);
-			IMP_AI_ReleaseFrame(ai_dev, 0, frame._priv);
-			free(frame._priv);
-		}
+		RSS_HAL_CALL(ops, audio_release_frame, hal_ctx, ai_dev, 0, &frame);
 
 		frame_count++;
 

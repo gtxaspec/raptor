@@ -176,9 +176,7 @@ int main(int argc, char **argv)
 
 	/* Allocate read buffer based on ring slot capacity */
 	const rss_ring_header_t *rhdr = rss_ring_get_header(ring);
-	uint32_t buf_size = rhdr->data_size / rhdr->slot_count;
-	if (buf_size < 256 * 1024)
-		buf_size = 256 * 1024;
+	uint32_t buf_size = rhdr->data_size;
 	uint8_t *frame_buf = malloc(buf_size);
 	if (!frame_buf) {
 		fprintf(stderr, "Failed to allocate %u byte read buffer\n", buf_size);
