@@ -1,11 +1,12 @@
 /*
- * rvd_osd.c -- OSD SHM consumer + HAL region management
+ * rvd_osd.c -- OSD region management
  *
- * Opens per-region OSD SHM double-buffers created by ROD, creates
- * HAL OSD regions with calculated screen positions, and pushes
- * updated bitmaps to hardware via the fast update_region_data path.
+ * Creates OSD regions during pipeline init (before FS enable) with
+ * transparent placeholder bitmaps. At runtime, polls OSD SHM for
+ * bitmap updates from ROD and calls osd_update_region_data.
  *
- * Handles ROD starting after RVD via lazy SHM retry.
+ * IMP SDK constraint: CreateRgn/RegisterRgn must be called before the
+ * encoder starts. Only UpdateRgnAttrData is safe at runtime.
  */
 
 #include <stdio.h>
@@ -18,6 +19,14 @@
 static const char *region_names[] = {"time", "uptime", "text", "logo"};
 
 #define OSD_MARGIN 10
+
+/* Region sizes must be >= ROD's rendered bitmap dimensions.
+ * Over-allocating is fine — transparent padding is invisible.
+ * These cover font_size up to 32 with 40 chars max. */
+#define OSD_TEXT_W 1024
+#define OSD_TEXT_H 48
+#define OSD_LOGO_W 210
+#define OSD_LOGO_H 64
 
 static void calc_position(int stream_w, int stream_h, int region_w, int region_h, int role,
 			  int *out_x, int *out_y)
@@ -44,8 +53,6 @@ static void calc_position(int stream_w, int stream_h, int region_w, int region_h
 		*out_y = OSD_MARGIN;
 		break;
 	}
-
-	/* Ensure non-negative and even (some SDKs require 2-aligned) */
 	if (*out_x < 0)
 		*out_x = 0;
 	if (*out_y < 0)
@@ -55,54 +62,30 @@ static void calc_position(int stream_w, int stream_h, int region_w, int region_h
 }
 
 /*
- * Try to open a region's SHM and create the HAL region.
- * Returns true if the region is now active.
+ * Create a single OSD region with a transparent placeholder bitmap.
+ * Called during pipeline init before FS enable.
  */
-static bool try_open_region(rvd_state_t *st, int s, int r)
+static bool create_region(rvd_state_t *st, int s, int r, uint32_t w, uint32_t h)
 {
 	rvd_osd_region_t *reg = &st->osd_regions[s][r];
-	if (reg->active)
-		return true;
-	if (reg->shm)
-		return false; /* SHM open but HAL creation failed — don't retry */
 
-	char name[64];
-	snprintf(name, sizeof(name), "osd_%d_%s", s, region_names[r]);
+	/* Ensure even dimensions */
+	w = (w + 1) & ~1;
+	h = (h + 1) & ~1;
 
-	reg->shm = rss_osd_open(name);
-	if (!reg->shm)
+	uint32_t buf_size = w * h * 4;
+	reg->local_buf = calloc(1, buf_size); /* transparent (all zeros) */
+	if (!reg->local_buf)
 		return false;
-
-	/* Read dimensions from SHM */
-	uint32_t w, h;
-	const uint8_t *bitmap = rss_osd_get_active_buffer(reg->shm, &w, &h);
-	if (!bitmap || w == 0 || h == 0) {
-		rss_osd_close(reg->shm);
-		reg->shm = NULL;
-		return false;
-	}
 
 	reg->width = w;
 	reg->height = h;
 
-	/* Allocate local buffer — IMP SDK DMA requires non-SHM memory.
-	 * We copy from SHM to this buffer before each HAL update. */
-	uint32_t buf_size = w * h * 4;
-	reg->local_buf = malloc(buf_size);
-	if (!reg->local_buf) {
-		rss_osd_close(reg->shm);
-		reg->shm = NULL;
-		return false;
-	}
-	memcpy(reg->local_buf, bitmap, buf_size);
-
-	/* Calculate screen position */
 	int stream_w = st->streams[s].enc_cfg.width;
 	int stream_h = st->streams[s].enc_cfg.height;
 	int x, y;
 	calc_position(stream_w, stream_h, (int)w, (int)h, r, &x, &y);
 
-	/* Create HAL region */
 	rss_osd_region_t attr = {
 		.type = RSS_OSD_PIC,
 		.x = x,
@@ -120,68 +103,123 @@ static bool try_open_region(rvd_state_t *st, int s, int r)
 	int handle = -1;
 	int ret = RSS_HAL_CALL(st->ops, osd_create_region, st->hal_ctx, &handle, &attr);
 	if (ret != RSS_OK) {
-		RSS_WARN("osd_create_region(%s) failed: %d", name, ret);
+		RSS_WARN("osd_create_region(s%d/%s) failed: %d", s, region_names[r], ret);
+		free(reg->local_buf);
+		reg->local_buf = NULL;
 		return false;
 	}
 
 	int grp = st->streams[s].chn;
 	ret = RSS_HAL_CALL(st->ops, osd_register_region, st->hal_ctx, handle, grp);
 	if (ret != RSS_OK) {
-		RSS_WARN("osd_register_region(%s, grp=%d) failed: %d", name, grp, ret);
+		RSS_WARN("osd_register_region(s%d/%s) failed: %d", s, region_names[r], ret);
 		RSS_HAL_CALL(st->ops, osd_destroy_region, st->hal_ctx, handle);
+		free(reg->local_buf);
+		reg->local_buf = NULL;
 		return false;
 	}
 
-	/* Skip osd_show_region — it calls IMP_OSD_Start which crashes the
-	 * encoder when called after the pipeline is running. OSD groups are
-	 * already started in pipeline init. Regions appear with default
-	 * group attributes (show=0 by default, but SetRgnAttr has the data). */
-	(void)grp;
+	/* Set group-level region attributes (alpha, layer, visibility) */
+	ret = RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, handle, grp, 1);
+	if (ret != RSS_OK)
+		RSS_WARN("osd_show_region(s%d/%s) failed: %d (non-fatal)", s, region_names[r], ret);
 
 	reg->hal_handle = handle;
 	reg->active = true;
 
-	RSS_INFO("osd region %s: %ux%u at (%d,%d) layer=%d handle=%d", name, w, h, x, y, r, handle);
+	RSS_INFO("osd region s%d/%s: %ux%u at (%d,%d) layer=%d handle=%d", s, region_names[r], w, h,
+		 x, y, r, handle);
 	return true;
 }
 
+/*
+ * Create all OSD regions during pipeline init.
+ * Must be called BEFORE osd_start and fs_enable.
+ */
 void rvd_osd_init(rvd_state_t *st)
 {
 	if (!st->osd_enabled)
 		return;
 
-	/* Init all region state */
+	rss_config_t *cfg = st->cfg;
+
 	for (int s = 0; s < st->stream_count; s++) {
+		if (st->streams[s].is_jpeg)
+			continue;
+
 		for (int r = 0; r < RVD_OSD_REGIONS; r++) {
 			st->osd_regions[s][r].shm = NULL;
 			st->osd_regions[s][r].hal_handle = -1;
 			st->osd_regions[s][r].active = false;
+			st->osd_regions[s][r].local_buf = NULL;
 		}
-	}
 
-	/* Try to open regions (ROD may not be running yet) */
-	int opened = 0;
-	for (int s = 0; s < st->stream_count; s++) {
-		if (st->streams[s].is_jpeg)
-			continue;
-		for (int r = 0; r < RVD_OSD_REGIONS; r++) {
-			if (try_open_region(st, s, r))
-				opened++;
+		/* Scale text dimensions for sub stream.
+		 * Must be >= ROD's SHM sizes to avoid buffer overflows. */
+		uint32_t tw = OSD_TEXT_W;
+		uint32_t th = OSD_TEXT_H;
+		if (s > 0) {
+			int scale_num = st->streams[s].enc_cfg.height;
+			int scale_den = st->streams[0].enc_cfg.height;
+			if (scale_den == 0)
+				scale_den = 1;
+			tw = tw * scale_num / scale_den;
+			th = th * scale_num / scale_den;
+			if (tw < 480)
+				tw = 480; /* min for sub stream */
+			if (th < 20)
+				th = 20;
 		}
-	}
 
-	/* Start OSD groups (idempotent — safe to call again on lazy retry) */
-	for (int s = 0; s < st->stream_count; s++) {
-		if (st->streams[s].is_jpeg)
-			continue;
-		int grp = st->streams[s].chn;
-		int ret = RSS_HAL_CALL(st->ops, osd_start, st->hal_ctx, grp);
-		if (ret != RSS_OK)
-			RSS_WARN("osd_start(%d) failed: %d", grp, ret);
+		int region_count = 0;
+
+		if (rss_config_get_bool(cfg, "osd", "time_enabled", true)) {
+			if (create_region(st, s, RVD_OSD_TIME, tw, th))
+				region_count++;
+		}
+
+		if (rss_config_get_bool(cfg, "osd", "uptime_enabled", true)) {
+			if (create_region(st, s, RVD_OSD_UPTIME, tw, th))
+				region_count++;
+		}
+
+		if (rss_config_get_bool(cfg, "osd", "text_enabled", true)) {
+			if (create_region(st, s, RVD_OSD_TEXT, tw, th))
+				region_count++;
+		}
+
+		if (rss_config_get_bool(cfg, "osd", "logo_enabled", true)) {
+			uint32_t lw = rss_config_get_int(cfg, "osd", "logo_width", OSD_LOGO_W);
+			uint32_t lh = rss_config_get_int(cfg, "osd", "logo_height", OSD_LOGO_H);
+			if (s > 0) {
+				/* Sub stream logo — use smaller variant size */
+				lw = 100;
+				lh = 30;
+			}
+			if (create_region(st, s, RVD_OSD_LOGO, lw, lh))
+				region_count++;
+		}
+
+		RSS_INFO("osd stream%d: %d regions created", s, region_count);
 	}
 
 	st->osd_retry_counter = 0;
-	RSS_INFO("osd init: %d regions active", opened);
+}
+
+/*
+ * Try to open SHM for a region that doesn't have one yet.
+ */
+static void try_open_shm(rvd_state_t *st, int s, int r)
+{
+	rvd_osd_region_t *reg = &st->osd_regions[s][r];
+	if (!reg->active || reg->shm)
+		return;
+
+	char name[64];
+	snprintf(name, sizeof(name), "osd_%d_%s", s, region_names[r]);
+	reg->shm = rss_osd_open(name);
+	if (reg->shm)
+		RSS_DEBUG("opened osd shm %s", name);
 }
 
 void rvd_osd_check(rvd_state_t *st)
@@ -189,21 +227,19 @@ void rvd_osd_check(rvd_state_t *st)
 	if (!st->osd_enabled)
 		return;
 
-	/* Lazy retry: periodically try to open regions that aren't active yet */
+	/* Lazy SHM open retry */
 	st->osd_retry_counter++;
 	if (st->osd_retry_counter >= RVD_OSD_RETRY_INTERVAL) {
 		st->osd_retry_counter = 0;
 		for (int s = 0; s < st->stream_count; s++) {
 			if (st->streams[s].is_jpeg)
 				continue;
-			for (int r = 0; r < RVD_OSD_REGIONS; r++) {
-				if (!st->osd_regions[s][r].active)
-					try_open_region(st, s, r);
-			}
+			for (int r = 0; r < RVD_OSD_REGIONS; r++)
+				try_open_shm(st, s, r);
 		}
 	}
 
-	/* Check dirty flags and push updates */
+	/* Push bitmap updates */
 	for (int s = 0; s < st->stream_count; s++) {
 		if (st->streams[s].is_jpeg)
 			continue;
@@ -220,12 +256,23 @@ void rvd_osd_check(rvd_state_t *st)
 			if (!bitmap)
 				continue;
 
-			/* Copy SHM bitmap to local buffer, then update HAL.
-			 * IMP SDK DMA reads from picData.pData — must not point
-			 * into SHM mmap (causes DMA/cache coherency issues). */
-			memcpy(reg->local_buf, bitmap, reg->width * reg->height * 4);
-			RSS_HAL_CALL(st->ops, osd_update_region_data, st->hal_ctx, reg->hal_handle,
-				     reg->local_buf);
+			/* Use SetRgnAttr instead of UpdateRgnAttrData — the
+			 * latter causes encoder deadlock on T31 SDK. */
+			if (w <= reg->width && h <= reg->height) {
+				memset(reg->local_buf, 0, reg->width * reg->height * 4);
+				for (uint32_t row = 0; row < h; row++)
+					memcpy(reg->local_buf + row * reg->width * 4,
+					       bitmap + row * w * 4, w * 4);
+				rss_osd_region_t attr = {
+					.type = RSS_OSD_PIC,
+					.width = (int)reg->width,
+					.height = (int)reg->height,
+					.bitmap_data = reg->local_buf,
+					.bitmap_fmt = RSS_PIXFMT_BGRA,
+				};
+				RSS_HAL_CALL(st->ops, osd_set_region_attr, st->hal_ctx,
+					     reg->hal_handle, &attr);
+			}
 			rss_osd_clear_dirty(reg->shm);
 		}
 	}
@@ -235,6 +282,9 @@ void *rvd_osd_thread(void *arg)
 {
 	rvd_state_t *st = arg;
 	RSS_INFO("osd update thread started");
+
+	/* Wait for pipeline to be fully initialized before polling */
+	sleep(2);
 
 	while (*st->running) {
 		rvd_osd_check(st);
