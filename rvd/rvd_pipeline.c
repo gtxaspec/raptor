@@ -129,11 +129,43 @@ int rvd_pipeline_init(rvd_state_t *st)
 	}
 	st->ops = rss_hal_get_ops(st->hal_ctx);
 
-	/* ── 2. Sensor config ── */
+	/* ── 2. Sensor config (auto-detect from /proc/jz/sensor if not set) ── */
 	rss_sensor_config_t sensor = {0};
-	rss_strlcpy(sensor.name, rss_config_get_str(cfg, "sensor", "name", "gc2053"),
-		    sizeof(sensor.name));
-	sensor.i2c_addr = rss_config_get_int(cfg, "sensor", "i2c_addr", 0x37);
+
+	const char *cfg_name = rss_config_get_str(cfg, "sensor", "name", "");
+	if (cfg_name[0]) {
+		rss_strlcpy(sensor.name, cfg_name, sizeof(sensor.name));
+	} else {
+		char *s = rss_read_file("/proc/jz/sensor/name", NULL);
+		if (s) {
+			/* strip trailing newline */
+			char *nl = strchr(s, '\n');
+			if (nl)
+				*nl = '\0';
+			rss_strlcpy(sensor.name, s, sizeof(sensor.name));
+			free(s);
+		}
+		if (!sensor.name[0]) {
+			RSS_FATAL("sensor name not in config and not in /proc/jz/sensor/name");
+			return RSS_ERR;
+		}
+		RSS_INFO("sensor name from procfs: %s", sensor.name);
+	}
+
+	sensor.i2c_addr = rss_config_get_int(cfg, "sensor", "i2c_addr", 0);
+	if (sensor.i2c_addr == 0) {
+		char *s = rss_read_file("/proc/jz/sensor/i2c_addr", NULL);
+		if (s) {
+			sensor.i2c_addr = (uint16_t)strtol(s, NULL, 0);
+			free(s);
+		}
+		if (sensor.i2c_addr == 0) {
+			RSS_FATAL("i2c_addr not in config and not in /proc/jz/sensor/i2c_addr");
+			return RSS_ERR;
+		}
+		RSS_INFO("sensor i2c_addr from procfs: 0x%02x", sensor.i2c_addr);
+	}
+
 	sensor.i2c_adapter = rss_config_get_int(cfg, "sensor", "i2c_adapter", 0);
 	sensor.rst_gpio = rss_config_get_int(cfg, "sensor", "rst_gpio", -1);
 	sensor.pwdn_gpio = rss_config_get_int(cfg, "sensor", "pwdn_gpio", -1);
