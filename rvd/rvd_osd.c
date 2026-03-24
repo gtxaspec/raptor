@@ -126,9 +126,9 @@ static bool create_region(rvd_state_t *st, int s, int r, uint32_t w, uint32_t h)
 			lw = 100;
 			lh = 30;
 		}
-		int fsz;
+		int fsz = 0;
 		char *fd = rss_read_file(lp, &fsz);
-		if (fd && fsz == lw * lh * 4) {
+		if (fd && fsz > 0 && fsz == lw * lh * 4) {
 			for (int row = 0; row < lh && row < (int)h; row++)
 				memcpy(reg->local_buf + row * w * 4, fd + row * lw * 4, lw * 4);
 			RSS_INFO("logo %s (%dx%d) loaded into %ux%u region", lp, lw, lh, w, h);
@@ -422,8 +422,9 @@ void *rvd_osd_thread(void *arg)
 	rvd_state_t *st = arg;
 	RSS_INFO("osd update thread started");
 
-	/* Wait for pipeline to be fully initialized before polling */
-	sleep(2);
+	/* Wait for pipeline to be fully initialized */
+	while (!st->pipeline_ready && *st->running)
+		usleep(100000);
 
 	/* Show all regions first (vendor pattern: ShowRgn before UpdateRgnAttrData) */
 	for (int s = 0; s < st->stream_count; s++) {
@@ -482,6 +483,15 @@ void rvd_osd_deinit(rvd_state_t *st)
 			reg->local_buf = NULL;
 			reg->active = false;
 			reg->hal_handle = -1;
+		}
+
+		/* Clean up privacy cover region */
+		int ph = st->privacy_handles[s];
+		if (ph >= 0) {
+			RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, ph, grp, 0, 0);
+			RSS_HAL_CALL(st->ops, osd_unregister_region, st->hal_ctx, ph, grp);
+			RSS_HAL_CALL(st->ops, osd_destroy_region, st->hal_ctx, ph);
+			st->privacy_handles[s] = -1;
 		}
 	}
 }

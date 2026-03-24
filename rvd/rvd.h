@@ -58,6 +58,7 @@ typedef struct {
 	/* Privacy mode (full-frame black cover) */
 	int privacy_handles[RVD_MAX_STREAMS]; /* HAL region handles, -1 if none */
 	bool privacy_active;
+	volatile bool pipeline_ready; /* set after FS enable + encoder start */
 
 	/* Control */
 	rss_ctrl_t *ctrl;

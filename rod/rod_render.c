@@ -16,10 +16,15 @@ int rod_render_init(rod_state_t *st, int stream_idx, int font_size)
 {
 	rod_font_t *f = &st->fonts[stream_idx];
 
-	f->sft.font = sft_loadfile(st->cfg.font_path);
-	if (!f->sft.font) {
-		RSS_FATAL("failed to load font: %s", st->cfg.font_path);
-		return -1;
+	/* Share font across streams — load once, reuse for different sizes */
+	if (stream_idx > 0 && st->fonts[0].sft.font) {
+		f->sft.font = st->fonts[0].sft.font;
+	} else {
+		f->sft.font = sft_loadfile(st->cfg.font_path);
+		if (!f->sft.font) {
+			RSS_FATAL("failed to load font: %s", st->cfg.font_path);
+			return -1;
+		}
 	}
 
 	f->sft.xScale = font_size;
@@ -116,17 +121,22 @@ void rod_render_deinit(rod_state_t *st, int stream_idx)
 	for (int i = 0; i < f->glyph_count; i++)
 		free(f->glyphs[i].alpha);
 	f->glyph_count = 0;
-	if (f->sft.font) {
+	/* Only free font for stream 0 (other streams share it) */
+	if (stream_idx == 0 && f->sft.font) {
 		sft_freefont(f->sft.font);
 		f->sft.font = NULL;
+	} else {
+		f->sft.font = NULL; /* don't double-free */
 	}
 }
 
 rod_glyph_t *rod_glyph_lookup(rod_font_t *font, uint32_t codepoint)
 {
-	for (int i = 0; i < font->glyph_count; i++) {
-		if (font->glyphs[i].codepoint == codepoint)
-			return &font->glyphs[i];
+	/* Direct ASCII indexing: glyphs[cp - 0x20] for O(1) lookup */
+	if (codepoint >= 0x20 && codepoint <= 0x7E) {
+		int idx = (int)(codepoint - 0x20);
+		if (idx < font->glyph_count && font->glyphs[idx].codepoint == codepoint)
+			return &font->glyphs[idx];
 	}
 	return NULL;
 }

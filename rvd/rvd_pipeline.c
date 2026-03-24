@@ -502,6 +502,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 
 	/* OSD regions already created in step 6b */
 
+	st->pipeline_ready = true;
 	RSS_INFO("pipeline ready: %d streams", st->stream_count);
 	return RSS_OK;
 }

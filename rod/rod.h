@@ -14,7 +14,7 @@
 
 #define ROD_MAX_STREAMS	     2
 #define ROD_MAX_REGIONS	     5
-#define ROD_GLYPH_CACHE_SIZE 128
+#define ROD_GLYPH_CACHE_SIZE 95 /* ASCII 0x20-0x7E */
 #define ROD_TIME_CHARS	     20 /* "2026-03-23 23:59:59" */
 #define ROD_UPTIME_CHARS     12 /* "12345d 23h 59m" */
 #define ROD_TEXT_CHARS	     14 /* camera name */
