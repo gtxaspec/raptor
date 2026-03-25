@@ -76,7 +76,7 @@ LDFLAGS     := $(LDFLAGS_SYSROOT) -luclibcshim -lpthread -lrt -latomic
 
 # Targets
 DAEMONS := rvd rsd rad rhd rod ric rmr
-TOOLS   := raptorctl ringdump
+TOOLS   := raptorctl ringdump rac
 
 .PHONY: all clean libs $(DAEMONS) $(TOOLS) install
 
@@ -157,6 +157,12 @@ raptorctl: $(LIB_IPC) $(LIB_COMMON)
 ringdump: $(LIB_IPC) $(LIB_COMMON)
 	@echo "  BUILD   ringdump"
 	$(Q)$(MAKE) -C ringdump CC="$(CC)" CFLAGS="$(CFLAGS)" \
+		LIBS="$(LIB_IPC) $(LIB_COMMON)" \
+		LDFLAGS="$(LDFLAGS)" Q="$(Q)"
+
+rac: $(LIB_IPC) $(LIB_COMMON)
+	@echo "  BUILD   rac"
+	$(Q)$(MAKE) -C rac CC="$(CC)" CFLAGS="$(CFLAGS)" \
 		LIBS="$(LIB_IPC) $(LIB_COMMON)" \
 		LDFLAGS="$(LDFLAGS)" Q="$(Q)"
 

@@ -17,6 +17,7 @@
 #include <getopt.h>
 #include <arpa/inet.h>
 
+#include <pthread.h>
 #include <sys/select.h>
 
 #include <raptor_hal.h>
@@ -97,6 +98,9 @@ typedef struct {
 	int sample_rate;
 	int codec_id;
 	const char *codec_str;
+	bool ao_enabled;
+	int ao_volume;
+	int ao_gain;
 #ifdef RAPTOR_AUDIO_EFFECTS
 	bool ns_enabled;
 	bool hpf_enabled;
@@ -263,6 +267,32 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 #endif /* RAPTOR_AUDIO_EFFECTS */
 
+	if (strstr(cmd_json, "\"ao-set-volume\"")) {
+		if (json_get_int(cmd_json, "value", &val) == 0 && ctx->ao_enabled) {
+			RSS_HAL_CALL(ctx->ops, ao_set_volume, ctx->hal_ctx, val);
+			ctx->ao_volume = val;
+			snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
+		} else {
+			snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"error\",\"reason\":\"%s\"}",
+				 ctx->ao_enabled ? "need value" : "ao disabled");
+		}
+		CTRL_RESP(resp_buf);
+	}
+
+	if (strstr(cmd_json, "\"ao-set-gain\"")) {
+		if (json_get_int(cmd_json, "value", &val) == 0 && ctx->ao_enabled) {
+			RSS_HAL_CALL(ctx->ops, ao_set_gain, ctx->hal_ctx, val);
+			ctx->ao_gain = val;
+			snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
+		} else {
+			snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"error\",\"reason\":\"%s\"}",
+				 ctx->ao_enabled ? "need value" : "ao disabled");
+		}
+		CTRL_RESP(resp_buf);
+	}
+
 	if (strstr(cmd_json, "\"config-save\"")) {
 		int ret = rss_config_save(ctx->cfg, ctx->config_path);
 		snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
@@ -283,25 +313,114 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 	if (strstr(cmd_json, "\"status\"")) {
-		snprintf(resp_buf, resp_buf_size,
-			 "{\"status\":\"ok\",\"codec\":\"%s\","
-			 "\"sample_rate\":%d,\"volume\":%d,\"gain\":%d"
+		int n = snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"ok\",\"codec\":\"%s\","
+				 "\"sample_rate\":%d,\"volume\":%d,\"gain\":%d,"
+				 "\"ao_enabled\":%s",
+				 ctx->codec_str, ctx->sample_rate, ctx->volume, ctx->gain,
+				 ctx->ao_enabled ? "true" : "false");
+		if (ctx->ao_enabled)
+			n += snprintf(resp_buf + n, resp_buf_size - n,
+				      ",\"ao_volume\":%d,\"ao_gain\":%d", ctx->ao_volume,
+				      ctx->ao_gain);
 #ifdef RAPTOR_AUDIO_EFFECTS
-			 ",\"ns\":%s,\"hpf\":%s,\"agc\":%s"
+		n += snprintf(resp_buf + n, resp_buf_size - n, ",\"ns\":%s,\"hpf\":%s,\"agc\":%s",
+			      ctx->ns_enabled ? "true" : "false",
+			      ctx->hpf_enabled ? "true" : "false",
+			      ctx->agc_enabled ? "true" : "false");
 #endif
-			 "}",
-			 ctx->codec_str, ctx->sample_rate, ctx->volume, ctx->gain
-#ifdef RAPTOR_AUDIO_EFFECTS
-			 ,
-			 ctx->ns_enabled ? "true" : "false", ctx->hpf_enabled ? "true" : "false",
-			 ctx->agc_enabled ? "true" : "false"
-#endif
-		);
+		snprintf(resp_buf + n, resp_buf_size - n, "}");
 		CTRL_RESP(resp_buf);
 	}
 
 	snprintf(resp_buf, resp_buf_size, "{\"status\":\"error\",\"reason\":\"unknown command\"}");
 	CTRL_RESP(resp_buf);
+}
+
+/* ── AO playback thread: reads from speaker ring, sends to hardware ── */
+
+typedef struct {
+	const rss_hal_ops_t *ops;
+	rss_hal_ctx_t *hal_ctx;
+	volatile sig_atomic_t *running;
+} ao_thread_ctx_t;
+
+static void *ao_playback_thread(void *arg)
+{
+	ao_thread_ctx_t *ctx = arg;
+
+	RSS_INFO("ao playback thread started, waiting for speaker ring...");
+
+	/* Poll for speaker ring (created by rac play) */
+	rss_ring_t *ring = NULL;
+	while (*ctx->running) {
+		ring = rss_ring_open("speaker");
+		if (ring)
+			break;
+		usleep(500000);
+	}
+	if (!ring) {
+		RSS_INFO("ao playback thread exiting (no ring)");
+		return NULL;
+	}
+
+	const rss_ring_header_t *hdr = rss_ring_get_header(ring);
+	uint8_t *buf = malloc(hdr->data_size);
+	if (!buf) {
+		RSS_FATAL("ao thread: malloc failed");
+		rss_ring_close(ring);
+		return NULL;
+	}
+
+	uint64_t read_seq = 0;
+	RSS_INFO("speaker ring connected");
+
+	while (*ctx->running) {
+		int ret = rss_ring_wait(ring, 500);
+		if (ret != 0) {
+			/* Check if ring was destroyed (rac exited) */
+			if (atomic_load(&hdr->magic) != 0x52535352) {
+				RSS_INFO("speaker ring gone, waiting for reconnect...");
+				free(buf);
+				rss_ring_close(ring);
+				ring = NULL;
+				buf = NULL;
+				/* Wait for new ring */
+				while (*ctx->running) {
+					ring = rss_ring_open("speaker");
+					if (ring)
+						break;
+					usleep(500000);
+				}
+				if (!ring)
+					break;
+				hdr = rss_ring_get_header(ring);
+				buf = malloc(hdr->data_size);
+				if (!buf) {
+					rss_ring_close(ring);
+					break;
+				}
+				read_seq = 0;
+				RSS_INFO("speaker ring reconnected");
+			}
+			continue;
+		}
+
+		uint32_t length = 0;
+		rss_ring_slot_t meta;
+		ret = rss_ring_read(ring, &read_seq, buf, hdr->data_size, &length, &meta);
+		if (ret != 0)
+			continue;
+
+		RSS_HAL_CALL(ctx->ops, ao_send_frame, ctx->hal_ctx, (const int16_t *)buf, length,
+			     true);
+	}
+
+	free(buf);
+	if (ring)
+		rss_ring_close(ring);
+	RSS_INFO("ao playback thread exiting");
+	return NULL;
 }
 
 static void usage(const char *prog)
@@ -468,6 +587,45 @@ int main(int argc, char **argv)
 	}
 #endif
 
+	/* ── Audio output (speaker) ── */
+	bool ao_enabled = rss_config_get_bool(cfg, "audio", "ao_enabled", false);
+	pthread_t ao_tid;
+	bool ao_thread_started = false;
+	ao_thread_ctx_t ao_ctx = {0};
+
+	if (ao_enabled) {
+		rss_audio_config_t ao_cfg = {
+			.sample_rate = sample_rate,
+			.samples_per_frame = sample_rate / 50,
+			.chn_count = 1,
+			.frame_depth = 20,
+		};
+		ret = RSS_HAL_CALL(ops, ao_init, hal_ctx, &ao_cfg);
+		if (ret != RSS_OK) {
+			RSS_WARN("ao_init failed: %d (speaker disabled)", ret);
+			ao_enabled = false;
+		} else {
+			int ao_vol = rss_config_get_int(cfg, "audio", "ao_volume", 80);
+			int ao_gain_val = rss_config_get_int(cfg, "audio", "ao_gain", 25);
+			RSS_HAL_CALL(ops, ao_set_volume, hal_ctx, ao_vol);
+			RSS_HAL_CALL(ops, ao_set_gain, hal_ctx, ao_gain_val);
+
+			ao_ctx = (ao_thread_ctx_t){
+				.ops = ops,
+				.hal_ctx = hal_ctx,
+				.running = running,
+			};
+			if (pthread_create(&ao_tid, NULL, ao_playback_thread, &ao_ctx) == 0) {
+				ao_thread_started = true;
+				RSS_INFO("audio output: %d Hz vol=%d gain=%d", sample_rate, ao_vol,
+					 ao_gain_val);
+			} else {
+				RSS_WARN("ao thread create failed");
+				ao_enabled = false;
+			}
+		}
+	}
+
 	/* Ring buffer — L16 frames are larger (2 bytes/sample vs 1) */
 	int ring_data_size = (codec_id == RAD_CODEC_L16) ? 256 * 1024 : 128 * 1024;
 	ring = rss_ring_create("audio", 32, ring_data_size);
@@ -496,10 +654,23 @@ int main(int argc, char **argv)
 		 codec_str);
 
 	rad_ctrl_ctx_t ctrl_ctx = {
-		cfg,	    config_path, ops,	      hal_ctx,	ai_dev,
-		volume,	    gain,	 sample_rate, codec_id, codec_str,
+		.cfg = cfg,
+		.config_path = config_path,
+		.ops = ops,
+		.hal_ctx = hal_ctx,
+		.ai_dev = ai_dev,
+		.volume = volume,
+		.gain = gain,
+		.sample_rate = sample_rate,
+		.codec_id = codec_id,
+		.codec_str = codec_str,
+		.ao_enabled = ao_enabled,
+		.ao_volume = rss_config_get_int(cfg, "audio", "ao_volume", 80),
+		.ao_gain = rss_config_get_int(cfg, "audio", "ao_gain", 25),
 #ifdef RAPTOR_AUDIO_EFFECTS
-		ns_enabled, hpf_enabled, agc_enabled,
+		.ns_enabled = ns_enabled,
+		.hpf_enabled = hpf_enabled,
+		.agc_enabled = agc_enabled,
 #endif
 	};
 
@@ -575,12 +746,16 @@ int main(int argc, char **argv)
 	RSS_INFO("rad shutting down");
 
 cleanup:
+	if (ao_thread_started)
+		pthread_join(ao_tid, NULL);
 	if (ctrl)
 		rss_ctrl_destroy(ctrl);
 	free(encode_buf);
 	if (ring)
 		rss_ring_destroy(ring);
 	if (hal_ctx) {
+		if (ao_enabled)
+			RSS_HAL_CALL(ops, ao_deinit, hal_ctx);
 		RSS_HAL_CALL(ops, audio_deinit, hal_ctx);
 		rss_hal_destroy(hal_ctx);
 	}

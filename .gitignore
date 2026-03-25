@@ -11,5 +11,6 @@ ric/ric
 rmr/rmr
 raptorctl/raptorctl
 ringdump/ringdump
+rac/rac
 test_enc
 asan-out/
