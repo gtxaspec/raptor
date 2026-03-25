@@ -762,6 +762,23 @@ int main(int argc, char **argv)
 	if (!ctrl)
 		RSS_WARN("control socket failed (non-fatal)");
 
+	/* AAC accumulation buffer — faac needs aac_input_samples (typically 1024)
+	 * but HAL delivers samples_per_frame (typically 320) per capture.
+	 * Buffer captures until we have enough for one full AAC frame. */
+	int16_t *aac_pcm_buf = NULL;
+	int aac_pcm_fill = 0;
+	int aac_frame_samples = 0;
+#ifdef RAPTOR_AAC
+	if (codec_id == RAD_CODEC_AAC) {
+		aac_frame_samples = (int)aac_input_samples;
+		aac_pcm_buf = malloc(aac_frame_samples * sizeof(int16_t));
+		if (!aac_pcm_buf) {
+			RSS_FATAL("aac pcm buffer alloc failed");
+			goto cleanup;
+		}
+	}
+#endif
+
 	RSS_INFO("audio loop: %d samples/frame (%dms), %s", audio_cfg.samples_per_frame, 1000 / 50,
 		 codec_str);
 
@@ -837,14 +854,38 @@ int main(int argc, char **argv)
 			out_len = samples * 2;
 			break;
 #ifdef RAPTOR_AAC
-		case RAD_CODEC_AAC:
-			out_len = faacEncEncode(aac_handle, (int32_t *)pcm, samples, encode_buf,
-						encode_buf_size);
-			if (out_len < 0) {
-				RSS_WARN("aac encode failed: %d", out_len);
-				out_len = 0;
+		case RAD_CODEC_AAC: {
+			/* Accumulate PCM until we have aac_frame_samples (1024).
+			 * Carry over leftover samples from each capture. */
+			const int16_t *src = pcm;
+			int remaining = samples;
+			out_len = 0;
+			while (remaining > 0) {
+				int copy = remaining;
+				if (aac_pcm_fill + copy > aac_frame_samples)
+					copy = aac_frame_samples - aac_pcm_fill;
+				memcpy(aac_pcm_buf + aac_pcm_fill, src, copy * sizeof(int16_t));
+				aac_pcm_fill += copy;
+				src += copy;
+				remaining -= copy;
+				if (aac_pcm_fill >= aac_frame_samples) {
+					out_len = faacEncEncode(aac_handle, (int32_t *)aac_pcm_buf,
+								aac_frame_samples, encode_buf,
+								encode_buf_size);
+					if (out_len < 0) {
+						RSS_WARN("aac encode failed: %d", out_len);
+						out_len = 0;
+					}
+					aac_pcm_fill = 0;
+					if (out_len > 0)
+						rss_ring_publish(ring, encode_buf, out_len,
+								 frame.timestamp, codec_id, 0);
+				}
 			}
+			/* Skip the publish below — handled inside the loop */
+			out_len = 0;
 			break;
+		}
 #endif
 #ifdef RAPTOR_OPUS
 		case RAD_CODEC_OPUS:
@@ -885,6 +926,7 @@ cleanup:
 #ifdef RAPTOR_AAC
 	if (aac_handle)
 		faacEncClose(aac_handle);
+	free(aac_pcm_buf);
 #endif
 #ifdef RAPTOR_OPUS
 	if (opus_enc)
