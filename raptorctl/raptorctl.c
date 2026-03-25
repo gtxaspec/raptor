@@ -65,6 +65,21 @@ static void usage(void)
 			"  rvd set-qp-bounds <ch> <min> <max>  Change QP range\n"
 			"  rvd request-idr [channel]           Request keyframe\n"
 			"  rvd privacy [on|off]                Toggle privacy mode\n"
+			"  rvd set-brightness <val>            ISP brightness (0-255)\n"
+			"  rvd set-contrast <val>              ISP contrast (0-255)\n"
+			"  rvd set-saturation <val>            ISP saturation (0-255)\n"
+			"  rvd set-sharpness <val>             ISP sharpness (0-255)\n"
+			"  rvd set-hue <val>                   ISP hue (0-255)\n"
+			"  rvd set-sinter <val>                Spatial NR (0-255)\n"
+			"  rvd set-temper <val>                Temporal NR (0-255)\n"
+			"  rvd set-hflip <0|1>                 Horizontal flip\n"
+			"  rvd set-vflip <0|1>                 Vertical flip\n"
+			"  rvd set-antiflicker <0|1|2>         Off/50Hz/60Hz\n"
+			"  rvd set-ae-comp <val>               AE compensation\n"
+			"  rvd set-max-again <val>             Max analog gain\n"
+			"  rvd set-max-dgain <val>             Max digital gain\n"
+			"  rvd set-defog <0|1>                 Defog enable\n"
+			"  rvd get-isp                         Show all ISP settings\n"
 			"\n"
 			"RSD commands:\n"
 			"  rsd clients                         List connected RTSP clients\n"
@@ -382,6 +397,14 @@ int main(int argc, char **argv)
 			return 1;
 		}
 		snprintf(json, sizeof(json), "{\"cmd\":\"mode\",\"value\":\"%s\"}", argv[3]);
+
+	} else if (strncmp(cmd, "set-", 4) == 0 && argc >= 4) {
+		/* Generic set-X <value> pass-through */
+		snprintf(json, sizeof(json), "{\"cmd\":\"%s\",\"value\":%s}", cmd, argv[3]);
+
+	} else if (strncmp(cmd, "get-", 4) == 0) {
+		/* Generic get-X pass-through */
+		snprintf(json, sizeof(json), "{\"cmd\":\"%s\"}", cmd);
 
 	} else {
 		/* Generic pass-through */

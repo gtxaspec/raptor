@@ -324,6 +324,110 @@ static int rvd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		CTRL_RESP(resp_buf);
 	}
 
+	/* ── ISP image settings ── */
+
+#define ISP_SET_U8(name, fn)                                                                       \
+	if (strstr(cmd_json, "\"" name "\"")) {                                                    \
+		int val;                                                                           \
+		if (json_get_int(cmd_json, "value", &val) == 0) {                                  \
+			int ret = RSS_HAL_CALL(st->ops, fn, st->hal_ctx, (uint8_t)val);            \
+			snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\"}",                   \
+				 ret == 0 ? "ok" : "error");                                       \
+		} else {                                                                           \
+			snprintf(resp_buf, resp_buf_size,                                          \
+				 "{\"status\":\"error\",\"reason\":\"need value\"}");              \
+		}                                                                                  \
+		CTRL_RESP(resp_buf);                                                               \
+	}
+
+#define ISP_SET_INT(name, fn)                                                                      \
+	if (strstr(cmd_json, "\"" name "\"")) {                                                    \
+		int val;                                                                           \
+		if (json_get_int(cmd_json, "value", &val) == 0) {                                  \
+			int ret = RSS_HAL_CALL(st->ops, fn, st->hal_ctx, val);                     \
+			snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\"}",                   \
+				 ret == 0 ? "ok" : "error");                                       \
+		} else {                                                                           \
+			snprintf(resp_buf, resp_buf_size,                                          \
+				 "{\"status\":\"error\",\"reason\":\"need value\"}");              \
+		}                                                                                  \
+		CTRL_RESP(resp_buf);                                                               \
+	}
+
+#define ISP_SET_BOOL(name, fn)                                                                     \
+	if (strstr(cmd_json, "\"" name "\"")) {                                                    \
+		int val;                                                                           \
+		if (json_get_int(cmd_json, "value", &val) == 0) {                                  \
+			int ret = RSS_HAL_CALL(st->ops, fn, st->hal_ctx, val);                     \
+			snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\"}",                   \
+				 ret == 0 ? "ok" : "error");                                       \
+		} else {                                                                           \
+			snprintf(resp_buf, resp_buf_size,                                          \
+				 "{\"status\":\"error\",\"reason\":\"need value\"}");              \
+		}                                                                                  \
+		CTRL_RESP(resp_buf);                                                               \
+	}
+
+	ISP_SET_U8("set-brightness", isp_set_brightness)
+	ISP_SET_U8("set-contrast", isp_set_contrast)
+	ISP_SET_U8("set-saturation", isp_set_saturation)
+	ISP_SET_U8("set-sharpness", isp_set_sharpness)
+	ISP_SET_U8("set-hue", isp_set_hue)
+	ISP_SET_U8("set-sinter", isp_set_sinter_strength)
+	ISP_SET_U8("set-temper", isp_set_temper_strength)
+	ISP_SET_U8("set-dpc", isp_set_dpc_strength)
+	ISP_SET_U8("set-drc", isp_set_drc_strength)
+	ISP_SET_U8("set-highlight-depress", isp_set_highlight_depress)
+	ISP_SET_INT("set-ae-comp", isp_set_ae_comp)
+	ISP_SET_INT("set-max-again", isp_set_max_again)
+	ISP_SET_INT("set-max-dgain", isp_set_max_dgain)
+	ISP_SET_BOOL("set-hflip", isp_set_hflip)
+	ISP_SET_BOOL("set-vflip", isp_set_vflip)
+	ISP_SET_BOOL("set-defog", isp_set_defog)
+
+	if (strstr(cmd_json, "\"set-antiflicker\"")) {
+		int val;
+		if (json_get_int(cmd_json, "value", &val) == 0) {
+			int ret = RSS_HAL_CALL(st->ops, isp_set_antiflicker, st->hal_ctx, val);
+			snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\"}",
+				 ret == 0 ? "ok" : "error");
+		} else {
+			snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"error\",\"reason\":\"need value "
+				 "(0=off,1=50hz,2=60hz)\"}");
+		}
+		CTRL_RESP(resp_buf);
+	}
+
+	if (strstr(cmd_json, "\"get-isp\"")) {
+		uint8_t bri = 0, con = 0, sat = 0, shp = 0, hue = 0, sin = 0, tem = 0;
+		int hf = 0, vf = 0, ae = 0;
+		uint32_t again = 0, dgain = 0;
+		RSS_HAL_CALL(st->ops, isp_get_brightness, st->hal_ctx, &bri);
+		RSS_HAL_CALL(st->ops, isp_get_contrast, st->hal_ctx, &con);
+		RSS_HAL_CALL(st->ops, isp_get_saturation, st->hal_ctx, &sat);
+		RSS_HAL_CALL(st->ops, isp_get_sharpness, st->hal_ctx, &shp);
+		RSS_HAL_CALL(st->ops, isp_get_hue, st->hal_ctx, &hue);
+		RSS_HAL_CALL(st->ops, isp_get_sinter_strength, st->hal_ctx, &sin);
+		RSS_HAL_CALL(st->ops, isp_get_temper_strength, st->hal_ctx, &tem);
+		RSS_HAL_CALL(st->ops, isp_get_hvflip, st->hal_ctx, &hf, &vf);
+		RSS_HAL_CALL(st->ops, isp_get_ae_comp, st->hal_ctx, &ae);
+		RSS_HAL_CALL(st->ops, isp_get_max_again, st->hal_ctx, &again);
+		RSS_HAL_CALL(st->ops, isp_get_max_dgain, st->hal_ctx, &dgain);
+		snprintf(resp_buf, resp_buf_size,
+			 "{\"status\":\"ok\","
+			 "\"brightness\":%u,\"contrast\":%u,\"saturation\":%u,"
+			 "\"sharpness\":%u,\"hue\":%u,\"sinter\":%u,\"temper\":%u,"
+			 "\"hflip\":%d,\"vflip\":%d,\"ae_comp\":%d,"
+			 "\"max_again\":%u,\"max_dgain\":%u}",
+			 bri, con, sat, shp, hue, sin, tem, hf, vf, ae, again, dgain);
+		CTRL_RESP(resp_buf);
+	}
+
+#undef ISP_SET_U8
+#undef ISP_SET_INT
+#undef ISP_SET_BOOL
+
 	if (strstr(cmd_json, "\"status\"")) {
 		int off = snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\",\"streams\":[");
 		for (int i = 0; i < st->stream_count; i++) {
