@@ -199,12 +199,10 @@ int main(int argc, char **argv)
 		return 0;
 	}
 
-	if (!foreground) {
-		if (rss_daemonize("ric", false) < 0) {
-			RSS_FATAL("daemonize failed");
-			rss_config_free(cfg);
-			return 1;
-		}
+	if (rss_daemonize("ric", foreground) < 0) {
+		RSS_FATAL("daemonize failed");
+		rss_config_free(cfg);
+		return 1;
 	}
 
 	volatile sig_atomic_t *running = rss_signal_init();
@@ -281,8 +279,7 @@ int main(int argc, char **argv)
 		rss_ctrl_destroy(st.ctrl);
 
 	rss_config_free(cfg);
-	if (!foreground)
-		rss_daemon_cleanup("ric");
+	rss_daemon_cleanup("ric");
 
 	return 0;
 }

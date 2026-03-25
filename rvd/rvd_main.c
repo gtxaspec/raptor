@@ -67,13 +67,11 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	/* Daemonize */
-	if (!foreground) {
-		if (rss_daemonize("rvd", false) < 0) {
-			RSS_FATAL("daemonize failed");
-			rss_config_free(cfg);
-			return 1;
-		}
+	/* Daemonize (or just write PID file if foreground) */
+	if (rss_daemonize("rvd", foreground) < 0) {
+		RSS_FATAL("daemonize failed");
+		rss_config_free(cfg);
+		return 1;
 	}
 
 	/* Signals */
@@ -114,8 +112,7 @@ cleanup:
 
 	rss_config_free(cfg);
 
-	if (!foreground)
-		rss_daemon_cleanup("rvd");
+	rss_daemon_cleanup("rvd");
 
 	return (ret == RSS_OK) ? 0 : 1;
 }

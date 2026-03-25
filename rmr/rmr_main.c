@@ -496,12 +496,10 @@ int main(int argc, char **argv)
 		return 0;
 	}
 
-	if (!foreground) {
-		if (rss_daemonize("rmr", false) < 0) {
-			RSS_FATAL("daemonize failed");
-			rss_config_free(cfg);
-			return 1;
-		}
+	if (rss_daemonize("rmr", foreground) < 0) {
+		RSS_FATAL("daemonize failed");
+		rss_config_free(cfg);
+		return 1;
 	}
 
 	volatile sig_atomic_t *running = rss_signal_init();
@@ -631,8 +629,7 @@ cleanup:
 	free(st.avcc_buf);
 	rss_config_free(cfg);
 
-	if (!foreground)
-		rss_daemon_cleanup("rmr");
+	rss_daemon_cleanup("rmr");
 
 	return 0;
 }
