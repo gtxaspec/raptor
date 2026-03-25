@@ -389,45 +389,62 @@ static void *ao_playback_thread(void *arg)
 	}
 
 	uint64_t read_seq = 0;
+	uint64_t last_write_seq = atomic_load(&hdr->write_seq);
+	int idle_count = 0;
 	RSS_INFO("speaker ring connected");
 
 	while (*ctx->running) {
-		int ret = rss_ring_wait(ring, 500);
+		int ret = rss_ring_wait(ring, 200);
 		if (ret != 0) {
-			/* Check if ring was destroyed (rac exited) */
-			if (atomic_load(&hdr->magic) != 0x52535352) {
-				RSS_INFO("speaker ring gone, waiting for reconnect...");
+			uint64_t ws = atomic_load(&hdr->write_seq);
+			if (ws == last_write_seq)
+				idle_count++;
+			else
+				idle_count = 0;
+			last_write_seq = ws;
+
+			/* After ~1s of no new data, close and wait for fresh ring */
+			if (idle_count >= 5) {
+				idle_count = 0;
 				free(buf);
 				rss_ring_close(ring);
 				ring = NULL;
 				buf = NULL;
-				/* Wait for new ring */
+				RSS_DEBUG("speaker idle, waiting for new ring...");
 				while (*ctx->running) {
 					ring = rss_ring_open("speaker");
-					if (ring)
+					if (ring) {
+						hdr = rss_ring_get_header(ring);
+						buf = malloc(hdr->data_size);
+						if (!buf) {
+							rss_ring_close(ring);
+							ring = NULL;
+							break;
+						}
+						read_seq = 0;
+						last_write_seq = atomic_load(&hdr->write_seq);
+						RSS_INFO("speaker ring reconnected");
 						break;
-					usleep(500000);
+					}
+					usleep(100000);
 				}
-				if (!ring)
+				if (!ring || !buf)
 					break;
-				hdr = rss_ring_get_header(ring);
-				buf = malloc(hdr->data_size);
-				if (!buf) {
-					rss_ring_close(ring);
-					break;
-				}
-				read_seq = 0;
-				RSS_INFO("speaker ring reconnected");
 			}
 			continue;
 		}
+		idle_count = 0;
 
 		uint32_t length = 0;
 		rss_ring_slot_t meta;
 		ret = rss_ring_read(ring, &read_seq, buf, hdr->data_size, &length, &meta);
-		if (ret != 0)
+		if (ret != 0) {
+			RSS_DEBUG("ao ring_read failed: %d seq=%llu", ret,
+				  (unsigned long long)read_seq);
 			continue;
+		}
 
+		RSS_DEBUG("ao send_frame len=%u", length);
 		RSS_HAL_CALL(ctx->ops, ao_send_frame, ctx->hal_ctx, (const int16_t *)buf, length,
 			     true);
 	}
