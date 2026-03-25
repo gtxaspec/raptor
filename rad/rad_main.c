@@ -8,6 +8,8 @@
  *   pcmu  — G.711 mu-law, 8kHz fixed (RTP PT 0)
  *   pcma  — G.711 A-law, 8kHz fixed (RTP PT 8)
  *   l16   — Uncompressed 16-bit PCM, any sample rate (RTP PT dynamic)
+ *   aac   — AAC-LC via faac (compile with RAPTOR_AAC=1)
+ *   opus  — Opus via libopus (compile with RAPTOR_OPUS=1)
  */
 
 #include <stdio.h>
@@ -24,10 +26,20 @@
 #include <rss_ipc.h>
 #include <rss_common.h>
 
-/* Audio codec IDs stored in ring stream_info */
+#ifdef RAPTOR_AAC
+#include <faac.h>
+#endif
+
+#ifdef RAPTOR_OPUS
+#include <opus/opus.h>
+#endif
+
+/* Audio codec IDs stored in ring stream_info (RTP payload types) */
 #define RAD_CODEC_PCMU 0
 #define RAD_CODEC_PCMA 8
 #define RAD_CODEC_L16  11
+#define RAD_CODEC_AAC  97
+#define RAD_CODEC_OPUS 111
 
 /* ── G.711 mu-law encoding ── */
 
@@ -494,6 +506,12 @@ int main(int argc, char **argv)
 	rss_ctrl_t *ctrl = NULL;
 	rss_ring_t *ring = NULL;
 	uint8_t *encode_buf = NULL;
+#ifdef RAPTOR_AAC
+	faacEncHandle aac_handle = NULL;
+#endif
+#ifdef RAPTOR_OPUS
+	OpusEncoder *opus_enc = NULL;
+#endif
 	bool ao_enabled = false;
 	pthread_t ao_tid;
 	bool ao_thread_started = false;
@@ -523,9 +541,24 @@ int main(int argc, char **argv)
 		sample_rate = 8000; /* PCMA is 8kHz only */
 	} else if (strcasecmp(codec_str, "l16") == 0) {
 		codec_id = RAD_CODEC_L16;
-		/* sample_rate is configurable for L16 */
+#ifdef RAPTOR_AAC
+	} else if (strcasecmp(codec_str, "aac") == 0) {
+		codec_id = RAD_CODEC_AAC;
+#endif
+#ifdef RAPTOR_OPUS
+	} else if (strcasecmp(codec_str, "opus") == 0) {
+		codec_id = RAD_CODEC_OPUS;
+#endif
 	} else {
-		RSS_FATAL("unknown audio codec: %s (use pcmu, pcma, or l16)", codec_str);
+		RSS_FATAL("unknown audio codec: %s (supported: pcmu, pcma, l16"
+#ifdef RAPTOR_AAC
+			  ", aac"
+#endif
+#ifdef RAPTOR_OPUS
+			  ", opus"
+#endif
+			  ")",
+			  codec_str);
 		goto cleanup;
 	}
 
@@ -549,6 +582,53 @@ int main(int argc, char **argv)
 
 	RSS_INFO("audio: dev=%d %d Hz %s vol=%d gain=%d", ai_dev, sample_rate, codec_str, volume,
 		 gain);
+
+	/* ── Encoder init (AAC/Opus) ── */
+#ifdef RAPTOR_AAC
+	unsigned long aac_input_samples = 0;
+	unsigned long aac_max_output = 0;
+#endif
+
+#ifdef RAPTOR_AAC
+	if (codec_id == RAD_CODEC_AAC) {
+		aac_handle = faacEncOpen(sample_rate, 1, &aac_input_samples, &aac_max_output);
+		if (!aac_handle) {
+			RSS_FATAL("faacEncOpen failed");
+			goto cleanup;
+		}
+		faacEncConfigurationPtr aac_cfg = faacEncGetCurrentConfiguration(aac_handle);
+		aac_cfg->aacObjectType = LOW;
+		aac_cfg->mpegVersion = MPEG4;
+		aac_cfg->inputFormat = FAAC_INPUT_16BIT;
+		aac_cfg->outputFormat = RAW_STREAM;
+		aac_cfg->bandWidth = sample_rate;
+		aac_cfg->bitRate =
+			rss_config_get_int(cfg, "audio", "bitrate", 32000); /* per channel */
+		aac_cfg->allowMidside = 0;
+		aac_cfg->useTns = 0;
+		if (!faacEncSetConfiguration(aac_handle, aac_cfg)) {
+			RSS_FATAL("faacEncSetConfiguration failed");
+			goto cleanup;
+		}
+		RSS_INFO("aac encoder: %lu samples/frame, max %lu bytes output", aac_input_samples,
+			 aac_max_output);
+	}
+#endif
+
+#ifdef RAPTOR_OPUS
+	if (codec_id == RAD_CODEC_OPUS) {
+		int opus_err;
+		opus_enc = opus_encoder_create(sample_rate, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY,
+					       &opus_err);
+		if (opus_err != OPUS_OK || !opus_enc) {
+			RSS_FATAL("opus_encoder_create failed: %d", opus_err);
+			goto cleanup;
+		}
+		int opus_bitrate = rss_config_get_int(cfg, "audio", "bitrate", 32000);
+		opus_encoder_ctl(opus_enc, OPUS_SET_BITRATE(opus_bitrate));
+		RSS_INFO("opus encoder: bitrate=%d", opus_bitrate);
+	}
+#endif
 
 	/* ── Audio effects (libaudioProcess.so) ── */
 #ifdef RAPTOR_AUDIO_EFFECTS
@@ -631,7 +711,7 @@ int main(int argc, char **argv)
 		}
 	}
 
-	/* Ring buffer — L16 frames are larger (2 bytes/sample vs 1) */
+	/* Ring buffer */
 	int ring_data_size = (codec_id == RAD_CODEC_L16) ? 256 * 1024 : 128 * 1024;
 	ring = rss_ring_create("audio", 32, ring_data_size);
 	if (!ring) {
@@ -640,9 +720,20 @@ int main(int argc, char **argv)
 	}
 	rss_ring_set_stream_info(ring, 0x10, codec_id, 0, 0, sample_rate, 1, 0, 0);
 
-	/* Encode buffer: L16 = 2 bytes/sample, G.711 = 1 byte/sample */
-	int encode_buf_size = (codec_id == RAD_CODEC_L16) ? audio_cfg.samples_per_frame * 2
-							  : audio_cfg.samples_per_frame;
+	/* Encode buffer — sized for worst case of each codec */
+	int encode_buf_size;
+	if (codec_id == RAD_CODEC_L16)
+		encode_buf_size = audio_cfg.samples_per_frame * 2;
+#ifdef RAPTOR_AAC
+	else if (codec_id == RAD_CODEC_AAC)
+		encode_buf_size = (int)(aac_max_output > 0 ? aac_max_output : 4096);
+#endif
+#ifdef RAPTOR_OPUS
+	else if (codec_id == RAD_CODEC_OPUS)
+		encode_buf_size = 4096;
+#endif
+	else
+		encode_buf_size = audio_cfg.samples_per_frame; /* G.711: 1 byte/sample */
 	encode_buf = malloc(encode_buf_size);
 	if (!encode_buf) {
 		RSS_FATAL("failed to allocate encode buffer");
@@ -729,6 +820,25 @@ int main(int argc, char **argv)
 			pcm16_to_l16(pcm, encode_buf, samples);
 			out_len = samples * 2;
 			break;
+#ifdef RAPTOR_AAC
+		case RAD_CODEC_AAC:
+			out_len = faacEncEncode(aac_handle, (int32_t *)pcm, samples, encode_buf,
+						encode_buf_size);
+			if (out_len < 0) {
+				RSS_WARN("aac encode failed: %d", out_len);
+				out_len = 0;
+			}
+			break;
+#endif
+#ifdef RAPTOR_OPUS
+		case RAD_CODEC_OPUS:
+			out_len = opus_encode(opus_enc, pcm, samples, encode_buf, encode_buf_size);
+			if (out_len < 0) {
+				RSS_WARN("opus encode failed: %d", out_len);
+				out_len = 0;
+			}
+			break;
+#endif
 		default:
 			out_len = 0;
 			break;
@@ -756,6 +866,14 @@ cleanup:
 	if (ctrl)
 		rss_ctrl_destroy(ctrl);
 	free(encode_buf);
+#ifdef RAPTOR_AAC
+	if (aac_handle)
+		faacEncClose(aac_handle);
+#endif
+#ifdef RAPTOR_OPUS
+	if (opus_enc)
+		opus_encoder_destroy(opus_enc);
+#endif
 	if (ring)
 		rss_ring_destroy(ring);
 	if (hal_ctx) {
