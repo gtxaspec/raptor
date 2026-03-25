@@ -47,19 +47,23 @@ static void rsd_bc_recv_t_on_audio(VSelf, uint8_t payload_type, uint32_t timesta
 			RSS_WARN("backchannel: failed to create speaker ring");
 			return;
 		}
-		rss_ring_set_stream_info(*ring_ptr, 0x11, 0, 0, 0, 8000, 1, 0, 0);
+		rss_ring_set_stream_info(*ring_ptr, 0x11, 0, 0, 0, 16000, 1, 0, 0);
 		RSS_INFO("backchannel: speaker ring created");
 	}
 
 	if (payload_type == 0) {
-		/* PCMU — decode to PCM16 */
-		int16_t pcm[960];
+		/* PCMU/8000 — decode to PCM16 and upsample 8kHz→16kHz.
+		 * Simple 2x interpolation: duplicate each sample. */
+		int16_t pcm[1920]; /* 960 input samples * 2 */
 		int n = (int)payload.len;
 		if (n > 960)
 			n = 960;
-		for (int i = 0; i < n; i++)
-			pcm[i] = ulaw_decode(payload.ptr[i]);
-		rss_ring_publish(*ring_ptr, (const uint8_t *)pcm, n * 2, rss_timestamp_us(), 0, 0);
+		for (int i = 0; i < n; i++) {
+			int16_t s = ulaw_decode(payload.ptr[i]);
+			pcm[i * 2] = s;
+			pcm[i * 2 + 1] = s;
+		}
+		rss_ring_publish(*ring_ptr, (const uint8_t *)pcm, n * 4, rss_timestamp_us(), 0, 0);
 	} else {
 		rss_ring_publish(*ring_ptr, payload.ptr, (uint32_t)payload.len, rss_timestamp_us(),
 				 payload_type, 0);
