@@ -178,6 +178,18 @@ int rvd_pipeline_init(rvd_state_t *st)
 		return ret;
 	}
 
+	/* Log system info */
+	{
+		char ver[64];
+		if (rss_hal_get_imp_version(ver, sizeof(ver)) == 0)
+			RSS_INFO("LIBIMP Version %s", ver);
+		if (rss_hal_get_sysutils_version(ver, sizeof(ver)) == 0)
+			RSS_INFO("SYSUTILS Version %s", ver);
+		const char *cpu = rss_hal_get_cpu_info();
+		if (cpu)
+			RSS_INFO("CPU: %s", cpu);
+	}
+
 	/* Check caps for codec fallback */
 	const rss_hal_caps_t *caps = st->ops->get_caps ? st->ops->get_caps(st->hal_ctx) : NULL;
 
