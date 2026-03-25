@@ -42,6 +42,16 @@ ifeq ($(AUDIO_EFFECTS),1)
 CFLAGS += -DRAPTOR_AUDIO_EFFECTS
 endif
 
+ifeq ($(AAC),1)
+CFLAGS += -DRAPTOR_AAC
+LDFLAGS_AAC := -lfaac
+endif
+
+ifeq ($(OPUS),1)
+CFLAGS += -DRAPTOR_OPUS
+LDFLAGS_OPUS := -lopus
+endif
+
 ifeq ($(V),1)
 Q :=
 else
@@ -120,7 +130,7 @@ rad: $(LIB_HAL) $(LIB_IPC) $(LIB_COMMON)
 	@echo "  BUILD   rad"
 	$(Q)$(MAKE) -C rad CC="$(CC)" CFLAGS="$(CFLAGS)" \
 		LIBS="$(LIB_HAL) $(LIB_IPC) $(LIB_COMMON)" \
-		LDFLAGS="$(LDFLAGS_HAL)" Q="$(Q)"
+		LDFLAGS="$(LDFLAGS_HAL) $(LDFLAGS_AAC) $(LDFLAGS_OPUS)" Q="$(Q)"
 
 rhd: $(LIB_IPC) $(LIB_COMMON)
 	@echo "  BUILD   rhd"
