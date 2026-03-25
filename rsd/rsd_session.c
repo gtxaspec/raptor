@@ -77,7 +77,10 @@ static void rsd_bc_recv_t_drop(VSelf)
 }
 
 impl(Compy_AudioReceiver, rsd_bc_recv_t);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-const-variable"
 impl(Compy_Droppable, rsd_bc_recv_t);
+#pragma GCC diagnostic pop
 
 /* ── Controller method implementations ── */
 

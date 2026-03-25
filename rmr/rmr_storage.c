@@ -169,7 +169,7 @@ static int64_t dir_mp4_size(const char *dir_path)
 		size_t len = strlen(ent->d_name);
 		if (len < 4 || strcmp(ent->d_name + len - 4, ".mp4") != 0)
 			continue;
-		char fpath[512];
+		char fpath[768];
 		snprintf(fpath, sizeof(fpath), "%s/%s", dir_path, ent->d_name);
 		struct stat st;
 		if (stat(fpath, &st) == 0)
@@ -211,7 +211,7 @@ int rmr_storage_enforce_limit(rmr_storage_t *st)
 		char **files = scan_dir_sorted(dir_path, &file_count);
 		if (files) {
 			for (int j = 0; j < file_count; j++) {
-				char fpath[512];
+				char fpath[768];
 				snprintf(fpath, sizeof(fpath), "%s/%s", dir_path, files[j]);
 				struct stat fst;
 				if (stat(fpath, &fst) == 0) {
