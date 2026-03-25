@@ -209,11 +209,66 @@ static enum play_fmt detect_format(const char *path, const uint8_t *hdr, size_t 
 }
 
 #if defined(RAPTOR_MP3) || defined(RAPTOR_AAC) || defined(RAPTOR_OPUS)
-static void publish_pcm(rss_ring_t *ring, const int16_t *pcm, int samples)
+/* Linear interpolation resampler (matches prudynt's resampleLinear) */
+static int resample_linear(const int16_t *in, int in_samples, int in_rate, int16_t *out,
+			   int out_max, int out_rate)
 {
-	rss_ring_publish(ring, (const uint8_t *)pcm, samples * 2, rss_timestamp_us(), 0, 0);
-	/* Pace: ~20ms per 320 samples at 16kHz */
-	usleep(18000);
+	if (in_rate == out_rate || in_samples == 0) {
+		int n = (in_samples < out_max) ? in_samples : out_max;
+		memcpy(out, in, n * sizeof(int16_t));
+		return n;
+	}
+	double ratio = (double)out_rate / (double)in_rate;
+	int out_samples = (int)(in_samples * ratio + 0.5);
+	if (out_samples > out_max)
+		out_samples = out_max;
+	for (int i = 0; i < out_samples; i++) {
+		double pos = (double)i / ratio;
+		int base = (int)pos;
+		if (base >= in_samples)
+			base = in_samples - 1;
+		int next = (base + 1 < in_samples) ? base + 1 : base;
+		double frac = pos - base;
+		double val = in[base] * (1.0 - frac) + in[next] * frac;
+		if (val > 32767)
+			val = 32767;
+		if (val < -32768)
+			val = -32768;
+		out[i] = (int16_t)val;
+	}
+	return out_samples;
+}
+
+/* Resample (if needed), chunk into 20ms frames, publish to ring */
+static void publish_pcm(rss_ring_t *ring, const int16_t *pcm, int samples, int src_rate,
+			int dst_rate)
+{
+	int16_t resamp_buf[8192];
+	const int16_t *data = pcm;
+	int count = samples;
+
+	if (src_rate != dst_rate) {
+		count = resample_linear(pcm, samples, src_rate, resamp_buf,
+					(int)(sizeof(resamp_buf) / sizeof(resamp_buf[0])),
+					dst_rate);
+		data = resamp_buf;
+	}
+
+	/* Chunk into 20ms frames at the output rate.
+	 * The AO hardware blocks on SendFrame, which is the real playback clock.
+	 * We publish slightly ahead to keep the ring fed. */
+	int chunk = dst_rate / 50; /* 320 samples at 16kHz = 20ms */
+	if (chunk <= 0)
+		chunk = 320;
+	int off = 0;
+	while (off < count) {
+		int n = (count - off < chunk) ? (count - off) : chunk;
+		rss_ring_publish(ring, (const uint8_t *)(data + off), n * 2, rss_timestamp_us(), 0,
+				 0);
+		off += n;
+		/* Sleep for the frame duration minus a bit to stay ahead of AO */
+		usleep((unsigned)(n * 1000000 / dst_rate) - 500);
+	}
 }
 #endif
 
@@ -324,7 +379,7 @@ static int cmd_play(const char *src, int sample_rate)
 				for (int i = 0; i < samples; i++)
 					pcm_buf[i] = (pcm_buf[i * 2] + pcm_buf[i * 2 + 1]) / 2;
 			}
-			publish_pcm(ring, pcm_buf, samples);
+			publish_pcm(ring, pcm_buf, samples, info.samprate, sample_rate);
 			total_samples += samples;
 		}
 		free(mp3_buf);
@@ -376,7 +431,7 @@ static int cmd_play(const char *src, int sample_rate)
 				for (int i = 0; i < samples; i++)
 					pcm_buf[i] = (pcm_buf[i * 2] + pcm_buf[i * 2 + 1]) / 2;
 			}
-			publish_pcm(ring, pcm_buf, samples);
+			publish_pcm(ring, pcm_buf, samples, info.sampRateOut, sample_rate);
 			total_samples += samples;
 		}
 		free(aac_buf);
@@ -397,7 +452,9 @@ static int cmd_play(const char *src, int sample_rate)
 	}
 
 done:
-	rss_ring_close(ring);
+	/* Let AO thread drain remaining frames, then destroy so it reconnects next time */
+	usleep(100000);
+	rss_ring_destroy(ring);
 	if (!is_stdin) {
 		fclose(in);
 		double duration = (double)(rss_timestamp_us() - start_time) / 1000000.0;
