@@ -573,12 +573,10 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	if (!foreground) {
-		if (rss_daemonize("rhd", false) < 0) {
-			RSS_FATAL("daemonize failed");
-			rss_config_free(cfg);
-			return 1;
-		}
+	if (rss_daemonize("rhd", foreground) < 0) {
+		RSS_FATAL("daemonize failed");
+		rss_config_free(cfg);
+		return 1;
 	}
 
 	volatile sig_atomic_t *running = rss_signal_init();
@@ -608,8 +606,7 @@ int main(int argc, char **argv)
 
 	RSS_INFO("rhd shutting down");
 	rss_config_free(cfg);
-	if (!foreground)
-		rss_daemon_cleanup("rhd");
+	rss_daemon_cleanup("rhd");
 
 	return 0;
 }

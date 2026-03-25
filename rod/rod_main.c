@@ -405,12 +405,10 @@ int main(int argc, char **argv)
 		return 0;
 	}
 
-	if (!foreground) {
-		if (rss_daemonize("rod", false) < 0) {
-			RSS_FATAL("daemonize failed");
-			rss_config_free(cfg);
-			return 1;
-		}
+	if (rss_daemonize("rod", foreground) < 0) {
+		RSS_FATAL("daemonize failed");
+		rss_config_free(cfg);
+		return 1;
 	}
 
 	volatile sig_atomic_t *running = rss_signal_init();
@@ -528,8 +526,7 @@ cleanup:
 		rod_render_deinit(&st, s);
 
 	rss_config_free(cfg);
-	if (!foreground)
-		rss_daemon_cleanup("rod");
+	rss_daemon_cleanup("rod");
 
 	return 0;
 }
