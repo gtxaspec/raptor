@@ -174,10 +174,16 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 		}
 	}
 
-	/* Backchannel: client sends PCMU to server */
-	COMPY_SDP_DESCRIBE(ret, sdp_w, (COMPY_SDP_MEDIA, "audio 0 RTP/AVP 0"),
-			   (COMPY_SDP_ATTR, "control:backchannel"),
-			   (COMPY_SDP_ATTR, "rtpmap:0 PCMU/8000"), (COMPY_SDP_ATTR, "sendonly"));
+	/* Backchannel: only advertise when client requests it via Require header
+	 * (ONVIF Profile T). Non-backchannel clients (ffplay, mpv, VLC) choke
+	 * on the sendonly media line and retry SETUP, adding seconds of delay. */
+	if (compy_require_has_tag(&req->header_map,
+				  CharSlice99_from_str("www.onvif.org/ver20/backchannel"))) {
+		COMPY_SDP_DESCRIBE(ret, sdp_w, (COMPY_SDP_MEDIA, "audio 0 RTP/AVP 0"),
+				   (COMPY_SDP_ATTR, "control:backchannel"),
+				   (COMPY_SDP_ATTR, "rtpmap:0 PCMU/8000"),
+				   (COMPY_SDP_ATTR, "sendonly"));
+	}
 
 	(void)ret;
 
