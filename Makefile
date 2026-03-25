@@ -44,7 +44,13 @@ endif
 
 ifeq ($(AAC),1)
 CFLAGS += -DRAPTOR_AAC
-LDFLAGS_AAC := -lfaac
+LDFLAGS_AAC_ENC := -lfaac
+LDFLAGS_AAC_DEC := -lhelix-aac
+endif
+
+ifeq ($(MP3),1)
+CFLAGS += -DRAPTOR_MP3 -DARDUINO
+LDFLAGS_MP3 := -lhelix-mp3
 endif
 
 ifeq ($(OPUS),1)
@@ -130,7 +136,7 @@ rad: $(LIB_HAL) $(LIB_IPC) $(LIB_COMMON)
 	@echo "  BUILD   rad"
 	$(Q)$(MAKE) -C rad CC="$(CC)" CFLAGS="$(CFLAGS)" \
 		LIBS="$(LIB_HAL) $(LIB_IPC) $(LIB_COMMON)" \
-		LDFLAGS="$(LDFLAGS_HAL) $(LDFLAGS_AAC) $(LDFLAGS_OPUS)" Q="$(Q)"
+		LDFLAGS="$(LDFLAGS_HAL) $(LDFLAGS_AAC_ENC) $(LDFLAGS_OPUS)" Q="$(Q)"
 
 rhd: $(LIB_IPC) $(LIB_COMMON)
 	@echo "  BUILD   rhd"
@@ -174,7 +180,7 @@ rac: $(LIB_IPC) $(LIB_COMMON)
 	@echo "  BUILD   rac"
 	$(Q)$(MAKE) -C rac CC="$(CC)" CFLAGS="$(CFLAGS)" \
 		LIBS="$(LIB_IPC) $(LIB_COMMON)" \
-		LDFLAGS="$(LDFLAGS)" Q="$(Q)"
+		LDFLAGS="$(LDFLAGS) $(LDFLAGS_MP3) $(LDFLAGS_AAC_DEC) $(LDFLAGS_OPUS)" Q="$(Q)"
 
 # -- Clean --
 
