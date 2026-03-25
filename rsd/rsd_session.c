@@ -155,22 +155,60 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 
 	if (g_srv->has_audio) {
 		const rss_ring_header_t *ahdr = rss_ring_get_header(g_srv->ring_audio);
-		int apt = (ahdr->codec == RSD_CODEC_PCMU)   ? 0
-			  : (ahdr->codec == RSD_CODEC_PCMA) ? 8
-							    : RSD_AUDIO_PT_L16;
+		uint32_t codec = ahdr->codec;
 		int aclk = ahdr->fps_num; /* fps_num holds sample_rate */
 
-		if (apt <= 8) {
-			/* Static PT (PCMU=0, PCMA=8) — no rtpmap needed */
-			COMPY_SDP_DESCRIBE(ret, sdp_w, (COMPY_SDP_MEDIA, "audio 0 RTP/AVP %d", apt),
+		if (codec == RSD_CODEC_PCMU) {
+			COMPY_SDP_DESCRIBE(ret, sdp_w, (COMPY_SDP_MEDIA, "audio 0 RTP/AVP 0"),
 					   (COMPY_SDP_ATTR, "control:audio"),
 					   (COMPY_SDP_ATTR, "recvonly"));
+		} else if (codec == RSD_CODEC_PCMA) {
+			COMPY_SDP_DESCRIBE(ret, sdp_w, (COMPY_SDP_MEDIA, "audio 0 RTP/AVP 8"),
+					   (COMPY_SDP_ATTR, "control:audio"),
+					   (COMPY_SDP_ATTR, "recvonly"));
+		} else if (codec == RSD_CODEC_AAC) {
+			/* AAC-LC (RFC 3640, AAC-hbr mode)
+			 * AudioSpecificConfig: 2 bytes encoding profile + sample rate + channels
+			 *   audioObjectType=2 (AAC-LC), channelConfig=1 (mono) */
+			static const int sr_table[] = {96000, 88200, 64000, 48000, 44100,
+						       32000, 24000, 22050, 16000, 12000,
+						       11025, 8000,  7350};
+			int sr_idx = 4; /* default 44100 */
+			for (int i = 0; i < 13; i++) {
+				if (sr_table[i] == aclk) {
+					sr_idx = i;
+					break;
+				}
+			}
+			uint16_t asc = (uint16_t)((2 << 11) | (sr_idx << 7) | (1 << 3));
+
+			COMPY_SDP_DESCRIBE(
+				ret, sdp_w,
+				(COMPY_SDP_MEDIA, "audio 0 RTP/AVP %d", RSD_AUDIO_PT_AAC),
+				(COMPY_SDP_ATTR, "control:audio"),
+				(COMPY_SDP_ATTR, "rtpmap:%d mpeg4-generic/%d/1", RSD_AUDIO_PT_AAC,
+				 aclk),
+				(COMPY_SDP_ATTR,
+				 "fmtp:%d streamtype=5;profile-level-id=1;mode=AAC-hbr;"
+				 "sizelength=13;indexlength=3;indexdeltalength=3;config=%04X",
+				 RSD_AUDIO_PT_AAC, asc),
+				(COMPY_SDP_ATTR, "recvonly"));
+		} else if (codec == RSD_CODEC_OPUS) {
+			/* Opus (RFC 7587) — always 48000/2 in SDP regardless of actual rate */
+			COMPY_SDP_DESCRIBE(
+				ret, sdp_w,
+				(COMPY_SDP_MEDIA, "audio 0 RTP/AVP %d", RSD_AUDIO_PT_OPUS),
+				(COMPY_SDP_ATTR, "control:audio"),
+				(COMPY_SDP_ATTR, "rtpmap:%d opus/48000/2", RSD_AUDIO_PT_OPUS),
+				(COMPY_SDP_ATTR, "recvonly"));
 		} else {
-			/* Dynamic PT (L16) — need rtpmap */
-			COMPY_SDP_DESCRIBE(ret, sdp_w, (COMPY_SDP_MEDIA, "audio 0 RTP/AVP %d", apt),
-					   (COMPY_SDP_ATTR, "control:audio"),
-					   (COMPY_SDP_ATTR, "rtpmap:%d L16/%d/1", apt, aclk),
-					   (COMPY_SDP_ATTR, "recvonly"));
+			/* L16 or unknown — dynamic PT with rtpmap */
+			COMPY_SDP_DESCRIBE(
+				ret, sdp_w,
+				(COMPY_SDP_MEDIA, "audio 0 RTP/AVP %d", RSD_AUDIO_PT_L16),
+				(COMPY_SDP_ATTR, "control:audio"),
+				(COMPY_SDP_ATTR, "rtpmap:%d L16/%d/1", RSD_AUDIO_PT_L16, aclk),
+				(COMPY_SDP_ATTR, "recvonly"));
 		}
 	}
 
@@ -327,10 +365,25 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 		int aclk = 8000;
 		if (g_srv && g_srv->ring_audio) {
 			const rss_ring_header_t *ahdr = rss_ring_get_header(g_srv->ring_audio);
-			apt = (ahdr->codec == RSD_CODEC_PCMU)	? 0
-			      : (ahdr->codec == RSD_CODEC_PCMA) ? 8
-								: RSD_AUDIO_PT_L16;
 			aclk = ahdr->fps_num;
+			switch (ahdr->codec) {
+			case RSD_CODEC_PCMU:
+				apt = 0;
+				break;
+			case RSD_CODEC_PCMA:
+				apt = 8;
+				break;
+			case RSD_CODEC_AAC:
+				apt = RSD_AUDIO_PT_AAC;
+				break;
+			case RSD_CODEC_OPUS:
+				apt = RSD_AUDIO_PT_OPUS;
+				aclk = 48000; /* RFC 7587: always 48kHz RTP clock */
+				break;
+			default:
+				apt = RSD_AUDIO_PT_L16;
+				break;
+			}
 		}
 		self->audio.rtp = Compy_RtpTransport_new(rtp_t, apt, aclk);
 		self->audio.rtcp = Compy_Rtcp_new(self->audio.rtp, rtcp_t, "raptor@camera");

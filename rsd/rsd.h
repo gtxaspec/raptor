@@ -20,12 +20,16 @@
 #define RSD_BUF_SIZE	4096
 
 /* Audio codec IDs (matches RAD ring codec field) */
-#define RSD_CODEC_PCMU	 0
-#define RSD_CODEC_PCMA	 8
-#define RSD_CODEC_L16	 11
-#define RSD_AUDIO_PT_L16  97 /* dynamic PT for L16 */
-#define RSD_AUDIO_PT_AAC  97 /* dynamic PT for AAC */
-#define RSD_AUDIO_PT_OPUS 111
+#define RSD_CODEC_PCMU	0
+#define RSD_CODEC_PCMA	8
+#define RSD_CODEC_L16	11
+#define RSD_CODEC_AAC	97
+#define RSD_CODEC_OPUS	111
+
+/* RTP payload types for audio */
+#define RSD_AUDIO_PT_L16  96 /* dynamic PT for L16 */
+#define RSD_AUDIO_PT_AAC  97 /* dynamic PT for AAC (RFC 3640) */
+#define RSD_AUDIO_PT_OPUS 111 /* dynamic PT for Opus (RFC 7587) */
 #define RSD_BACKCHANNEL_PT 110 /* backchannel audio PT (PCMU default) */
 
 /* Stream index for per-ring state */

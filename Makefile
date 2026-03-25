@@ -112,7 +112,7 @@ libs: $(LIB_HAL) $(LIB_IPC) $(LIB_COMMON)
 $(LIB_HAL):
 	@echo "  BUILD   raptor-hal"
 	$(Q)$(MAKE) -C $(HAL_DIR) PLATFORM=$(PLATFORM) CROSS_COMPILE=$(CROSS_COMPILE) \
-		INGENIC_HEADERS=$(CURDIR)/ingenic-headers $(if $(DEBUG),DEBUG=1,)
+		$(if $(DEBUG),DEBUG=1,)
 
 $(LIB_IPC):
 	@echo "  BUILD   raptor-ipc"
