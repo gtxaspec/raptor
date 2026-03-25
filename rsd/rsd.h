@@ -23,7 +23,10 @@
 #define RSD_CODEC_PCMU	 0
 #define RSD_CODEC_PCMA	 8
 #define RSD_CODEC_L16	 11
-#define RSD_AUDIO_PT_L16 97 /* dynamic PT for L16 */
+#define RSD_AUDIO_PT_L16  97 /* dynamic PT for L16 */
+#define RSD_AUDIO_PT_AAC  97 /* dynamic PT for AAC */
+#define RSD_AUDIO_PT_OPUS 111
+#define RSD_BACKCHANNEL_PT 110 /* backchannel audio PT (PCMU default) */
 
 /* Stream index for per-ring state */
 #define RSD_STREAM_MAIN	 0
@@ -56,6 +59,11 @@ typedef struct rsd_client {
 	bool is_tcp;
 	int stream_idx;	      /* RSD_STREAM_MAIN or RSD_STREAM_SUB */
 	uint32_t video_codec; /* RSS_CODEC_H264 or RSS_CODEC_H265 */
+
+	/* Backchannel (client → server audio) */
+	Compy_Backchannel *backchannel;
+	rss_ring_t *speaker_ring; /* created on first backchannel packet */
+	void *bc_recv;		  /* rsd_bc_recv_t, kept alive for callback */
 
 	/* UDP socket fds (for cleanup) */
 	int udp_rtp_fd;

@@ -16,6 +16,65 @@
 /* Server pointer for SDP generation (set by rsd_handle_rtsp_data) */
 static rsd_server_t *g_srv = NULL;
 
+/* ── Backchannel audio receiver (separate type for interface99) ── */
+
+typedef struct {
+	rss_ring_t **speaker_ring_ptr; /* points to client->speaker_ring */
+} rsd_bc_recv_t;
+
+static int16_t ulaw_decode(uint8_t ulaw)
+{
+	ulaw = ~ulaw;
+	int sign = (ulaw & 0x80);
+	int exponent = (ulaw >> 4) & 0x07;
+	int mantissa = ulaw & 0x0f;
+	int magnitude = ((mantissa << 3) + 0x84) << exponent;
+	magnitude -= 0x84;
+	return (int16_t)(sign ? -magnitude : magnitude);
+}
+
+static void rsd_bc_recv_t_on_audio(VSelf, uint8_t payload_type, uint32_t timestamp, uint32_t ssrc,
+				   U8Slice99 payload)
+{
+	VSELF(rsd_bc_recv_t);
+	(void)timestamp;
+	(void)ssrc;
+
+	rss_ring_t **ring_ptr = self->speaker_ring_ptr;
+	if (!*ring_ptr) {
+		*ring_ptr = rss_ring_create("speaker", 16, 64 * 1024);
+		if (!*ring_ptr) {
+			RSS_WARN("backchannel: failed to create speaker ring");
+			return;
+		}
+		rss_ring_set_stream_info(*ring_ptr, 0x11, 0, 0, 0, 8000, 1, 0, 0);
+		RSS_INFO("backchannel: speaker ring created");
+	}
+
+	if (payload_type == 0) {
+		/* PCMU — decode to PCM16 */
+		int16_t pcm[960];
+		int n = (int)payload.len;
+		if (n > 960)
+			n = 960;
+		for (int i = 0; i < n; i++)
+			pcm[i] = ulaw_decode(payload.ptr[i]);
+		rss_ring_publish(*ring_ptr, (const uint8_t *)pcm, n * 2, rss_timestamp_us(), 0, 0);
+	} else {
+		rss_ring_publish(*ring_ptr, payload.ptr, (uint32_t)payload.len, rss_timestamp_us(),
+				 payload_type, 0);
+	}
+}
+
+static void rsd_bc_recv_t_drop(VSelf)
+{
+	VSELF(rsd_bc_recv_t);
+	(void)self;
+}
+
+impl(Compy_AudioReceiver, rsd_bc_recv_t);
+impl(Compy_Droppable, rsd_bc_recv_t);
+
 /* ── Controller method implementations ── */
 
 static void rsd_client_t_options(VSelf, Compy_Context *ctx, const Compy_Request *req)
@@ -108,6 +167,11 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 		}
 	}
 
+	/* Backchannel: client sends PCMU to server */
+	COMPY_SDP_DESCRIBE(ret, sdp_w, (COMPY_SDP_MEDIA, "audio 0 RTP/AVP 0"),
+			   (COMPY_SDP_ATTR, "control:backchannel"),
+			   (COMPY_SDP_ATTR, "rtpmap:0 PCMU/8000"), (COMPY_SDP_ATTR, "sendonly"));
+
 	(void)ret;
 
 	compy_header(ctx, COMPY_HEADER_CONTENT_TYPE, "application/sdp");
@@ -122,6 +186,8 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 	/* Determine stream type from URI */
 	bool is_audio = CharSlice99_primitive_ends_with(req->start_line.uri,
 							CharSlice99_from_str("/audio"));
+	bool is_backchannel = CharSlice99_primitive_ends_with(req->start_line.uri,
+							      CharSlice99_from_str("/backchannel"));
 
 	/* Parse Transport header */
 	CharSlice99 transport_val;
@@ -229,7 +295,20 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 			 srv_rtp, srv_rtcp);
 	}
 
-	if (is_audio) {
+	if (is_backchannel) {
+		/* Backchannel: receive-only, create Compy_Backchannel */
+		Compy_BackchannelConfig bc_cfg = {.payload_type = 0, .clock_rate = 8000};
+		rsd_bc_recv_t *recv = calloc(1, sizeof(rsd_bc_recv_t));
+		if (!recv) {
+			compy_respond_internal_error(ctx);
+			return;
+		}
+		recv->speaker_ring_ptr = &self->speaker_ring;
+		self->bc_recv = recv;
+		self->backchannel = Compy_Backchannel_new(
+			bc_cfg, DYN(rsd_bc_recv_t, Compy_AudioReceiver, recv));
+		RSS_INFO("client SETUP: backchannel PCMU/8000");
+	} else if (is_audio) {
 		/* Determine PT and clock from ring metadata */
 		int apt = 0;
 		int aclk = 8000;
@@ -399,6 +478,41 @@ impl(Compy_Controller, rsd_client_t);
 void rsd_handle_rtsp_data(rsd_server_t *srv, rsd_client_t *client, const char *data, size_t len)
 {
 	g_srv = srv;
+
+	/* Handle TCP interleaved frames ($ + channel + 2-byte length + payload).
+	 * These arrive on the same TCP connection as RTSP signaling. */
+	while (len >= 4 && data[0] == '$') {
+		uint8_t channel = (uint8_t)data[1];
+		uint16_t frame_len = ((uint8_t)data[2] << 8) | (uint8_t)data[3];
+		if (4 + (size_t)frame_len > len)
+			break; /* incomplete frame */
+
+		/* Feed backchannel data */
+		if (client->backchannel) {
+			Compy_RtpReceiver *recv =
+				Compy_Backchannel_get_receiver(client->backchannel);
+			if (recv) {
+				uint8_t ch_type =
+					(channel & 1) ? COMPY_CHANNEL_RTCP : COMPY_CHANNEL_RTP;
+				Compy_RtpReceiver_feed(recv, ch_type, (const uint8_t *)data + 4,
+						       frame_len);
+			}
+		}
+
+		size_t consumed = 4 + frame_len;
+		data += consumed;
+		len -= consumed;
+		if (consumed <= client->recv_len) {
+			memmove(client->recv_buf, client->recv_buf + consumed,
+				client->recv_len - consumed);
+			client->recv_len -= consumed;
+		} else {
+			client->recv_len = 0;
+		}
+	}
+
+	if (len == 0)
+		return;
 
 	/* Try to parse an RTSP request from the buffer */
 	Compy_Request req = Compy_Request_uninit();
