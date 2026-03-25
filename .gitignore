@@ -16,3 +16,4 @@ test_enc
 asan-out/
 build/
 test_enc
+scripts/
