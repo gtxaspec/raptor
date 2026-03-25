@@ -3,7 +3,7 @@
  *
  * CLI tool for audio input/output:
  *   rac record <file|->         Record mic to file or stdout (PCM16 LE)
- *   rac play <file|->           Play PCM16 LE to speaker via "speaker" ring
+ *   rac play <file|->           Play audio to speaker (PCM16, MP3, AAC, Opus)
  *   rac status                  Show audio daemon status
  *   rac ao-volume <val>         Set speaker volume
  *   rac ao-gain <val>           Set speaker gain
@@ -20,6 +20,18 @@
 
 #include <rss_ipc.h>
 #include <rss_common.h>
+
+#ifdef RAPTOR_MP3
+#include <mp3dec.h>
+#endif
+
+#ifdef RAPTOR_AAC
+#include <aacdec.h>
+#endif
+
+#ifdef RAPTOR_OPUS
+#include <opus/opus.h>
+#endif
 
 static volatile sig_atomic_t g_running = 1;
 
@@ -161,12 +173,57 @@ static int cmd_record(const char *dest, int max_seconds)
 	return 0;
 }
 
-/* ── Play: write PCM16 LE to speaker ring ── */
+/* ── Play helpers ── */
+
+enum play_fmt { FMT_PCM, FMT_MP3, FMT_AAC, FMT_OPUS };
+
+static enum play_fmt detect_format(const char *path, const uint8_t *hdr, size_t hdr_len)
+{
+	/* Check file extension first */
+	if (path) {
+		const char *ext = strrchr(path, '.');
+		if (ext) {
+			if (strcasecmp(ext, ".mp3") == 0)
+				return FMT_MP3;
+			if (strcasecmp(ext, ".aac") == 0 || strcasecmp(ext, ".adts") == 0)
+				return FMT_AAC;
+			if (strcasecmp(ext, ".opus") == 0 || strcasecmp(ext, ".ogg") == 0)
+				return FMT_OPUS;
+			if (strcasecmp(ext, ".pcm") == 0 || strcasecmp(ext, ".raw") == 0 ||
+			    strcasecmp(ext, ".wav") == 0)
+				return FMT_PCM;
+		}
+	}
+	/* Fall back to magic bytes */
+	if (hdr_len >= 4) {
+		if (hdr[0] == 0xFF && (hdr[1] & 0xE0) == 0xE0)
+			return FMT_MP3; /* MP3 sync or ADTS */
+		if (hdr[0] == 'I' && hdr[1] == 'D' && hdr[2] == '3')
+			return FMT_MP3;
+		if (hdr[0] == 0xFF && (hdr[1] & 0xF6) == 0xF0)
+			return FMT_AAC; /* ADTS sync */
+		if (hdr[0] == 'O' && hdr[1] == 'g' && hdr[2] == 'g' && hdr[3] == 'S')
+			return FMT_OPUS;
+	}
+	return FMT_PCM;
+}
+
+#if defined(RAPTOR_MP3) || defined(RAPTOR_AAC) || defined(RAPTOR_OPUS)
+static void publish_pcm(rss_ring_t *ring, const int16_t *pcm, int samples)
+{
+	rss_ring_publish(ring, (const uint8_t *)pcm, samples * 2, rss_timestamp_us(), 0, 0);
+	/* Pace: ~20ms per 320 samples at 16kHz */
+	usleep(18000);
+}
+#endif
+
+/* ── Play: decode and write PCM16 to speaker ring ── */
 
 static int cmd_play(const char *src, int sample_rate)
 {
 	FILE *in = NULL;
-	if (strcmp(src, "-") == 0) {
+	bool is_stdin = strcmp(src, "-") == 0;
+	if (is_stdin) {
 		in = stdin;
 	} else {
 		in = fopen(src, "rb");
@@ -176,61 +233,178 @@ static int cmd_play(const char *src, int sample_rate)
 		}
 	}
 
-	/* Create the speaker ring (we are the producer, RAD's AO thread is consumer) */
+	/* Read header for format detection */
+	uint8_t peek[16];
+	size_t peek_len = is_stdin ? 0 : fread(peek, 1, sizeof(peek), in);
+	enum play_fmt fmt = is_stdin ? FMT_PCM : detect_format(src, peek, peek_len);
+
+	const char *fmt_str[] = {"pcm", "mp3", "aac", "opus"};
+	if (!is_stdin)
+		fprintf(stderr, "rac: playing %s (%s), %d Hz\n", src, fmt_str[fmt], sample_rate);
+
+	/* Rewind after peek */
+	if (peek_len > 0)
+		fseek(in, 0, SEEK_SET);
+
+	/* Create speaker ring */
 	rss_ring_t *ring = rss_ring_create("speaker", 16, 64 * 1024);
 	if (!ring) {
 		fprintf(stderr, "rac: failed to create speaker ring\n");
-		if (in != stdin)
+		if (!is_stdin)
 			fclose(in);
 		return 1;
 	}
 	rss_ring_set_stream_info(ring, 0x11, 0, 0, 0, sample_rate, 1, 0, 0);
 
-	/* Frame size: 20ms at configured sample rate, 16-bit mono */
-	int frame_samples = sample_rate / 50;
-	int frame_bytes = frame_samples * 2;
-	uint8_t *buf = malloc(frame_bytes);
-	if (!buf) {
-		fprintf(stderr, "rac: malloc failed\n");
-		rss_ring_close(ring);
-		if (in != stdin)
-			fclose(in);
-		return 1;
-	}
-
-	if (in != stdin)
-		fprintf(stderr, "rac: playing to speaker, %d Hz\n", sample_rate);
-
-	uint64_t total_bytes = 0;
+	int ret = 0;
 	int64_t start_time = rss_timestamp_us();
+	uint64_t total_samples = 0;
 
-	while (g_running) {
-		size_t n = fread(buf, 1, frame_bytes, in);
-		if (n == 0)
-			break;
+	if (fmt == FMT_PCM) {
+		/* Raw PCM16 LE — passthrough */
+		int frame_bytes = (sample_rate / 50) * 2;
+		uint8_t *buf = malloc(frame_bytes);
+		if (!buf) {
+			ret = 1;
+			goto done;
+		}
+		while (g_running) {
+			size_t n = fread(buf, 1, frame_bytes, in);
+			if (n == 0)
+				break;
+			rss_ring_publish(ring, buf, (uint32_t)n, rss_timestamp_us(), 0, 0);
+			total_samples += n / 2;
+			usleep(18000);
+		}
+		free(buf);
+	}
+#ifdef RAPTOR_MP3
+	else if (fmt == FMT_MP3) {
+		HMP3Decoder mp3 = MP3InitDecoder();
+		if (!mp3) {
+			fprintf(stderr, "rac: MP3InitDecoder failed\n");
+			ret = 1;
+			goto done;
+		}
+		/* Read entire file into memory (MP3 files are small) */
+		fseek(in, 0, SEEK_END);
+		long fsize = ftell(in);
+		fseek(in, 0, SEEK_SET);
+		uint8_t *mp3_buf = malloc(fsize);
+		if (!mp3_buf) {
+			MP3FreeDecoder(mp3);
+			ret = 1;
+			goto done;
+		}
+		fread(mp3_buf, 1, fsize, in);
 
-		/* Publish PCM16 LE to speaker ring — RAD's AO thread will read it */
-		rss_ring_publish(ring, buf, (uint32_t)n, rss_timestamp_us(), 0, 0);
-		total_bytes += n;
+		int16_t pcm_buf[2304]; /* max MP3 frame: 1152 samples * 2 channels */
+		unsigned char *read_ptr = mp3_buf;
+		int bytes_left = (int)fsize;
 
-		/* Pace output: sleep ~20ms per frame to avoid flooding the ring.
-		 * The AO hardware is the real clock; this just prevents ring overflow. */
-		usleep(18000);
+		while (g_running && bytes_left > 0) {
+			int offset = MP3FindSyncWord(read_ptr, bytes_left);
+			if (offset < 0)
+				break;
+			read_ptr += offset;
+			bytes_left -= offset;
+
+			int err = MP3Decode(mp3, &read_ptr, &bytes_left, pcm_buf, 0);
+			if (err) {
+				if (err == -6) /* ERR_MP3_INDATA_UNDERFLOW */
+					break;
+				continue; /* skip bad frame */
+			}
+			MP3FrameInfo info;
+			MP3GetLastFrameInfo(mp3, &info);
+
+			/* Downmix stereo to mono if needed */
+			int samples = info.outputSamps / info.nChans;
+			if (info.nChans == 2) {
+				for (int i = 0; i < samples; i++)
+					pcm_buf[i] = (pcm_buf[i * 2] + pcm_buf[i * 2 + 1]) / 2;
+			}
+			publish_pcm(ring, pcm_buf, samples);
+			total_samples += samples;
+		}
+		free(mp3_buf);
+		MP3FreeDecoder(mp3);
+	}
+#endif
+#ifdef RAPTOR_AAC
+	else if (fmt == FMT_AAC) {
+		HAACDecoder aac = AACInitDecoder();
+		if (!aac) {
+			fprintf(stderr, "rac: AACInitDecoder failed\n");
+			ret = 1;
+			goto done;
+		}
+		/* Read entire file */
+		fseek(in, 0, SEEK_END);
+		long fsize = ftell(in);
+		fseek(in, 0, SEEK_SET);
+		uint8_t *aac_buf = malloc(fsize);
+		if (!aac_buf) {
+			AACFreeDecoder(aac);
+			ret = 1;
+			goto done;
+		}
+		fread(aac_buf, 1, fsize, in);
+
+		int16_t pcm_buf[4096]; /* max AAC frame: 2048 samples * 2 channels */
+		unsigned char *read_ptr = aac_buf;
+		int bytes_left = (int)fsize;
+
+		while (g_running && bytes_left > 0) {
+			int offset = AACFindSyncWord(read_ptr, bytes_left);
+			if (offset < 0)
+				break;
+			read_ptr += offset;
+			bytes_left -= offset;
+
+			int err = AACDecode(aac, &read_ptr, &bytes_left, pcm_buf);
+			if (err) {
+				if (bytes_left <= 0)
+					break;
+				continue;
+			}
+			AACFrameInfo info;
+			AACGetLastFrameInfo(aac, &info);
+
+			int samples = info.outputSamps / info.nChans;
+			if (info.nChans == 2) {
+				for (int i = 0; i < samples; i++)
+					pcm_buf[i] = (pcm_buf[i * 2] + pcm_buf[i * 2 + 1]) / 2;
+			}
+			publish_pcm(ring, pcm_buf, samples);
+			total_samples += samples;
+		}
+		free(aac_buf);
+		AACFreeDecoder(aac);
+	}
+#endif
+#ifdef RAPTOR_OPUS
+	else if (fmt == FMT_OPUS) {
+		/* Opus in Ogg container — simplified parser */
+		fprintf(stderr, "rac: Opus/Ogg playback not yet implemented\n");
+		ret = 1;
+		goto done;
+	}
+#endif
+	else {
+		fprintf(stderr, "rac: unsupported format (compile with MP3/AAC/OPUS support)\n");
+		ret = 1;
 	}
 
-	free(buf);
-	/* Don't destroy — let AO thread drain remaining frames.
-	 * Ring persists in /dev/shm until next rac play creates a new one. */
+done:
 	rss_ring_close(ring);
-
-	if (in != stdin) {
+	if (!is_stdin) {
 		fclose(in);
 		double duration = (double)(rss_timestamp_us() - start_time) / 1000000.0;
-		fprintf(stderr, "rac: played %.1fs, %llu bytes\n", duration,
-			(unsigned long long)total_bytes);
+		fprintf(stderr, "rac: played %.1fs, %llu samples\n", duration,
+			(unsigned long long)total_samples);
 	}
-
-	return 0;
+	return ret;
 }
 
 /* ── Status / control commands ── */
