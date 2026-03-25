@@ -28,7 +28,8 @@ case "$platform" in
         ;;
     t31|T31)
         PLATFORM=T31
-        PROFILE="wyze_cam3_t31al_gc2053_atbm6031-3.10.14-uclibc"
+        PROFILE="vanhua_z55i_t31x_gc4653_eth-3.10.14-uclibc"
+        TUPLE="mipsel-buildroot-linux-uclibc"
         ;;
     *)
         echo "Usage: $0 <platform> [target...]"
@@ -39,7 +40,7 @@ esac
 
 BR_OUTPUT="$HOME/projects/thingino/thingino-firmware/output/master/$PROFILE"
 TOOLCHAIN="$BR_OUTPUT/host/bin"
-SYSROOT="$BR_OUTPUT/host/mipsel-thingino-linux-uclibc/sysroot"
+SYSROOT="$BR_OUTPUT/host/${TUPLE:-mipsel-thingino-linux-uclibc}/sysroot"
 
 if [ ! -d "$TOOLCHAIN" ]; then
     echo "Toolchain not found: $TOOLCHAIN"
