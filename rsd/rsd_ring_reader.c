@@ -210,17 +210,20 @@ void *rsd_audio_reader_thread(void *arg)
 	uint32_t audio_codec = ahdr->codec;
 	uint32_t audio_clock = ahdr->fps_num; /* fps_num holds sample_rate */
 
-	/* Timestamp increment per frame — must match actual frame size */
+	/* Timestamp increment per frame — must match encoder output rate.
+	 * AAC-LC: 1024 samples per frame (RAD accumulates captures).
+	 * Opus: 20ms at 48kHz RTP clock = 960 (RFC 7587).
+	 * PCM: 20ms at native clock = sr/50. */
 	uint32_t samples_per_frame;
 	switch (audio_codec) {
 	case RSD_CODEC_AAC:
-		samples_per_frame = 1024; /* AAC-LC: always 1024 samples/frame */
+		samples_per_frame = 1024;
 		break;
 	case RSD_CODEC_OPUS:
-		samples_per_frame = 960; /* 20ms at 48kHz RTP clock (RFC 7587) */
+		samples_per_frame = 960;
 		break;
 	default:
-		samples_per_frame = audio_clock / 50; /* 20ms PCM */
+		samples_per_frame = audio_clock / 50;
 		break;
 	}
 
