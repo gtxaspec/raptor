@@ -316,6 +316,10 @@ int main(int argc, char **argv)
 				return 1;
 			}
 		}
+		if (sample_rate <= 0) {
+			fprintf(stderr, "rac: invalid sample rate\n");
+			return 1;
+		}
 		if (optind >= argc) {
 			fprintf(stderr, "rac: play requires a source (file or -)\n");
 			return 1;

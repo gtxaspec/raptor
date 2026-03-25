@@ -36,6 +36,8 @@ static uint8_t pcm16_to_ulaw(int16_t pcm)
 	int sign, exponent, mantissa;
 	const int BIAS = 0x84;
 
+	if (pcm == -32768)
+		pcm = -32767;
 	sign = (pcm >> 8) & 0x80;
 	if (sign)
 		pcm = -pcm;
@@ -57,6 +59,8 @@ static uint8_t pcm16_to_alaw(int16_t pcm)
 {
 	int sign, exponent, mantissa;
 
+	if (pcm == -32768)
+		pcm = -32767;
 	sign = ((~pcm) >> 8) & 0x80;
 	if (!sign)
 		pcm = -pcm;
@@ -490,6 +494,10 @@ int main(int argc, char **argv)
 	rss_ctrl_t *ctrl = NULL;
 	rss_ring_t *ring = NULL;
 	uint8_t *encode_buf = NULL;
+	bool ao_enabled = false;
+	pthread_t ao_tid;
+	bool ao_thread_started = false;
+	ao_thread_ctx_t ao_ctx = {0};
 
 	rss_hal_ctx_t *hal_ctx = rss_hal_create();
 	if (!hal_ctx) {
@@ -588,10 +596,7 @@ int main(int argc, char **argv)
 #endif
 
 	/* ── Audio output (speaker) ── */
-	bool ao_enabled = rss_config_get_bool(cfg, "audio", "ao_enabled", false);
-	pthread_t ao_tid;
-	bool ao_thread_started = false;
-	ao_thread_ctx_t ao_ctx = {0};
+	ao_enabled = rss_config_get_bool(cfg, "audio", "ao_enabled", false);
 
 	if (ao_enabled) {
 		rss_audio_config_t ao_cfg = {
