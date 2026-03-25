@@ -440,10 +440,98 @@ static int cmd_play(const char *src, int sample_rate)
 #endif
 #ifdef RAPTOR_OPUS
 	else if (fmt == FMT_OPUS) {
-		/* Opus in Ogg container — simplified parser */
-		fprintf(stderr, "rac: Opus/Ogg playback not yet implemented\n");
-		ret = 1;
-		goto done;
+		/* Read entire Ogg/Opus file */
+		fseek(in, 0, SEEK_END);
+		long fsize = ftell(in);
+		fseek(in, 0, SEEK_SET);
+		uint8_t *ogg_buf = malloc(fsize);
+		if (!ogg_buf) {
+			ret = 1;
+			goto done;
+		}
+		fread(ogg_buf, 1, fsize, in);
+
+		int opus_err;
+		/* Opus always decodes at 48kHz internally */
+		/* Decode at target rate — Opus supports 8/12/16/24/48kHz natively */
+		int opus_rate = sample_rate;
+		if (opus_rate != 8000 && opus_rate != 12000 && opus_rate != 16000 &&
+		    opus_rate != 24000 && opus_rate != 48000)
+			opus_rate = 48000; /* fallback to 48kHz if non-standard */
+		OpusDecoder *opus_dec = opus_decoder_create(opus_rate, 1, &opus_err);
+		if (opus_err != OPUS_OK || !opus_dec) {
+			fprintf(stderr, "rac: opus_decoder_create failed: %d\n", opus_err);
+			free(ogg_buf);
+			ret = 1;
+			goto done;
+		}
+
+		int16_t pcm_buf[5760]; /* max Opus frame: 120ms at 48kHz */
+		uint8_t *p = ogg_buf;
+		uint8_t *end = ogg_buf + fsize;
+		int page_count = 0;
+
+		while (g_running && p + 27 <= end) {
+			/* Ogg page header: "OggS" + version + flags + ... */
+			if (p[0] != 'O' || p[1] != 'g' || p[2] != 'g' || p[3] != 'S') {
+				p++;
+				continue;
+			}
+			uint8_t segments = p[26];
+			if (p + 27 + segments > end)
+				break;
+
+			/* Segment table starts at offset 27 */
+			uint8_t *seg_table = p + 27;
+			int body_size = 0;
+			for (int i = 0; i < segments; i++)
+				body_size += seg_table[i];
+
+			uint8_t *body = seg_table + segments;
+			if (body + body_size > end)
+				break;
+
+			page_count++;
+			/* Skip first 2 pages (OpusHead + OpusTags) */
+			if (page_count <= 2) {
+				p = body + body_size;
+				continue;
+			}
+
+			/* Extract packets from segments */
+			uint8_t *pkt = body;
+			int pkt_len = 0;
+			for (int i = 0; i < segments; i++) {
+				pkt_len += seg_table[i];
+				if (seg_table[i] < 255) {
+					/* Complete packet */
+					if (pkt_len > 0) {
+						int decoded = opus_decode(opus_dec, pkt, pkt_len,
+									  pcm_buf, 5760, 0);
+						if (decoded > 0) {
+							publish_pcm(ring, pcm_buf, decoded,
+								    opus_rate, sample_rate);
+							total_samples += decoded;
+						}
+					}
+					pkt += pkt_len;
+					pkt_len = 0;
+				}
+			}
+			/* Handle final packet if last segment was 255 (spanning) */
+			if (pkt_len > 0) {
+				int decoded = opus_decode(opus_dec, pkt, pkt_len, pcm_buf, 5760, 0);
+				if (decoded > 0) {
+					publish_pcm(ring, pcm_buf, decoded, opus_rate, sample_rate);
+					total_samples += decoded;
+				}
+			}
+
+			p = body + body_size;
+		}
+
+		opus_decoder_destroy(opus_dec);
+		free(ogg_buf);
 	}
 #endif
 	else {
