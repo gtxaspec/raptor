@@ -9,8 +9,10 @@
 #   PLATFORM       - Target SoC: T20, T21, T23, T30, T31, T32, T40, T41
 #   CROSS_COMPILE  - Cross-compiler prefix
 
+ifeq ($(filter clean distclean build,$(MAKECMDGOALS)),)
 ifndef PLATFORM
 $(error PLATFORM not set. Use: make PLATFORM=T31 CROSS_COMPILE=mipsel-linux-)
+endif
 endif
 
 # Sibling repos
