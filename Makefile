@@ -27,12 +27,14 @@ AR     := $(CROSS_COMPILE)ar
 STRIP  := $(CROSS_COMPILE)strip
 
 # Common flags for all daemons
+EXTRA_CFLAGS ?=
 CFLAGS := -Wall -Wextra -Werror=implicit-function-declaration
 CFLAGS += -std=gnu11 -D_GNU_SOURCE
 CFLAGS += -DPLATFORM_$(PLATFORM)
 CFLAGS += -I$(CURDIR)/$(HAL_DIR)/include
 CFLAGS += -I$(CURDIR)/$(IPC_DIR)/include
 CFLAGS += -I$(CURDIR)/$(COMMON_DIR)/include
+CFLAGS += $(EXTRA_CFLAGS)
 
 ifeq ($(DEBUG),1)
 CFLAGS += -O0 -g
