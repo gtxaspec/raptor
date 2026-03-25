@@ -162,15 +162,33 @@ void *rsd_video_reader_thread(void *arg)
 
 /* ── Audio ring reader thread ── */
 
-static void rsd_send_audio_frame(rsd_client_t *c, const uint8_t *data, uint32_t len,
-				 uint32_t rtp_ts)
+static void rsd_send_audio_frame(rsd_client_t *c, uint32_t codec, const uint8_t *data,
+				 uint32_t len, uint32_t rtp_ts)
 {
 	if (!c->audio.rtp || !c->audio.playing)
 		return;
 
+	bool marker = false;
+	U8Slice99 payload_hdr = U8Slice99_empty();
+	uint8_t au_header[4];
+
+	if (codec == RSD_CODEC_AAC) {
+		/* RFC 3640 AAC-hbr: AU header section
+		 * 2 bytes AU-headers-length (16 = one 16-bit AU header)
+		 * 2 bytes AU header: 13-bit AU-size | 3-bit AU-index (0) */
+		au_header[0] = 0x00;
+		au_header[1] = 0x10; /* 16 bits of AU header */
+		au_header[2] = (uint8_t)((len >> 5) & 0xFF);
+		au_header[3] = (uint8_t)((len << 3) & 0xFF);
+		payload_hdr = U8Slice99_new(au_header, 4);
+		marker = true;
+	} else if (codec == RSD_CODEC_OPUS) {
+		/* RFC 7587: raw Opus packet, marker on first packet of talkspurt */
+		marker = true;
+	}
+
 	(void)!Compy_RtpTransport_send_packet(c->audio.rtp, Compy_RtpTimestamp_Raw(rtp_ts),
-					      false,		 /* no marker */
-					      U8Slice99_empty(), /* no payload header */
+					      marker, payload_hdr,
 					      U8Slice99_new((uint8_t *)data, len));
 
 	/* Periodic RTCP SR */
@@ -187,21 +205,30 @@ void *rsd_audio_reader_thread(void *arg)
 
 	RSS_INFO("audio reader thread started");
 
-	/* Get clock rate from ring header */
+	/* Get codec and clock from ring header */
 	const rss_ring_header_t *ahdr = rss_ring_get_header(srv->ring_audio);
+	uint32_t audio_codec = ahdr->codec;
 	uint32_t audio_clock = ahdr->fps_num; /* fps_num holds sample_rate */
 
-	/* Buffer for audio frames (L16@16kHz = 640 bytes/20ms) */
+	/* Timestamp increment per frame — must match actual frame size */
+	uint32_t samples_per_frame;
+	switch (audio_codec) {
+	case RSD_CODEC_AAC:
+		samples_per_frame = 1024; /* AAC-LC: always 1024 samples/frame */
+		break;
+	case RSD_CODEC_OPUS:
+		samples_per_frame = 960; /* 20ms at 48kHz RTP clock (RFC 7587) */
+		break;
+	default:
+		samples_per_frame = audio_clock / 50; /* 20ms PCM */
+		break;
+	}
+
+	RSS_INFO("audio codec=%u clock=%u spf=%u", audio_codec, audio_clock, samples_per_frame);
+
+	/* Buffer for audio frames */
 	uint8_t audio_buf[4096];
-	/*
-	 * Use a sample counter for audio RTP timestamps instead of
-	 * converting HAL microsecond timestamps. HAL timestamps have
-	 * sub-millisecond jitter that causes non-monotonic DTS at the
-	 * receiver. A counter incremented by samples_per_frame gives
-	 * perfectly monotonic timestamps with zero jitter.
-	 */
 	uint32_t audio_rtp_ts = 0;
-	uint32_t samples_per_frame = audio_clock / 50; /* 20ms */
 
 	while (*srv->running) {
 		int ret = rss_ring_wait(srv->ring_audio, 100);
@@ -238,7 +265,8 @@ void *rsd_audio_reader_thread(void *arg)
 					c->audio_ts_base_set = true;
 				}
 				uint32_t client_ts = rtp_ts - c->audio_ts_offset;
-				rsd_send_audio_frame(c, audio_buf, length, client_ts);
+				rsd_send_audio_frame(c, audio_codec, audio_buf, length,
+						 client_ts);
 			}
 			pthread_mutex_unlock(&srv->clients_lock);
 		}
