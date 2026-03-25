@@ -115,6 +115,18 @@ static void remove_client(rsd_server_t *srv, rsd_client_t *client)
 		client->audio.rtcp = NULL;
 	}
 
+	/* Backchannel cleanup */
+	if (client->backchannel) {
+		VCALL(DYN(Compy_Backchannel, Compy_Droppable, client->backchannel), drop);
+		client->backchannel = NULL;
+	}
+	free(client->bc_recv);
+	client->bc_recv = NULL;
+	if (client->speaker_ring) {
+		rss_ring_destroy(client->speaker_ring);
+		client->speaker_ring = NULL;
+	}
+
 	/* Close UDP sockets if used */
 	if (client->udp_rtp_fd >= 0)
 		close(client->udp_rtp_fd);
