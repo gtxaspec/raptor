@@ -533,13 +533,14 @@ int main(int argc, char **argv)
 	pthread_t ao_tid;
 	bool ao_thread_started = false;
 	ao_thread_ctx_t ao_ctx = {0};
+	const rss_hal_ops_t *ops = NULL;
 
 	rss_hal_ctx_t *hal_ctx = rss_hal_create();
 	if (!hal_ctx) {
 		RSS_FATAL("rss_hal_create failed");
 		goto cleanup;
 	}
-	const rss_hal_ops_t *ops = rss_hal_get_ops(hal_ctx);
+	ops = rss_hal_get_ops(hal_ctx);
 
 	/* Audio config */
 	int sample_rate = rss_config_get_int(cfg, "audio", "sample_rate", 16000);
