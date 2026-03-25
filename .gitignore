@@ -14,3 +14,4 @@ ringdump/ringdump
 rac/rac
 test_enc
 asan-out/
+build/
