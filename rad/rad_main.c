@@ -618,8 +618,9 @@ int main(int argc, char **argv)
 		aac_cfg->inputFormat = FAAC_INPUT_16BIT;
 		aac_cfg->outputFormat = RAW_STREAM;
 		aac_cfg->bandWidth = sample_rate;
-		aac_cfg->bitRate =
-			rss_config_get_int(cfg, "audio", "bitrate", 32000); /* per channel */
+		int aac_br = rss_config_get_int(cfg, "audio", "bitrate", 32000);
+		if (aac_br > 256000) aac_br = 256000;
+		aac_cfg->bitRate = aac_br; /* per channel */
 		aac_cfg->allowMidside = 0;
 		aac_cfg->useTns = 0;
 		if (!faacEncSetConfiguration(aac_handle, aac_cfg)) {
@@ -641,6 +642,7 @@ int main(int argc, char **argv)
 			goto cleanup;
 		}
 		int opus_bitrate = rss_config_get_int(cfg, "audio", "bitrate", 32000);
+		if (opus_bitrate > 256000) opus_bitrate = 256000;
 		opus_encoder_ctl(opus_enc, OPUS_SET_BITRATE(opus_bitrate));
 		RSS_INFO("opus encoder: bitrate=%d", opus_bitrate);
 	}
