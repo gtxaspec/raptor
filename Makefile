@@ -182,6 +182,15 @@ rac: $(LIB_IPC) $(LIB_COMMON)
 		LIBS="$(LIB_IPC) $(LIB_COMMON)" \
 		LDFLAGS="$(LDFLAGS) $(LDFLAGS_MP3) $(LDFLAGS_AAC_DEC) $(LDFLAGS_OPUS)" Q="$(Q)"
 
+# -- Collect binaries --
+
+build:
+	@mkdir -p build
+	@for d in $(DAEMONS) $(TOOLS); do \
+		if [ -f $$d/$$d ]; then cp $$d/$$d build/; fi; \
+	done
+	@echo "  Binaries collected in build/"
+
 # -- Clean --
 
 clean:
@@ -189,6 +198,7 @@ clean:
 		echo "  CLEAN   $$d"; \
 		$(MAKE) -C $$d clean 2>/dev/null || true; \
 	done
+	rm -rf build
 
 distclean: clean
 	$(MAKE) -C $(HAL_DIR) clean
