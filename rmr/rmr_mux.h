@@ -28,10 +28,12 @@
 #define RMR_CODEC_H264 0
 #define RMR_CODEC_H265 1
 
-/* Audio codec */
-#define RMR_AUDIO_PCMU 0  /* G.711 mu-law */
-#define RMR_AUDIO_PCMA 8  /* G.711 A-law  */
-#define RMR_AUDIO_L16  11 /* Linear PCM 16-bit */
+/* Audio codec (values match RAD ring header codec IDs) */
+#define RMR_AUDIO_PCMU 0   /* G.711 mu-law */
+#define RMR_AUDIO_PCMA 8   /* G.711 A-law  */
+#define RMR_AUDIO_L16  11  /* Linear PCM 16-bit */
+#define RMR_AUDIO_AAC  97  /* AAC-LC (raw AUs, no ADTS) */
+#define RMR_AUDIO_OPUS 111 /* Opus */
 
 typedef struct rmr_mux rmr_mux_t;
 
