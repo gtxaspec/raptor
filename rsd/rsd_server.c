@@ -385,8 +385,33 @@ static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return (int)strlen(resp_buf);
 	}
 
+	if (strstr(cmd_json, "\"clients\"")) {
+		int n = snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"ok\",\"count\":%d,\"clients\":[",
+				 srv->client_count);
+		pthread_mutex_lock(&srv->clients_lock);
+		for (int i = 0; i < srv->client_count; i++) {
+			rsd_client_t *c = srv->clients[i];
+			char addr[INET6_ADDRSTRLEN];
+			client_addr_str(&c->addr, addr, sizeof(addr));
+			n += snprintf(resp_buf + n, resp_buf_size - n,
+				      "%s{\"ip\":\"%s\",\"port\":%u,"
+				      "\"stream\":%d,\"transport\":\"%s\","
+				      "\"video\":%s,\"audio\":%s,\"backchannel\":%s}",
+				      i > 0 ? "," : "", addr, client_port(&c->addr), c->stream_idx,
+				      c->is_tcp ? "tcp" : "udp",
+				      c->video.playing ? "true" : "false",
+				      c->audio.playing ? "true" : "false",
+				      c->backchannel ? "true" : "false");
+		}
+		pthread_mutex_unlock(&srv->clients_lock);
+		snprintf(resp_buf + n, resp_buf_size - n, "]}");
+		return (int)strlen(resp_buf);
+	}
+
 	/* Default: status */
-	snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\",\"clients\":%d}", srv->client_count);
+	snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\",\"clients\":%d,\"port\":%d}",
+		 srv->client_count, srv->port);
 	return (int)strlen(resp_buf);
 }
 

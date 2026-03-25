@@ -66,6 +66,9 @@ static void usage(void)
 			"  rvd request-idr [channel]           Request keyframe\n"
 			"  rvd privacy [on|off]                Toggle privacy mode\n"
 			"\n"
+			"RSD commands:\n"
+			"  rsd clients                         List connected RTSP clients\n"
+			"\n"
 			"RAD commands:\n"
 			"  rad set-volume <val>                Change input volume\n"
 			"  rad set-gain <val>                  Change input gain\n"
@@ -263,6 +266,9 @@ int main(int argc, char **argv)
 
 	} else if (strcmp(cmd, "config") == 0) {
 		snprintf(json, sizeof(json), "{\"cmd\":\"config-show\"}");
+
+	} else if (strcmp(cmd, "clients") == 0) {
+		snprintf(json, sizeof(json), "{\"cmd\":\"clients\"}");
 
 	} else if (strcmp(cmd, "request-idr") == 0) {
 		if (argc > 3)
