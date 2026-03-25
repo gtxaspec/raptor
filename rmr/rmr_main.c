@@ -203,13 +203,21 @@ static int start_segment(rmr_state_t *st)
 			.channels = 1,
 		};
 		switch (st->audio_codec) {
-		case 0:
+		case RMR_AUDIO_PCMU:
 			ap.codec = RMR_AUDIO_PCMU;
 			ap.bits_per_sample = 8;
 			break;
-		case 8:
+		case RMR_AUDIO_PCMA:
 			ap.codec = RMR_AUDIO_PCMA;
 			ap.bits_per_sample = 8;
+			break;
+		case RMR_AUDIO_AAC:
+			ap.codec = RMR_AUDIO_AAC;
+			ap.bits_per_sample = 16;
+			break;
+		case RMR_AUDIO_OPUS:
+			ap.codec = RMR_AUDIO_OPUS;
+			ap.bits_per_sample = 16;
 			break;
 		default:
 			ap.codec = RMR_AUDIO_L16;
@@ -294,8 +302,17 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 static void record_loop(rmr_state_t *st)
 {
 	int64_t v_ts_base = -1; /* first video timestamp (for relative DTS) */
-	/* Audio bytes per sample: G.711 = 1 byte, L16/PCM = 2 bytes */
-	uint32_t audio_bps = (st->audio_codec == 0 || st->audio_codec == 8) ? 1 : 2;
+	/* Audio DTS increment per ring frame.
+	 * PCM: alen / bytes_per_sample = sample count.
+	 * AAC: always 1024 samples per frame (AAC-LC).
+	 * Opus: 20ms at actual sample_rate = sr/50.
+	 * For PCM codecs we compute from byte length; for compressed we use fixed. */
+	uint32_t audio_bps = (st->audio_codec == RMR_AUDIO_PCMU || st->audio_codec == RMR_AUDIO_PCMA) ? 1 : 2;
+	uint32_t audio_samples_per_frame = 0; /* 0 = derive from byte length (PCM) */
+	if (st->audio_codec == RMR_AUDIO_AAC)
+		audio_samples_per_frame = 1024;
+	else if (st->audio_codec == RMR_AUDIO_OPUS)
+		audio_samples_per_frame = st->audio_sample_rate / 50; /* 20ms */
 	int64_t a_dts_counter = 0;
 	bool was_recording = false;
 
@@ -431,7 +448,9 @@ static void record_loop(rmr_state_t *st)
 					.dts = a_dts_counter,
 				};
 				rmr_mux_write_audio(st->mux, &as);
-				a_dts_counter += alen / audio_bps;
+				a_dts_counter += audio_samples_per_frame
+							 ? audio_samples_per_frame
+							 : alen / audio_bps;
 			}
 		}
 	}
