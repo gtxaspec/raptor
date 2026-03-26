@@ -246,13 +246,19 @@ int rvd_pipeline_init(rvd_state_t *st)
 		RSS_WARN("could not read sensor resolution from /proc");
 
 	/* ── 4. Load stream configs ── */
-	load_stream_config(cfg, "stream0", &st->streams[0], 1920, 1080, 25, 2000000);
+	/* Stream0 defaults to sensor resolution; sub stream defaults to sensor/2 */
+	int def_w = sensor_w > 0 ? sensor_w : 1920;
+	int def_h = sensor_h > 0 ? sensor_h : 1080;
+	int sub_w = def_w > 640 ? 640 : def_w / 2;
+	int sub_h = def_h > 360 ? 360 : def_h / 2;
+	load_stream_config(cfg, "stream0", &st->streams[0], def_w, def_h, 25, 2000000);
+	st->streams[0].enc_cfg.ivdc = rss_config_get_bool(cfg, "stream0", "ivdc", false);
 	st->streams[0].chn = 0;
 	st->stream_count = 1;
 
 	/* Sub stream (optional) */
 	if (rss_config_get_bool(cfg, "stream1", "enabled", true)) {
-		load_stream_config(cfg, "stream1", &st->streams[1], 640, 360, 25, 500000);
+		load_stream_config(cfg, "stream1", &st->streams[1], sub_w, sub_h, 25, 500000);
 		st->streams[1].chn = 1;
 		st->stream_count = 2;
 	}
@@ -513,12 +519,32 @@ int rvd_pipeline_init(rvd_state_t *st)
 	}
 
 	/* ── 10. Create SHM rings ── */
-	int ring_main_mb = rss_config_get_int(cfg, "ring", "main_data_mb", 4);
-	int ring_main_slots = rss_config_get_int(cfg, "ring", "main_slots", 32);
-	int ring_sub_mb = rss_config_get_int(cfg, "ring", "sub_data_mb", 1);
-	int ring_sub_slots = rss_config_get_int(cfg, "ring", "sub_slots", 32);
 
-	st->streams[0].ring = rss_ring_create("main", ring_main_slots, ring_main_mb * 1024 * 1024);
+	/* Auto-size ring data region from bitrate and slot count.
+	 * max_frame ≈ bitrate / fps / 8 * 4 (4× headroom for I-frames).
+	 * ring_data = max_frame * slots, clamped to [256KB .. config max].
+	 * Config value of 0 = auto (recommended). Non-zero = explicit MB. */
+	int ring_main_slots = rss_config_get_int(cfg, "ring", "main_slots", 32);
+	int ring_sub_slots = rss_config_get_int(cfg, "ring", "sub_slots", 32);
+	int ring_main_cfg_mb = rss_config_get_int(cfg, "ring", "main_data_mb", 0);
+	int ring_sub_cfg_mb = rss_config_get_int(cfg, "ring", "sub_data_mb", 0);
+
+	uint32_t main_data;
+	if (ring_main_cfg_mb > 0) {
+		main_data = (uint32_t)ring_main_cfg_mb * 1024 * 1024;
+	} else {
+		uint32_t bps = st->streams[0].enc_cfg.bitrate;
+		uint32_t fps = st->streams[0].enc_cfg.fps_num;
+		if (fps == 0) fps = 25;
+		uint32_t max_frame = bps / 8 / fps * 4;
+		if (max_frame < 8192) max_frame = 8192;
+		main_data = max_frame * (uint32_t)ring_main_slots;
+		if (main_data < 256 * 1024) main_data = 256 * 1024;
+		if (main_data > 8 * 1024 * 1024) main_data = 8 * 1024 * 1024;
+	}
+	RSS_INFO("main ring: %u slots, %u KB data", ring_main_slots, main_data / 1024);
+
+	st->streams[0].ring = rss_ring_create("main", ring_main_slots, main_data);
 	if (!st->streams[0].ring) {
 		RSS_FATAL("failed to create main ring");
 		return RSS_ERR;
@@ -530,8 +556,22 @@ int rvd_pipeline_init(rvd_state_t *st)
 		rvd_level_idc(st->streams[0].enc_cfg.width, st->streams[0].enc_cfg.height));
 
 	if (st->stream_count > 1 && !st->streams[1].is_jpeg) {
-		st->streams[1].ring =
-			rss_ring_create("sub", ring_sub_slots, ring_sub_mb * 1024 * 1024);
+		uint32_t sub_data;
+		if (ring_sub_cfg_mb > 0) {
+			sub_data = (uint32_t)ring_sub_cfg_mb * 1024 * 1024;
+		} else {
+			uint32_t bps = st->streams[1].enc_cfg.bitrate;
+			uint32_t fps = st->streams[1].enc_cfg.fps_num;
+			if (fps == 0) fps = 25;
+			uint32_t max_frame = bps / 8 / fps * 4;
+			if (max_frame < 4096) max_frame = 4096;
+			sub_data = max_frame * (uint32_t)ring_sub_slots;
+			if (sub_data < 128 * 1024) sub_data = 128 * 1024;
+			if (sub_data > 4 * 1024 * 1024) sub_data = 4 * 1024 * 1024;
+		}
+		RSS_INFO("sub ring: %u slots, %u KB data", ring_sub_slots, sub_data / 1024);
+
+		st->streams[1].ring = rss_ring_create("sub", ring_sub_slots, sub_data);
 		if (!st->streams[1].ring) {
 			RSS_FATAL("failed to create sub ring");
 			return RSS_ERR;
@@ -544,14 +584,23 @@ int rvd_pipeline_init(rvd_state_t *st)
 			rvd_level_idc(st->streams[1].enc_cfg.width, st->streams[1].enc_cfg.height));
 	}
 
-	/* JPEG rings (one per JPEG channel) */
+	/* JPEG rings — auto-sized from resolution (uncompressed × quality estimate) */
 	for (int j = 0; j < st->jpeg_count; j++) {
 		int ji = st->jpeg_streams[j];
 		if (ji < 0)
 			continue;
 		char ring_name[16];
 		snprintf(ring_name, sizeof(ring_name), "jpeg%d", j);
-		st->streams[ji].ring = rss_ring_create(ring_name, 16, 2 * 1024 * 1024);
+		/* JPEG max ≈ w*h*3/quality_divisor, 16 slots */
+		uint32_t w = st->streams[ji].enc_cfg.width;
+		uint32_t h = st->streams[ji].enc_cfg.height;
+		uint32_t jpeg_max = w * h / 4; /* ~25% of uncompressed */
+		if (jpeg_max < 65536) jpeg_max = 65536;
+		uint32_t jpeg_data = jpeg_max * 16;
+		if (jpeg_data > 4 * 1024 * 1024) jpeg_data = 4 * 1024 * 1024;
+		RSS_INFO("%s ring: 16 slots, %u KB data", ring_name, jpeg_data / 1024);
+
+		st->streams[ji].ring = rss_ring_create(ring_name, 16, jpeg_data);
 		if (!st->streams[ji].ring) {
 			RSS_FATAL("failed to create %s ring", ring_name);
 			return RSS_ERR;
