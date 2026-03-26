@@ -521,6 +521,7 @@ int main(int argc, char **argv)
 	rss_ctrl_t *ctrl = NULL;
 	rss_ring_t *ring = NULL;
 	uint8_t *encode_buf = NULL;
+	int16_t *aac_pcm_buf = NULL;
 #ifdef RAPTOR_AAC
 	faacEncHandle aac_handle = NULL;
 #endif
@@ -767,10 +768,9 @@ int main(int argc, char **argv)
 	/* AAC accumulation buffer — faac needs aac_input_samples (typically 1024)
 	 * but HAL delivers samples_per_frame (typically 320) per capture.
 	 * Buffer captures until we have enough for one full AAC frame. */
-	int16_t *aac_pcm_buf = NULL;
+#ifdef RAPTOR_AAC
 	int aac_pcm_fill = 0;
 	int aac_frame_samples = 0;
-#ifdef RAPTOR_AAC
 	if (codec_id == RAD_CODEC_AAC) {
 		aac_frame_samples = (int)aac_input_samples;
 		aac_pcm_buf = malloc(aac_frame_samples * sizeof(int16_t));
@@ -925,10 +925,10 @@ cleanup:
 	if (ctrl)
 		rss_ctrl_destroy(ctrl);
 	free(encode_buf);
+	free(aac_pcm_buf);
 #ifdef RAPTOR_AAC
 	if (aac_handle)
 		faacEncClose(aac_handle);
-	free(aac_pcm_buf);
 #endif
 #ifdef RAPTOR_OPUS
 	if (opus_enc)
