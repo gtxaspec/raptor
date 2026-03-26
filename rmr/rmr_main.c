@@ -410,6 +410,22 @@ static void record_loop(rmr_state_t *st)
 		if (avcc_len <= 0)
 			continue;
 
+		/* Verify AVCC: first 4 bytes must be a valid NAL length */
+		if (avcc_len >= 5) {
+			uint32_t nal_len = ((uint32_t)st->avcc_buf[0] << 24) |
+					   ((uint32_t)st->avcc_buf[1] << 16) |
+					   ((uint32_t)st->avcc_buf[2] << 8) |
+					   (uint32_t)st->avcc_buf[3];
+			if (nal_len + 4 > (uint32_t)avcc_len) {
+				RSS_WARN("AVCC corrupt: nal_len=%u avcc_len=%d src_len=%u "
+					 "src[0..3]=%02x%02x%02x%02x",
+					 nal_len, avcc_len, length,
+					 st->frame_buf[0], st->frame_buf[1],
+					 st->frame_buf[2], st->frame_buf[3]);
+				continue; /* drop corrupt frame */
+			}
+		}
+
 		/* DTS from actual ring timestamp (microseconds → 90kHz) */
 		if (v_ts_base < 0)
 			v_ts_base = meta.timestamp;

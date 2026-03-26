@@ -830,7 +830,9 @@ static int write_fragment(rmr_mux_t *m)
 	if (bb_flush(m) < 0)
 		return -1;
 
-	/* Write mdat: video data first, then audio data */
+	/* Write mdat: video data first, then audio data.
+	 * Write in chunks to avoid exceeding the write buffer capacity
+	 * (GOP-sized video data can exceed 1MB). */
 	bb_reset(m);
 	uint32_t mdat_size = 8 + m->v_data_len + m->a_data_len;
 	bb_w32(m, mdat_size);
@@ -838,17 +840,27 @@ static int write_fragment(rmr_mux_t *m)
 	if (bb_flush(m) < 0)
 		return -1;
 
-	if (m->v_data_len > 0) {
-		int ret = m->write_fn(m->v_data, m->v_data_len, m->write_ctx);
-		m->bytes_written += m->v_data_len;
+	/* Chunked write helper — 64KB at a time */
+#define MUX_WRITE_CHUNK 65536
+	for (uint32_t off = 0; off < m->v_data_len;) {
+		uint32_t chunk = m->v_data_len - off;
+		if (chunk > MUX_WRITE_CHUNK)
+			chunk = MUX_WRITE_CHUNK;
+		int ret = m->write_fn(m->v_data + off, chunk, m->write_ctx);
 		if (ret < 0)
 			return -1;
+		m->bytes_written += chunk;
+		off += chunk;
 	}
-	if (m->a_data_len > 0) {
-		int ret = m->write_fn(m->a_data, m->a_data_len, m->write_ctx);
-		m->bytes_written += m->a_data_len;
+	for (uint32_t off = 0; off < m->a_data_len;) {
+		uint32_t chunk = m->a_data_len - off;
+		if (chunk > MUX_WRITE_CHUNK)
+			chunk = MUX_WRITE_CHUNK;
+		int ret = m->write_fn(m->a_data + off, chunk, m->write_ctx);
 		if (ret < 0)
 			return -1;
+		m->bytes_written += chunk;
+		off += chunk;
 	}
 
 	/* Update running durations */
