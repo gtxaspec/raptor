@@ -88,6 +88,12 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
+	if (!rss_config_get_bool(cfg, "rtsp", "enabled", true)) {
+		RSS_INFO("RTSP disabled in config");
+		rss_config_free(cfg);
+		return 0;
+	}
+
 	if (rss_daemonize("rsd", foreground) < 0) {
 		RSS_FATAL("daemonize failed");
 		rss_config_free(cfg);
