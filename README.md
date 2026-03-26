@@ -37,7 +37,7 @@ for ISP exposure queries via RVD's control socket).
 | ROD  | `rod`  | OSD Rendering Daemon. Renders timestamp, uptime, user text, and logo bitmaps into BGRA SHM double-buffers using libschrift. No HAL dependency -- RVD handles the hardware OSD regions. |
 | RHD  | `rhd`  | HTTP Streaming Daemon. Serves JPEG snapshots (`/snap.jpg`) and MJPEG streams (`/mjpeg`) from JPEG rings. Dual-stack IPv4/IPv6, Basic auth. |
 | RIC  | `ric`  | IR-Cut Controller. Polls ISP exposure via RVD's control socket and switches between day/night modes with configurable hysteresis. Controls IR-cut filter and IR LED GPIOs. |
-| RMR  | `rmr`  | Recording/Muxing Daemon. Reads H.264/H.265 + audio from rings and writes fragmented MP4 segments to SD card. Two-thread design: ring reader + async disk writer with a circular write buffer. |
+| RMR  | `rmr`  | Recording/Muxing Daemon. Reads H.264/H.265 + audio from rings and writes crash-safe fragmented MP4 segments to SD card. Own fMP4 muxer with zero external dependencies. |
 
 ### Tools
 
@@ -47,16 +47,19 @@ for ISP exposure queries via RVD's control socket).
 | ringdump   | `ringdump`   | Ring buffer debugger. Print ring header, follow per-frame metadata, or dump raw Annex B to stdout for piping to ffprobe. |
 | rac        | `rac`        | Audio client. Record mic input to file/stdout (PCM16 LE) or play back audio (PCM, MP3, AAC, Opus) to the speaker ring. |
 
+## Related Repositories
+
+| Repository | Description |
+|-----------|-------------|
+| [raptor-hal](https://github.com/gtxaspec/raptor-hal) | Hardware abstraction layer -- wraps Ingenic IMP SDK calls behind a unified API across SDK generations. |
+| [raptor-ipc](https://github.com/gtxaspec/raptor-ipc) | SHM ring buffers, OSD double-buffer SHM, and Unix domain control socket protocol. |
+| [raptor-common](https://github.com/gtxaspec/raptor-common) | Config parser, logging, daemonize, signal handling, timestamp utilities. |
+| [raptor-docs](https://github.com/gtxaspec/raptor-docs) | Architecture documentation, SDK analysis, and design notes. |
+| [compy](https://github.com/gtxaspec/compy) | RTSP/RTP server library (used by RSD). Built with CMake; fetches Slice99/Datatype99/Interface99/Metalang99 automatically. |
+
 ## Dependencies
 
-Raptor is built against four sibling libraries and the Ingenic vendor SDK:
-
-| Library | Repository | Purpose |
-|---------|-----------|---------|
-| raptor-hal    | `../raptor-hal`    | Hardware abstraction layer -- wraps Ingenic IMP SDK calls behind a unified API across SDK generations. |
-| raptor-ipc    | `../raptor-ipc`    | SHM ring buffers, OSD double-buffer SHM, and Unix domain control socket protocol. |
-| raptor-common | `../raptor-common` | Config parser, logging, daemonize, signal handling, timestamp utilities. |
-| compy         | `../compy`         | RTSP/RTP server library (used by RSD only). Built with CMake; requires Slice99/Datatype99/Interface99/Metalang99 (fetched automatically). |
+Raptor is built against the above libraries and the Ingenic vendor SDK.
 
 Runtime shared libraries from the Ingenic SDK / Buildroot sysroot:
 
