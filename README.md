@@ -1,8 +1,7 @@
 # Raptor Streaming System (RSS)
 
-A modular microservice camera streamer for Ingenic T-series SoCs, built as part
-of the [thingino](https://github.com/themactep/thingino-firmware) firmware
-project. Raptor replaces the monolithic prudynt-t with independent daemons that
+A modular microservice camera streamer for Ingenic T-series SoCs. Raptor
+replaces the traditional monolithic streamer with independent daemons that
 communicate through POSIX shared-memory ring buffers and Unix domain control
 sockets.
 
