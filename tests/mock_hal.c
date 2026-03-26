@@ -5,6 +5,7 @@
  * All ops return RSS_OK (or RSS_ERR_NOTSUP if NULL). enc_poll returns
  * -EAGAIN to avoid infinite loops in encoder threads.
  */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
@@ -219,4 +220,21 @@ void rss_hal_destroy(rss_hal_ctx_t *ctx)
 const rss_hal_ops_t *rss_hal_get_ops(rss_hal_ctx_t *ctx)
 {
 	return ctx ? ctx->ops : NULL;
+}
+
+int rss_hal_get_imp_version(char *buf, int size)
+{
+	snprintf(buf, size, "MOCK-IMP-1.0.0");
+	return 0;
+}
+
+int rss_hal_get_sysutils_version(char *buf, int size)
+{
+	snprintf(buf, size, "MOCK-SYSUTILS-1.0.0");
+	return 0;
+}
+
+const char *rss_hal_get_cpu_info(void)
+{
+	return "MOCK-CPU";
 }
