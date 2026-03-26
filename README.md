@@ -174,6 +174,4 @@ correct HAL backend at compile time.
 
 ## License
 
-Part of the [thingino](https://github.com/themactep/thingino-firmware) project.
-Licensed under the GNU General Public License v3.0. See the thingino firmware
-repository for the full license text.
+Licensed under the GNU General Public License v3.0.
