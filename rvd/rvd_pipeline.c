@@ -170,6 +170,9 @@ int rvd_pipeline_init(rvd_state_t *st)
 	sensor.rst_gpio = rss_config_get_int(cfg, "sensor", "rst_gpio", -1);
 	sensor.pwdn_gpio = rss_config_get_int(cfg, "sensor", "pwdn_gpio", -1);
 	sensor.power_gpio = rss_config_get_int(cfg, "sensor", "power_gpio", -1);
+	sensor.default_boot = rss_config_get_int(cfg, "sensor", "boot", 0);
+	sensor.mclk = rss_config_get_int(cfg, "sensor", "mclk", 0);
+	sensor.vin_type = rss_config_get_int(cfg, "sensor", "video_interface", 0);
 
 	/* ── 3. Init HAL (brings up ISP + sensor) ── */
 	ret = RSS_HAL_CALL(st->ops, init, st->hal_ctx, &sensor);
