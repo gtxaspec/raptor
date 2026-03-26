@@ -19,6 +19,10 @@ cp /mnt/nfs/projects/thingino/raptor/config/raptor.conf $C
 sed -i "s/fps = 25/fps = 30/g" $C
 sed -i "s/# ao_enabled = false/ao_enabled = true/" $C
 sed -i "s/level = info/level = debug/" $C
+sed -i "s/enabled = false/enabled = true/" $C
+sed -i "s/segment_minutes = 5/segment_minutes = 1/" $C
+# codec override if needed
+# sed -i "s/codec = aac/codec = l16/" $C
 
 # Default: all daemons
 DAEMONS="${@:-rvd rad rod rsd rhd ric}"
