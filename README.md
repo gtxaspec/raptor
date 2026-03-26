@@ -54,7 +54,7 @@ for ISP exposure queries via RVD's control socket).
 | [raptor-hal](https://github.com/gtxaspec/raptor-hal) | Hardware abstraction layer -- wraps Ingenic IMP SDK calls behind a unified API across SDK generations. |
 | [raptor-ipc](https://github.com/gtxaspec/raptor-ipc) | SHM ring buffers, OSD double-buffer SHM, and Unix domain control socket protocol. |
 | [raptor-common](https://github.com/gtxaspec/raptor-common) | Config parser, logging, daemonize, signal handling, timestamp utilities. |
-| [compy](https://github.com/gtxaspec/compy) | RTSP/RTP server library (used by RSD). Built with CMake; fetches Slice99/Datatype99/Interface99/Metalang99 automatically. |
+| [compy](https://github.com/gtxaspec/compy) | RTSP/RTP server library (used by RSD). |
 
 ## Dependencies
 
