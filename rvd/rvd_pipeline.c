@@ -243,10 +243,20 @@ int rvd_pipeline_init(rvd_state_t *st)
 			free(s);
 		}
 	}
-	if (sensor_w > 0 && sensor_h > 0)
+	if (sensor_w > 0 && sensor_h > 0) {
 		RSS_INFO("sensor resolution: %dx%d", sensor_w, sensor_h);
-	else
-		RSS_WARN("could not read sensor resolution from /proc");
+	} else {
+		/* T40/T41: /proc/jz/sensor doesn't exist — use stream0 config as reference */
+		int cfg_w = rss_config_get_int(cfg, "stream0", "width", 0);
+		int cfg_h = rss_config_get_int(cfg, "stream0", "height", 0);
+		if (cfg_w > 0 && cfg_h > 0) {
+			sensor_w = cfg_w;
+			sensor_h = cfg_h;
+			RSS_INFO("sensor resolution from config: %dx%d", sensor_w, sensor_h);
+		} else {
+			RSS_WARN("could not determine sensor resolution");
+		}
+	}
 
 	/* ── 4. Load stream configs ── */
 	/* Stream0 defaults to sensor resolution; sub stream defaults to sensor/2 */
