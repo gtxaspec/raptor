@@ -2,9 +2,8 @@
  * rmr_main.c -- Raptor Media Recorder
  *
  * Reads H.264/H.265 video + audio from SHM rings and writes
- * fragmented MP4 files to SD card. Two threads: the main thread
- * reads rings and feeds the muxer, a writer thread drains the
- * write buffer to disk.
+ * fragmented MP4 files to SD card. Single-threaded: the main loop
+ * reads rings, feeds the muxer, and writes directly to disk.
  */
 
 #include <stdio.h>
@@ -19,142 +18,26 @@
 
 #include "rmr.h"
 
-/* ── Write buffer (SPSC circular) ── */
+/* ── Direct write callback for muxer ── */
 
-static int wbuf_init(rmr_wbuf_t *wb, uint32_t capacity)
+static int direct_write(const void *buf, uint32_t len, void *ctx)
 {
-	if (capacity < 1024 || capacity > 64 * 1024 * 1024)
-		return -1; /* H2: validate range */
-
-	wb->data = malloc(capacity);
-	if (!wb->data)
-		return -1;
-	wb->capacity = capacity;
-	atomic_store(&wb->head, 0);
-	atomic_store(&wb->tail, 0);
-
-	pthread_mutexattr_t mattr;
-	pthread_mutexattr_init(&mattr);
-	pthread_mutex_init(&wb->mtx, &mattr);
-	pthread_mutexattr_destroy(&mattr);
-
-	/* L3: use CLOCK_MONOTONIC for condvar timeout */
-	pthread_condattr_t cattr;
-	pthread_condattr_init(&cattr);
-	pthread_condattr_setclock(&cattr, CLOCK_MONOTONIC);
-	pthread_cond_init(&wb->cond, &cattr);
-	pthread_condattr_destroy(&cattr);
-
-	wb->initialized = true; /* H1: track init state */
-	return 0;
-}
-
-static void wbuf_destroy(rmr_wbuf_t *wb)
-{
-	if (!wb->initialized) /* H1: only destroy if initialized */
-		return;
-	free(wb->data);
-	wb->data = NULL;
-	pthread_mutex_destroy(&wb->mtx);
-	pthread_cond_destroy(&wb->cond);
-	wb->initialized = false;
-}
-
-static uint32_t wbuf_used(rmr_wbuf_t *wb)
-{
-	uint32_t h = atomic_load(&wb->head);
-	uint32_t t = atomic_load(&wb->tail);
-	return (t - h + wb->capacity) % wb->capacity;
-}
-
-static bool wbuf_empty(rmr_wbuf_t *wb)
-{
-	return atomic_load(&wb->head) == atomic_load(&wb->tail);
-}
-
-/* Append bytes to the write buffer. Returns 0 on success, -1 if full. */
-static int wbuf_write(const void *buf, uint32_t len, void *ctx)
-{
-	rmr_wbuf_t *wb = ctx;
-
-	if (len == 0) /* M1: early return for empty writes */
+	rmr_state_t *st = ctx;
+	if (len == 0)
 		return 0;
-	if (len >= wb->capacity) /* M1: reject oversized writes */
+
+	int fd = st->segment_fd;
+	if (fd < 0)
 		return -1;
 
-	uint32_t used = wbuf_used(wb);
-
-	if (used + len >= wb->capacity - 1)
-		return -1; /* buffer full */
-
-	uint32_t tail = atomic_load(&wb->tail);
-	const uint8_t *src = buf;
-
-	for (uint32_t i = 0; i < len; i++)
-		wb->data[(tail + i) % wb->capacity] = src[i];
-
-	atomic_store(&wb->tail, (tail + len) % wb->capacity);
-
-	/* Wake writer thread */
-	pthread_cond_signal(&wb->cond);
-	return 0;
-}
-
-/* Read contiguous bytes from write buffer. Returns bytes available. */
-static uint32_t wbuf_peek(rmr_wbuf_t *wb, const uint8_t **ptr)
-{
-	uint32_t h = atomic_load(&wb->head);
-	uint32_t t = atomic_load(&wb->tail);
-
-	if (h == t) {
-		*ptr = NULL;
-		return 0;
-	}
-
-	*ptr = wb->data + h;
-	if (t > h)
-		return t - h;
-	else
-		return wb->capacity - h; /* contiguous until wrap */
-}
-
-static void wbuf_consume(rmr_wbuf_t *wb, uint32_t len)
-{
-	uint32_t h = atomic_load(&wb->head);
-	atomic_store(&wb->head, (h + len) % wb->capacity);
-}
-
-/* ── Writer thread ── */
-
-static void *writer_thread_fn(void *arg)
-{
-	rmr_state_t *st = arg;
-	rmr_wbuf_t *wb = &st->wbuf;
-
-	while (*st->running || wbuf_used(wb) > 0) {
-		const uint8_t *ptr;
-		uint32_t avail = wbuf_peek(wb, &ptr);
-
-		if (avail == 0) {
-			pthread_mutex_lock(&wb->mtx);
-			struct timespec ts;
-			clock_gettime(CLOCK_MONOTONIC, &ts); /* L3: monotonic clock */
-			ts.tv_sec += 1;
-			pthread_cond_timedwait(&wb->cond, &wb->mtx, &ts);
-			pthread_mutex_unlock(&wb->mtx);
-			continue;
-		}
-
-		int fd = atomic_load(&st->segment_fd_atomic); /* C2: atomic fd access */
-		if (fd < 0) {
-			wbuf_consume(wb, avail);
-			continue;
-		}
-
-		ssize_t n = write(fd, ptr, avail);
+	const uint8_t *p = buf;
+	uint32_t remaining = len;
+	while (remaining > 0) {
+		ssize_t n = write(fd, p, remaining);
 		if (n > 0) {
-			wbuf_consume(wb, (uint32_t)n);
-			atomic_fetch_add(&st->bytes_written, (uint64_t)n); /* H4: atomic */
+			p += n;
+			remaining -= (uint32_t)n;
+			st->bytes_written += (uint64_t)n;
 		} else if (n < 0) {
 			if (errno == EINTR)
 				continue;
@@ -163,11 +46,10 @@ static void *writer_thread_fn(void *arg)
 				RSS_ERROR("SD card full, stopping recording");
 				atomic_store(&st->recording, false);
 			}
-			break;
+			return -1;
 		}
 	}
-
-	return NULL;
+	return 0;
 }
 
 /* ── Segment management ── */
@@ -178,8 +60,7 @@ static int start_segment(rmr_state_t *st)
 	if (fd < 0)
 		return -1;
 
-	/* Create muxer writing to the write buffer */
-	st->mux = rmr_mux_create(wbuf_write, &st->wbuf);
+	st->mux = rmr_mux_create(direct_write, st);
 	if (!st->mux) {
 		rmr_storage_close_segment(fd);
 		return -1;
@@ -227,10 +108,7 @@ static int start_segment(rmr_state_t *st)
 		rmr_mux_set_audio(st->mux, &ap);
 	}
 
-	/* Publish fd BEFORE mux_start so the writer thread can drain
-	 * the ftyp+moov header that mux_start writes to the wbuf. */
-	atomic_store(&st->segment_fd_atomic, fd);
-
+	st->segment_fd = fd;
 	rmr_mux_start(st->mux);
 	st->segment_start_us = rss_timestamp_us();
 
@@ -240,28 +118,19 @@ static int start_segment(rmr_state_t *st)
 
 static void close_segment(rmr_state_t *st)
 {
-	/* 1. Finalize muxer — writes remaining data to wbuf */
 	if (st->mux) {
 		rmr_mux_finalize(st->mux);
 		rmr_mux_destroy(st->mux);
 		st->mux = NULL;
 	}
 
-	/* 2. Wait for writer thread to drain the wbuf (it's the sole consumer).
-	 *    Signal it to wake, then spin until empty. */
-	pthread_cond_signal(&st->wbuf.cond);
-	for (int i = 0; i < 50 && !wbuf_empty(&st->wbuf); i++) {
-		pthread_cond_signal(&st->wbuf.cond);
-		usleep(20000); /* 20ms, up to 1s total */
-	}
-
-	/* 3. Revoke fd and close — writer thread will see -1 and discard any stragglers */
-	int fd = atomic_exchange(&st->segment_fd_atomic, -1);
+	int fd = st->segment_fd;
+	st->segment_fd = -1;
 
 	if (fd >= 0) {
 		rmr_storage_close_segment(fd);
 		RSS_INFO("segment closed: %s (%" PRIu64 " frames, %" PRIu64 " bytes)",
-			 st->segment_path, st->frames_written, atomic_load(&st->bytes_written));
+			 st->segment_path, st->frames_written, st->bytes_written);
 	}
 }
 
@@ -288,8 +157,7 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			 "{\"recording\":%s,\"file\":\"%s\",\"frames\":%" PRIu64
 			 ",\"dropped\":%" PRIu64 ",\"bytes\":%" PRIu64 "}",
 			 atomic_load(&st->recording) ? "true" : "false", st->segment_path,
-			 st->frames_written, st->frames_dropped,
-			 atomic_load(&st->bytes_written)); /* H4: atomic read */
+			 st->frames_written, st->frames_dropped, st->bytes_written);
 		return (int)strlen(resp_buf);
 	}
 
@@ -397,7 +265,7 @@ static void record_loop(rmr_state_t *st)
 				v_ts_base = -1; /* reset timestamp base for new segment */
 				a_dts_counter = 0;
 				st->frames_written = 0;
-				atomic_store(&st->bytes_written, (uint64_t)0);
+				st->bytes_written = 0;
 				was_recording = true;
 			} else {
 				continue; /* wait for keyframe */
@@ -544,10 +412,9 @@ int main(int argc, char **argv)
 	st.cfg = cfg;
 	st.config_path = config_path;
 	st.running = running;
-	atomic_store(&st.segment_fd_atomic, -1);
+	st.segment_fd = -1;
 	st.stream_idx = rss_config_get_int(cfg, "recording", "stream", 0);
 	st.audio_enabled = rss_config_get_bool(cfg, "recording", "audio", true);
-	bool writer_started = false;
 
 	/* Open video ring */
 	const char *ring_names[] = {"main", "sub"};
@@ -575,7 +442,7 @@ int main(int argc, char **argv)
 	RSS_INFO("video: %s %ux%u @ %u fps", st.video_codec == 1 ? "H.265" : "H.264", st.width,
 		 st.height, st.fps_num);
 
-	/* C4: allocate buffers and check */
+	/* Allocate buffers */
 	st.frame_buf_size = vhdr->data_size;
 	st.frame_buf = malloc(st.frame_buf_size);
 	st.avcc_buf_size = st.frame_buf_size;
@@ -598,7 +465,7 @@ int main(int argc, char **argv)
 		}
 	}
 
-	/* L1: Storage — check allocation */
+	/* Storage */
 	rmr_storage_config_t scfg = {
 		.base_path = rss_config_get_str(cfg, "recording", "storage_path",
 						"/mnt/mmcblk0p1/raptor"),
@@ -611,29 +478,11 @@ int main(int argc, char **argv)
 		goto cleanup;
 	}
 
-	/* H2: validate wbuf_kb range before multiplication */
-	int wbuf_kb = rss_config_get_int(cfg, "recording", "write_buffer_kb", 1024);
-	if (wbuf_kb < 64)
-		wbuf_kb = 64;
-	if (wbuf_kb > 65536)
-		wbuf_kb = 65536;
-	if (wbuf_init(&st.wbuf, (uint32_t)wbuf_kb * 1024) < 0) {
-		RSS_FATAL("write buffer alloc failed");
-		goto cleanup;
-	}
-
 	/* Control socket */
 	rss_mkdir_p("/var/run/rss");
 	st.ctrl = rss_ctrl_listen("/var/run/rss/rmr.sock");
 	if (!st.ctrl)
 		RSS_WARN("control socket failed (non-fatal)");
-
-	/* L2: Start writer thread with error check */
-	if (pthread_create(&st.writer_thread, NULL, writer_thread_fn, &st) != 0) {
-		RSS_FATAL("writer thread creation failed");
-		goto cleanup;
-	}
-	writer_started = true;
 
 	/* Start recording immediately */
 	atomic_store(&st.recording, true);
@@ -643,17 +492,9 @@ int main(int argc, char **argv)
 
 	RSS_INFO("rmr shutting down");
 
-	/* Join writer thread */
-	pthread_cond_signal(&st.wbuf.cond);
-	pthread_join(st.writer_thread, NULL);
-
 cleanup:
-	if (!writer_started) {
-		/* If writer never started, skip join (already done above if it did) */
-	}
 	if (st.ctrl)
 		rss_ctrl_destroy(st.ctrl);
-	wbuf_destroy(&st.wbuf); /* H1: safe — checks initialized flag */
 	if (st.storage)
 		rmr_storage_destroy(st.storage);
 	if (st.video_ring)
