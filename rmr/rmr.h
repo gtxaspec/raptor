@@ -17,17 +17,6 @@
 #include "rmr_nal.h"
 #include "rmr_storage.h"
 
-/* Write buffer (SPSC circular byte buffer) */
-typedef struct {
-	uint8_t *data;
-	uint32_t capacity;
-	_Atomic uint32_t head; /* read position (writer thread advances) */
-	_Atomic uint32_t tail; /* write position (reader thread advances) */
-	pthread_mutex_t mtx;
-	pthread_cond_t cond; /* writer sleeps on this */
-	bool initialized;    /* H1: track init state for safe destroy */
-} rmr_wbuf_t;
-
 typedef struct {
 	/* Config */
 	rss_config_t *cfg;
@@ -56,12 +45,9 @@ typedef struct {
 
 	/* Storage (main thread only) */
 	rmr_storage_t *storage;
-	_Atomic int segment_fd_atomic; /* C2: atomic for cross-thread access */
+	int segment_fd;
 	char segment_path[256];
 	int64_t segment_start_us;
-
-	/* Write buffer */
-	rmr_wbuf_t wbuf;
 
 	/* Frame read buffer (main thread only) */
 	uint8_t *frame_buf;
@@ -74,9 +60,6 @@ typedef struct {
 	/* Audio read buffer (main thread only) */
 	uint8_t audio_buf[8192];
 
-	/* Threads */
-	pthread_t writer_thread;
-
 	/* Control */
 	rss_ctrl_t *ctrl;
 
@@ -84,10 +67,10 @@ typedef struct {
 	volatile sig_atomic_t *running;
 	_Atomic bool recording;
 
-	/* Stats — frames only from main thread, bytes from writer thread */
-	uint64_t frames_written;	/* main thread only */
-	uint64_t frames_dropped;	/* main thread only */
-	_Atomic uint64_t bytes_written; /* H4: written by writer, read by main */
+	/* Stats (main thread only) */
+	uint64_t frames_written;
+	uint64_t frames_dropped;
+	uint64_t bytes_written;
 
 	/* Timestamps (main thread only) */
 	int64_t v_dts;
