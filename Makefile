@@ -90,9 +90,12 @@ else
 LDFLAGS_SYSROOT :=
 endif
 
+# uclibc shim — only link if present in sysroot
+SHIM_LIB := $(if $(wildcard $(SYSROOT)/usr/lib/libuclibcshim.so $(SYSROOT)/lib/libuclibcshim.so),-luclibcshim,)
+
 # System libs for HAL-linked daemons
-LDFLAGS_HAL := $(LDFLAGS_SYSROOT) -limp -lalog -lsysutils -luclibcshim -lpthread -lrt -lm -ldl -latomic
-LDFLAGS     := $(LDFLAGS_SYSROOT) -luclibcshim -lpthread -lrt -latomic
+LDFLAGS_HAL := $(LDFLAGS_SYSROOT) -limp -lalog -lsysutils $(SHIM_LIB) -lpthread -lrt -lm -ldl -latomic
+LDFLAGS     := $(LDFLAGS_SYSROOT) $(SHIM_LIB) -lpthread -lrt -latomic
 
 # Targets
 DAEMONS := rvd rsd rad rhd rod ric rmr
