@@ -95,9 +95,42 @@ static void rsd_client_t_options(VSelf, Compy_Context *ctx, const Compy_Request 
 	compy_respond_ok(ctx);
 }
 
+/* Check if URI ends with a given path (builds slash-prefixed string) */
+static bool uri_ends_with(CharSlice99 uri, const char *path)
+{
+	if (!path[0])
+		return false;
+	char buf[72];
+	int n = snprintf(buf, sizeof(buf), "/%s", path);
+	if (n < 0 || n >= (int)sizeof(buf))
+		return false;
+	return CharSlice99_primitive_ends_with(uri, CharSlice99_from_str(buf));
+}
+
+/* Strip the last path component from URI (e.g. /stream0/audio -> /stream0) */
+static CharSlice99 uri_strip_last(CharSlice99 uri)
+{
+	for (ptrdiff_t i = uri.len - 1; i >= 0; i--) {
+		if (uri.ptr[i] == '/') {
+			uri.len = i;
+			return uri;
+		}
+	}
+	return uri;
+}
+
 /* Detect stream index from URI. Returns -1 for unknown endpoints. */
 static int detect_stream_idx(CharSlice99 uri)
 {
+	/* Custom endpoints from config (checked first) */
+	if (g_srv) {
+		if (g_srv->endpoint_sub[0] && uri_ends_with(uri, g_srv->endpoint_sub))
+			return RSD_STREAM_SUB;
+		if (g_srv->endpoint_main[0] && uri_ends_with(uri, g_srv->endpoint_main))
+			return RSD_STREAM_MAIN;
+	}
+
+	/* Default endpoints */
 	if (CharSlice99_primitive_ends_with(uri, CharSlice99_from_str("/stream1")) ||
 	    CharSlice99_primitive_ends_with(uri, CharSlice99_from_str("/sub")))
 		return RSD_STREAM_SUB;
@@ -105,17 +138,17 @@ static int detect_stream_idx(CharSlice99 uri)
 	    CharSlice99_primitive_ends_with(uri, CharSlice99_from_str("/main")) ||
 	    CharSlice99_primitive_ends_with(uri, CharSlice99_from_str("/")))
 		return RSD_STREAM_MAIN;
-	/* Strip /audio or /backchannel suffix and re-check base path */
+
+	/* Strip /audio or /backchannel suffix and re-check */
 	if (CharSlice99_primitive_ends_with(uri, CharSlice99_from_str("/audio")) ||
 	    CharSlice99_primitive_ends_with(uri, CharSlice99_from_str("/backchannel"))) {
-		/* These are sub-resources of a valid stream, accept them */
-		CharSlice99 base = uri;
-		/* Walk back to find the stream part */
-		for (ptrdiff_t i = base.len - 1; i >= 0; i--) {
-			if (base.ptr[i] == '/') {
-				base.len = i;
-				break;
-			}
+		CharSlice99 base = uri_strip_last(uri);
+		/* Check custom endpoints on base */
+		if (g_srv) {
+			if (g_srv->endpoint_sub[0] && uri_ends_with(base, g_srv->endpoint_sub))
+				return RSD_STREAM_SUB;
+			if (g_srv->endpoint_main[0] && uri_ends_with(base, g_srv->endpoint_main))
+				return RSD_STREAM_MAIN;
 		}
 		if (CharSlice99_primitive_ends_with(base, CharSlice99_from_str("/stream1")) ||
 		    CharSlice99_primitive_ends_with(base, CharSlice99_from_str("/sub")))

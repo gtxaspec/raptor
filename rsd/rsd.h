@@ -114,6 +114,10 @@ typedef struct {
 
 	/* Digest auth (NULL = no auth required) */
 	Compy_Auth *auth;
+
+	/* Custom stream endpoints (empty = use defaults) */
+	char endpoint_main[64];
+	char endpoint_sub[64];
 } rsd_server_t;
 
 /* rsd_server.c */
