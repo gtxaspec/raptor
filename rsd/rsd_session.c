@@ -122,38 +122,35 @@ static CharSlice99 uri_strip_last(CharSlice99 uri)
 /* Detect stream index from URI. Returns -1 for unknown endpoints. */
 static int detect_stream_idx(CharSlice99 uri)
 {
-	/* Custom endpoints from config (checked first) */
-	if (g_srv) {
-		if (g_srv->endpoint_sub[0] && uri_ends_with(uri, g_srv->endpoint_sub))
-			return RSD_STREAM_SUB;
-		if (g_srv->endpoint_main[0] && uri_ends_with(uri, g_srv->endpoint_main))
-			return RSD_STREAM_MAIN;
-	}
+	bool custom = g_srv && (g_srv->endpoint_main[0] || g_srv->endpoint_sub[0]);
 
-	/* Default endpoints */
-	if (CharSlice99_primitive_ends_with(uri, CharSlice99_from_str("/stream1")) ||
-	    CharSlice99_primitive_ends_with(uri, CharSlice99_from_str("/sub")))
-		return RSD_STREAM_SUB;
-	if (CharSlice99_primitive_ends_with(uri, CharSlice99_from_str("/stream0")) ||
-	    CharSlice99_primitive_ends_with(uri, CharSlice99_from_str("/main")) ||
-	    CharSlice99_primitive_ends_with(uri, CharSlice99_from_str("/")))
-		return RSD_STREAM_MAIN;
-
-	/* Strip /audio or /backchannel suffix and re-check */
+	/* Strip /audio or /backchannel suffix to get base stream path */
+	CharSlice99 base = uri;
+	bool is_subresource = false;
 	if (CharSlice99_primitive_ends_with(uri, CharSlice99_from_str("/audio")) ||
 	    CharSlice99_primitive_ends_with(uri, CharSlice99_from_str("/backchannel"))) {
-		CharSlice99 base = uri_strip_last(uri);
-		/* Check custom endpoints on base */
-		if (g_srv) {
-			if (g_srv->endpoint_sub[0] && uri_ends_with(base, g_srv->endpoint_sub))
-				return RSD_STREAM_SUB;
-			if (g_srv->endpoint_main[0] && uri_ends_with(base, g_srv->endpoint_main))
-				return RSD_STREAM_MAIN;
-		}
+		base = uri_strip_last(uri);
+		is_subresource = true;
+	}
+
+	if (custom) {
+		/* Custom endpoints — exclusive, defaults disabled */
+		if (g_srv->endpoint_sub[0] && uri_ends_with(base, g_srv->endpoint_sub))
+			return RSD_STREAM_SUB;
+		if (g_srv->endpoint_main[0] && uri_ends_with(base, g_srv->endpoint_main))
+			return RSD_STREAM_MAIN;
+	} else {
+		/* Default endpoints */
 		if (CharSlice99_primitive_ends_with(base, CharSlice99_from_str("/stream1")) ||
 		    CharSlice99_primitive_ends_with(base, CharSlice99_from_str("/sub")))
 			return RSD_STREAM_SUB;
-		return RSD_STREAM_MAIN;
+		if (CharSlice99_primitive_ends_with(base, CharSlice99_from_str("/stream0")) ||
+		    CharSlice99_primitive_ends_with(base, CharSlice99_from_str("/main")) ||
+		    CharSlice99_primitive_ends_with(base, CharSlice99_from_str("/")))
+			return RSD_STREAM_MAIN;
+		/* Sub-resources of default main stream */
+		if (is_subresource)
+			return RSD_STREAM_MAIN;
 	}
 	return -1; /* unknown endpoint */
 }
