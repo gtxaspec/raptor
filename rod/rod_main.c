@@ -286,6 +286,11 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	if (strstr(cmd_json, "\"set-text\"")) {
 		char val[128];
 		if (json_get_str(cmd_json, "value", val, sizeof(val)) == 0) {
+			/* Sanitize: strip control characters */
+			for (int i = 0; val[i]; i++) {
+				if ((unsigned char)val[i] < 0x20)
+					val[i] = ' ';
+			}
 			rss_strlcpy(st->cfg.text_string, val, sizeof(st->cfg.text_string));
 			rss_config_set_str(st->config, "osd", "text_string", val);
 			for (int s = 0; s < st->stream_count; s++)
