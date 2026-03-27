@@ -128,6 +128,23 @@ int main(int argc, char **argv)
 			RSS_WARN("failed to create auth context");
 	}
 
+#ifdef COMPY_HAS_TLS
+	/* RTSPS — enabled when tls = true and cert/key paths are set */
+	const char *tls_cert = rss_config_get_str(cfg, "rtsp", "tls_cert", "");
+	const char *tls_key = rss_config_get_str(cfg, "rtsp", "tls_key", "");
+	if (rss_config_get_bool(cfg, "rtsp", "tls", false) && tls_cert[0] && tls_key[0]) {
+		Compy_TlsConfig tls_cfg = {.cert_path = tls_cert, .key_path = tls_key};
+		srv.tls_ctx = Compy_TlsContext_new(tls_cfg);
+		if (srv.tls_ctx) {
+			/* RTSPS: use tls_port if set, otherwise fall back to port */
+			srv.port = rss_config_get_int(cfg, "rtsp", "tls_port", srv.port);
+			RSS_INFO("RTSPS enabled (cert=%s, port=%d)", tls_cert, srv.port);
+		} else {
+			RSS_WARN("failed to load TLS cert/key — running plain RTSP");
+		}
+	}
+#endif
+
 	int ret = rsd_server_init(&srv);
 	if (ret != 0) {
 		RSS_FATAL("server init failed");
@@ -139,6 +156,10 @@ int main(int argc, char **argv)
 	RSS_INFO("rsd shutting down");
 
 cleanup:
+#ifdef COMPY_HAS_TLS
+	if (srv.tls_ctx)
+		Compy_TlsContext_free(srv.tls_ctx);
+#endif
 	if (srv.auth)
 		Compy_Auth_free(srv.auth);
 	rsd_server_deinit(&srv);

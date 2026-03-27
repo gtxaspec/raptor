@@ -50,6 +50,9 @@ typedef struct {
 typedef struct rsd_client {
 	int fd;
 	struct sockaddr_storage addr;
+#ifdef COMPY_HAS_TLS
+	Compy_TlsConn *tls;
+#endif
 	uint64_t session_id;
 	rsd_stream_t video;
 	rsd_stream_t audio;
@@ -118,6 +121,11 @@ typedef struct {
 	/* Custom stream endpoints (empty = use defaults) */
 	char endpoint_main[64];
 	char endpoint_sub[64];
+
+#ifdef COMPY_HAS_TLS
+	/* TLS context for RTSPS (NULL = plain RTSP) */
+	Compy_TlsContext *tls_ctx;
+#endif
 } rsd_server_t;
 
 /* rsd_server.c */
