@@ -95,13 +95,34 @@ static void rsd_client_t_options(VSelf, Compy_Context *ctx, const Compy_Request 
 	compy_respond_ok(ctx);
 }
 
-/* Detect stream index from URI */
+/* Detect stream index from URI. Returns -1 for unknown endpoints. */
 static int detect_stream_idx(CharSlice99 uri)
 {
 	if (CharSlice99_primitive_ends_with(uri, CharSlice99_from_str("/stream1")) ||
 	    CharSlice99_primitive_ends_with(uri, CharSlice99_from_str("/sub")))
 		return RSD_STREAM_SUB;
-	return RSD_STREAM_MAIN;
+	if (CharSlice99_primitive_ends_with(uri, CharSlice99_from_str("/stream0")) ||
+	    CharSlice99_primitive_ends_with(uri, CharSlice99_from_str("/main")) ||
+	    CharSlice99_primitive_ends_with(uri, CharSlice99_from_str("/")))
+		return RSD_STREAM_MAIN;
+	/* Strip /audio or /backchannel suffix and re-check base path */
+	if (CharSlice99_primitive_ends_with(uri, CharSlice99_from_str("/audio")) ||
+	    CharSlice99_primitive_ends_with(uri, CharSlice99_from_str("/backchannel"))) {
+		/* These are sub-resources of a valid stream, accept them */
+		CharSlice99 base = uri;
+		/* Walk back to find the stream part */
+		for (ptrdiff_t i = base.len - 1; i >= 0; i--) {
+			if (base.ptr[i] == '/') {
+				base.len = i;
+				break;
+			}
+		}
+		if (CharSlice99_primitive_ends_with(base, CharSlice99_from_str("/stream1")) ||
+		    CharSlice99_primitive_ends_with(base, CharSlice99_from_str("/sub")))
+			return RSD_STREAM_SUB;
+		return RSD_STREAM_MAIN;
+	}
+	return -1; /* unknown endpoint */
 }
 
 static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request *req)
@@ -110,6 +131,10 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 
 	/* Determine which stream from URI */
 	self->stream_idx = detect_stream_idx(req->start_line.uri);
+	if (self->stream_idx < 0) {
+		compy_respond(ctx, COMPY_STATUS_NOT_FOUND, "Unknown stream endpoint");
+		return;
+	}
 
 	/* Check if the requested stream's ring exists */
 	if (!g_srv || !g_srv->video[self->stream_idx].ring) {
