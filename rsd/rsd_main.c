@@ -109,11 +109,9 @@ int main(int argc, char **argv)
 	srv.config_path = config_path;
 	srv.running = running;
 	srv.port = rss_config_get_int(cfg, "rtsp", "port", 554);
-	rss_strlcpy(srv.endpoint_main,
-		    rss_config_get_str(cfg, "rtsp", "endpoint_main", ""),
+	rss_strlcpy(srv.endpoint_main, rss_config_get_str(cfg, "rtsp", "endpoint_main", ""),
 		    sizeof(srv.endpoint_main));
-	rss_strlcpy(srv.endpoint_sub,
-		    rss_config_get_str(cfg, "rtsp", "endpoint_sub", ""),
+	rss_strlcpy(srv.endpoint_sub, rss_config_get_str(cfg, "rtsp", "endpoint_sub", ""),
 		    sizeof(srv.endpoint_sub));
 	pthread_mutex_init(&srv.clients_lock, NULL);
 

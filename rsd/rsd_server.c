@@ -213,8 +213,7 @@ static void accept_client(rsd_server_t *srv)
 
 	char addrstr[INET6_ADDRSTRLEN];
 	RSS_INFO("client %s:%u connected%s (%d/%d)",
-		 client_addr_str(&addr, addrstr, sizeof(addrstr)),
-		 client_port(&addr),
+		 client_addr_str(&addr, addrstr, sizeof(addrstr)), client_port(&addr),
 #ifdef COMPY_HAS_TLS
 		 client->tls ? " (TLS)" : "",
 #else
@@ -362,8 +361,8 @@ int rsd_server_init(rsd_server_t *srv)
 		}
 	}
 
-	RSS_INFO("%s server listening on port %d (dual-stack)",
-		 srv->tls_ctx ? "RTSPS" : "RTSP", srv->port);
+	RSS_INFO("%s server listening on port %d (dual-stack)", srv->tls_ctx ? "RTSPS" : "RTSP",
+		 srv->port);
 	return 0;
 }
 
