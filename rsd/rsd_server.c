@@ -133,6 +133,15 @@ static void remove_client(rsd_server_t *srv, rsd_client_t *client)
 	if (client->udp_rtcp_fd >= 0)
 		close(client->udp_rtcp_fd);
 
+	/* TLS shutdown and cleanup */
+#ifdef COMPY_HAS_TLS
+	if (client->tls) {
+		compy_tls_shutdown(client->tls);
+		Compy_TlsConn_free(client->tls);
+		client->tls = NULL;
+	}
+#endif
+
 	/* Remove from epoll and close TCP fd */
 	epoll_ctl(srv->epoll_fd, EPOLL_CTL_DEL, client->fd, NULL);
 	close(client->fd);
@@ -177,6 +186,21 @@ static void accept_client(rsd_server_t *srv)
 	client->active = true;
 	client->waiting_keyframe = true;
 
+#ifdef COMPY_HAS_TLS
+	if (srv->tls_ctx) {
+		client->tls = Compy_TlsConn_accept(srv->tls_ctx, fd);
+		if (!client->tls) {
+			char addrstr[INET6_ADDRSTRLEN];
+			RSS_WARN("TLS handshake failed from %s:%u",
+				 client_addr_str(&addr, addrstr, sizeof(addrstr)),
+				 client_port(&addr));
+			close(fd);
+			free(client);
+			return;
+		}
+	}
+#endif
+
 	struct epoll_event ev = {
 		.events = EPOLLIN,
 		.data.fd = fd,
@@ -188,8 +212,15 @@ static void accept_client(rsd_server_t *srv)
 	pthread_mutex_unlock(&srv->clients_lock);
 
 	char addrstr[INET6_ADDRSTRLEN];
-	RSS_INFO("client %s:%u connected (%d/%d)", client_addr_str(&addr, addrstr, sizeof(addrstr)),
-		 client_port(&addr), srv->client_count, RSD_MAX_CLIENTS);
+	RSS_INFO("client %s:%u connected%s (%d/%d)",
+		 client_addr_str(&addr, addrstr, sizeof(addrstr)),
+		 client_port(&addr),
+#ifdef COMPY_HAS_TLS
+		 client->tls ? " (TLS)" : "",
+#else
+		 "",
+#endif
+		 srv->client_count, RSD_MAX_CLIENTS);
 }
 
 static void handle_client_data(rsd_server_t *srv, int fd)
@@ -206,7 +237,13 @@ static void handle_client_data(rsd_server_t *srv, int fd)
 		return;
 	}
 
-	ssize_t n = read(fd, client->recv_buf + client->recv_len, avail);
+	ssize_t n;
+#ifdef COMPY_HAS_TLS
+	if (client->tls)
+		n = compy_tls_read(client->tls, client->recv_buf + client->recv_len, avail);
+	else
+#endif
+		n = read(fd, client->recv_buf + client->recv_len, avail);
 	if (n <= 0) {
 		remove_client(srv, client);
 		return;
@@ -325,7 +362,8 @@ int rsd_server_init(rsd_server_t *srv)
 		}
 	}
 
-	RSS_INFO("RTSP server listening on port %d (dual-stack)", srv->port);
+	RSS_INFO("%s server listening on port %d (dual-stack)",
+		 srv->tls_ctx ? "RTSPS" : "RTSP", srv->port);
 	return 0;
 }
 

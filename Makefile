@@ -76,6 +76,10 @@ COMPY_CFLAGS := -I$(CURDIR)/$(COMPY_DIR)/include \
                 -I$(COMPY_BUILD)/_deps/interface99-src \
                 -I$(COMPY_BUILD)/_deps/metalang99-src/include
 
+# TLS support — if mbedTLS is in sysroot, compy was built with COMPY_HAS_TLS
+COMPY_TLS_CFLAGS := $(if $(wildcard $(SYSROOT)/usr/lib/libmbedtls.so $(SYSROOT)/lib/libmbedtls.so),-DCOMPY_HAS_TLS,)
+COMPY_CFLAGS += $(COMPY_TLS_CFLAGS)
+
 # Static libraries (absolute paths for sub-makes)
 LIB_HAL    := $(CURDIR)/$(HAL_DIR)/libraptor_hal.a
 LIB_IPC    := $(CURDIR)/$(IPC_DIR)/librss_ipc.a
@@ -133,11 +137,14 @@ rvd: $(LIB_HAL) $(LIB_IPC) $(LIB_COMMON)
 		LIBS="$(LIB_HAL) $(LIB_IPC) $(LIB_COMMON)" \
 		LDFLAGS="$(LDFLAGS_HAL)" Q="$(Q)"
 
+# mbedTLS — link if present in sysroot (enables RTSPS via compy COMPY_HAS_TLS)
+MBEDTLS_LIB := $(if $(wildcard $(SYSROOT)/usr/lib/libmbedtls.so $(SYSROOT)/lib/libmbedtls.so),-lmbedtls -lmbedx509 -lmbedcrypto,)
+
 rsd: $(LIB_IPC) $(LIB_COMMON) $(LIB_COMPY)
 	@echo "  BUILD   rsd"
 	$(Q)$(MAKE) -C rsd CC="$(CC)" CFLAGS="$(CFLAGS) $(COMPY_CFLAGS)" \
 		LIBS="$(LIB_IPC) $(LIB_COMMON) $(LIB_COMPY)" \
-		LDFLAGS="$(LDFLAGS)" Q="$(Q)"
+		LDFLAGS="$(LDFLAGS) $(MBEDTLS_LIB)" Q="$(Q)"
 
 rad: $(LIB_HAL) $(LIB_IPC) $(LIB_COMMON)
 	@echo "  BUILD   rad"

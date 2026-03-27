@@ -641,7 +641,13 @@ void rsd_handle_rtsp_data(rsd_server_t *srv, rsd_client_t *client, const char *d
 	Compy_ParseResult result = Compy_Request_parse(&req, input);
 
 	if (Compy_ParseResult_is_complete(result)) {
-		Compy_Writer writer = compy_fd_writer(&client->fd);
+		Compy_Writer writer;
+#ifdef COMPY_HAS_TLS
+		if (client->tls)
+			writer = compy_tls_writer(client->tls);
+		else
+#endif
+			writer = compy_fd_writer(&client->fd);
 		Compy_Controller ctrl = DYN(rsd_client_t, Compy_Controller, client);
 		compy_dispatch(writer, ctrl, &req);
 
