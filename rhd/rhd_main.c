@@ -464,7 +464,9 @@ static void server_run(rhd_server_t *srv)
 
 				int one = 1;
 				setsockopt(cfd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
-				fcntl(cfd, F_SETFL, fcntl(cfd, F_GETFL) | O_NONBLOCK);
+				int flags = fcntl(cfd, F_GETFL);
+				if (flags >= 0)
+					fcntl(cfd, F_SETFL, flags | O_NONBLOCK);
 
 				rhd_client_t *c = calloc(1, sizeof(*c));
 				c->fd = cfd;
