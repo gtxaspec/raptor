@@ -284,7 +284,7 @@ static void record_loop(rmr_state_t *st)
 					   ((uint32_t)st->avcc_buf[1] << 16) |
 					   ((uint32_t)st->avcc_buf[2] << 8) |
 					   (uint32_t)st->avcc_buf[3];
-			if (nal_len + 4 > (uint32_t)avcc_len) {
+			if (nal_len > (uint32_t)avcc_len - 4) {
 				RSS_WARN("AVCC corrupt: nal_len=%u avcc_len=%d src_len=%u "
 					 "src[0..3]=%02x%02x%02x%02x",
 					 nal_len, avcc_len, length,
