@@ -290,8 +290,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 
 		/* Per-stream JPEG enable: jpeg0_enabled, jpeg1_enabled (default true) */
 		for (int v = 0; v < video_count && v < RVD_MAX_JPEG; v++) {
-			char key[20];
-			snprintf(key, sizeof(key), "jpeg%d_enabled", v);
+			const char *key = v == 0 ? "jpeg0_enabled" : "jpeg1_enabled";
 			if (!rss_config_get_bool(cfg, "jpeg", key, true)) {
 				RSS_INFO("jpeg%d: disabled by config", v);
 				continue;
