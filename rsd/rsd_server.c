@@ -361,8 +361,12 @@ int rsd_server_init(rsd_server_t *srv)
 		}
 	}
 
-	RSS_INFO("%s server listening on port %d (dual-stack)", srv->tls_ctx ? "RTSPS" : "RTSP",
-		 srv->port);
+	const char *proto = "RTSP";
+#ifdef COMPY_HAS_TLS
+	if (srv->tls_ctx)
+		proto = "RTSPS";
+#endif
+	RSS_INFO("%s server listening on port %d (dual-stack)", proto, srv->port);
 	return 0;
 }
 
