@@ -52,6 +52,7 @@ static void usage(void)
 			"\n"
 			"Commands:\n"
 			"  status                              Show daemon status\n"
+			"  memory                              Show memory usage (private/shared)\n"
 			"  get <section> <key>                 Read config value\n"
 			"  set <section> <key> <value>         Set config value\n"
 			"  config save                         Save running config to disk\n"
@@ -108,6 +109,35 @@ static void usage(void)
 			"Daemons: rvd, rsd, rad, rod, rhd, ric, rmr, rmd\n");
 }
 
+/* Read private and shared memory from /proc/<pid>/smaps.
+ * Returns 0 on success, -1 on error. Values in KB. */
+static int read_smaps(int pid, long *priv_kb, long *shared_kb)
+{
+	char path[64];
+	snprintf(path, sizeof(path), "/proc/%d/smaps", pid);
+	FILE *f = fopen(path, "r");
+	if (!f)
+		return -1;
+
+	long priv = 0, shared = 0;
+	char line[256];
+	while (fgets(line, sizeof(line), f)) {
+		long val;
+		if (sscanf(line, "Private_Clean: %ld kB", &val) == 1)
+			priv += val;
+		else if (sscanf(line, "Private_Dirty: %ld kB", &val) == 1)
+			priv += val;
+		else if (sscanf(line, "Shared_Clean: %ld kB", &val) == 1)
+			shared += val;
+		else if (sscanf(line, "Shared_Dirty: %ld kB", &val) == 1)
+			shared += val;
+	}
+	fclose(f);
+	*priv_kb = priv;
+	*shared_kb = shared;
+	return 0;
+}
+
 static void cmd_status(void)
 {
 	for (int i = 0; daemons[i]; i++) {
@@ -117,6 +147,54 @@ static void cmd_status(void)
 		else
 			printf("%-6s  stopped\n", daemons[i]);
 	}
+}
+
+static void cmd_memory(void)
+{
+	long total_priv = 0, total_shared = 0;
+	int running = 0;
+
+	printf("%-6s  %8s  %8s  %8s\n", "DAEMON", "PRIVATE", "SHARED", "RSS");
+	printf("%-6s  %8s  %8s  %8s\n", "------", "-------", "------", "---");
+
+	for (int i = 0; daemons[i]; i++) {
+		int pid = rss_daemon_check(daemons[i]);
+		if (pid <= 0)
+			continue;
+
+		long priv = 0, shared = 0;
+		if (read_smaps(pid, &priv, &shared) < 0)
+			continue;
+
+		printf("%-6s  %6ld KB  %6ld KB  %6ld KB\n",
+		       daemons[i], priv, shared, priv + shared);
+		total_priv += priv;
+		total_shared += shared;
+		running++;
+	}
+
+	if (running == 0) {
+		printf("No daemons running.\n");
+		return;
+	}
+
+	/* SHM rings are shared — count them once */
+	long shm_total = 0;
+	FILE *f = popen("du -sk /dev/shm/rss_ring_* /dev/shm/rss_osd_* 2>/dev/null", "r");
+	if (f) {
+		char line[256];
+		long val;
+		while (fgets(line, sizeof(line), f)) {
+			if (sscanf(line, "%ld", &val) == 1)
+				shm_total += val;
+		}
+		pclose(f);
+	}
+
+	printf("%-6s  %8s  %8s  %8s\n", "------", "-------", "------", "---");
+	printf("%-6s  %6ld KB  %6ld KB\n", "TOTAL", total_priv, total_shared);
+	printf("\nSHM rings + OSD: %ld KB (shared, counted once)\n", shm_total);
+	printf("Actual memory:   %ld KB (private + SHM)\n", total_priv + shm_total);
 }
 
 static int is_daemon(const char *name)
@@ -159,6 +237,11 @@ int main(int argc, char **argv)
 
 	if (strcmp(argv[1], "status") == 0) {
 		cmd_status();
+		return 0;
+	}
+
+	if (strcmp(argv[1], "memory") == 0) {
+		cmd_memory();
 		return 0;
 	}
 
