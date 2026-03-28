@@ -15,6 +15,7 @@
 
 #include "rmr_mux.h"
 #include "rmr_nal.h"
+#include "rmr_prebuf.h"
 #include "rmr_storage.h"
 
 /* Recording mode */
@@ -53,11 +54,21 @@ typedef struct {
 	char segment_path[256];
 	int64_t segment_start_us;
 
-	/* Muxer — motion clip (main thread only, mode=both) */
-	rmr_mux_t *clip_mux;
+	/* Pre-buffer for motion clips (main thread only) */
+	rmr_prebuf_t *video_pb;
+	rmr_prebuf_t *audio_pb;
+	int prebuffer_sec;
+	int clip_length_sec;
+
+	/* Motion clip context (main thread only) */
 	rmr_storage_t *clip_storage;
+	rmr_mux_t *clip_mux;
 	int clip_fd;
 	char clip_path[256];
+	int64_t clip_v_ts_base;  /* first video timestamp in clip */
+	int64_t clip_a_dts;      /* audio DTS counter for clip */
+	int64_t clip_start_us;   /* wall clock when clip opened */
+	uint64_t clip_bytes;
 
 	/* Frame read buffer (main thread only) */
 	uint8_t *frame_buf;

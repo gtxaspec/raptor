@@ -39,11 +39,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <rss_ipc.h>
 #include <rss_common.h>
 
-static const char *daemons[] = {"rvd", "rsd", "rad", "rod", "rhd", "ric", "rmr", NULL};
+static const char *daemons[] = {"rvd", "rsd", "rad", "rod", "rhd", "ric", "rmr", "rmd", NULL};
 
 static void usage(void)
 {
@@ -98,7 +99,13 @@ static void usage(void)
 			"RIC commands:\n"
 			"  ric mode <auto|day|night>           Set day/night mode\n"
 			"\n"
-			"Daemons: rvd, rsd, rad, rod, ric\n");
+			"RMR commands:\n"
+			"  rmr status                          Show recording status\n"
+			"\n"
+			"Testing:\n"
+			"  test-motion [sec]                   Trigger clip recording (default 10s)\n"
+			"\n"
+			"Daemons: rvd, rsd, rad, rod, rhd, ric, rmr, rmd\n");
 }
 
 static void cmd_status(void)
@@ -162,7 +169,8 @@ int main(int argc, char **argv)
 	} section_map[] = {
 		{"sensor", "rvd"}, {"stream0", "rvd"}, {"stream1", "rvd"}, {"jpeg", "rvd"},
 		{"ring", "rvd"},   {"audio", "rad"},   {"rtsp", "rsd"},	   {"http", "rhd"},
-		{"osd", "rod"},	   {"ircut", "ric"},   {"log", "rvd"},	   {NULL, NULL},
+		{"osd", "rod"},	   {"ircut", "ric"},   {"recording", "rmr"},
+		{"motion", "rmd"}, {"log", "rvd"},     {NULL, NULL},
 	};
 
 	/* raptorctl get <section> <key> — query live value from daemon, fall back to file */
@@ -259,6 +267,23 @@ int main(int argc, char **argv)
 			return 1;
 		}
 		return 0;
+	}
+
+	/* raptorctl test-motion [duration_sec] — trigger RMR clip recording */
+	if (strcmp(argv[1], "test-motion") == 0) {
+		int dur = 10;
+		if (argc >= 3)
+			dur = atoi(argv[2]);
+		if (dur < 1) dur = 1;
+		if (dur > 300) dur = 300;
+
+		printf("triggering motion clip for %d seconds...\n", dur);
+		int ret = send_cmd("rmr", "{\"cmd\":\"start\"}");
+		if (ret != 0)
+			return ret;
+		sleep(dur);
+		printf("stopping motion clip...\n");
+		return send_cmd("rmr", "{\"cmd\":\"stop\"}");
 	}
 
 	if (!is_daemon(argv[1])) {

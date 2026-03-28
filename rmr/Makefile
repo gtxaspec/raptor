@@ -1,4 +1,4 @@
-SRCS := rmr_main.c rmr_mux.c rmr_nal.c rmr_storage.c
+SRCS := rmr_main.c rmr_mux.c rmr_nal.c rmr_prebuf.c rmr_storage.c
 OBJS := $(SRCS:.c=.o)
 BIN  := rmr
 
