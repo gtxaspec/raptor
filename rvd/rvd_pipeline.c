@@ -562,7 +562,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 		uint32_t bps = st->streams[0].enc_cfg.bitrate;
 		uint32_t fps = st->streams[0].enc_cfg.fps_num;
 		if (fps == 0) fps = 25;
-		uint32_t max_frame = bps / 8 / fps * 4;
+		uint32_t max_frame = (uint32_t)((uint64_t)bps * 4 / 8 / fps);
 		if (max_frame < 8192) max_frame = 8192;
 		main_data = max_frame * (uint32_t)ring_main_slots;
 		if (main_data < 256 * 1024) main_data = 256 * 1024;
@@ -589,7 +589,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 			uint32_t bps = st->streams[1].enc_cfg.bitrate;
 			uint32_t fps = st->streams[1].enc_cfg.fps_num;
 			if (fps == 0) fps = 25;
-			uint32_t max_frame = bps / 8 / fps * 4;
+			uint32_t max_frame = (uint32_t)((uint64_t)bps * 4 / 8 / fps);
 			if (max_frame < 4096) max_frame = 4096;
 			sub_data = max_frame * (uint32_t)ring_sub_slots;
 			if (sub_data < 128 * 1024) sub_data = 128 * 1024;

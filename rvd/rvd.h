@@ -82,7 +82,7 @@ typedef struct {
 
 	/* IVS (motion detection) */
 	bool ivs_enabled;
-	bool ivs_active;
+	_Atomic bool ivs_active;
 	_Atomic bool ivs_motion;
 	_Atomic int64_t ivs_motion_ts;
 	void *ivs_algo_handle;
