@@ -233,6 +233,10 @@ void *rsd_audio_reader_thread(void *arg)
 	uint8_t audio_buf[4096];
 	uint32_t audio_rtp_ts = 0;
 
+	/* Start from the latest ring position — don't replay stale audio */
+	const rss_ring_header_t *rhdr = rss_ring_get_header(srv->ring_audio);
+	srv->audio_read_seq = rhdr->write_seq;
+
 	while (*srv->running) {
 		int ret = rss_ring_wait(srv->ring_audio, 100);
 		if (ret != 0)
