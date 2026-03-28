@@ -60,6 +60,10 @@ typedef struct {
 	bool privacy_active;
 	volatile bool pipeline_ready; /* set after FS enable + encoder start */
 
+	/* Pipeline bind chain (for clean unbind at deinit) */
+	rss_cell_t bind_chain[RVD_MAX_STREAMS][4]; /* max 4 stages: FS→IVS→OSD→ENC */
+	int bind_chain_len[RVD_MAX_STREAMS];
+
 	/* Control */
 	rss_ctrl_t *ctrl;
 
@@ -97,6 +101,11 @@ void rvd_osd_check(rvd_state_t *st);
 void rvd_osd_deinit(rvd_state_t *st);
 void *rvd_osd_thread(void *arg);
 void rvd_osd_set_privacy(rvd_state_t *st, bool enable);
+
+/* rvd_ctrl.c */
+int rvd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, void *userdata);
+int rvd_json_get_int(const char *json, const char *key, int *out);
+int rvd_json_get_str(const char *json, const char *key, char *buf, int bufsz);
 
 /* rvd_ivs.c */
 int rvd_ivs_init(rvd_state_t *st);
