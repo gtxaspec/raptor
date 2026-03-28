@@ -12,7 +12,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <getopt.h>
 #include <time.h>
 #include <sys/epoll.h>
 
@@ -260,32 +259,13 @@ static void render_tick(rod_state_t *st)
 
 /* ── Control socket ── */
 
-static int json_get_str(const char *json, const char *key, char *buf, int bufsz)
-{
-	char pattern[64];
-	snprintf(pattern, sizeof(pattern), "\"%s\":\"", key);
-	const char *p = strstr(json, pattern);
-	if (!p)
-		return -1;
-	p += strlen(pattern);
-	const char *end = strchr(p, '"');
-	if (!end)
-		return -1;
-	int len = (int)(end - p);
-	if (len >= bufsz)
-		len = bufsz - 1;
-	memcpy(buf, p, len);
-	buf[len] = '\0';
-	return 0;
-}
-
 static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, void *userdata)
 {
 	rod_state_t *st = userdata;
 
 	if (strstr(cmd_json, "\"set-text\"")) {
 		char val[128];
-		if (json_get_str(cmd_json, "value", val, sizeof(val)) == 0) {
+		if (rss_json_get_str(cmd_json, "value", val, sizeof(val)) == 0) {
 			/* Sanitize: strip control characters */
 			for (int i = 0; val[i]; i++) {
 				if ((unsigned char)val[i] < 0x20)
@@ -305,8 +285,8 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 
 	if (strstr(cmd_json, "\"config-get\"")) {
 		char section[64], key[64];
-		if (json_get_str(cmd_json, "section", section, sizeof(section)) == 0 &&
-		    json_get_str(cmd_json, "key", key, sizeof(key)) == 0) {
+		if (rss_json_get_str(cmd_json, "section", section, sizeof(section)) == 0 &&
+		    rss_json_get_str(cmd_json, "key", key, sizeof(key)) == 0) {
 			const char *v = rss_config_get_str(st->config, section, key, NULL);
 			if (v)
 				snprintf(resp_buf, resp_buf_size, "%s", v);
@@ -356,80 +336,32 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 
 /* ── Entry point ── */
 
-static void usage(const char *prog)
-{
-	fprintf(stderr,
-		"Usage: %s [options]\n"
-		"  -c <file>   Config file (default: /etc/raptor.conf)\n"
-		"  -f          Run in foreground\n"
-		"  -d          Debug logging\n"
-		"  -h          Show this help\n",
-		prog);
-}
-
 int main(int argc, char **argv)
 {
-	const char *config_path = "/etc/raptor.conf";
-	bool foreground = false;
-	bool debug = false;
-	int opt;
-
-	while ((opt = getopt(argc, argv, "c:fdh")) != -1) {
-		switch (opt) {
-		case 'c':
-			config_path = optarg;
-			break;
-		case 'f':
-			foreground = true;
-			break;
-		case 'd':
-			debug = true;
-			break;
-		case 'h':
-			usage(argv[0]);
-			return 0;
-		default:
-			usage(argv[0]);
-			return 1;
-		}
-	}
-
-	rss_log_init("rod", debug ? RSS_LOG_DEBUG : RSS_LOG_INFO,
-		     foreground ? RSS_LOG_TARGET_STDERR : RSS_LOG_TARGET_SYSLOG, NULL);
-
-	rss_config_t *cfg = rss_config_load(config_path);
-	if (!cfg) {
-		RSS_FATAL("failed to load config: %s", config_path);
-		return 1;
-	}
+	rss_daemon_ctx_t ctx;
+	int ret = rss_daemon_init(&ctx, "rod", argc, argv);
+	if (ret != 0)
+		return ret < 0 ? 1 : 0;
 
 	/* Early exit if OSD disabled */
-	if (!rss_config_get_bool(cfg, "osd", "enabled", true)) {
+	if (!rss_config_get_bool(ctx.cfg, "osd", "enabled", true)) {
 		RSS_INFO("OSD disabled in config, exiting");
-		rss_config_free(cfg);
+		rss_config_free(ctx.cfg);
+		rss_daemon_cleanup("rod");
 		return 0;
 	}
 
-	if (rss_daemonize("rod", foreground) < 0) {
-		RSS_FATAL("daemonize failed");
-		rss_config_free(cfg);
-		return 1;
-	}
-
-	volatile sig_atomic_t *running = rss_signal_init();
-	RSS_INFO("rod starting");
-
 	rod_state_t st = {0};
-	st.config = cfg;
-	st.config_path = config_path;
-	st.running = running;
+	st.config = ctx.cfg;
+	st.config_path = ctx.config_path;
+	st.running = ctx.running;
 	load_config(&st);
 
 	/* Init fonts per stream — check for per-stream font_size override */
 	for (int s = 0; s < st.stream_count; s++) {
 		char key[32];
 		snprintf(key, sizeof(key), "stream%d_font_size", s);
-		int fs = rss_config_get_int(cfg, "osd", key, 0);
+		int fs = rss_config_get_int(ctx.cfg, "osd", key, 0);
 		if (fs <= 0) {
 			/* No per-stream override — auto-scale from global */
 			fs = st.cfg.font_size;
@@ -491,7 +423,7 @@ int main(int argc, char **argv)
 	/* Main loop: 1Hz render, 100ms control socket poll */
 	int64_t last_tick = rss_timestamp_us();
 
-	while (*running) {
+	while (*st.running) {
 		int64_t now = rss_timestamp_us();
 		if (now - last_tick >= 1000000) {
 			render_tick(&st);
@@ -530,7 +462,7 @@ cleanup:
 	for (int s = 0; s < st.stream_count; s++)
 		rod_render_deinit(&st, s);
 
-	rss_config_free(cfg);
+	rss_config_free(ctx.cfg);
 	rss_daemon_cleanup("rod");
 
 	return 0;

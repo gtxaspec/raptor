@@ -9,7 +9,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <getopt.h>
 #include <sys/epoll.h>
 
 #include "rmd.h"
@@ -75,10 +74,9 @@ static void rmd_update_state(rmd_ctx_t *ctx, bool motion)
 			ctx->last_motion_us = now;
 		} else {
 			int64_t elapsed_sec = (now - ctx->cooldown_start_us) / 1000000;
-			int post_sec =
-				ctx->cfg.record_post_sec > ctx->cfg.cooldown_sec
-					? ctx->cfg.record_post_sec
-					: ctx->cfg.cooldown_sec;
+			int post_sec = ctx->cfg.record_post_sec > ctx->cfg.cooldown_sec
+					       ? ctx->cfg.record_post_sec
+					       : ctx->cfg.cooldown_sec;
 			if (elapsed_sec >= post_sec) {
 				ctx->state = RMD_STATE_IDLE;
 
@@ -139,15 +137,15 @@ static int rmd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 	if (strstr(cmd_json, "\"sensitivity\"")) {
-		const char *vp = strstr(cmd_json, "\"value\":");
-		if (vp) {
-			int val = atoi(vp + 8);
+		int val;
+		if (rss_json_get_int(cmd_json, "value", &val) == 0) {
 			ctx->cfg.sensitivity = val;
 			/* Relay to RVD */
 			char cmd[128], resp[128];
-			snprintf(cmd, sizeof(cmd),
-				 "{\"cmd\":\"ivs-set-sensitivity\",\"value\":%d}", val);
-			rss_ctrl_send_command("/var/run/rss/rvd.sock", cmd, resp, sizeof(resp), 1000);
+			snprintf(cmd, sizeof(cmd), "{\"cmd\":\"ivs-set-sensitivity\",\"value\":%d}",
+				 val);
+			rss_ctrl_send_command("/var/run/rss/rvd.sock", cmd, resp, sizeof(resp),
+					      1000);
 			snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\",\"sensitivity\":%d}",
 				 val);
 		} else {
@@ -165,79 +163,30 @@ static int rmd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	return (int)strlen(resp_buf);
 }
 
-static void usage(const char *prog)
-{
-	fprintf(stderr,
-		"Usage: %s [options]\n"
-		"  -c <file>   Config file (default: /etc/raptor.conf)\n"
-		"  -f          Run in foreground\n"
-		"  -d          Debug logging\n"
-		"  -h          Show this help\n",
-		prog);
-}
-
 int main(int argc, char **argv)
 {
-	const char *config_path = "/etc/raptor.conf";
-	bool foreground = false;
-	bool debug = false;
-	int opt;
+	rss_daemon_ctx_t dctx;
+	int ret = rss_daemon_init(&dctx, "rmd", argc, argv);
+	if (ret != 0)
+		return ret < 0 ? 1 : 0;
 
-	while ((opt = getopt(argc, argv, "c:fdh")) != -1) {
-		switch (opt) {
-		case 'c':
-			config_path = optarg;
-			break;
-		case 'f':
-			foreground = true;
-			break;
-		case 'd':
-			debug = true;
-			break;
-		case 'h':
-			usage(argv[0]);
-			return 0;
-		default:
-			usage(argv[0]);
-			return 1;
-		}
-	}
-
-	rss_log_init("rmd", debug ? RSS_LOG_DEBUG : RSS_LOG_INFO,
-		     foreground ? RSS_LOG_TARGET_STDERR : RSS_LOG_TARGET_SYSLOG, NULL);
-
-	rss_config_t *cfg = rss_config_load(config_path);
-	if (!cfg) {
-		RSS_FATAL("failed to load config: %s", config_path);
-		return 1;
-	}
-
-	if (!rss_config_get_bool(cfg, "motion", "enabled", false)) {
+	if (!rss_config_get_bool(dctx.cfg, "motion", "enabled", false)) {
 		RSS_INFO("motion detection disabled in config");
-		rss_config_free(cfg);
+		rss_config_free(dctx.cfg);
+		rss_daemon_cleanup("rmd");
 		return 0;
 	}
 
-	if (rss_daemonize("rmd", foreground) < 0) {
-		RSS_FATAL("daemonize failed");
-		rss_config_free(cfg);
-		return 1;
-	}
-
-	volatile sig_atomic_t *running = rss_signal_init();
-
-	RSS_INFO("rmd starting");
-
 	rmd_ctx_t ctx = {0};
-	ctx.config = cfg;
-	ctx.config_path = config_path;
-	ctx.running = running;
+	ctx.config = dctx.cfg;
+	ctx.config_path = dctx.config_path;
+	ctx.running = dctx.running;
 	ctx.cfg.gpio_pin = -1;
 	load_config(&ctx);
 
 	/* Wait for RVD control socket */
 	RSS_INFO("waiting for RVD...");
-	for (int i = 0; i < 100 && *running; i++) {
+	for (int i = 0; i < 100 && *ctx.running; i++) {
 		char resp[128];
 		if (rss_ctrl_send_command("/var/run/rss/rvd.sock", "{\"cmd\":\"ivs-status\"}", resp,
 					  sizeof(resp), 500) >= 0) {
@@ -269,7 +218,7 @@ int main(int argc, char **argv)
 	RSS_INFO("rmd running (poll=%dms, cooldown=%ds, sensitivity=%d)", ctx.cfg.poll_interval_ms,
 		 ctx.cfg.cooldown_sec, ctx.cfg.sensitivity);
 
-	while (*running) {
+	while (*ctx.running) {
 		bool motion = rmd_poll_motion();
 		rmd_update_state(&ctx, motion);
 
@@ -278,7 +227,8 @@ int main(int argc, char **argv)
 			int n = epoll_wait(epoll_fd, events, 4, ctx.cfg.poll_interval_ms);
 			for (int i = 0; i < n; i++) {
 				if (events[i].data.fd == ctrl_fd)
-					rss_ctrl_accept_and_handle(ctx.ctrl, rmd_ctrl_handler, &ctx);
+					rss_ctrl_accept_and_handle(ctx.ctrl, rmd_ctrl_handler,
+								   &ctx);
 			}
 		} else {
 			usleep(ctx.cfg.poll_interval_ms * 1000);
@@ -296,7 +246,7 @@ int main(int argc, char **argv)
 		rss_ctrl_destroy(ctx.ctrl);
 	if (epoll_fd >= 0)
 		close(epoll_fd);
-	rss_config_free(cfg);
+	rss_config_free(dctx.cfg);
 	rss_daemon_cleanup("rmd");
 
 	return 0;

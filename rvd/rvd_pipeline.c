@@ -237,7 +237,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 		/* Auto-detect from procfs (like prudynt) */
 		char *s = rss_read_file("/proc/jz/sensor/max_fps", NULL);
 		if (s) {
-			sensor_fps = atoi(s);
+			sensor_fps = (int)strtol(s, NULL, 10);
 			free(s);
 		}
 		if (sensor_fps <= 0)
@@ -269,12 +269,12 @@ int rvd_pipeline_init(rvd_state_t *st)
 		char *s;
 		s = rss_read_file("/proc/jz/sensor/width", NULL);
 		if (s) {
-			sensor_w = atoi(s);
+			sensor_w = (int)strtol(s, NULL, 10);
 			free(s);
 		}
 		s = rss_read_file("/proc/jz/sensor/height", NULL);
 		if (s) {
-			sensor_h = atoi(s);
+			sensor_h = (int)strtol(s, NULL, 10);
 			free(s);
 		}
 	}

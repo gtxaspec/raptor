@@ -605,7 +605,7 @@ int main(int argc, char **argv)
 		while ((opt = getopt(argc, argv, "d:r:")) != -1) {
 			switch (opt) {
 			case 'd':
-				duration = atoi(optarg);
+				duration = (int)strtol(optarg, NULL, 10);
 				break;
 			case 'r':
 				/* info only for record */
@@ -628,7 +628,7 @@ int main(int argc, char **argv)
 		while ((opt = getopt(argc, argv, "r:")) != -1) {
 			switch (opt) {
 			case 'r':
-				sample_rate = atoi(optarg);
+				sample_rate = (int)strtol(optarg, NULL, 10);
 				break;
 			default:
 				usage();

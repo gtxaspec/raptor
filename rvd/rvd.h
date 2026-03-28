@@ -106,8 +106,6 @@ void rvd_osd_set_privacy(rvd_state_t *st, bool enable);
 
 /* rvd_ctrl.c */
 int rvd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, void *userdata);
-int rvd_json_get_int(const char *json, const char *key, int *out);
-int rvd_json_get_str(const char *json, const char *key, char *buf, int bufsz);
 
 /* rvd_ivs.c */
 int rvd_ivs_init(rvd_state_t *st);

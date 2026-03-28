@@ -9,11 +9,8 @@
  */
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <getopt.h>
-#include <fcntl.h>
 #include <sys/epoll.h>
 
 #include "ric.h"
@@ -45,32 +42,13 @@ static void load_config(ric_state_t *st)
 
 /* ── Control socket ── */
 
-static int json_get_str(const char *json, const char *key, char *buf, int bufsz)
-{
-	char pattern[64];
-	snprintf(pattern, sizeof(pattern), "\"%s\":\"", key);
-	const char *p = strstr(json, pattern);
-	if (!p)
-		return -1;
-	p += strlen(pattern);
-	const char *end = strchr(p, '"');
-	if (!end)
-		return -1;
-	int len = (int)(end - p);
-	if (len >= bufsz)
-		len = bufsz - 1;
-	memcpy(buf, p, len);
-	buf[len] = '\0';
-	return 0;
-}
-
 static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, void *userdata)
 {
 	ric_state_t *st = userdata;
 
 	if (strstr(cmd_json, "\"mode\"")) {
 		char val[16];
-		if (json_get_str(cmd_json, "value", val, sizeof(val)) == 0) {
+		if (rss_json_get_str(cmd_json, "value", val, sizeof(val)) == 0) {
 			if (strcmp(val, "day") == 0) {
 				st->cfg.opmode = RIC_FORCE_DAY;
 				ric_set_mode(st, RIC_MODE_DAY);
@@ -93,8 +71,8 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 
 	if (strstr(cmd_json, "\"config-get\"")) {
 		char section[64], key[64];
-		if (json_get_str(cmd_json, "section", section, sizeof(section)) == 0 &&
-		    json_get_str(cmd_json, "key", key, sizeof(key)) == 0) {
+		if (rss_json_get_str(cmd_json, "section", section, sizeof(section)) == 0 &&
+		    rss_json_get_str(cmd_json, "key", key, sizeof(key)) == 0) {
 			const char *v = rss_config_get_str(st->config, section, key, NULL);
 			if (v)
 				snprintf(resp_buf, resp_buf_size, "%s", v);
@@ -146,78 +124,30 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 
 /* ── Entry point ── */
 
-static void usage(const char *prog)
-{
-	fprintf(stderr,
-		"Usage: %s [options]\n"
-		"  -c <file>   Config file (default: /etc/raptor.conf)\n"
-		"  -f          Run in foreground\n"
-		"  -d          Debug logging\n"
-		"  -h          Show this help\n",
-		prog);
-}
-
 int main(int argc, char **argv)
 {
-	const char *config_path = "/etc/raptor.conf";
-	bool foreground = false;
-	bool debug = false;
-	int opt;
+	rss_daemon_ctx_t ctx;
+	int ret = rss_daemon_init(&ctx, "ric", argc, argv);
+	if (ret != 0)
+		return ret < 0 ? 1 : 0;
 
-	while ((opt = getopt(argc, argv, "c:fdh")) != -1) {
-		switch (opt) {
-		case 'c':
-			config_path = optarg;
-			break;
-		case 'f':
-			foreground = true;
-			break;
-		case 'd':
-			debug = true;
-			break;
-		case 'h':
-			usage(argv[0]);
-			return 0;
-		default:
-			usage(argv[0]);
-			return 1;
-		}
-	}
-
-	rss_log_init("ric", debug ? RSS_LOG_DEBUG : RSS_LOG_INFO,
-		     foreground ? RSS_LOG_TARGET_STDERR : RSS_LOG_TARGET_SYSLOG, NULL);
-
-	rss_config_t *cfg = rss_config_load(config_path);
-	if (!cfg) {
-		RSS_FATAL("failed to load config: %s", config_path);
-		return 1;
-	}
-
-	if (!rss_config_get_bool(cfg, "ircut", "enabled", true)) {
+	if (!rss_config_get_bool(ctx.cfg, "ircut", "enabled", true)) {
 		RSS_INFO("IR-cut control disabled in config, exiting");
-		rss_config_free(cfg);
+		rss_config_free(ctx.cfg);
+		rss_daemon_cleanup("ric");
 		return 0;
 	}
 
-	if (rss_daemonize("ric", foreground) < 0) {
-		RSS_FATAL("daemonize failed");
-		rss_config_free(cfg);
-		return 1;
-	}
-
-	volatile sig_atomic_t *running = rss_signal_init();
-	RSS_INFO("ric starting");
-
 	ric_state_t st = {0};
-	st.config = cfg;
-	st.config_path = config_path;
-	st.running = running;
+	st.config = ctx.cfg;
+	st.config_path = ctx.config_path;
+	st.running = ctx.running;
 	st.current_mode = RIC_MODE_DAY;
 	load_config(&st);
 
 	/* Wait for RVD control socket to be available */
 	RSS_INFO("waiting for RVD...");
-	for (int i = 0; i < 100 && *running; i++) {
+	for (int i = 0; i < 100 && *st.running; i++) {
 		char resp[256];
 		if (rss_ctrl_send_command("/var/run/rss/rvd.sock", "{\"cmd\":\"get-exposure\"}",
 					  resp, sizeof(resp), 1000) >= 0) {
@@ -258,7 +188,7 @@ int main(int argc, char **argv)
 		 st.cfg.gpio_ircut, st.cfg.gpio_ircut2, st.cfg.gpio_irled);
 
 	/* Main loop: poll exposure + handle control socket */
-	while (*running) {
+	while (*st.running) {
 		ric_poll_exposure(&st);
 
 		if (epoll_fd >= 0) {
@@ -278,7 +208,7 @@ int main(int argc, char **argv)
 	if (st.ctrl)
 		rss_ctrl_destroy(st.ctrl);
 
-	rss_config_free(cfg);
+	rss_config_free(ctx.cfg);
 	rss_daemon_cleanup("ric");
 
 	return 0;

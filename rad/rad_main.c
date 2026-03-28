@@ -16,7 +16,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <getopt.h>
 #include <arpa/inet.h>
 
 #include <pthread.h>
@@ -124,39 +123,6 @@ typedef struct {
 #endif
 } rad_ctrl_ctx_t;
 
-static int json_get_int(const char *json, const char *key, int *out)
-{
-	char pattern[64];
-	snprintf(pattern, sizeof(pattern), "\"%s\":", key);
-	const char *p = strstr(json, pattern);
-	if (!p)
-		return -1;
-	p += strlen(pattern);
-	while (*p == ' ')
-		p++;
-	*out = atoi(p);
-	return 0;
-}
-
-static int json_get_str(const char *json, const char *key, char *buf, int bufsz)
-{
-	char pattern[64];
-	snprintf(pattern, sizeof(pattern), "\"%s\":\"", key);
-	const char *p = strstr(json, pattern);
-	if (!p)
-		return -1;
-	p += strlen(pattern);
-	const char *end = strchr(p, '"');
-	if (!end)
-		return -1;
-	int len = (int)(end - p);
-	if (len >= bufsz)
-		len = bufsz - 1;
-	memcpy(buf, p, len);
-	buf[len] = '\0';
-	return 0;
-}
-
 #define CTRL_RESP(buf) return (int)strlen(buf)
 
 static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, void *userdata)
@@ -166,8 +132,8 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 
 	if (strstr(cmd_json, "\"config-get\"")) {
 		char section[64], key[64];
-		if (json_get_str(cmd_json, "section", section, sizeof(section)) == 0 &&
-		    json_get_str(cmd_json, "key", key, sizeof(key)) == 0) {
+		if (rss_json_get_str(cmd_json, "section", section, sizeof(section)) == 0 &&
+		    rss_json_get_str(cmd_json, "key", key, sizeof(key)) == 0) {
 			const char *v = rss_config_get_str(ctx->cfg, section, key, NULL);
 			if (v)
 				snprintf(resp_buf, resp_buf_size, "%s", v);
@@ -180,7 +146,7 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 	if (strstr(cmd_json, "\"set-volume\"")) {
-		if (json_get_int(cmd_json, "value", &val) == 0) {
+		if (rss_json_get_int(cmd_json, "value", &val) == 0) {
 			RSS_HAL_CALL(ctx->ops, audio_set_volume, ctx->hal_ctx, ctx->ai_dev, 0, val);
 			ctx->volume = val;
 			rss_config_set_int(ctx->cfg, "audio", "volume", val);
@@ -193,7 +159,7 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 	if (strstr(cmd_json, "\"set-gain\"")) {
-		if (json_get_int(cmd_json, "value", &val) == 0) {
+		if (rss_json_get_int(cmd_json, "value", &val) == 0) {
 			RSS_HAL_CALL(ctx->ops, audio_set_gain, ctx->hal_ctx, ctx->ai_dev, 0, val);
 			ctx->gain = val;
 			rss_config_set_int(ctx->cfg, "audio", "gain", val);
@@ -208,8 +174,8 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 #ifdef RAPTOR_AUDIO_EFFECTS
 	if (strstr(cmd_json, "\"set-ns\"")) {
 		char level[16] = "";
-		json_get_str(cmd_json, "level", level, sizeof(level));
-		if (json_get_int(cmd_json, "value", &val) == 0) {
+		rss_json_get_str(cmd_json, "level", level, sizeof(level));
+		if (rss_json_get_int(cmd_json, "value", &val) == 0) {
 			int ret = RSS_OK;
 			if (val && !ctx->ns_enabled) {
 				rss_ns_level_t ns = RSS_NS_MODERATE;
@@ -236,7 +202,7 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 	if (strstr(cmd_json, "\"set-hpf\"")) {
-		if (json_get_int(cmd_json, "value", &val) == 0) {
+		if (rss_json_get_int(cmd_json, "value", &val) == 0) {
 			int ret = RSS_OK;
 			if (val && !ctx->hpf_enabled)
 				ret = RSS_HAL_CALL(ctx->ops, audio_enable_hpf, ctx->hal_ctx);
@@ -255,12 +221,12 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 	if (strstr(cmd_json, "\"set-agc\"")) {
-		if (json_get_int(cmd_json, "value", &val) == 0) {
+		if (rss_json_get_int(cmd_json, "value", &val) == 0) {
 			int ret = RSS_OK;
 			if (val) {
 				int target = 10, compression = 0;
-				json_get_int(cmd_json, "target", &target);
-				json_get_int(cmd_json, "compression", &compression);
+				rss_json_get_int(cmd_json, "target", &target);
+				rss_json_get_int(cmd_json, "compression", &compression);
 				rss_agc_config_t agc_cfg = {
 					.target_level_dbfs = target,
 					.compression_gain_db = compression,
@@ -284,7 +250,7 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 #endif /* RAPTOR_AUDIO_EFFECTS */
 
 	if (strstr(cmd_json, "\"ao-set-volume\"")) {
-		if (json_get_int(cmd_json, "value", &val) == 0 && ctx->ao_enabled) {
+		if (rss_json_get_int(cmd_json, "value", &val) == 0 && ctx->ao_enabled) {
 			RSS_HAL_CALL(ctx->ops, ao_set_volume, ctx->hal_ctx, val);
 			ctx->ao_volume = val;
 			snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
@@ -297,7 +263,7 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 	if (strstr(cmd_json, "\"ao-set-gain\"")) {
-		if (json_get_int(cmd_json, "value", &val) == 0 && ctx->ao_enabled) {
+		if (rss_json_get_int(cmd_json, "value", &val) == 0 && ctx->ao_enabled) {
 			RSS_HAL_CALL(ctx->ops, ao_set_gain, ctx->hal_ctx, val);
 			ctx->ao_gain = val;
 			snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
@@ -456,67 +422,19 @@ static void *ao_playback_thread(void *arg)
 	return NULL;
 }
 
-static void usage(const char *prog)
-{
-	fprintf(stderr,
-		"Usage: %s [options]\n"
-		"  -c <file>   Config file (default: /etc/raptor.conf)\n"
-		"  -f          Run in foreground\n"
-		"  -d          Debug logging\n"
-		"  -h          Show this help\n",
-		prog);
-}
-
 int main(int argc, char **argv)
 {
-	const char *config_path = "/etc/raptor.conf";
-	bool foreground = false;
-	bool debug = false;
-	int opt;
+	rss_daemon_ctx_t dctx;
+	int ret = rss_daemon_init(&dctx, "rad", argc, argv);
+	if (ret != 0)
+		return ret < 0 ? 1 : 0;
 
-	while ((opt = getopt(argc, argv, "c:fdh")) != -1) {
-		switch (opt) {
-		case 'c':
-			config_path = optarg;
-			break;
-		case 'f':
-			foreground = true;
-			break;
-		case 'd':
-			debug = true;
-			break;
-		case 'h':
-			usage(argv[0]);
-			return 0;
-		default:
-			usage(argv[0]);
-			return 1;
-		}
-	}
-
-	rss_log_init("rad", debug ? RSS_LOG_DEBUG : RSS_LOG_INFO,
-		     foreground ? RSS_LOG_TARGET_STDERR : RSS_LOG_TARGET_SYSLOG, NULL);
-
-	rss_config_t *cfg = rss_config_load(config_path);
-	if (!cfg) {
-		RSS_FATAL("failed to load config: %s", config_path);
-		return 1;
-	}
-
-	if (!rss_config_get_bool(cfg, "audio", "enabled", true)) {
+	if (!rss_config_get_bool(dctx.cfg, "audio", "enabled", true)) {
 		RSS_INFO("audio disabled in config");
-		rss_config_free(cfg);
+		rss_config_free(dctx.cfg);
+		rss_daemon_cleanup("rad");
 		return 0;
 	}
-
-	if (rss_daemonize("rad", foreground) < 0) {
-		RSS_FATAL("daemonize failed");
-		rss_config_free(cfg);
-		return 1;
-	}
-
-	volatile sig_atomic_t *running = rss_signal_init();
-	RSS_INFO("rad starting");
 
 	rss_ctrl_t *ctrl = NULL;
 	rss_ring_t *ring = NULL;
@@ -542,11 +460,11 @@ int main(int argc, char **argv)
 	ops = rss_hal_get_ops(hal_ctx);
 
 	/* Audio config */
-	int sample_rate = rss_config_get_int(cfg, "audio", "sample_rate", 16000);
-	int volume = rss_config_get_int(cfg, "audio", "volume", 80);
-	int gain = rss_config_get_int(cfg, "audio", "gain", 25);
-	int ai_dev = rss_config_get_int(cfg, "audio", "device", 1);
-	const char *codec_str = rss_config_get_str(cfg, "audio", "codec", "l16");
+	int sample_rate = rss_config_get_int(dctx.cfg, "audio", "sample_rate", 16000);
+	int volume = rss_config_get_int(dctx.cfg, "audio", "volume", 80);
+	int gain = rss_config_get_int(dctx.cfg, "audio", "gain", 25);
+	int ai_dev = rss_config_get_int(dctx.cfg, "audio", "device", 1);
+	const char *codec_str = rss_config_get_str(dctx.cfg, "audio", "codec", "l16");
 
 	/* Parse codec */
 	int codec_id;
@@ -588,7 +506,7 @@ int main(int argc, char **argv)
 		.ai_gain = gain,
 	};
 
-	int ret = RSS_HAL_CALL(ops, audio_init, hal_ctx, &audio_cfg);
+	ret = RSS_HAL_CALL(ops, audio_init, hal_ctx, &audio_cfg);
 	if (ret != RSS_OK) {
 		RSS_FATAL("audio_init failed: %d", ret);
 		goto cleanup;
@@ -619,8 +537,9 @@ int main(int argc, char **argv)
 		aac_cfg->inputFormat = FAAC_INPUT_16BIT;
 		aac_cfg->outputFormat = RAW_STREAM;
 		aac_cfg->bandWidth = sample_rate;
-		int aac_br = rss_config_get_int(cfg, "audio", "bitrate", 32000);
-		if (aac_br > 256000) aac_br = 256000;
+		int aac_br = rss_config_get_int(dctx.cfg, "audio", "bitrate", 32000);
+		if (aac_br > 256000)
+			aac_br = 256000;
 		aac_cfg->bitRate = aac_br; /* per channel */
 		aac_cfg->allowMidside = 0;
 		aac_cfg->useTns = 0;
@@ -642,8 +561,9 @@ int main(int argc, char **argv)
 			RSS_FATAL("opus_encoder_create failed: %d", opus_err);
 			goto cleanup;
 		}
-		int opus_bitrate = rss_config_get_int(cfg, "audio", "bitrate", 32000);
-		if (opus_bitrate > 256000) opus_bitrate = 256000;
+		int opus_bitrate = rss_config_get_int(dctx.cfg, "audio", "bitrate", 32000);
+		if (opus_bitrate > 256000)
+			opus_bitrate = 256000;
 		opus_encoder_ctl(opus_enc, OPUS_SET_BITRATE(opus_bitrate));
 		RSS_INFO("opus encoder: bitrate=%d", opus_bitrate);
 	}
@@ -651,9 +571,9 @@ int main(int argc, char **argv)
 
 	/* ── Audio effects (libaudioProcess.so) ── */
 #ifdef RAPTOR_AUDIO_EFFECTS
-	bool ns_enabled = rss_config_get_bool(cfg, "audio", "ns_enabled", false);
+	bool ns_enabled = rss_config_get_bool(dctx.cfg, "audio", "ns_enabled", false);
 	if (ns_enabled) {
-		const char *ns_str = rss_config_get_str(cfg, "audio", "ns_level", "moderate");
+		const char *ns_str = rss_config_get_str(dctx.cfg, "audio", "ns_level", "moderate");
 		rss_ns_level_t ns_level = RSS_NS_MODERATE;
 		if (strcasecmp(ns_str, "low") == 0)
 			ns_level = RSS_NS_LOW;
@@ -668,7 +588,7 @@ int main(int argc, char **argv)
 			RSS_WARN("noise suppression failed: %d", ret);
 	}
 
-	bool hpf_enabled = rss_config_get_bool(cfg, "audio", "hpf_enabled", false);
+	bool hpf_enabled = rss_config_get_bool(dctx.cfg, "audio", "hpf_enabled", false);
 	if (hpf_enabled) {
 		ret = RSS_HAL_CALL(ops, audio_enable_hpf, hal_ctx);
 		if (ret == RSS_OK)
@@ -677,13 +597,13 @@ int main(int argc, char **argv)
 			RSS_WARN("high-pass filter failed: %d", ret);
 	}
 
-	bool agc_enabled = rss_config_get_bool(cfg, "audio", "agc_enabled", false);
+	bool agc_enabled = rss_config_get_bool(dctx.cfg, "audio", "agc_enabled", false);
 	if (agc_enabled) {
 		rss_agc_config_t agc_cfg = {
 			.target_level_dbfs =
-				rss_config_get_int(cfg, "audio", "agc_target_dbfs", 10),
+				rss_config_get_int(dctx.cfg, "audio", "agc_target_dbfs", 10),
 			.compression_gain_db =
-				rss_config_get_int(cfg, "audio", "agc_compression_db", 0),
+				rss_config_get_int(dctx.cfg, "audio", "agc_compression_db", 0),
 		};
 		ret = RSS_HAL_CALL(ops, audio_enable_agc, hal_ctx, &agc_cfg);
 		if (ret == RSS_OK)
@@ -695,7 +615,7 @@ int main(int argc, char **argv)
 #endif
 
 	/* ── Audio output (speaker) ── */
-	ao_enabled = rss_config_get_bool(cfg, "audio", "ao_enabled", false);
+	ao_enabled = rss_config_get_bool(dctx.cfg, "audio", "ao_enabled", false);
 
 	if (ao_enabled) {
 		rss_audio_config_t ao_cfg = {
@@ -709,15 +629,15 @@ int main(int argc, char **argv)
 			RSS_WARN("ao_init failed: %d (speaker disabled)", ret);
 			ao_enabled = false;
 		} else {
-			int ao_vol = rss_config_get_int(cfg, "audio", "ao_volume", 80);
-			int ao_gain_val = rss_config_get_int(cfg, "audio", "ao_gain", 25);
+			int ao_vol = rss_config_get_int(dctx.cfg, "audio", "ao_volume", 80);
+			int ao_gain_val = rss_config_get_int(dctx.cfg, "audio", "ao_gain", 25);
 			RSS_HAL_CALL(ops, ao_set_volume, hal_ctx, ao_vol);
 			RSS_HAL_CALL(ops, ao_set_gain, hal_ctx, ao_gain_val);
 
 			ao_ctx = (ao_thread_ctx_t){
 				.ops = ops,
 				.hal_ctx = hal_ctx,
-				.running = running,
+				.running = dctx.running,
 			};
 			if (pthread_create(&ao_tid, NULL, ao_playback_thread, &ao_ctx) == 0) {
 				ao_thread_started = true;
@@ -785,8 +705,8 @@ int main(int argc, char **argv)
 		 codec_str);
 
 	rad_ctrl_ctx_t ctrl_ctx = {
-		.cfg = cfg,
-		.config_path = config_path,
+		.cfg = dctx.cfg,
+		.config_path = dctx.config_path,
 		.ops = ops,
 		.hal_ctx = hal_ctx,
 		.ai_dev = ai_dev,
@@ -796,8 +716,8 @@ int main(int argc, char **argv)
 		.codec_id = codec_id,
 		.codec_str = codec_str,
 		.ao_enabled = ao_enabled,
-		.ao_volume = rss_config_get_int(cfg, "audio", "ao_volume", 80),
-		.ao_gain = rss_config_get_int(cfg, "audio", "ao_gain", 25),
+		.ao_volume = rss_config_get_int(dctx.cfg, "audio", "ao_volume", 80),
+		.ao_gain = rss_config_get_int(dctx.cfg, "audio", "ao_gain", 25),
 #ifdef RAPTOR_AUDIO_EFFECTS
 		.ns_enabled = ns_enabled,
 		.hpf_enabled = hpf_enabled,
@@ -808,7 +728,7 @@ int main(int argc, char **argv)
 	uint64_t frame_count = 0;
 	int64_t last_stats = rss_timestamp_us();
 
-	while (*running) {
+	while (*dctx.running) {
 		/* Check control socket (non-blocking) */
 		if (ctrl) {
 			int ctrl_fd = rss_ctrl_get_fd(ctrl);
@@ -942,7 +862,7 @@ cleanup:
 		RSS_HAL_CALL(ops, audio_deinit, hal_ctx);
 		rss_hal_destroy(hal_ctx);
 	}
-	rss_config_free(cfg);
+	rss_config_free(dctx.cfg);
 	rss_daemon_cleanup("rad");
 
 	return 0;
