@@ -60,8 +60,10 @@ typedef struct {
 	bool privacy_active;
 	volatile bool pipeline_ready; /* set after FS enable + encoder start */
 
+#define RVD_MAX_BIND_STAGES 5 /* FS [→ IVS] [→ OSD] → ENC + headroom */
+
 	/* Pipeline bind chain (for clean unbind at deinit) */
-	rss_cell_t bind_chain[RVD_MAX_STREAMS][4]; /* max 4 stages: FS→IVS→OSD→ENC */
+	rss_cell_t bind_chain[RVD_MAX_STREAMS][RVD_MAX_BIND_STAGES];
 	int bind_chain_len[RVD_MAX_STREAMS];
 
 	/* Control */

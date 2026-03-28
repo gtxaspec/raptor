@@ -478,7 +478,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 		int chn = st->streams[i].chn;
 		bool insert_ivs = (chn == 1 && st->ivs_active);
 
-		rss_cell_t chain[4];
+		rss_cell_t chain[RVD_MAX_BIND_STAGES];
 		int chain_len = 0;
 
 		chain[chain_len++] = (rss_cell_t){RSS_DEV_FS, chn, 0};

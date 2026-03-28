@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 #include <inttypes.h>
 #include <stdatomic.h>
 
@@ -25,7 +26,13 @@ int rvd_json_get_int(const char *json, const char *key, int *out)
 	p += strlen(pattern);
 	while (*p == ' ')
 		p++;
-	*out = (int)strtol(p, NULL, 10);
+	char *endp;
+	long val = strtol(p, &endp, 10);
+	if (endp == p)
+		return -1; /* no digits parsed */
+	if (val < INT_MIN || val > INT_MAX)
+		return -1; /* overflow */
+	*out = (int)val;
 	return 0;
 }
 
@@ -308,23 +315,26 @@ static int handle_config_cmd(const char *cmd_json, rvd_state_t *st, char *resp, 
 
 	if (strstr(cmd_json, "\"config-show\"")) {
 		int off = snprintf(resp, resp_size, "{\"status\":\"ok\",\"config\":{\"streams\":[");
-		for (int i = 0; i < st->stream_count; i++) {
+		for (int i = 0; i < st->stream_count && off < resp_size; i++) {
 			rvd_stream_t *s = &st->streams[i];
 			uint32_t avg_br = 0;
 			RSS_HAL_CALL(st->ops, enc_get_avg_bitrate, st->hal_ctx, s->chn, &avg_br);
-			off += snprintf(resp + off, resp_size - off,
-					"%s{\"chn\":%d,\"w\":%u,\"h\":%u,\"codec\":%u,"
-					"\"bitrate\":%u,\"avg_bitrate\":%u,\"gop\":%u,"
-					"\"fps\":%u,\"min_qp\":%d,\"max_qp\":%d,"
-					"\"rc_mode\":%u,\"profile\":%d}",
-					i > 0 ? "," : "", s->chn, s->enc_cfg.width,
-					s->enc_cfg.height, s->enc_cfg.codec, s->enc_cfg.bitrate,
-					avg_br, s->enc_cfg.gop_length, s->enc_cfg.fps_num,
-					s->enc_cfg.min_qp, s->enc_cfg.max_qp, s->enc_cfg.rc_mode,
-					s->enc_cfg.profile);
+			int n = snprintf(resp + off, resp_size - off,
+					 "%s{\"chn\":%d,\"w\":%u,\"h\":%u,\"codec\":%u,"
+					 "\"bitrate\":%u,\"avg_bitrate\":%u,\"gop\":%u,"
+					 "\"fps\":%u,\"min_qp\":%d,\"max_qp\":%d,"
+					 "\"rc_mode\":%u,\"profile\":%d}",
+					 i > 0 ? "," : "", s->chn, s->enc_cfg.width,
+					 s->enc_cfg.height, s->enc_cfg.codec, s->enc_cfg.bitrate,
+					 avg_br, s->enc_cfg.gop_length, s->enc_cfg.fps_num,
+					 s->enc_cfg.min_qp, s->enc_cfg.max_qp, s->enc_cfg.rc_mode,
+					 s->enc_cfg.profile);
+			if (n > 0 && off + n < resp_size)
+				off += n;
 		}
-		snprintf(resp + off, resp_size - off, "],\"config_path\":\"%s\"}}",
-			 st->config_path);
+		if (off < resp_size)
+			snprintf(resp + off, resp_size - off, "],\"config_path\":\"%s\"}}",
+				 st->config_path);
 		return 1;
 	}
 
@@ -343,21 +353,24 @@ static int handle_config_cmd(const char *cmd_json, rvd_state_t *st, char *resp, 
 
 	if (strstr(cmd_json, "\"status\"")) {
 		int off = snprintf(resp, resp_size, "{\"status\":\"ok\",\"streams\":[");
-		for (int i = 0; i < st->stream_count; i++) {
+		for (int i = 0; i < st->stream_count && off < resp_size; i++) {
 			uint32_t avg_br = 0;
 			RSS_HAL_CALL(st->ops, enc_get_avg_bitrate, st->hal_ctx, st->streams[i].chn,
 				     &avg_br);
-			off += snprintf(resp + off, resp_size - off,
-					"%s{\"chn\":%d,\"w\":%u,\"h\":%u,\"codec\":%u,"
-					"\"bitrate\":%u,\"avg_bitrate\":%u,\"gop\":%u,"
-					"\"fps\":%u}",
-					i > 0 ? "," : "", st->streams[i].chn,
-					st->streams[i].enc_cfg.width, st->streams[i].enc_cfg.height,
-					st->streams[i].enc_cfg.codec, st->streams[i].enc_cfg.bitrate,
-					avg_br, st->streams[i].enc_cfg.gop_length,
-					st->streams[i].enc_cfg.fps_num);
+			int n = snprintf(resp + off, resp_size - off,
+					 "%s{\"chn\":%d,\"w\":%u,\"h\":%u,\"codec\":%u,"
+					 "\"bitrate\":%u,\"avg_bitrate\":%u,\"gop\":%u,"
+					 "\"fps\":%u}",
+					 i > 0 ? "," : "", st->streams[i].chn,
+					 st->streams[i].enc_cfg.width, st->streams[i].enc_cfg.height,
+					 st->streams[i].enc_cfg.codec, st->streams[i].enc_cfg.bitrate,
+					 avg_br, st->streams[i].enc_cfg.gop_length,
+					 st->streams[i].enc_cfg.fps_num);
+			if (n > 0 && off + n < resp_size)
+				off += n;
 		}
-		snprintf(resp + off, resp_size - off, "]}");
+		if (off < resp_size)
+			snprintf(resp + off, resp_size - off, "]}");
 		return 1;
 	}
 
