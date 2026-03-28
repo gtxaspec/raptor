@@ -92,6 +92,12 @@ $CC $CFLAGS -c "$RAPTOR_DIR/ric/ric_daynight.c" -o "$OUT/ric_daynight.o"
 $CC -o "$OUT/ric" "$OUT/ric_main.o" "$OUT/ric_daynight.o" $LIBS $LDFLAGS
 echo "  -> ric"
 
+echo "=== RMD ==="
+$CC $CFLAGS -c "$RAPTOR_DIR/rmd/rmd_main.c" -o "$OUT/rmd_main.o"
+$CC $CFLAGS -c "$RAPTOR_DIR/rmd/rmd_actions.c" -o "$OUT/rmd_actions.o"
+$CC -o "$OUT/rmd" "$OUT/rmd_main.o" "$OUT/rmd_actions.o" $LIBS $LDFLAGS
+echo "  -> rmd"
+
 echo "=== ROD ==="
 $CC $CFLAGS -c "$RAPTOR_DIR/rod/rod_main.c" -o "$OUT/rod_main.o"
 $CC $CFLAGS -c "$RAPTOR_DIR/rod/rod_render.c" -o "$OUT/rod_render.o"
@@ -122,8 +128,10 @@ echo "=== RVD (mock HAL) ==="
 $CC $CFLAGS $HAL_CFLAGS -c "$RAPTOR_DIR/rvd/rvd_main.c" -o "$OUT/rvd_main.o"
 $CC $CFLAGS $HAL_CFLAGS -c "$RAPTOR_DIR/rvd/rvd_pipeline.c" -o "$OUT/rvd_pipeline.o"
 $CC $CFLAGS $HAL_CFLAGS -c "$RAPTOR_DIR/rvd/rvd_frame_loop.c" -o "$OUT/rvd_frame_loop.o"
+$CC $CFLAGS $HAL_CFLAGS -c "$RAPTOR_DIR/rvd/rvd_ctrl.c" -o "$OUT/rvd_ctrl.o"
 $CC $CFLAGS $HAL_CFLAGS -c "$RAPTOR_DIR/rvd/rvd_osd.c" -o "$OUT/rvd_osd.o"
-$CC -o "$OUT/rvd" "$OUT"/rvd_main.o "$OUT"/rvd_pipeline.o "$OUT"/rvd_frame_loop.o "$OUT"/rvd_osd.o $LIBS_HAL $LDFLAGS
+$CC $CFLAGS $HAL_CFLAGS -c "$RAPTOR_DIR/rvd/rvd_ivs.c" -o "$OUT/rvd_ivs.o"
+$CC -o "$OUT/rvd" "$OUT"/rvd_main.o "$OUT"/rvd_pipeline.o "$OUT"/rvd_frame_loop.o "$OUT"/rvd_ctrl.o "$OUT"/rvd_osd.o "$OUT"/rvd_ivs.o $LIBS_HAL $LDFLAGS
 echo "  -> rvd"
 
 echo "=== RAD (mock HAL) ==="
@@ -133,11 +141,16 @@ echo "  -> rad"
 
 # ── Test helpers ──
 
+echo "=== rac ==="
+$CC $CFLAGS -c "$RAPTOR_DIR/rac/rac.c" -o "$OUT/rac.o"
+$CC -o "$OUT/rac" "$OUT/rac.o" $LIBS $LDFLAGS
+echo "  -> rac"
+
 echo "=== create_rings ==="
 $CC $CFLAGS -c "$RAPTOR_DIR/tests/create_rings.c" -o "$OUT/create_rings.o"
 $CC -o "$OUT/create_rings" "$OUT/create_rings.o" $LIBS $LDFLAGS
 echo "  -> create_rings"
 
 echo ""
-echo "Done. All 8 binaries in asan-out/"
-ls -1 "$OUT"/rvd "$OUT"/rsd "$OUT"/rad "$OUT"/rhd "$OUT"/rod "$OUT"/ric "$OUT"/raptorctl "$OUT"/ringdump "$OUT"/create_rings 2>/dev/null | while read f; do echo "  $(basename $f)"; done
+echo "Done. All binaries in asan-out/"
+ls -1 "$OUT"/rvd "$OUT"/rsd "$OUT"/rad "$OUT"/rhd "$OUT"/rod "$OUT"/ric "$OUT"/rmd "$OUT"/rmr "$OUT"/raptorctl "$OUT"/ringdump "$OUT"/rac "$OUT"/create_rings 2>/dev/null | while read f; do echo "  $(basename $f)"; done
