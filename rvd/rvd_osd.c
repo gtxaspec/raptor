@@ -118,6 +118,12 @@ static bool create_region(rvd_state_t *st, int s, int r, uint32_t w, uint32_t h)
 	w = (w + 1) & ~1;
 	h = (h + 1) & ~1;
 
+	/* Sanity check — prevent huge allocation from bad config */
+	if (w > 4096 || h > 4096 || w == 0 || h == 0) {
+		RSS_WARN("osd region s%d/%s: bad dimensions %ux%u", s, region_names[r], w, h);
+		return false;
+	}
+
 	uint32_t buf_size = w * h * 4;
 	reg->local_buf = calloc(1, buf_size); /* transparent (all zeros) */
 	if (!reg->local_buf)

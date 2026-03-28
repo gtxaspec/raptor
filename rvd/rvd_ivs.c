@@ -93,7 +93,8 @@ int rvd_ivs_start(rvd_state_t *st)
 				snprintf(key, sizeof(key), "roi%d", i);
 				const char *val = rss_config_get_str(cfg, "motion", key, "");
 				int x0 = 0, y0 = 0, x1 = w - 1, y1 = h - 1;
-				sscanf(val, "%d,%d,%d,%d", &x0, &y0, &x1, &y1);
+				if (sscanf(val, "%d,%d,%d,%d", &x0, &y0, &x1, &y1) < 4)
+					RSS_WARN("IVS: roi%d incomplete, using defaults", i);
 				mp.roi[i] = (rss_rect_t){x0, y0, x1, y1};
 				mp.sense[i] = sensitivity > 4 ? 4 : sensitivity;
 			}
@@ -101,7 +102,8 @@ int rvd_ivs_start(rvd_state_t *st)
 			/* Auto grid — default 4x4 */
 			const char *grid_str = rss_config_get_str(cfg, "motion", "grid", "4x4");
 			int gx = 4, gy = 4;
-			sscanf(grid_str, "%dx%d", &gx, &gy);
+			if (sscanf(grid_str, "%dx%d", &gx, &gy) < 2)
+				RSS_WARN("IVS: invalid grid '%s', using 4x4", grid_str);
 			if (gx < 1) gx = 1;
 			if (gy < 1) gy = 1;
 			if (gx * gy > RSS_IVS_MAX_ROI) { gx = 4; gy = 4; }
