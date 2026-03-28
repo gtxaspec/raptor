@@ -370,33 +370,14 @@ int rsd_server_init(rsd_server_t *srv)
 	return 0;
 }
 
-static int json_get_str(const char *json, const char *key, char *buf, int bufsz)
-{
-	char pattern[64];
-	snprintf(pattern, sizeof(pattern), "\"%s\":\"", key);
-	const char *p = strstr(json, pattern);
-	if (!p)
-		return -1;
-	p += strlen(pattern);
-	const char *end = strchr(p, '"');
-	if (!end)
-		return -1;
-	int len = (int)(end - p);
-	if (len >= bufsz)
-		len = bufsz - 1;
-	memcpy(buf, p, len);
-	buf[len] = '\0';
-	return 0;
-}
-
 static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, void *userdata)
 {
 	rsd_server_t *srv = userdata;
 
 	if (strstr(cmd_json, "\"config-get\"")) {
 		char section[64], key[64];
-		if (json_get_str(cmd_json, "section", section, sizeof(section)) == 0 &&
-		    json_get_str(cmd_json, "key", key, sizeof(key)) == 0) {
+		if (rss_json_get_str(cmd_json, "section", section, sizeof(section)) == 0 &&
+		    rss_json_get_str(cmd_json, "key", key, sizeof(key)) == 0) {
 			const char *v = rss_config_get_str(srv->cfg, section, key, NULL);
 			if (v)
 				snprintf(resp_buf, resp_buf_size, "%s", v);

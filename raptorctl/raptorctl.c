@@ -356,7 +356,7 @@ int main(int argc, char **argv)
 	if (strcmp(argv[1], "test-motion") == 0) {
 		int dur = 10;
 		if (argc >= 3)
-			dur = atoi(argv[2]);
+			dur = (int)strtol(argv[2], NULL, 10);
 		if (dur < 1) dur = 1;
 		if (dur > 300) dur = 300;
 

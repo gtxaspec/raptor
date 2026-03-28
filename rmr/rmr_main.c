@@ -15,10 +15,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <inttypes.h>
-#include <getopt.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <sys/epoll.h>
 
 #include "rmr.h"
 
@@ -617,17 +615,6 @@ clip_handling:
 
 /* ── Entry point ── */
 
-static void usage(const char *prog)
-{
-	fprintf(stderr,
-		"Usage: %s [options]\n"
-		"  -c <file>   Config file (default: /etc/raptor.conf)\n"
-		"  -f          Run in foreground\n"
-		"  -d          Debug logging\n"
-		"  -h          Show this help\n",
-		prog);
-}
-
 /* Compute next power of 2 >= n */
 static uint32_t next_pow2(uint32_t n)
 {
@@ -644,66 +631,29 @@ static uint32_t next_pow2(uint32_t n)
 
 int main(int argc, char **argv)
 {
-	const char *config_path = "/etc/raptor.conf";
-	bool foreground = false;
-	bool debug = false;
-	int opt;
+	rss_daemon_ctx_t dctx;
+	int ret = rss_daemon_init(&dctx, "rmr", argc, argv);
+	if (ret != 0)
+		return ret < 0 ? 1 : 0;
 
-	while ((opt = getopt(argc, argv, "c:fdh")) != -1) {
-		switch (opt) {
-		case 'c':
-			config_path = optarg;
-			break;
-		case 'f':
-			foreground = true;
-			break;
-		case 'd':
-			debug = true;
-			break;
-		case 'h':
-			usage(argv[0]);
-			return 0;
-		default:
-			usage(argv[0]);
-			return 1;
-		}
-	}
-
-	rss_log_init("rmr", debug ? RSS_LOG_DEBUG : RSS_LOG_INFO,
-		     foreground ? RSS_LOG_TARGET_STDERR : RSS_LOG_TARGET_SYSLOG, NULL);
-
-	rss_config_t *cfg = rss_config_load(config_path);
-	if (!cfg) {
-		RSS_FATAL("failed to load config: %s", config_path);
-		return 1;
-	}
-
-	if (!rss_config_get_bool(cfg, "recording", "enabled", false)) {
+	if (!rss_config_get_bool(dctx.cfg, "recording", "enabled", false)) {
 		RSS_INFO("recording disabled in config");
-		rss_config_free(cfg);
+		rss_config_free(dctx.cfg);
+		rss_daemon_cleanup("rmr");
 		return 0;
 	}
 
-	if (rss_daemonize("rmr", foreground) < 0) {
-		RSS_FATAL("daemonize failed");
-		rss_config_free(cfg);
-		return 1;
-	}
-
-	volatile sig_atomic_t *running = rss_signal_init();
-	RSS_INFO("rmr starting");
-
 	rmr_state_t st = {0};
-	st.cfg = cfg;
-	st.config_path = config_path;
-	st.running = running;
+	st.cfg = dctx.cfg;
+	st.config_path = dctx.config_path;
+	st.running = dctx.running;
 	st.segment_fd = -1;
 	st.clip_fd = -1;
-	st.stream_idx = rss_config_get_int(cfg, "recording", "stream", 0);
-	st.audio_enabled = rss_config_get_bool(cfg, "recording", "audio", true);
+	st.stream_idx = rss_config_get_int(dctx.cfg, "recording", "stream", 0);
+	st.audio_enabled = rss_config_get_bool(dctx.cfg, "recording", "audio", true);
 
 	/* Parse recording mode */
-	const char *mode_str = rss_config_get_str(cfg, "recording", "mode", "continuous");
+	const char *mode_str = rss_config_get_str(dctx.cfg, "recording", "mode", "continuous");
 	if (strcmp(mode_str, "motion") == 0)
 		st.mode = RMR_MODE_MOTION;
 	else if (strcmp(mode_str, "both") == 0)
@@ -711,17 +661,17 @@ int main(int argc, char **argv)
 	else
 		st.mode = RMR_MODE_CONTINUOUS;
 
-	st.prebuffer_sec = rss_config_get_int(cfg, "recording", "prebuffer_sec", 5);
+	st.prebuffer_sec = rss_config_get_int(dctx.cfg, "recording", "prebuffer_sec", 5);
 	if (st.prebuffer_sec < 0) st.prebuffer_sec = 0;
 	if (st.prebuffer_sec > 5) st.prebuffer_sec = 5;
 
-	st.clip_length_sec = rss_config_get_int(cfg, "recording", "clip_length_sec", 60);
+	st.clip_length_sec = rss_config_get_int(dctx.cfg, "recording", "clip_length_sec", 60);
 
 	/* Open video ring */
 	const char *ring_names[] = {"main", "sub"};
 	const char *ring_name = ring_names[st.stream_idx < 2 ? st.stream_idx : 0];
 
-	for (int attempt = 0; attempt < 30 && *running; attempt++) {
+	for (int attempt = 0; attempt < 30 && *st.running; attempt++) {
 		st.video_ring = rss_ring_open(ring_name);
 		if (st.video_ring)
 			break;
@@ -772,7 +722,7 @@ int main(int argc, char **argv)
 		uint32_t v_frames = fps * (uint32_t)st.prebuffer_sec + fps; /* +1s margin */
 		uint32_t v_slots = next_pow2(v_frames);
 		/* Data size: bitrate * prebuffer_sec * 2.5 (headroom for I-frames) / 8 */
-		uint32_t bps = rss_config_get_int(cfg, "stream0", "bitrate", 2000000);
+		uint32_t bps = rss_config_get_int(dctx.cfg, "stream0", "bitrate", 2000000);
 		uint64_t v_data = (uint64_t)bps * (uint32_t)st.prebuffer_sec * 5 / 2 / 8;
 		if (v_data < 1024 * 1024) v_data = 1024 * 1024;  /* min 1MB */
 		if (v_data > 10 * 1024 * 1024) v_data = 10 * 1024 * 1024; /* max 10MB */
@@ -803,10 +753,10 @@ int main(int argc, char **argv)
 
 	/* Storage */
 	rmr_storage_config_t scfg = {
-		.base_path = rss_config_get_str(cfg, "recording", "storage_path",
+		.base_path = rss_config_get_str(dctx.cfg, "recording", "storage_path",
 						"/mnt/mmcblk0p1/raptor"),
-		.segment_minutes = rss_config_get_int(cfg, "recording", "segment_minutes", 5),
-		.max_storage_mb = rss_config_get_int(cfg, "recording", "max_storage_mb", 0),
+		.segment_minutes = rss_config_get_int(dctx.cfg, "recording", "segment_minutes", 5),
+		.max_storage_mb = rss_config_get_int(dctx.cfg, "recording", "max_storage_mb", 0),
 	};
 	st.storage = rmr_storage_create(&scfg);
 	if (!st.storage) {
@@ -824,12 +774,12 @@ int main(int argc, char **argv)
 	if (st.mode == RMR_MODE_BOTH || st.mode == RMR_MODE_MOTION) {
 		char clip_path[280];
 		snprintf(clip_path, sizeof(clip_path), "%s/clips",
-			 rss_config_get_str(cfg, "recording", "storage_path",
+			 rss_config_get_str(dctx.cfg, "recording", "storage_path",
 					    "/mnt/mmcblk0p1/raptor"));
 		rmr_storage_config_t ccfg = {
 			.base_path = clip_path,
 			.segment_minutes = (st.clip_length_sec + 59) / 60,
-			.max_storage_mb = rss_config_get_int(cfg, "recording", "clip_max_mb", 100),
+			.max_storage_mb = rss_config_get_int(dctx.cfg, "recording", "clip_max_mb", 100),
 		};
 		if (ccfg.segment_minutes < 1)
 			ccfg.segment_minutes = 1;
@@ -868,7 +818,7 @@ cleanup:
 		rmr_prebuf_destroy(st.audio_pb);
 	free(st.frame_buf);
 	free(st.avcc_buf);
-	rss_config_free(cfg);
+	rss_config_free(dctx.cfg);
 
 	rss_daemon_cleanup("rmr");
 

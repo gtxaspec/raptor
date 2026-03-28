@@ -14,7 +14,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <getopt.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/socket.h>
@@ -173,7 +172,7 @@ static bool http_check_auth(const rhd_server_t *srv, const char *request)
 		return false;
 	*colon = '\0';
 
-	return strcmp(decoded, srv->auth_user) == 0 && strcmp(colon + 1, srv->auth_pass) == 0;
+	return rss_secure_compare(decoded, srv->auth_user) && rss_secure_compare(colon + 1, srv->auth_pass);
 }
 
 static void http_send_mjpeg_header(int fd)
@@ -291,8 +290,9 @@ static int parse_stream_param(const char *path)
 {
 	const char *p = strstr(path, "stream=");
 	if (p) {
-		int v = atoi(p + 7);
-		if (v >= 0 && v < RHD_MAX_JPEG)
+		char *end;
+		int v = (int)strtol(p + 7, &end, 10);
+		if (end != p + 7 && v >= 0 && v < RHD_MAX_JPEG)
 			return v;
 	}
 	return 0;
@@ -560,77 +560,29 @@ static void server_run(rhd_server_t *srv)
 
 /* ── Entry point ── */
 
-static void usage(const char *prog)
-{
-	fprintf(stderr,
-		"Usage: %s [options]\n"
-		"  -c <file>   Config file (default: /etc/raptor.conf)\n"
-		"  -f          Run in foreground\n"
-		"  -d          Debug logging\n"
-		"  -h          Show this help\n",
-		prog);
-}
-
 int main(int argc, char **argv)
 {
-	const char *config_path = "/etc/raptor.conf";
-	bool foreground = false;
-	bool debug = false;
-	int opt;
+	rss_daemon_ctx_t ctx;
+	int ret = rss_daemon_init(&ctx, "rhd", argc, argv);
+	if (ret != 0)
+		return ret < 0 ? 1 : 0;
 
-	while ((opt = getopt(argc, argv, "c:fdh")) != -1) {
-		switch (opt) {
-		case 'c':
-			config_path = optarg;
-			break;
-		case 'f':
-			foreground = true;
-			break;
-		case 'd':
-			debug = true;
-			break;
-		case 'h':
-			usage(argv[0]);
-			return 0;
-		default:
-			usage(argv[0]);
-			return 1;
-		}
-	}
-
-	rss_log_init("rhd", debug ? RSS_LOG_DEBUG : RSS_LOG_INFO,
-		     foreground ? RSS_LOG_TARGET_STDERR : RSS_LOG_TARGET_SYSLOG, NULL);
-
-	rss_config_t *cfg = rss_config_load(config_path);
-	if (!cfg) {
-		RSS_FATAL("failed to load config: %s", config_path);
-		return 1;
-	}
-
-	if (!rss_config_get_bool(cfg, "http", "enabled", true)) {
+	if (!rss_config_get_bool(ctx.cfg, "http", "enabled", true)) {
 		RSS_INFO("HTTP disabled in config");
-		rss_config_free(cfg);
+		rss_config_free(ctx.cfg);
+		rss_daemon_cleanup("rhd");
 		return 0;
 	}
 
-	if (rss_daemonize("rhd", foreground) < 0) {
-		RSS_FATAL("daemonize failed");
-		rss_config_free(cfg);
-		return 1;
-	}
-
-	volatile sig_atomic_t *running = rss_signal_init();
-	RSS_INFO("rhd starting");
-
 	rhd_server_t srv = {0};
-	srv.cfg = cfg;
-	srv.config_path = config_path;
-	srv.running = running;
-	srv.port = rss_config_get_int(cfg, "http", "port", 8080);
+	srv.cfg = ctx.cfg;
+	srv.config_path = ctx.config_path;
+	srv.running = ctx.running;
+	srv.port = rss_config_get_int(ctx.cfg, "http", "port", 8080);
 
 	/* Basic auth — enabled when both username and password are set */
-	const char *http_user = rss_config_get_str(cfg, "http", "username", "");
-	const char *http_pass = rss_config_get_str(cfg, "http", "password", "");
+	const char *http_user = rss_config_get_str(ctx.cfg, "http", "username", "");
+	const char *http_pass = rss_config_get_str(ctx.cfg, "http", "password", "");
 	if (http_user[0] && http_pass[0]) {
 		strncpy(srv.auth_user, http_user, sizeof(srv.auth_user) - 1);
 		strncpy(srv.auth_pass, http_pass, sizeof(srv.auth_pass) - 1);
@@ -638,14 +590,14 @@ int main(int argc, char **argv)
 	}
 
 	if (server_init(&srv) < 0) {
-		rss_config_free(cfg);
+		rss_config_free(ctx.cfg);
 		return 1;
 	}
 
 	server_run(&srv);
 
 	RSS_INFO("rhd shutting down");
-	rss_config_free(cfg);
+	rss_config_free(ctx.cfg);
 	rss_daemon_cleanup("rhd");
 
 	return 0;

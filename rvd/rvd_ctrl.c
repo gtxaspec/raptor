@@ -14,47 +14,6 @@
 
 #include "rvd.h"
 
-/* ── JSON helpers ── */
-
-int rvd_json_get_int(const char *json, const char *key, int *out)
-{
-	char pattern[64];
-	snprintf(pattern, sizeof(pattern), "\"%s\":", key);
-	const char *p = strstr(json, pattern);
-	if (!p)
-		return -1;
-	p += strlen(pattern);
-	while (*p == ' ')
-		p++;
-	char *endp;
-	long val = strtol(p, &endp, 10);
-	if (endp == p)
-		return -1; /* no digits parsed */
-	if (val < INT_MIN || val > INT_MAX)
-		return -1; /* overflow */
-	*out = (int)val;
-	return 0;
-}
-
-int rvd_json_get_str(const char *json, const char *key, char *buf, int bufsz)
-{
-	char pattern[64];
-	snprintf(pattern, sizeof(pattern), "\"%s\":\"", key);
-	const char *p = strstr(json, pattern);
-	if (!p)
-		return -1;
-	p += strlen(pattern);
-	const char *end = strchr(p, '"');
-	if (!end)
-		return -1;
-	int len = (int)(end - p);
-	if (len >= bufsz)
-		len = bufsz - 1;
-	memcpy(buf, p, len);
-	buf[len] = '\0';
-	return 0;
-}
-
 /* ── Helpers ── */
 
 /*
@@ -76,7 +35,7 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 
 	if (strstr(cmd_json, "\"request-idr\"")) {
 		int target = -1;
-		rvd_json_get_int(cmd_json, "channel", &target);
+		rss_json_get_int(cmd_json, "channel", &target);
 		for (int i = 0; i < st->stream_count; i++) {
 			if (target >= 0 && i != target)
 				continue;
@@ -87,8 +46,8 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 	}
 
 	if (strstr(cmd_json, "\"set-bitrate\"")) {
-		if (rvd_json_get_int(cmd_json, "channel", &chn) == 0 &&
-		    rvd_json_get_int(cmd_json, "value", &val) == 0 && chn >= 0 &&
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
+		    rss_json_get_int(cmd_json, "value", &val) == 0 && chn >= 0 &&
 		    chn < st->stream_count) {
 			int ret = RSS_HAL_CALL(st->ops, enc_set_bitrate, st->hal_ctx,
 					       st->streams[chn].chn, val);
@@ -105,8 +64,8 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 	}
 
 	if (strstr(cmd_json, "\"set-gop\"")) {
-		if (rvd_json_get_int(cmd_json, "channel", &chn) == 0 &&
-		    rvd_json_get_int(cmd_json, "value", &val) == 0 && chn >= 0 &&
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
+		    rss_json_get_int(cmd_json, "value", &val) == 0 && chn >= 0 &&
 		    chn < st->stream_count) {
 			int ret = RSS_HAL_CALL(st->ops, enc_set_gop, st->hal_ctx,
 					       st->streams[chn].chn, val);
@@ -123,8 +82,8 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 	}
 
 	if (strstr(cmd_json, "\"set-fps\"")) {
-		if (rvd_json_get_int(cmd_json, "channel", &chn) == 0 &&
-		    rvd_json_get_int(cmd_json, "value", &val) == 0 && chn >= 0 &&
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
+		    rss_json_get_int(cmd_json, "value", &val) == 0 && chn >= 0 &&
 		    chn < st->stream_count) {
 			int ret = RSS_HAL_CALL(st->ops, enc_set_fps, st->hal_ctx,
 					       st->streams[chn].chn, val, 1);
@@ -141,9 +100,9 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 	}
 
 	if (strstr(cmd_json, "\"set-qp-bounds\"")) {
-		if (rvd_json_get_int(cmd_json, "channel", &chn) == 0 &&
-		    rvd_json_get_int(cmd_json, "min", &val) == 0 &&
-		    rvd_json_get_int(cmd_json, "max", &val2) == 0 && chn >= 0 &&
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
+		    rss_json_get_int(cmd_json, "min", &val) == 0 &&
+		    rss_json_get_int(cmd_json, "max", &val2) == 0 && chn >= 0 &&
 		    chn < st->stream_count) {
 			int ret = RSS_HAL_CALL(st->ops, enc_set_qp_bounds, st->hal_ctx,
 					       st->streams[chn].chn, val, val2);
@@ -172,7 +131,7 @@ static int handle_isp_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 
 #define ISP_SET(name, fn)                                                                          \
 	if (strstr(cmd_json, "\"" name "\"")) {                                                    \
-		if (rvd_json_get_int(cmd_json, "value", &val) == 0) {                              \
+		if (rss_json_get_int(cmd_json, "value", &val) == 0) {                              \
 			int ret = RSS_HAL_CALL(st->ops, fn, st->hal_ctx, val);                     \
 			snprintf(resp, resp_size, "{\"status\":\"%s\"}",                            \
 				 ret == 0 ? "ok" : "error");                                       \
@@ -238,7 +197,7 @@ static int handle_isp_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 
 	if (strstr(cmd_json, "\"set-running-mode\"")) {
 		char mode_str[8];
-		if (rvd_json_get_str(cmd_json, "value", mode_str, sizeof(mode_str)) == 0) {
+		if (rss_json_get_str(cmd_json, "value", mode_str, sizeof(mode_str)) == 0) {
 			int mode = (strcmp(mode_str, "night") == 0) ? 1 : 0;
 			RSS_HAL_CALL(st->ops, isp_set_running_mode, st->hal_ctx, mode);
 			snprintf(resp, resp_size, "{\"status\":\"ok\",\"mode\":\"%s\"}",
@@ -267,7 +226,7 @@ static int handle_ivs_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 
 	if (strstr(cmd_json, "\"ivs-set-sensitivity\"")) {
 		int sens = -1;
-		if (rvd_json_get_int(cmd_json, "value", &sens) == 0 && st->ivs_active && sens >= 0) {
+		if (rss_json_get_int(cmd_json, "value", &sens) == 0 && st->ivs_active && sens >= 0) {
 			rss_ivs_move_param_t mp;
 			memset(&mp, 0, sizeof(mp));
 			if (RSS_HAL_CALL(st->ops, ivs_get_param, st->hal_ctx, st->ivs_chn, &mp) == 0) {
@@ -292,8 +251,8 @@ static int handle_config_cmd(const char *cmd_json, rvd_state_t *st, char *resp, 
 {
 	if (strstr(cmd_json, "\"config-get\"")) {
 		char section[64], key[64];
-		if (rvd_json_get_str(cmd_json, "section", section, sizeof(section)) == 0 &&
-		    rvd_json_get_str(cmd_json, "key", key, sizeof(key)) == 0) {
+		if (rss_json_get_str(cmd_json, "section", section, sizeof(section)) == 0 &&
+		    rss_json_get_str(cmd_json, "key", key, sizeof(key)) == 0) {
 			const char *v = rss_config_get_str(st->cfg, section, key, NULL);
 			if (v)
 				snprintf(resp, resp_size, "%s", v);
@@ -341,7 +300,7 @@ static int handle_config_cmd(const char *cmd_json, rvd_state_t *st, char *resp, 
 	if (strstr(cmd_json, "\"privacy\"")) {
 		char val_str[8];
 		bool enable;
-		if (rvd_json_get_str(cmd_json, "value", val_str, sizeof(val_str)) == 0)
+		if (rss_json_get_str(cmd_json, "value", val_str, sizeof(val_str)) == 0)
 			enable = (strcmp(val_str, "on") == 0 || strcmp(val_str, "1") == 0);
 		else
 			enable = !st->privacy_active;

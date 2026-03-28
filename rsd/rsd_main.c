@@ -6,7 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <getopt.h>
 
 #include "rsd.h"
 
@@ -38,86 +37,37 @@ static Compy_Auth *rsd_auth_new(const char *username, const char *password)
 	return Compy_Auth_new("Raptor", rsd_credential_lookup, &g_creds);
 }
 
-static void usage(const char *prog)
-{
-	fprintf(stderr,
-		"Usage: %s [options]\n"
-		"  -c <file>   Config file (default: /etc/raptor.conf)\n"
-		"  -f          Run in foreground\n"
-		"  -d          Debug logging\n"
-		"  -h          Show this help\n",
-		prog);
-}
-
 int main(int argc, char **argv)
 {
-	const char *config_path = "/etc/raptor.conf";
-	bool foreground = false;
-	bool debug = false;
-	int opt;
-
-	while ((opt = getopt(argc, argv, "c:fdh")) != -1) {
-		switch (opt) {
-		case 'c':
-			config_path = optarg;
-			break;
-		case 'f':
-			foreground = true;
-			break;
-		case 'd':
-			debug = true;
-			break;
-		case 'h':
-			usage(argv[0]);
-			return 0;
-		default:
-			usage(argv[0]);
-			return 1;
-		}
-	}
-
 	/* Seed PRNG for SSRC generation (compy requirement) */
 	srand(time(NULL));
 
-	rss_log_init("rsd", debug ? RSS_LOG_DEBUG : RSS_LOG_INFO,
-		     foreground ? RSS_LOG_TARGET_STDERR : RSS_LOG_TARGET_SYSLOG, NULL);
+	rss_daemon_ctx_t dctx;
+	int ret = rss_daemon_init(&dctx, "rsd", argc, argv);
+	if (ret != 0)
+		return ret < 0 ? 1 : 0;
 
-	rss_config_t *cfg = rss_config_load(config_path);
-	if (!cfg) {
-		RSS_FATAL("failed to load config: %s", config_path);
-		return 1;
-	}
-
-	if (!rss_config_get_bool(cfg, "rtsp", "enabled", true)) {
+	if (!rss_config_get_bool(dctx.cfg, "rtsp", "enabled", true)) {
 		RSS_INFO("RTSP disabled in config");
-		rss_config_free(cfg);
+		rss_config_free(dctx.cfg);
+		rss_daemon_cleanup("rsd");
 		return 0;
 	}
 
-	if (rss_daemonize("rsd", foreground) < 0) {
-		RSS_FATAL("daemonize failed");
-		rss_config_free(cfg);
-		return 1;
-	}
-
-	volatile sig_atomic_t *running = rss_signal_init();
-
-	RSS_INFO("rsd starting");
-
 	rsd_server_t srv = {0};
-	srv.cfg = cfg;
-	srv.config_path = config_path;
-	srv.running = running;
-	srv.port = rss_config_get_int(cfg, "rtsp", "port", 554);
-	rss_strlcpy(srv.endpoint_main, rss_config_get_str(cfg, "rtsp", "endpoint_main", ""),
+	srv.cfg = dctx.cfg;
+	srv.config_path = dctx.config_path;
+	srv.running = dctx.running;
+	srv.port = rss_config_get_int(dctx.cfg, "rtsp", "port", 554);
+	rss_strlcpy(srv.endpoint_main, rss_config_get_str(dctx.cfg, "rtsp", "endpoint_main", ""),
 		    sizeof(srv.endpoint_main));
-	rss_strlcpy(srv.endpoint_sub, rss_config_get_str(cfg, "rtsp", "endpoint_sub", ""),
+	rss_strlcpy(srv.endpoint_sub, rss_config_get_str(dctx.cfg, "rtsp", "endpoint_sub", ""),
 		    sizeof(srv.endpoint_sub));
 	pthread_mutex_init(&srv.clients_lock, NULL);
 
 	/* Digest auth — enabled when both username and password are set */
-	const char *rtsp_user = rss_config_get_str(cfg, "rtsp", "username", "");
-	const char *rtsp_pass = rss_config_get_str(cfg, "rtsp", "password", "");
+	const char *rtsp_user = rss_config_get_str(dctx.cfg, "rtsp", "username", "");
+	const char *rtsp_pass = rss_config_get_str(dctx.cfg, "rtsp", "password", "");
 	if (rtsp_user[0] && rtsp_pass[0]) {
 		srv.auth = rsd_auth_new(rtsp_user, rtsp_pass);
 		if (srv.auth)
@@ -128,14 +78,14 @@ int main(int argc, char **argv)
 
 #ifdef COMPY_HAS_TLS
 	/* RTSPS — enabled when tls = true and cert/key paths are set */
-	const char *tls_cert = rss_config_get_str(cfg, "rtsp", "tls_cert", "");
-	const char *tls_key = rss_config_get_str(cfg, "rtsp", "tls_key", "");
-	if (rss_config_get_bool(cfg, "rtsp", "tls", false) && tls_cert[0] && tls_key[0]) {
+	const char *tls_cert = rss_config_get_str(dctx.cfg, "rtsp", "tls_cert", "");
+	const char *tls_key = rss_config_get_str(dctx.cfg, "rtsp", "tls_key", "");
+	if (rss_config_get_bool(dctx.cfg, "rtsp", "tls", false) && tls_cert[0] && tls_key[0]) {
 		Compy_TlsConfig tls_cfg = {.cert_path = tls_cert, .key_path = tls_key};
 		srv.tls_ctx = Compy_TlsContext_new(tls_cfg);
 		if (srv.tls_ctx) {
 			/* RTSPS: use tls_port if set, otherwise fall back to port */
-			srv.port = rss_config_get_int(cfg, "rtsp", "tls_port", srv.port);
+			srv.port = rss_config_get_int(dctx.cfg, "rtsp", "tls_port", srv.port);
 			RSS_INFO("RTSPS enabled (cert=%s, port=%d)", tls_cert, srv.port);
 		} else {
 			RSS_WARN("failed to load TLS cert/key — running plain RTSP");
@@ -143,7 +93,7 @@ int main(int argc, char **argv)
 	}
 #endif
 
-	int ret = rsd_server_init(&srv);
+	ret = rsd_server_init(&srv);
 	if (ret != 0) {
 		RSS_FATAL("server init failed");
 		goto cleanup;
@@ -162,7 +112,7 @@ cleanup:
 		Compy_Auth_free(srv.auth);
 	rsd_server_deinit(&srv);
 	pthread_mutex_destroy(&srv.clients_lock);
-	rss_config_free(cfg);
+	rss_config_free(dctx.cfg);
 
 	rss_daemon_cleanup("rsd");
 

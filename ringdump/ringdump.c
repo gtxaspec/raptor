@@ -138,7 +138,7 @@ int main(int argc, char **argv)
 			dump_raw = true;
 			break;
 		case 'n':
-			max_frames = atoi(optarg);
+			max_frames = (int)strtol(optarg, NULL, 10);
 			break;
 		case 'h':
 			usage(argv[0]);
