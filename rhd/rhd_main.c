@@ -19,6 +19,7 @@
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/epoll.h>
+#include <poll.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
@@ -188,6 +189,36 @@ static void http_send_mjpeg_header(int fd)
 	write(fd, header, hlen);
 }
 
+/*
+ * Write all bytes to a non-blocking fd, retrying on EAGAIN with poll().
+ * Returns 0 on success, -1 if the client is dead or stalled beyond timeout.
+ */
+static int nb_write_all(int fd, const void *buf, size_t len)
+{
+	const uint8_t *p = buf;
+	size_t remaining = len;
+	int retries = 0;
+
+	while (remaining > 0) {
+		ssize_t n = write(fd, p, remaining);
+		if (n > 0) {
+			p += n;
+			remaining -= (size_t)n;
+			retries = 0;
+		} else if (n < 0) {
+			if ((errno == EAGAIN || errno == EWOULDBLOCK) && retries < 50) {
+				/* Back off: poll for write-ready, 100ms max per retry */
+				struct pollfd pfd = {.fd = fd, .events = POLLOUT};
+				poll(&pfd, 1, 100);
+				retries++;
+			} else {
+				return -1; /* dead or stalled too long */
+			}
+		}
+	}
+	return 0;
+}
+
 static int http_send_mjpeg_frame(int fd, const uint8_t *data, uint32_t len)
 {
 	char part_hdr[128];
@@ -197,11 +228,11 @@ static int http_send_mjpeg_frame(int fd, const uint8_t *data, uint32_t len)
 			    "Content-Length: %u\r\n"
 			    "\r\n",
 			    len);
-	if (write(fd, part_hdr, hlen) < 0)
+	if (nb_write_all(fd, part_hdr, hlen) < 0)
 		return -1;
-	if (write(fd, data, len) < 0)
+	if (nb_write_all(fd, data, len) < 0)
 		return -1;
-	if (write(fd, "\r\n", 2) < 0)
+	if (nb_write_all(fd, "\r\n", 2) < 0)
 		return -1;
 	return 0;
 }

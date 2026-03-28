@@ -41,8 +41,8 @@ static const char *region_names[] = {"time", "uptime", "text", "logo", "privacy"
 #define OSD_UPTIME_W 280 /* "12345d 23h 59m 59s" ≈ 260px */
 #define OSD_TEXT_W   320 /* camera name */
 #define OSD_TEXT_H   36
-#define OSD_LOGO_W   210
-#define OSD_LOGO_H   64
+#define OSD_LOGO_W   100
+#define OSD_LOGO_H   30
 
 /* Default position names per role */
 static const char *default_pos[] = {
@@ -137,16 +137,9 @@ static bool create_region(rvd_state_t *st, int s, int r, uint32_t w, uint32_t h)
 	if (r == RVD_OSD_LOGO) {
 		const char *lp;
 		int lw, lh;
-		if (s == 0) {
-			lp = rss_config_get_str(st->cfg, "osd", "logo_path",
-						"/usr/share/images/thingino_100x30.bgra");
-			lw = rss_config_get_int(st->cfg, "osd", "logo_width", 100);
-			lh = rss_config_get_int(st->cfg, "osd", "logo_height", 30);
-		} else {
-			lp = "/usr/share/images/thingino_100x30.bgra";
-			lw = 100;
-			lh = 30;
-		}
+		lp = rss_config_get_str(st->cfg, "osd", "logo", "");
+		lw = rss_config_get_int(st->cfg, "osd", "logo_width", OSD_LOGO_W);
+		lh = rss_config_get_int(st->cfg, "osd", "logo_height", OSD_LOGO_H);
 		int fsz = 0;
 		char *fd = rss_read_file(lp, &fsz);
 		if (fd && fsz > 0 && fsz == lw * lh * 4) {
@@ -289,15 +282,14 @@ void rvd_osd_init(rvd_state_t *st)
 				region_count++;
 		}
 
-		if (rss_config_get_bool(cfg, "osd", "logo_enabled", true)) {
-			uint32_t lw = rss_config_get_int(cfg, "osd", "logo_width", OSD_LOGO_W);
-			uint32_t lh = rss_config_get_int(cfg, "osd", "logo_height", OSD_LOGO_H);
-			if (s > 0) {
-				lw = 100;
-				lh = 30;
+		{
+			const char *logo_path = rss_config_get_str(cfg, "osd", "logo", "");
+			if (logo_path[0] && access(logo_path, R_OK) == 0) {
+				uint32_t lw = rss_config_get_int(cfg, "osd", "logo_width", OSD_LOGO_W);
+				uint32_t lh = rss_config_get_int(cfg, "osd", "logo_height", OSD_LOGO_H);
+				if (create_region(st, s, RVD_OSD_LOGO, lw, lh))
+					region_count++;
 			}
-			if (create_region(st, s, RVD_OSD_LOGO, lw, lh))
-				region_count++;
 		}
 
 		/* Privacy text region (centered, hidden until privacy mode) */
