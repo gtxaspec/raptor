@@ -477,6 +477,7 @@ void rsd_server_run(rsd_server_t *srv)
 
 	struct epoll_event events[16];
 	int ctrl_fd = srv->ctrl ? rss_ctrl_get_fd(srv->ctrl) : -1;
+	int audio_retry_count = 0;
 
 	while (*srv->running) {
 		int n = epoll_wait(srv->epoll_fd, events, 16, 500);
@@ -489,6 +490,21 @@ void rsd_server_run(rsd_server_t *srv)
 				rss_ctrl_accept_and_handle(srv->ctrl, rsd_ctrl_handler, srv);
 			} else {
 				handle_client_data(srv, fd);
+			}
+		}
+
+		/* Lazy audio ring attach — retry every ~2s until found */
+		if (!srv->has_audio && ++audio_retry_count >= 4) {
+			audio_retry_count = 0;
+			srv->ring_audio = rss_ring_open("audio");
+			if (srv->ring_audio) {
+				srv->has_audio = true;
+				pthread_attr_t a_attr;
+				pthread_attr_init(&a_attr);
+				pthread_attr_setstacksize(&a_attr, 128 * 1024);
+				pthread_create(&audio_tid, &a_attr, rsd_audio_reader_thread, srv);
+				pthread_attr_destroy(&a_attr);
+				RSS_INFO("audio ring attached (late)");
 			}
 		}
 	}
