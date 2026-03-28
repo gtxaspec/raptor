@@ -1,4 +1,4 @@
-SRCS := rvd_main.c rvd_pipeline.c rvd_frame_loop.c rvd_osd.c
+SRCS := rvd_main.c rvd_pipeline.c rvd_frame_loop.c rvd_osd.c rvd_ivs.c
 OBJS := $(SRCS:.c=.o)
 BIN  := rvd
 
