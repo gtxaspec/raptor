@@ -15,6 +15,7 @@
  *   7. StartRecvPic(2)         -- after FS streaming
  */
 
+#include <stdio.h>
 #include <stdatomic.h>
 #include <string.h>
 
@@ -81,9 +82,47 @@ int rvd_ivs_start(rvd_state_t *st)
 		mp.skip_frame_count = skip;
 		mp.width = w;
 		mp.height = h;
-		mp.roi_count = 1;
-		mp.roi[0] = (rss_rect_t){0, 0, w - 1, h - 1};
-		mp.sense[0] = sensitivity > 4 ? 4 : sensitivity;
+
+		int roi_count = rss_config_get_int(cfg, "motion", "roi_count", 0);
+		if (roi_count > 0 && roi_count <= RSS_IVS_MAX_ROI) {
+			/* Explicit ROI regions from config */
+			mp.roi_count = roi_count;
+			for (int i = 0; i < roi_count; i++) {
+				char key[16];
+				snprintf(key, sizeof(key), "roi%d", i);
+				const char *val = rss_config_get_str(cfg, "motion", key, "");
+				int x0 = 0, y0 = 0, x1 = w - 1, y1 = h - 1;
+				sscanf(val, "%d,%d,%d,%d", &x0, &y0, &x1, &y1);
+				mp.roi[i] = (rss_rect_t){x0, y0, x1, y1};
+				mp.sense[i] = sensitivity > 4 ? 4 : sensitivity;
+			}
+		} else {
+			/* Auto grid — default 4x4 */
+			const char *grid_str = rss_config_get_str(cfg, "motion", "grid", "4x4");
+			int gx = 4, gy = 4;
+			sscanf(grid_str, "%dx%d", &gx, &gy);
+			if (gx < 1) gx = 1;
+			if (gy < 1) gy = 1;
+			if (gx * gy > RSS_IVS_MAX_ROI) { gx = 4; gy = 4; }
+
+			mp.roi_count = gx * gy;
+			int cw = w / gx;
+			int ch = h / gy;
+			for (int row = 0; row < gy; row++) {
+				for (int col = 0; col < gx; col++) {
+					int idx = row * gx + col;
+					mp.roi[idx] = (rss_rect_t){
+						col * cw,
+						row * ch,
+						(col + 1) * cw - 1,
+						(row + 1) * ch - 1,
+					};
+					mp.sense[idx] = sensitivity > 4 ? 4 : sensitivity;
+				}
+			}
+			RSS_INFO("IVS: %dx%d grid (%d zones, %dx%d each)", gx, gy, mp.roi_count, cw, ch);
+		}
+
 		if (st->ops->ivs_create_move_interface)
 			algo_handle = st->ops->ivs_create_move_interface(st->hal_ctx, &mp);
 	}
@@ -192,8 +231,19 @@ void *rvd_ivs_thread(void *arg)
 		if (motion)
 			atomic_store(&st->ivs_motion_ts, rss_timestamp_us());
 
-		if (motion != prev)
-			RSS_DEBUG("IVS: motion %s", motion ? "detected" : "stopped");
+		if (motion && !prev) {
+			/* Log which zones triggered */
+			char zones[128] = {0};
+			int off = 0;
+			for (int i = 0; i < RSS_IVS_MAX_ROI && off < (int)sizeof(zones) - 4; i++) {
+				if (mr->ret_roi[i])
+					off += snprintf(zones + off, sizeof(zones) - off,
+							"%s%d", off > 0 ? "," : "", i);
+			}
+			RSS_DEBUG("IVS: motion detected (zones: %s)", zones);
+		} else if (!motion && prev) {
+			RSS_DEBUG("IVS: motion stopped");
+		}
 
 		RSS_HAL_CALL(st->ops, ivs_release_result, st->hal_ctx, st->ivs_chn, result);
 	}
