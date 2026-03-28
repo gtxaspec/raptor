@@ -458,27 +458,57 @@ int rvd_pipeline_init(rvd_state_t *st)
 		}
 	}
 
-	/* ── 8. Bind pipeline ── */
+	/* ── 8a. IVS init (before bind — SDK requires all groups created before FS enable) ── */
+	st->ivs_enabled = rss_config_get_bool(cfg, "motion", "enabled", false);
+	if (st->ivs_enabled) {
+		int ivs_ret = rvd_ivs_init(st);
+		if (ivs_ret != RSS_OK) {
+			RSS_WARN("IVS init failed: %d (motion detection disabled)", ivs_ret);
+			st->ivs_enabled = false;
+		}
+	}
+
+	/* ── 8b. Bind pipeline ── */
 	/* JPEG is registered in group 0 — no separate bind needed.
-	 * The SDK bind is per-group, not per-channel. */
+	 * The SDK bind is per-group, not per-channel.
+	 * IVS inserts into sub-stream chain: FS(1) → IVS(0) → OSD(1) → ENC(1) */
 	for (int i = 0; i < st->stream_count; i++) {
 		if (st->streams[i].is_jpeg)
 			continue;
 		int chn = st->streams[i].chn;
+		bool is_sub_with_ivs = (chn == 1 && st->ivs_active);
 
 		if (st->osd_enabled) {
-			/* FS → OSD → ENC */
 			rss_cell_t fs_out = {RSS_DEV_FS, chn, 0};
 			rss_cell_t osd_in = {RSS_DEV_OSD, chn, 0};
 			rss_cell_t osd_out = {RSS_DEV_OSD, chn, 0};
 			rss_cell_t enc_in = {RSS_DEV_ENC, chn, 0};
 
-			ret = RSS_HAL_CALL(st->ops, bind, st->hal_ctx, &fs_out, &osd_in);
-			if (ret != RSS_OK) {
-				RSS_FATAL("bind FS(%d)->OSD(%d) failed: %d", chn, chn, ret);
-				return ret;
+			if (is_sub_with_ivs) {
+				/* FS(1) → IVS(0) → OSD(1) → ENC(1) */
+				rss_cell_t ivs_in = {RSS_DEV_IVS, 0, 0};
+				rss_cell_t ivs_out = {RSS_DEV_IVS, 0, 0};
+
+				ret = RSS_HAL_CALL(st->ops, bind, st->hal_ctx, &fs_out, &ivs_in);
+				if (ret != RSS_OK) {
+					RSS_FATAL("bind FS(%d)->IVS(0) failed: %d", chn, ret);
+					return ret;
+				}
+				ret = RSS_HAL_CALL(st->ops, bind, st->hal_ctx, &ivs_out, &osd_in);
+				if (ret != RSS_OK) {
+					RSS_FATAL("bind IVS(0)->OSD(%d) failed: %d", chn, ret);
+					return ret;
+				}
+				RSS_INFO("bind FS(%d)->IVS(0)->OSD(%d) ok", chn, chn);
+			} else {
+				/* FS → OSD */
+				ret = RSS_HAL_CALL(st->ops, bind, st->hal_ctx, &fs_out, &osd_in);
+				if (ret != RSS_OK) {
+					RSS_FATAL("bind FS(%d)->OSD(%d) failed: %d", chn, chn, ret);
+					return ret;
+				}
+				RSS_INFO("bind FS(%d)->OSD(%d) ok", chn, chn);
 			}
-			RSS_INFO("bind FS(%d)->OSD(%d) ok", chn, chn);
 			ret = RSS_HAL_CALL(st->ops, bind, st->hal_ctx, &osd_out, &enc_in);
 			if (ret != RSS_OK) {
 				RSS_FATAL("bind OSD(%d)->ENC(%d) failed: %d", chn, chn, ret);
@@ -486,15 +516,42 @@ int rvd_pipeline_init(rvd_state_t *st)
 			}
 			RSS_INFO("bind OSD(%d)->ENC(%d) ok", chn, chn);
 		} else {
-			/* Direct: FS → ENC */
 			rss_cell_t fs_out = {RSS_DEV_FS, chn, 0};
 			rss_cell_t enc_in = {RSS_DEV_ENC, chn, 0};
 
-			ret = RSS_HAL_CALL(st->ops, bind, st->hal_ctx, &fs_out, &enc_in);
-			if (ret != RSS_OK) {
-				RSS_FATAL("bind FS(%d)->ENC(%d) failed: %d", chn, chn, ret);
-				return ret;
+			if (is_sub_with_ivs) {
+				/* FS(1) → IVS(0) → ENC(1) */
+				rss_cell_t ivs_in = {RSS_DEV_IVS, 0, 0};
+				rss_cell_t ivs_out = {RSS_DEV_IVS, 0, 0};
+
+				ret = RSS_HAL_CALL(st->ops, bind, st->hal_ctx, &fs_out, &ivs_in);
+				if (ret != RSS_OK) {
+					RSS_FATAL("bind FS(%d)->IVS(0) failed: %d", chn, ret);
+					return ret;
+				}
+				ret = RSS_HAL_CALL(st->ops, bind, st->hal_ctx, &ivs_out, &enc_in);
+				if (ret != RSS_OK) {
+					RSS_FATAL("bind IVS(0)->ENC(%d) failed: %d", chn, ret);
+					return ret;
+				}
+				RSS_INFO("bind FS(%d)->IVS(0)->ENC(%d) ok", chn, chn);
+			} else {
+				/* Direct: FS → ENC */
+				ret = RSS_HAL_CALL(st->ops, bind, st->hal_ctx, &fs_out, &enc_in);
+				if (ret != RSS_OK) {
+					RSS_FATAL("bind FS(%d)->ENC(%d) failed: %d", chn, chn, ret);
+					return ret;
+				}
 			}
+		}
+	}
+
+	/* IVS: create algo interface + channel + register BEFORE FS enable.
+	 * The SDK aborts if frames arrive at an IVS group with no channel. */
+	if (st->ivs_active) {
+		int ivs_ret = rvd_ivs_start(st);
+		if (ivs_ret != RSS_OK) {
+			RSS_WARN("IVS start failed: %d (motion detection disabled)", ivs_ret);
 		}
 	}
 
@@ -632,6 +689,9 @@ int rvd_pipeline_init(rvd_state_t *st)
 
 void rvd_pipeline_deinit(rvd_state_t *st)
 {
+	if (st->ivs_active)
+		rvd_ivs_deinit(st);
+
 	rvd_osd_deinit(st);
 
 	for (int i = st->stream_count - 1; i >= 0; i--) {

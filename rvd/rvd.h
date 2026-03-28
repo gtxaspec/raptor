@@ -73,6 +73,15 @@ typedef struct {
 	int jpeg_quality;
 
 	volatile sig_atomic_t *running;
+
+	/* IVS (motion detection) */
+	bool ivs_enabled;
+	bool ivs_active;
+	_Atomic bool ivs_motion;
+	_Atomic int64_t ivs_motion_ts;
+	void *ivs_algo_handle;
+	int ivs_grp;
+	int ivs_chn;
 } rvd_state_t;
 
 /* rvd_pipeline.c */
@@ -88,5 +97,11 @@ void rvd_osd_check(rvd_state_t *st);
 void rvd_osd_deinit(rvd_state_t *st);
 void *rvd_osd_thread(void *arg);
 void rvd_osd_set_privacy(rvd_state_t *st, bool enable);
+
+/* rvd_ivs.c */
+int rvd_ivs_init(rvd_state_t *st);
+int rvd_ivs_start(rvd_state_t *st);
+void rvd_ivs_deinit(rvd_state_t *st);
+void *rvd_ivs_thread(void *arg);
 
 #endif /* RVD_H */

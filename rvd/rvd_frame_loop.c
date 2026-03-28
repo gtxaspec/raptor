@@ -11,6 +11,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <inttypes.h>
+#include <stdatomic.h>
 #include <pthread.h>
 #include <sys/epoll.h>
 
@@ -448,6 +450,35 @@ static int rvd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		CTRL_RESP(resp_buf);
 	}
 
+	if (strstr(cmd_json, "\"ivs-status\"")) {
+		bool motion = atomic_load(&st->ivs_motion);
+		int64_t ts = atomic_load(&st->ivs_motion_ts);
+		snprintf(resp_buf, resp_buf_size,
+			 "{\"status\":\"ok\",\"active\":%s,\"motion\":%s,\"timestamp\":%" PRId64 "}",
+			 st->ivs_active ? "true" : "false", motion ? "true" : "false", ts);
+		CTRL_RESP(resp_buf);
+	}
+
+	if (strstr(cmd_json, "\"ivs-set-sensitivity\"")) {
+		int sens = -1;
+		if (json_get_int(cmd_json, "value", &sens) == 0 && st->ivs_active && sens >= 0) {
+			rss_ivs_move_param_t mp;
+			memset(&mp, 0, sizeof(mp));
+			if (RSS_HAL_CALL(st->ops, ivs_get_param, st->hal_ctx, st->ivs_chn, &mp) ==
+			    0) {
+				for (int i = 0; i < mp.roi_count; i++)
+					mp.sense[i] = sens;
+				RSS_HAL_CALL(st->ops, ivs_set_param, st->hal_ctx, st->ivs_chn, &mp);
+			}
+			snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\",\"sensitivity\":%d}",
+				 sens);
+		} else {
+			snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"error\",\"reason\":\"invalid or ivs not active\"}");
+		}
+		CTRL_RESP(resp_buf);
+	}
+
 	snprintf(resp_buf, resp_buf_size, "{\"status\":\"error\",\"reason\":\"unknown command\"}");
 	CTRL_RESP(resp_buf);
 }
@@ -485,6 +516,16 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running)
 		pthread_attr_destroy(&osd_attr);
 	}
 
+	/* IVS poll thread */
+	pthread_t ivs_tid = 0;
+	if (st->ivs_active) {
+		pthread_attr_t ivs_attr;
+		pthread_attr_init(&ivs_attr);
+		pthread_attr_setstacksize(&ivs_attr, 64 * 1024);
+		pthread_create(&ivs_tid, &ivs_attr, rvd_ivs_thread, st);
+		pthread_attr_destroy(&ivs_attr);
+	}
+
 	/* Main thread: handle control socket */
 	int epoll_fd = epoll_create1(0);
 	int ctrl_fd = -1;
@@ -517,6 +558,9 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running)
 
 	if (osd_tid)
 		pthread_join(osd_tid, NULL);
+
+	if (ivs_tid)
+		pthread_join(ivs_tid, NULL);
 
 	if (epoll_fd >= 0)
 		close(epoll_fd);
