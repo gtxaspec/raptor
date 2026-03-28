@@ -101,6 +101,7 @@ void rvd_osd_set_privacy(rvd_state_t *st, bool enable);
 /* rvd_ivs.c */
 int rvd_ivs_init(rvd_state_t *st);
 int rvd_ivs_start(rvd_state_t *st);
+void rvd_ivs_stop(rvd_state_t *st);
 void rvd_ivs_deinit(rvd_state_t *st);
 void *rvd_ivs_thread(void *arg);
 

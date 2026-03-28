@@ -689,8 +689,9 @@ int rvd_pipeline_init(rvd_state_t *st)
 
 void rvd_pipeline_deinit(rvd_state_t *st)
 {
+	/* IVS stop: StopRecvPic + UnRegister + DestroyChn (before FS disable) */
 	if (st->ivs_active)
-		rvd_ivs_deinit(st);
+		rvd_ivs_stop(st);
 
 	rvd_osd_deinit(st);
 
@@ -704,7 +705,29 @@ void rvd_pipeline_deinit(rvd_state_t *st)
 		if (!st->streams[i].is_jpeg) {
 			RSS_HAL_CALL(st->ops, fs_disable_channel, st->hal_ctx, chn);
 
-			if (st->osd_enabled) {
+			/* Unbind IVS from sub-stream chain */
+			bool is_sub_with_ivs = (chn == 1 && st->ivs_active);
+
+			if (is_sub_with_ivs && st->osd_enabled) {
+				/* Was: FS(1)->IVS(0)->OSD(1)->ENC(1) */
+				rss_cell_t osd_out = {RSS_DEV_OSD, chn, 0};
+				rss_cell_t enc_in = {RSS_DEV_ENC, chn, 0};
+				RSS_HAL_CALL(st->ops, unbind, st->hal_ctx, &osd_out, &enc_in);
+				rss_cell_t ivs_out = {RSS_DEV_IVS, 0, 0};
+				rss_cell_t osd_in = {RSS_DEV_OSD, chn, 0};
+				RSS_HAL_CALL(st->ops, unbind, st->hal_ctx, &ivs_out, &osd_in);
+				rss_cell_t fs_out = {RSS_DEV_FS, chn, 0};
+				rss_cell_t ivs_in = {RSS_DEV_IVS, 0, 0};
+				RSS_HAL_CALL(st->ops, unbind, st->hal_ctx, &fs_out, &ivs_in);
+			} else if (is_sub_with_ivs) {
+				/* Was: FS(1)->IVS(0)->ENC(1) */
+				rss_cell_t ivs_out = {RSS_DEV_IVS, 0, 0};
+				rss_cell_t enc_in = {RSS_DEV_ENC, chn, 0};
+				RSS_HAL_CALL(st->ops, unbind, st->hal_ctx, &ivs_out, &enc_in);
+				rss_cell_t fs_out = {RSS_DEV_FS, chn, 0};
+				rss_cell_t ivs_in = {RSS_DEV_IVS, 0, 0};
+				RSS_HAL_CALL(st->ops, unbind, st->hal_ctx, &fs_out, &ivs_in);
+			} else if (st->osd_enabled) {
 				rss_cell_t osd_out = {RSS_DEV_OSD, chn, 0};
 				rss_cell_t enc_in = {RSS_DEV_ENC, chn, 0};
 				RSS_HAL_CALL(st->ops, unbind, st->hal_ctx, &osd_out, &enc_in);
@@ -732,6 +755,10 @@ void rvd_pipeline_deinit(rvd_state_t *st)
 			st->streams[i].ring = NULL;
 		}
 	}
+
+	/* IVS group destroy — after unbind (SDK requirement) */
+	if (st->ivs_active)
+		rvd_ivs_deinit(st);
 
 	if (st->hal_ctx) {
 		RSS_HAL_CALL(st->ops, deinit, st->hal_ctx);
