@@ -134,6 +134,69 @@ static void close_segment(rmr_state_t *st)
 	}
 }
 
+/* ── Motion clip segment management ── */
+
+static int start_clip(rmr_state_t *st)
+{
+	int fd = rmr_storage_open_segment(st->clip_storage, st->clip_path, sizeof(st->clip_path));
+	if (fd < 0)
+		return -1;
+
+	st->clip_mux = rmr_mux_create(direct_write, st);
+	if (!st->clip_mux) {
+		rmr_storage_close_segment(fd);
+		return -1;
+	}
+
+	/* Temporarily swap segment_fd so direct_write goes to clip */
+	st->clip_fd = fd;
+
+	rmr_video_params_t vp = {
+		.codec = (st->video_codec == 1) ? RMR_CODEC_H265 : RMR_CODEC_H264,
+		.width = st->width,
+		.height = st->height,
+		.timescale = 90000,
+	};
+	rmr_mux_set_video(st->clip_mux, &vp, st->params.sps, st->params.sps_len, st->params.pps,
+			  st->params.pps_len, st->params.vps_len > 0 ? st->params.vps : NULL,
+			  st->params.vps_len);
+
+	if (st->audio_ring) {
+		rmr_audio_params_t ap = {.sample_rate = st->audio_sample_rate, .channels = 1};
+		switch (st->audio_codec) {
+		case RMR_AUDIO_PCMU: ap.codec = RMR_AUDIO_PCMU; ap.bits_per_sample = 8; break;
+		case RMR_AUDIO_PCMA: ap.codec = RMR_AUDIO_PCMA; ap.bits_per_sample = 8; break;
+		case RMR_AUDIO_AAC:  ap.codec = RMR_AUDIO_AAC;  ap.bits_per_sample = 16; break;
+		case RMR_AUDIO_OPUS: ap.codec = RMR_AUDIO_OPUS; ap.bits_per_sample = 16; break;
+		default:             ap.codec = RMR_AUDIO_L16;   ap.bits_per_sample = 16; break;
+		}
+		rmr_mux_set_audio(st->clip_mux, &ap);
+	}
+
+	rmr_mux_start(st->clip_mux);
+	RSS_INFO("motion clip started: %s", st->clip_path);
+	return 0;
+}
+
+static void close_clip(rmr_state_t *st)
+{
+	if (st->clip_mux) {
+		/* Swap fd for finalize writes */
+		int saved_fd = st->segment_fd;
+		st->segment_fd = st->clip_fd;
+		rmr_mux_finalize(st->clip_mux);
+		st->segment_fd = saved_fd;
+
+		rmr_mux_destroy(st->clip_mux);
+		st->clip_mux = NULL;
+	}
+	if (st->clip_fd >= 0) {
+		rmr_storage_close_segment(st->clip_fd);
+		RSS_INFO("motion clip closed: %s", st->clip_path);
+		st->clip_fd = -1;
+	}
+}
+
 /* ── Control socket handler ── */
 
 static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, void *userdata)
@@ -141,22 +204,31 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	rmr_state_t *st = userdata;
 
 	if (strstr(cmd_json, "\"start\"")) {
-		atomic_store(&st->recording, true);
-		snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\",\"recording\":true}");
+		if (st->mode == RMR_MODE_MOTION)
+			atomic_store(&st->recording, true);
+		if (st->mode == RMR_MODE_BOTH)
+			atomic_store(&st->clip_recording, true);
+		snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
 		return (int)strlen(resp_buf);
 	}
 
 	if (strstr(cmd_json, "\"stop\"")) {
-		atomic_store(&st->recording, false);
-		snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\",\"recording\":false}");
+		if (st->mode == RMR_MODE_MOTION)
+			atomic_store(&st->recording, false);
+		if (st->mode == RMR_MODE_BOTH)
+			atomic_store(&st->clip_recording, false);
+		snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
 		return (int)strlen(resp_buf);
 	}
 
 	if (strstr(cmd_json, "\"status\"")) {
 		snprintf(resp_buf, resp_buf_size,
-			 "{\"recording\":%s,\"file\":\"%s\",\"frames\":%" PRIu64
+			 "{\"recording\":%s,\"clip\":%s,\"mode\":%d,"
+			 "\"file\":\"%s\",\"frames\":%" PRIu64
 			 ",\"dropped\":%" PRIu64 ",\"bytes\":%" PRIu64 "}",
-			 atomic_load(&st->recording) ? "true" : "false", st->segment_path,
+			 atomic_load(&st->recording) ? "true" : "false",
+			 atomic_load(&st->clip_recording) ? "true" : "false",
+			 st->mode, st->segment_path,
 			 st->frames_written, st->frames_dropped, st->bytes_written);
 		return (int)strlen(resp_buf);
 	}
@@ -313,6 +385,33 @@ static void record_loop(rmr_state_t *st)
 		}
 		st->frames_written++;
 
+		/* Motion clip handling (mode=both) */
+		if (st->mode == RMR_MODE_BOTH) {
+			bool clip_want = atomic_load(&st->clip_recording);
+
+			/* Start clip on keyframe */
+			if (clip_want && !st->clip_mux && meta.is_key && st->clip_storage) {
+				if (start_clip(st) == 0) {
+					/* Write this keyframe to clip too */
+					int saved_fd = st->segment_fd;
+					st->segment_fd = st->clip_fd;
+					rmr_mux_write_video(st->clip_mux, &vs);
+					st->segment_fd = saved_fd;
+				}
+			} else if (clip_want && st->clip_mux) {
+				/* Write frame to clip */
+				int saved_fd = st->segment_fd;
+				st->segment_fd = st->clip_fd;
+				if (meta.is_key)
+					rmr_mux_flush_fragment(st->clip_mux);
+				rmr_mux_write_video(st->clip_mux, &vs);
+				st->segment_fd = saved_fd;
+			} else if (!clip_want && st->clip_mux) {
+				/* Stop clip */
+				close_clip(st);
+			}
+		}
+
 		/* Drain audio ring (burst read, non-blocking) */
 		if (st->audio_ring) {
 			for (int burst = 0; burst < 4; burst++) {
@@ -332,6 +431,14 @@ static void record_loop(rmr_state_t *st)
 					.dts = a_dts_counter,
 				};
 				rmr_mux_write_audio(st->mux, &as);
+
+				/* Also write to motion clip if active */
+				if (st->clip_mux) {
+					int saved_fd = st->segment_fd;
+					st->segment_fd = st->clip_fd;
+					rmr_mux_write_audio(st->clip_mux, &as);
+					st->segment_fd = saved_fd;
+				}
 				a_dts_counter += audio_samples_per_frame
 							 ? audio_samples_per_frame
 							 : alen / audio_bps;
@@ -484,8 +591,40 @@ int main(int argc, char **argv)
 	if (!st.ctrl)
 		RSS_WARN("control socket failed (non-fatal)");
 
-	/* Start recording immediately */
-	atomic_store(&st.recording, true);
+	/* Parse recording mode */
+	const char *mode_str = rss_config_get_str(cfg, "recording", "mode", "continuous");
+	if (strcmp(mode_str, "motion") == 0)
+		st.mode = RMR_MODE_MOTION;
+	else if (strcmp(mode_str, "both") == 0)
+		st.mode = RMR_MODE_BOTH;
+	else
+		st.mode = RMR_MODE_CONTINUOUS;
+
+	st.clip_fd = -1;
+
+	/* Set up clip storage for 'both' mode */
+	if (st.mode == RMR_MODE_BOTH) {
+		char clip_path[280];
+		snprintf(clip_path, sizeof(clip_path), "%s/clips",
+			 rss_config_get_str(cfg, "recording", "storage_path",
+					    "/mnt/mmcblk0p1/raptor"));
+		rmr_storage_config_t ccfg = {
+			.base_path = clip_path,
+			.segment_minutes = rss_config_get_int(cfg, "recording", "clip_length_sec", 60) / 60,
+			.max_storage_mb = rss_config_get_int(cfg, "recording", "clip_max_mb", 100),
+		};
+		if (ccfg.segment_minutes < 1)
+			ccfg.segment_minutes = 1;
+		st.clip_storage = rmr_storage_create(&ccfg);
+		if (!st.clip_storage)
+			RSS_WARN("clip storage init failed — motion clips disabled");
+	}
+
+	/* Start continuous recording for 'continuous' and 'both' modes */
+	if (st.mode != RMR_MODE_MOTION)
+		atomic_store(&st.recording, true);
+	else
+		RSS_INFO("mode=motion — waiting for trigger");
 
 	/* Run main loop */
 	record_loop(&st);
@@ -495,6 +634,10 @@ int main(int argc, char **argv)
 cleanup:
 	if (st.ctrl)
 		rss_ctrl_destroy(st.ctrl);
+	if (st.clip_mux)
+		close_clip(&st);
+	if (st.clip_storage)
+		rmr_storage_destroy(st.clip_storage);
 	if (st.storage)
 		rmr_storage_destroy(st.storage);
 	if (st.video_ring)
