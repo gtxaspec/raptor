@@ -71,11 +71,9 @@ static void *encoder_thread(void *arg)
 		uint32_t cnt = frame.nal_count;
 		if (cnt > 16)
 			cnt = 16;
-		uint32_t total_len = 0;
 		for (uint32_t n = 0; n < cnt; n++) {
 			iov[n].data = frame.nals[n].data;
 			iov[n].length = frame.nals[n].length;
-			total_len += frame.nals[n].length;
 		}
 		rss_ring_publish_iov(s->ring, iov, cnt, frame.timestamp, primary_nal_type(&frame),
 				     frame.is_key ? 1 : 0);
