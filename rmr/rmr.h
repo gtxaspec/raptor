@@ -17,12 +17,18 @@
 #include "rmr_nal.h"
 #include "rmr_storage.h"
 
+/* Recording mode */
+#define RMR_MODE_CONTINUOUS 0 /* always recording */
+#define RMR_MODE_MOTION     1 /* record only on motion trigger */
+#define RMR_MODE_BOTH       2 /* continuous + motion clips */
+
 typedef struct {
 	/* Config */
 	rss_config_t *cfg;
 	const char *config_path;
 	int stream_idx;
 	bool audio_enabled;
+	int mode; /* RMR_MODE_* */
 
 	/* Rings */
 	rss_ring_t *video_ring;
@@ -40,14 +46,18 @@ typedef struct {
 	/* Codec params */
 	rmr_codec_params_t params;
 
-	/* Muxer (main thread only) */
+	/* Muxer — continuous segment (main thread only) */
 	rmr_mux_t *mux;
-
-	/* Storage (main thread only) */
 	rmr_storage_t *storage;
 	int segment_fd;
 	char segment_path[256];
 	int64_t segment_start_us;
+
+	/* Muxer — motion clip (main thread only, mode=both) */
+	rmr_mux_t *clip_mux;
+	rmr_storage_t *clip_storage;
+	int clip_fd;
+	char clip_path[256];
 
 	/* Frame read buffer (main thread only) */
 	uint8_t *frame_buf;
@@ -65,7 +75,8 @@ typedef struct {
 
 	/* State */
 	volatile sig_atomic_t *running;
-	_Atomic bool recording;
+	_Atomic bool recording;      /* continuous recording active */
+	_Atomic bool clip_recording; /* motion clip active */
 
 	/* Stats (main thread only) */
 	uint64_t frames_written;
