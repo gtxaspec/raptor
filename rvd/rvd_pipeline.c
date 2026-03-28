@@ -469,81 +469,38 @@ int rvd_pipeline_init(rvd_state_t *st)
 	}
 
 	/* ── 8b. Bind pipeline ── */
-	/* JPEG is registered in group 0 — no separate bind needed.
-	 * The SDK bind is per-group, not per-channel.
-	 * IVS inserts into sub-stream chain: FS(1) → IVS(0) → OSD(1) → ENC(1) */
+	/* Build a chain of cells for each video stream and bind them sequentially.
+	 * JPEG channels share a framesource — no separate bind needed.
+	 * Chain varies by stream: FS [→ IVS] [→ OSD] → ENC */
 	for (int i = 0; i < st->stream_count; i++) {
 		if (st->streams[i].is_jpeg)
 			continue;
 		int chn = st->streams[i].chn;
-		bool is_sub_with_ivs = (chn == 1 && st->ivs_active);
+		bool insert_ivs = (chn == 1 && st->ivs_active);
 
-		if (st->osd_enabled) {
-			rss_cell_t fs_out = {RSS_DEV_FS, chn, 0};
-			rss_cell_t osd_in = {RSS_DEV_OSD, chn, 0};
-			rss_cell_t osd_out = {RSS_DEV_OSD, chn, 0};
-			rss_cell_t enc_in = {RSS_DEV_ENC, chn, 0};
+		rss_cell_t chain[4];
+		int chain_len = 0;
 
-			if (is_sub_with_ivs) {
-				/* FS(1) → IVS(0) → OSD(1) → ENC(1) */
-				rss_cell_t ivs_in = {RSS_DEV_IVS, 0, 0};
-				rss_cell_t ivs_out = {RSS_DEV_IVS, 0, 0};
+		chain[chain_len++] = (rss_cell_t){RSS_DEV_FS, chn, 0};
+		if (insert_ivs)
+			chain[chain_len++] = (rss_cell_t){RSS_DEV_IVS, 0, 0};
+		if (st->osd_enabled)
+			chain[chain_len++] = (rss_cell_t){RSS_DEV_OSD, chn, 0};
+		chain[chain_len++] = (rss_cell_t){RSS_DEV_ENC, chn, 0};
 
-				ret = RSS_HAL_CALL(st->ops, bind, st->hal_ctx, &fs_out, &ivs_in);
-				if (ret != RSS_OK) {
-					RSS_FATAL("bind FS(%d)->IVS(0) failed: %d", chn, ret);
-					return ret;
-				}
-				ret = RSS_HAL_CALL(st->ops, bind, st->hal_ctx, &ivs_out, &osd_in);
-				if (ret != RSS_OK) {
-					RSS_FATAL("bind IVS(0)->OSD(%d) failed: %d", chn, ret);
-					return ret;
-				}
-				RSS_INFO("bind FS(%d)->IVS(0)->OSD(%d) ok", chn, chn);
-			} else {
-				/* FS → OSD */
-				ret = RSS_HAL_CALL(st->ops, bind, st->hal_ctx, &fs_out, &osd_in);
-				if (ret != RSS_OK) {
-					RSS_FATAL("bind FS(%d)->OSD(%d) failed: %d", chn, chn, ret);
-					return ret;
-				}
-				RSS_INFO("bind FS(%d)->OSD(%d) ok", chn, chn);
-			}
-			ret = RSS_HAL_CALL(st->ops, bind, st->hal_ctx, &osd_out, &enc_in);
+		for (int j = 0; j < chain_len - 1; j++) {
+			ret = RSS_HAL_CALL(st->ops, bind, st->hal_ctx, &chain[j], &chain[j + 1]);
 			if (ret != RSS_OK) {
-				RSS_FATAL("bind OSD(%d)->ENC(%d) failed: %d", chn, chn, ret);
+				RSS_FATAL("bind failed at step %d for chn %d: %d", j, chn, ret);
 				return ret;
 			}
-			RSS_INFO("bind OSD(%d)->ENC(%d) ok", chn, chn);
-		} else {
-			rss_cell_t fs_out = {RSS_DEV_FS, chn, 0};
-			rss_cell_t enc_in = {RSS_DEV_ENC, chn, 0};
-
-			if (is_sub_with_ivs) {
-				/* FS(1) → IVS(0) → ENC(1) */
-				rss_cell_t ivs_in = {RSS_DEV_IVS, 0, 0};
-				rss_cell_t ivs_out = {RSS_DEV_IVS, 0, 0};
-
-				ret = RSS_HAL_CALL(st->ops, bind, st->hal_ctx, &fs_out, &ivs_in);
-				if (ret != RSS_OK) {
-					RSS_FATAL("bind FS(%d)->IVS(0) failed: %d", chn, ret);
-					return ret;
-				}
-				ret = RSS_HAL_CALL(st->ops, bind, st->hal_ctx, &ivs_out, &enc_in);
-				if (ret != RSS_OK) {
-					RSS_FATAL("bind IVS(0)->ENC(%d) failed: %d", chn, ret);
-					return ret;
-				}
-				RSS_INFO("bind FS(%d)->IVS(0)->ENC(%d) ok", chn, chn);
-			} else {
-				/* Direct: FS → ENC */
-				ret = RSS_HAL_CALL(st->ops, bind, st->hal_ctx, &fs_out, &enc_in);
-				if (ret != RSS_OK) {
-					RSS_FATAL("bind FS(%d)->ENC(%d) failed: %d", chn, chn, ret);
-					return ret;
-				}
-			}
 		}
+
+		/* Store chain for unbind at deinit */
+		memcpy(st->bind_chain[i], chain, sizeof(rss_cell_t) * chain_len);
+		st->bind_chain_len[i] = chain_len;
+
+		RSS_INFO("stream%d bind: %d stages", i, chain_len);
 	}
 
 	/* IVS: create algo interface + channel + register BEFORE FS enable.
@@ -705,40 +662,12 @@ void rvd_pipeline_deinit(rvd_state_t *st)
 		if (!st->streams[i].is_jpeg) {
 			RSS_HAL_CALL(st->ops, fs_disable_channel, st->hal_ctx, chn);
 
-			/* Unbind IVS from sub-stream chain */
-			bool is_sub_with_ivs = (chn == 1 && st->ivs_active);
-
-			if (is_sub_with_ivs && st->osd_enabled) {
-				/* Was: FS(1)->IVS(0)->OSD(1)->ENC(1) */
-				rss_cell_t osd_out = {RSS_DEV_OSD, chn, 0};
-				rss_cell_t enc_in = {RSS_DEV_ENC, chn, 0};
-				RSS_HAL_CALL(st->ops, unbind, st->hal_ctx, &osd_out, &enc_in);
-				rss_cell_t ivs_out = {RSS_DEV_IVS, 0, 0};
-				rss_cell_t osd_in = {RSS_DEV_OSD, chn, 0};
-				RSS_HAL_CALL(st->ops, unbind, st->hal_ctx, &ivs_out, &osd_in);
-				rss_cell_t fs_out = {RSS_DEV_FS, chn, 0};
-				rss_cell_t ivs_in = {RSS_DEV_IVS, 0, 0};
-				RSS_HAL_CALL(st->ops, unbind, st->hal_ctx, &fs_out, &ivs_in);
-			} else if (is_sub_with_ivs) {
-				/* Was: FS(1)->IVS(0)->ENC(1) */
-				rss_cell_t ivs_out = {RSS_DEV_IVS, 0, 0};
-				rss_cell_t enc_in = {RSS_DEV_ENC, chn, 0};
-				RSS_HAL_CALL(st->ops, unbind, st->hal_ctx, &ivs_out, &enc_in);
-				rss_cell_t fs_out = {RSS_DEV_FS, chn, 0};
-				rss_cell_t ivs_in = {RSS_DEV_IVS, 0, 0};
-				RSS_HAL_CALL(st->ops, unbind, st->hal_ctx, &fs_out, &ivs_in);
-			} else if (st->osd_enabled) {
-				rss_cell_t osd_out = {RSS_DEV_OSD, chn, 0};
-				rss_cell_t enc_in = {RSS_DEV_ENC, chn, 0};
-				RSS_HAL_CALL(st->ops, unbind, st->hal_ctx, &osd_out, &enc_in);
-				rss_cell_t fs_out = {RSS_DEV_FS, chn, 0};
-				rss_cell_t osd_in = {RSS_DEV_OSD, chn, 0};
-				RSS_HAL_CALL(st->ops, unbind, st->hal_ctx, &fs_out, &osd_in);
-			} else {
-				rss_cell_t fs_out = {RSS_DEV_FS, chn, 0};
-				rss_cell_t enc_in = {RSS_DEV_ENC, chn, 0};
-				RSS_HAL_CALL(st->ops, unbind, st->hal_ctx, &fs_out, &enc_in);
-			}
+			/* Unbind: walk the stored chain in reverse */
+			int len = st->bind_chain_len[i];
+			for (int j = len - 1; j > 0; j--)
+				RSS_HAL_CALL(st->ops, unbind, st->hal_ctx,
+					     &st->bind_chain[i][j - 1],
+					     &st->bind_chain[i][j]);
 		}
 
 		RSS_HAL_CALL(st->ops, enc_unregister_channel, st->hal_ctx, chn);
