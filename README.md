@@ -15,10 +15,11 @@ for ISP exposure queries via RVD's control socket).
 ```
  sensor
    |
-  [RVD] --shm rings--> [RSD] RTSP server (via compy)
+  [RVD] --shm rings--> [RSD] RTSP/RTSPS server (via compy)
    |  \                 [RHD] HTTP snapshots / MJPEG
    |   \                [RMR] fragmented MP4 recording
    |    `--osd shm <--- [ROD] OSD text / logo renderer
+   |    `--ivs -------> [RMD] motion detection → triggers RMR
    |
   [RAD] --audio ring--> [RSD] (interleaved A/V)
    |                    [RMR] (muxed A/V)
@@ -31,12 +32,13 @@ for ISP exposure queries via RVD's control socket).
 | Name | Binary | Description |
 |------|--------|-------------|
 | RVD  | `rvd`  | Raw Video Daemon. Initializes HAL, configures sensor and encoder channels, creates SHM ring buffers (`main`, `sub`, `jpeg0`, `jpeg1`), and runs the frame acquisition loop. Exposes ISP controls and encoder tuning via its control socket. |
-| RSD  | `rsd`  | RTSP Streaming Daemon. Reads video/audio rings and serves RTSP/RTP streams using the compy library. Supports Digest authentication. |
+| RSD  | `rsd`  | RTSP Streaming Daemon. Reads video/audio rings and serves RTSP/RTP streams using the compy library. Supports Digest authentication and RTSPS (TLS via mbedTLS, compile with `TLS=1`). |
 | RAD  | `rad`  | Raw Audio Daemon. Captures PCM from the ISP audio input, optionally encodes (G.711 mu-law/A-law, L16, AAC, Opus), and publishes to the `audio` ring. Also handles speaker output via a `speaker` ring. Supports noise suppression, HPF, and AGC when libaudioProcess is available. |
 | ROD  | `rod`  | OSD Rendering Daemon. Renders timestamp, uptime, user text, and logo bitmaps into BGRA SHM double-buffers using libschrift. No HAL dependency -- RVD handles the hardware OSD regions. |
 | RHD  | `rhd`  | HTTP Streaming Daemon. Serves JPEG snapshots (`/snap.jpg`) and MJPEG streams (`/mjpeg`) from JPEG rings. Dual-stack IPv4/IPv6, Basic auth. |
 | RIC  | `ric`  | IR-Cut Controller. Polls ISP exposure via RVD's control socket and switches between day/night modes with configurable hysteresis. Controls IR-cut filter and IR LED GPIOs. |
 | RMR  | `rmr`  | Recording/Muxing Daemon. Reads H.264/H.265 + audio from rings and writes crash-safe fragmented MP4 segments to SD card. Own fMP4 muxer with zero external dependencies. |
+| RMD  | `rmd`  | Motion Detection Daemon. Queries RVD for IVS hardware motion results (configurable grid ROI), manages idle/active/cooldown state machine, triggers recording via RMR and GPIO output on motion events. |
 
 ### Tools
 
@@ -77,16 +79,15 @@ Raptor cross-compiles with a MIPS toolchain from a thingino Buildroot output.
 ### Quick build (using build.sh)
 
 ```sh
-./build.sh t31                    # full distclean + rebuild for T31
-./build.sh t31 rvd rsd            # rebuild specific targets
-./build.sh t31 clean              # clean only
+./build.sh t31 /path/to/buildroot/output              # full distclean + rebuild
+./build.sh t31 /path/to/buildroot/output rvd rsd       # rebuild specific targets
+./build.sh t31 /path/to/buildroot/output clean          # clean only
 ```
 
-Supported platform arguments: `t20`, `t21`, `t23`, `t30`, `t31`.
+Supported platforms: `t20`, `t21`, `t23`, `t30`, `t31`, `t32`, `t40`, `t41`.
 
-`build.sh` expects the thingino firmware tree at
-`~/projects/thingino/thingino-firmware/` with a completed Buildroot output for
-the target profile.
+`build.sh` takes the Buildroot output directory as the second argument. It
+auto-detects the sysroot tuple and TLS support (mbedTLS).
 
 ### Manual build
 
@@ -107,6 +108,7 @@ Optional variables:
 - `MP3=1` -- enable MP3 decode support (rac playback)
 - `OPUS=1` -- enable Opus encode/decode support
 - `AUDIO_EFFECTS=1` -- enable noise suppression, HPF, AGC
+- `TLS=1` -- enable RTSPS (TLS-encrypted RTSP via mbedTLS)
 - `V=1` -- verbose build output
 
 Build individual targets:
@@ -130,7 +132,7 @@ and the init script to `$DESTDIR/etc/init.d/S31raptor`.
 All daemons share a single INI-style config file: `/etc/raptor.conf`.
 
 Sections: `[sensor]`, `[stream0]`, `[stream1]`, `[jpeg]`, `[ring]`, `[audio]`,
-`[rtsp]`, `[http]`, `[osd]`, `[ircut]`, `[recording]`, `[log]`.
+`[rtsp]`, `[http]`, `[osd]`, `[ircut]`, `[recording]`, `[motion]`, `[log]`.
 
 See `config/raptor.conf` for the full reference with defaults and comments.
 
@@ -150,11 +152,10 @@ manages startup order:
 
 1. **RVD** starts first and creates the SHM ring buffers.
 2. The script waits (up to 5 seconds) for `/dev/shm/rss_ring_main` to appear.
-3. **RAD**, **ROD**, **RSD**, and **RIC** start as consumers.
+3. **RAD**, **ROD**, **RSD**, **RHD**, **RMR**, **RIC**, and **RMD** start.
+   Each daemon checks its own `enabled` flag in the config and exits cleanly
+   if disabled, so all can be started unconditionally.
 4. Shutdown reverses the order: consumers stop first, then RVD.
-
-RHD and RMR are not started by default in the init script; enable them in the
-config and add to the init script as needed.
 
 ## Supported Platforms
 
