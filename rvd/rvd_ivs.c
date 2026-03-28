@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <stdatomic.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "rvd.h"
 
@@ -175,17 +176,21 @@ err_iface:
 	return ret;
 }
 
-void rvd_ivs_deinit(rvd_state_t *st)
+/*
+ * Phase 1 deinit: stop receiving, unregister channel, destroy channel + interface.
+ * Called BEFORE FS disable and unbind (vendor SDK requires this order).
+ */
+void rvd_ivs_stop(rvd_state_t *st)
 {
 	if (!st->ivs_active)
 		return;
 
 	RSS_HAL_CALL(st->ops, ivs_stop, st->hal_ctx, st->ivs_chn);
+	usleep(500000); /* SDK needs delay after StopRecvPic (vendor sample uses sleep(1)) */
+
 	RSS_HAL_CALL(st->ops, ivs_unregister_channel, st->hal_ctx, st->ivs_chn);
 	RSS_HAL_CALL(st->ops, ivs_destroy_channel, st->hal_ctx, st->ivs_chn);
-	RSS_HAL_CALL(st->ops, ivs_destroy_group, st->hal_ctx, st->ivs_grp);
 
-	/* Destroy algo interface */
 	if (st->ivs_algo_handle) {
 		const char *algo = rss_config_get_str(st->cfg, "motion", "algorithm", "move");
 		if (strcmp(algo, "base_move") == 0)
@@ -194,9 +199,23 @@ void rvd_ivs_deinit(rvd_state_t *st)
 		else
 			RSS_HAL_CALL(st->ops, ivs_destroy_move_interface, st->hal_ctx,
 				     st->ivs_algo_handle);
+		st->ivs_algo_handle = NULL;
 	}
 
-	st->ivs_algo_handle = NULL;
+	RSS_INFO("IVS: stopped");
+}
+
+/*
+ * Phase 2 deinit: destroy group.
+ * Called AFTER unbind (vendor SDK: DestroyGroup can't be called until after UnBind).
+ */
+void rvd_ivs_deinit(rvd_state_t *st)
+{
+	if (!st->ivs_active)
+		return;
+
+	RSS_HAL_CALL(st->ops, ivs_destroy_group, st->hal_ctx, st->ivs_grp);
+
 	st->ivs_active = false;
 	RSS_INFO("IVS: deinitialized");
 }
