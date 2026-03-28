@@ -166,13 +166,48 @@ int rvd_pipeline_init(rvd_state_t *st)
 		RSS_INFO("sensor i2c_addr from procfs: 0x%02x", sensor.i2c_addr);
 	}
 
-	sensor.i2c_adapter = rss_config_get_int(cfg, "sensor", "i2c_adapter", 0);
-	sensor.rst_gpio = rss_config_get_int(cfg, "sensor", "rst_gpio", -1);
+	sensor.i2c_adapter = rss_config_get_int(cfg, "sensor", "i2c_adapter", -1);
+	if (sensor.i2c_adapter < 0) {
+		char *s = rss_read_file("/proc/jz/sensor/i2c_bus", NULL);
+		sensor.i2c_adapter = s ? (int)strtol(s, NULL, 10) : 0;
+		free(s);
+	}
 	sensor.pwdn_gpio = rss_config_get_int(cfg, "sensor", "pwdn_gpio", -1);
 	sensor.power_gpio = rss_config_get_int(cfg, "sensor", "power_gpio", -1);
-	sensor.default_boot = rss_config_get_int(cfg, "sensor", "boot", 0);
-	sensor.mclk = rss_config_get_int(cfg, "sensor", "mclk", 0);
-	sensor.vin_type = rss_config_get_int(cfg, "sensor", "video_interface", 0);
+
+	/* Read rst_gpio from config, fall back to /proc/jz/sensor/rst_gpio */
+	sensor.rst_gpio = rss_config_get_int(cfg, "sensor", "rst_gpio", -1);
+	if (sensor.rst_gpio == -1) {
+		char *s = rss_read_file("/proc/jz/sensor/rst_gpio", NULL);
+		if (s) {
+			sensor.rst_gpio = (int)strtol(s, NULL, 10);
+			free(s);
+			if (sensor.rst_gpio > 0)
+				RSS_INFO("sensor rst_gpio from procfs: %d", sensor.rst_gpio);
+		}
+	}
+
+	/* T40/T41 sensor fields — read from config, fall back to procfs */
+	sensor.default_boot = rss_config_get_int(cfg, "sensor", "boot", -1);
+	if (sensor.default_boot < 0) {
+		char *s = rss_read_file("/proc/jz/sensor/boot", NULL);
+		sensor.default_boot = s ? (int)strtol(s, NULL, 10) : 0;
+		free(s);
+	}
+
+	sensor.mclk = rss_config_get_int(cfg, "sensor", "mclk", -1);
+	if (sensor.mclk < 0) {
+		char *s = rss_read_file("/proc/jz/sensor/mclk", NULL);
+		sensor.mclk = s ? (int)strtol(s, NULL, 10) : 1; /* default MCLK1 */
+		free(s);
+	}
+
+	sensor.vin_type = rss_config_get_int(cfg, "sensor", "video_interface", -1);
+	if (sensor.vin_type < 0) {
+		char *s = rss_read_file("/proc/jz/sensor/video_interface", NULL);
+		sensor.vin_type = s ? (int)strtol(s, NULL, 10) : 0;
+		free(s);
+	}
 
 	/* ── 3. Init HAL (brings up ISP + sensor) ── */
 	ret = RSS_HAL_CALL(st->ops, init, st->hal_ctx, &sensor);
