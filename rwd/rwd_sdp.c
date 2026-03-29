@@ -204,7 +204,8 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 	APPEND("s=Raptor");
 	APPEND("t=0 0");
 
-	/* BUNDLE group */
+	/* Session-level attributes */
+	APPEND("a=ice-lite");
 	if (c->offer.has_audio && c->offer.audio_pt >= 0)
 		APPEND("a=group:BUNDLE %s %s", c->offer.mid_video[0] ? c->offer.mid_video : "0",
 		       c->offer.mid_audio[0] ? c->offer.mid_audio : "1");
@@ -215,10 +216,9 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 	APPEND("m=video %d UDP/TLS/RTP/SAVPF %d", srv->udp_port, c->offer.video_pt);
 	APPEND("c=IN IP4 %s", srv->local_ip);
 	APPEND("a=rtcp-mux");
+	APPEND("a=rtcp-rsize");
 	APPEND("a=ice-ufrag:%s", c->local_ufrag);
 	APPEND("a=ice-pwd:%s", c->local_pwd);
-	APPEND("a=ice-options:ice2");
-	APPEND("a=ice-lite");
 	APPEND("a=fingerprint:%s", srv->dtls->fingerprint);
 	APPEND("a=setup:passive");
 	APPEND("a=mid:%s", c->offer.mid_video[0] ? c->offer.mid_video : "0");
@@ -240,6 +240,7 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 		APPEND("m=audio %d UDP/TLS/RTP/SAVPF %d", srv->udp_port, c->offer.audio_pt);
 		APPEND("c=IN IP4 %s", srv->local_ip);
 		APPEND("a=rtcp-mux");
+		APPEND("a=rtcp-rsize");
 		APPEND("a=ice-ufrag:%s", c->local_ufrag);
 		APPEND("a=ice-pwd:%s", c->local_pwd);
 		APPEND("a=fingerprint:%s", srv->dtls->fingerprint);
