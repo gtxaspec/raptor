@@ -59,6 +59,7 @@ typedef struct {
 	uint32_t snap_buf_size;
 
 	volatile sig_atomic_t *running;
+	rss_ctrl_t *ctrl;
 
 	/* Basic auth (empty = no auth) */
 	char auth_user[128];
@@ -375,6 +376,60 @@ static void stream_mjpeg_frame(rhd_server_t *srv, const uint8_t *data, uint32_t 
 
 /* ── Server init ── */
 
+/* ── Control socket ── */
+
+static int rhd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, void *userdata)
+{
+	rhd_server_t *srv = userdata;
+
+	if (strstr(cmd_json, "\"config-get\"")) {
+		char section[64], key[64];
+		if (rss_json_get_str(cmd_json, "section", section, sizeof(section)) == 0 &&
+		    rss_json_get_str(cmd_json, "key", key, sizeof(key)) == 0) {
+			const char *v = rss_config_get_str(srv->cfg, section, key, NULL);
+			if (v)
+				snprintf(resp_buf, resp_buf_size, "%s", v);
+			else
+				resp_buf[0] = '\0';
+		} else {
+			resp_buf[0] = '\0';
+		}
+		return (int)strlen(resp_buf);
+	}
+
+	if (strstr(cmd_json, "\"config-save\"")) {
+		int ret = rss_config_save(srv->cfg, srv->config_path);
+		snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
+		return (int)strlen(resp_buf);
+	}
+
+	if (strstr(cmd_json, "\"clients\"")) {
+		int mjpeg = 0, snap = 0;
+		for (int i = 0; i < srv->client_count; i++) {
+			if (srv->clients[i]->is_mjpeg)
+				mjpeg++;
+			else
+				snap++;
+		}
+		snprintf(resp_buf, resp_buf_size,
+			 "{\"status\":\"ok\",\"clients\":%d,\"mjpeg\":%d,\"snapshot\":%d,"
+			 "\"max_clients\":%d,\"jpeg_rings\":%d}",
+			 srv->client_count, mjpeg, snap, srv->max_clients, srv->jpeg_ring_count);
+		return (int)strlen(resp_buf);
+	}
+
+	/* Default: status */
+	int mjpeg = 0;
+	for (int i = 0; i < srv->client_count; i++)
+		if (srv->clients[i]->is_mjpeg)
+			mjpeg++;
+	snprintf(resp_buf, resp_buf_size,
+		 "{\"status\":\"ok\",\"clients\":%d,\"mjpeg\":%d,\"port\":%d,"
+		 "\"jpeg_rings\":%d}",
+		 srv->client_count, mjpeg, srv->port, srv->jpeg_ring_count);
+	return (int)strlen(resp_buf);
+}
+
 static int server_init(rhd_server_t *srv)
 {
 	srv->listen_fd = socket(AF_INET6, SOCK_STREAM, 0);
@@ -411,6 +466,17 @@ static int server_init(rhd_server_t *srv)
 	srv->epoll_fd = epoll_create1(0);
 	struct epoll_event ev = {.events = EPOLLIN, .data.fd = srv->listen_fd};
 	epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, srv->listen_fd, &ev);
+
+	/* Control socket */
+	rss_mkdir_p("/var/run/rss");
+	srv->ctrl = rss_ctrl_listen("/var/run/rss/rhd.sock");
+	if (srv->ctrl) {
+		int ctrl_fd = rss_ctrl_get_fd(srv->ctrl);
+		if (ctrl_fd >= 0) {
+			ev = (struct epoll_event){.events = EPOLLIN, .data.fd = ctrl_fd};
+			epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, ctrl_fd, &ev);
+		}
+	}
 
 	RSS_INFO("HTTP server listening on port %d (dual-stack)", srv->port);
 	return 0;
@@ -454,6 +520,7 @@ static void server_run(rhd_server_t *srv)
 	srv->snap_buf = malloc(srv->snap_buf_size);
 
 	struct epoll_event events[16];
+	int ctrl_fd = srv->ctrl ? rss_ctrl_get_fd(srv->ctrl) : -1;
 
 	while (*srv->running) {
 		/* Check for new JPEG frames from ring 0 for MJPEG streaming */
@@ -487,6 +554,11 @@ static void server_run(rhd_server_t *srv)
 
 		for (int i = 0; i < n; i++) {
 			int fd = events[i].data.fd;
+
+			if (fd == ctrl_fd) {
+				rss_ctrl_accept_and_handle(srv->ctrl, rhd_ctrl_handler, srv);
+				continue;
+			}
 
 			if (fd == srv->listen_fd) {
 				/* Accept new client */
@@ -570,6 +642,8 @@ static void server_run(rhd_server_t *srv)
 		if (srv->jpeg_rings[j])
 			rss_ring_close(srv->jpeg_rings[j]);
 	}
+	if (srv->ctrl)
+		rss_ctrl_destroy(srv->ctrl);
 	close(srv->listen_fd);
 	close(srv->epoll_fd);
 }
