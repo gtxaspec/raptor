@@ -168,7 +168,7 @@ int rwd_sdp_parse_offer(const char *sdp, rwd_sdp_offer_t *offer)
 			int eid;
 			char ext_uri[128];
 			if (sscanf(val, "%d %127s", &eid, ext_uri) == 2) {
-				if (strstr(ext_uri, "sdes:mid"))
+				if (strstr(ext_uri, "sdes:mid") && eid >= 1 && eid <= 14)
 					offer->mid_ext_id = eid;
 			}
 			continue;
