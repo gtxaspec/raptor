@@ -156,6 +156,7 @@ int rwd_dtls_init(rwd_dtls_ctx_t *ctx, const char *cert_path, const char *key_pa
 	 * Include SHA1 fallbacks for broader client support (Chrome, go2rtc).
 	 * SHA384 ciphersuites are excluded — the TLS PRF fallback for SRTP key
 	 * export produces wrong keys with SHA384 (go2rtc/pion). */
+	/* static: mbedtls_ssl_conf_ciphersuites stores a pointer, not a copy */
 	static const int ciphersuites[] = {
 		MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
 		MBEDTLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
