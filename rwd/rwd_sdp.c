@@ -250,9 +250,7 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 	APPEND("a=rtcp-fb:%d nack", c->offer.video_pt);
 	APPEND("a=rtcp-fb:%d nack pli", c->offer.video_pt);
 	APPEND("a=rtcp-fb:%d ccm fir", c->offer.video_pt);
-	/* SSRC declared for pion/go2rtc compatibility. htonl because compy
-	 * writes SSRC in host byte order but pion reads as network byte order. */
-	APPEND("a=ssrc:%u cname:raptor", (unsigned)htonl(c->video_ssrc));
+	APPEND("a=ssrc:%u cname:raptor", c->video_ssrc);
 	APPEND("a=candidate:1 1 UDP 2130706431 %s %d typ host", srv->local_ip, srv->udp_port);
 
 	/* Audio m-line (if browser offered Opus) */
@@ -272,7 +270,7 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 		 * go2rtc sets this internally for webrtc: sources. */
 		APPEND("a=rtpmap:%d opus/48000/2", c->offer.audio_pt);
 		APPEND("a=fmtp:%d minptime=10;useinbandfec=1", c->offer.audio_pt);
-		APPEND("a=ssrc:%u cname:raptor", (unsigned)htonl(c->audio_ssrc));
+		APPEND("a=ssrc:%u cname:raptor", c->audio_ssrc);
 		APPEND("a=candidate:1 1 UDP 2130706431 %s %d typ host", srv->local_ip,
 		       srv->udp_port);
 	}
