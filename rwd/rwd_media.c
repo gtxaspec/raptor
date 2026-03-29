@@ -61,7 +61,8 @@ static void RwdUdpSender_drop(VSelf)
 impl(Compy_Droppable, RwdUdpSender);
 impl(Compy_Transport, RwdUdpSender);
 
-Compy_Transport rwd_transport_sendto(int fd, const struct sockaddr_storage *addr, socklen_t addr_len)
+Compy_Transport rwd_transport_sendto(int fd, const struct sockaddr_storage *addr,
+				     socklen_t addr_len)
 {
 	RwdUdpSender *s = calloc(1, sizeof(*s));
 	if (!s) {
@@ -121,8 +122,7 @@ int rwd_media_setup(rwd_client_t *c)
 			if (udp_rtcp_a.self) {
 				Compy_Transport srtcp_a =
 					compy_transport_srtcp(udp_rtcp_a, suite, &send_key);
-				c->rtcp_audio =
-					Compy_Rtcp_new(c->rtp_audio, srtcp_a, "raptor");
+				c->rtcp_audio = Compy_Rtcp_new(c->rtp_audio, srtcp_a, "raptor");
 			}
 		}
 	}
@@ -132,8 +132,9 @@ int rwd_media_setup(rwd_client_t *c)
 	c->waiting_keyframe = true;
 
 	/* Request IDR so we get a keyframe quickly */
-	if (srv->video_ring)
-		rss_ring_request_idr(srv->video_ring);
+	int si = c->stream_idx;
+	if (si >= 0 && si < RWD_STREAM_COUNT && srv->video_rings[si])
+		rss_ring_request_idr(srv->video_rings[si]);
 
 	RSS_INFO("media: SRTP stack ready for %s (IDR requested)", c->session_id);
 	return 0;
@@ -164,11 +165,14 @@ void rwd_media_teardown(rwd_client_t *c)
 	c->rtp_audio = NULL;
 	c->rtcp_video = NULL;
 	c->rtcp_audio = NULL;
+	memset(&c->srtp_video, 0, sizeof(c->srtp_video));
+	memset(&c->srtp_audio, 0, sizeof(c->srtp_audio));
 }
 
 /* ── Parse Annex B and send NALUs via SRTP ── */
 
-static void rwd_send_video_frame(rwd_client_t *c, const uint8_t *data, uint32_t len, uint32_t rtp_ts)
+static void rwd_send_video_frame(rwd_client_t *c, const uint8_t *data, uint32_t len,
+				 uint32_t rtp_ts)
 {
 	if (!c->nal_video || !c->sending)
 		return;
@@ -180,17 +184,29 @@ static void rwd_send_video_frame(rwd_client_t *c, const uint8_t *data, uint32_t 
 	const uint8_t *end = data + len;
 
 	while (p < end - 4) {
-		if (!(p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] == 1)) { p++; continue; }
+		if (!(p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] == 1)) {
+			p++;
+			continue;
+		}
 		const uint8_t *ns = p + 4;
 		const uint8_t *ne = end;
 		for (const uint8_t *q = ns + 1; q < end - 3; q++) {
-			if (q[0] == 0 && q[1] == 0 && q[2] == 0 && q[3] == 1) { ne = q; break; }
+			if (q[0] == 0 && q[1] == 0 && q[2] == 0 && q[3] == 1) {
+				ne = q;
+				break;
+			}
 		}
 		uint32_t nl = (uint32_t)(ne - ns);
 		if (nl >= 1) {
 			uint8_t nt = ns[0] & 0x1F;
-			if (nt == 7) { sps_data = ns; sps_len = nl; }
-			if (nt == 8) { pps_data = ns; pps_len = nl; }
+			if (nt == 7) {
+				sps_data = ns;
+				sps_len = nl;
+			}
+			if (nt == 8) {
+				pps_data = ns;
+				pps_len = nl;
+			}
 		}
 		p = ne;
 	}
@@ -202,10 +218,12 @@ static void rwd_send_video_frame(rwd_client_t *c, const uint8_t *data, uint32_t 
 		stap[off++] = (sps_data[0] & 0xE0) | 24; /* STAP-A: NRI from SPS, type=24 */
 		stap[off++] = (uint8_t)(sps_len >> 8);
 		stap[off++] = (uint8_t)(sps_len);
-		memcpy(stap + off, sps_data, sps_len); off += sps_len;
+		memcpy(stap + off, sps_data, sps_len);
+		off += sps_len;
 		stap[off++] = (uint8_t)(pps_len >> 8);
 		stap[off++] = (uint8_t)(pps_len);
-		memcpy(stap + off, pps_data, pps_len); off += pps_len;
+		memcpy(stap + off, pps_data, pps_len);
+		off += pps_len;
 
 		(void)!Compy_RtpTransport_send_packet(c->rtp_video, Compy_RtpTimestamp_Raw(rtp_ts),
 						      false, U8Slice99_empty(),
@@ -215,17 +233,29 @@ static void rwd_send_video_frame(rwd_client_t *c, const uint8_t *data, uint32_t 
 	/* Second pass: send picture NALUs (skip SPS/PPS) */
 	p = data;
 	while (p < end - 4) {
-		if (!(p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] == 1)) { p++; continue; }
+		if (!(p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] == 1)) {
+			p++;
+			continue;
+		}
 		const uint8_t *nalu_start = p + 4;
 		const uint8_t *nalu_end = end;
 		for (const uint8_t *q = nalu_start + 1; q < end - 3; q++) {
-			if (q[0] == 0 && q[1] == 0 && q[2] == 0 && q[3] == 1) { nalu_end = q; break; }
+			if (q[0] == 0 && q[1] == 0 && q[2] == 0 && q[3] == 1) {
+				nalu_end = q;
+				break;
+			}
 		}
 		uint32_t nalu_len = (uint32_t)(nalu_end - nalu_start);
-		if (nalu_len < 1) { p = nalu_end; continue; }
+		if (nalu_len < 1) {
+			p = nalu_end;
+			continue;
+		}
 
 		uint8_t nal_type = nalu_start[0] & 0x1F;
-		if (nal_type == 7 || nal_type == 8) { p = nalu_end; continue; } /* skip SPS/PPS */
+		if (nal_type == 7 || nal_type == 8) {
+			p = nalu_end;
+			continue;
+		} /* skip SPS/PPS */
 
 		Compy_NalUnit nalu = {
 			.header = Compy_NalHeader_H264(Compy_H264NalHeader_parse(nalu_start[0])),
@@ -254,95 +284,122 @@ static void rwd_send_audio_frame(rwd_client_t *c, uint32_t codec, const uint8_t 
 
 	/* Opus: raw packet, marker=true */
 	(void)!Compy_RtpTransport_send_packet(c->rtp_audio, Compy_RtpTimestamp_Raw(rtp_ts), true,
-					      U8Slice99_empty(), U8Slice99_new((uint8_t *)data, len));
+					      U8Slice99_empty(),
+					      U8Slice99_new((uint8_t *)data, len));
 	(void)codec;
+
+	/* Periodic RTCP SR (every 5 seconds) */
+	if (c->rtcp_audio) {
+		int64_t now = rss_timestamp_us();
+		if (now - c->last_rtcp_audio > 5000000) {
+			(void)!Compy_Rtcp_send_sr(c->rtcp_audio);
+			c->last_rtcp_audio = now;
+		}
+	}
 }
 
-/* ── Video reader thread ── */
+/* ── Video reader thread ──
+ *
+ * Reads from both main (stream 0) and sub (stream 1) rings,
+ * dispatching frames to clients based on their stream_idx. */
 
-static rwd_server_t *g_srv_for_readers = NULL;
+static const char *ring_names[RWD_STREAM_COUNT] = {"main", "sub"};
 
 void *rwd_video_reader_thread(void *arg)
 {
 	rwd_server_t *srv = arg;
-	g_srv_for_readers = srv;
+	uint32_t video_ts_inc[RWD_STREAM_COUNT] = {0};
+	uint32_t video_rtp_ts[RWD_STREAM_COUNT] = {0};
 
-	/* Wait for video ring to become available */
-	while (*srv->running && !srv->video_ring) {
-		srv->video_ring = rss_ring_open("main");
-		if (!srv->video_ring)
+	/* Wait for at least the main ring */
+	while (*srv->running && !srv->video_rings[0]) {
+		for (int s = 0; s < RWD_STREAM_COUNT; s++) {
+			if (!srv->video_rings[s])
+				srv->video_rings[s] = rss_ring_open(ring_names[s]);
+		}
+		if (!srv->video_rings[0])
 			usleep(500000);
 	}
-	if (!srv->video_ring)
+	if (!srv->video_rings[0])
 		return NULL;
 
-	const rss_ring_header_t *vhdr = rss_ring_get_header(srv->video_ring);
-	uint32_t fps = vhdr->fps_num ? vhdr->fps_num : 25;
-	uint32_t video_ts_inc = RWD_VIDEO_CLOCK / fps;
-	uint32_t video_rtp_ts = 0;
+	/* Initialize per-stream state */
+	for (int s = 0; s < RWD_STREAM_COUNT; s++) {
+		if (!srv->video_rings[s])
+			continue;
+		const rss_ring_header_t *vhdr = rss_ring_get_header(srv->video_rings[s]);
+		uint32_t fps = vhdr->fps_num ? vhdr->fps_num : 25;
+		video_ts_inc[s] = RWD_VIDEO_CLOCK / fps;
 
-	/* Allocate frame buffer based on ring data size */
-	srv->video_buf_size = vhdr->data_size / (vhdr->slot_count ? vhdr->slot_count : 1);
-	if (srv->video_buf_size < 256 * 1024)
-		srv->video_buf_size = 256 * 1024;
-	srv->video_buf = malloc(srv->video_buf_size);
-	if (!srv->video_buf) {
-		RSS_ERROR("media: failed to allocate video buffer (%u bytes)", srv->video_buf_size);
-		return NULL;
+		srv->video_buf_sizes[s] =
+			vhdr->data_size / (vhdr->slot_count ? vhdr->slot_count : 1);
+		if (srv->video_buf_sizes[s] < 256 * 1024)
+			srv->video_buf_sizes[s] = 256 * 1024;
+		srv->video_bufs[s] = malloc(srv->video_buf_sizes[s]);
+		if (!srv->video_bufs[s]) {
+			RSS_ERROR("media: failed to allocate video buffer[%d]", s);
+			continue;
+		}
+		srv->video_read_seq[s] = vhdr->write_seq;
+		RSS_INFO("media: video reader[%d] started (fps=%u ts_inc=%u)", s, fps,
+			 video_ts_inc[s]);
 	}
-
-	/* Start from latest to avoid replay */
-	srv->video_read_seq = vhdr->write_seq;
-
-	RSS_INFO("media: video reader started (fps=%u ts_inc=%u)", fps, video_ts_inc);
 
 	while (*srv->running) {
-		int ret = rss_ring_wait(srv->video_ring, 100);
-		if (ret != 0)
-			continue;
-
-		uint32_t length;
-		rss_ring_slot_t meta;
-		uint64_t read_seq = srv->video_read_seq;
-
-		ret = rss_ring_read(srv->video_ring, &read_seq, srv->video_buf, srv->video_buf_size,
-				    &length, &meta);
-		if (ret == RSS_EOVERFLOW) {
-			srv->video_read_seq = read_seq;
-			rss_ring_request_idr(srv->video_ring);
-			continue;
-		}
-		if (ret != 0)
-			continue;
-
-		srv->video_read_seq = read_seq;
-
-		uint32_t rtp_ts = video_rtp_ts;
-		video_rtp_ts += video_ts_inc;
-
-		pthread_mutex_lock(&srv->clients_lock);
-		for (int i = 0; i < srv->client_count; i++) {
-			rwd_client_t *c = srv->clients[i];
-			if (!c || !c->sending)
+		/* Poll both rings (short timeout so we alternate quickly) */
+		for (int s = 0; s < RWD_STREAM_COUNT; s++) {
+			if (!srv->video_rings[s] || !srv->video_bufs[s])
 				continue;
 
-			if (c->waiting_keyframe) {
-				if (!meta.is_key)
-					continue;
-				c->waiting_keyframe = false;
-				c->video_ts_offset = rtp_ts;
-				c->video_ts_base_set = true;
-				RSS_INFO("media: client got keyframe, starting send");
-			}
+			int ret = rss_ring_wait(srv->video_rings[s], 50);
+			if (ret != 0)
+				continue;
 
-			uint32_t client_ts = rtp_ts - c->video_ts_offset;
-			rwd_send_video_frame(c, srv->video_buf, length, client_ts);
+			uint32_t length;
+			rss_ring_slot_t meta;
+			uint64_t read_seq = srv->video_read_seq[s];
+
+			ret = rss_ring_read(srv->video_rings[s], &read_seq, srv->video_bufs[s],
+					    srv->video_buf_sizes[s], &length, &meta);
+			if (ret == RSS_EOVERFLOW) {
+				srv->video_read_seq[s] = read_seq;
+				rss_ring_request_idr(srv->video_rings[s]);
+				continue;
+			}
+			if (ret != 0)
+				continue;
+
+			srv->video_read_seq[s] = read_seq;
+
+			uint32_t rtp_ts = video_rtp_ts[s];
+			video_rtp_ts[s] += video_ts_inc[s];
+
+			pthread_mutex_lock(&srv->clients_lock);
+			for (int i = 0; i < RWD_MAX_CLIENTS; i++) {
+				rwd_client_t *c = srv->clients[i];
+				if (!c || !c->sending || c->stream_idx != s)
+					continue;
+
+				if (c->waiting_keyframe) {
+					if (!meta.is_key)
+						continue;
+					c->waiting_keyframe = false;
+					c->video_ts_offset = rtp_ts;
+					c->video_ts_base_set = true;
+					RSS_INFO("media: client[%d] got keyframe, starting send", s);
+				}
+
+				uint32_t client_ts = rtp_ts - c->video_ts_offset;
+				rwd_send_video_frame(c, srv->video_bufs[s], length, client_ts);
+			}
+			pthread_mutex_unlock(&srv->clients_lock);
 		}
-		pthread_mutex_unlock(&srv->clients_lock);
 	}
 
-	free(srv->video_buf);
-	srv->video_buf = NULL;
+	for (int s = 0; s < RWD_STREAM_COUNT; s++) {
+		free(srv->video_bufs[s]);
+		srv->video_bufs[s] = NULL;
+	}
 	RSS_INFO("media: video reader exiting");
 	return NULL;
 }
@@ -353,7 +410,11 @@ void *rwd_audio_reader_thread(void *arg)
 {
 	rwd_server_t *srv = arg;
 
-	/* Wait for audio ring */
+	/* Wait for audio ring.
+	 * NOTE: srv->audio_ring and srv->has_audio are set once here at
+	 * thread start and never changed afterward. The word-aligned pointer
+	 * write is atomic on MIPS, and has_audio is set before any client
+	 * can exist to read it, so no additional synchronization is needed. */
 	while (*srv->running && !srv->audio_ring) {
 		srv->audio_ring = rss_ring_open("audio");
 		if (!srv->audio_ring)
@@ -386,8 +447,8 @@ void *rwd_audio_reader_thread(void *arg)
 			rss_ring_slot_t meta;
 			uint64_t read_seq = srv->audio_read_seq;
 
-			ret = rss_ring_read(srv->audio_ring, &read_seq, audio_buf, sizeof(audio_buf),
-					    &length, &meta);
+			ret = rss_ring_read(srv->audio_ring, &read_seq, audio_buf,
+					    sizeof(audio_buf), &length, &meta);
 			if (ret == RSS_EOVERFLOW) {
 				srv->audio_read_seq = read_seq;
 				break;
@@ -400,7 +461,7 @@ void *rwd_audio_reader_thread(void *arg)
 			audio_rtp_ts += samples_per_frame;
 
 			pthread_mutex_lock(&srv->clients_lock);
-			for (int i = 0; i < srv->client_count; i++) {
+			for (int i = 0; i < RWD_MAX_CLIENTS; i++) {
 				rwd_client_t *c = srv->clients[i];
 				if (!c || !c->sending || !c->rtp_audio)
 					continue;

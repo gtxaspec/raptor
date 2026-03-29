@@ -32,19 +32,24 @@
 void rwd_hmac_sha1(const uint8_t *key, size_t key_len, const uint8_t *data, size_t data_len,
 		   uint8_t out[20])
 {
-	mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA1), key, key_len, data, data_len,
-			out);
+	const mbedtls_md_info_t *md = mbedtls_md_info_from_type(MBEDTLS_MD_SHA1);
+	if (!md) {
+		memset(out, 0, 20);
+		return;
+	}
+	mbedtls_md_hmac(md, key, key_len, data, data_len, out);
 }
 
 /* ── Utility: CSPRNG via /dev/urandom ── */
 
 int rwd_random_bytes(uint8_t *buf, size_t len)
 {
-	int fd = open("/dev/urandom", O_RDONLY);
-	if (fd < 0)
+	static int urandom_fd = -1;
+	if (urandom_fd < 0)
+		urandom_fd = open("/dev/urandom", O_RDONLY);
+	if (urandom_fd < 0)
 		return -1;
-	ssize_t n = read(fd, buf, len);
-	close(fd);
+	ssize_t n = read(urandom_fd, buf, len);
 	return n == (ssize_t)len ? 0 : -1;
 }
 
@@ -80,9 +85,14 @@ int rwd_get_local_ip(char *buf, size_t buflen)
 
 void rwd_generate_ice_credentials(char *ufrag, size_t ufrag_len, char *pwd, size_t pwd_len)
 {
-	static const char charset[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/";
+	static const char charset[] =
+		"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/";
 	uint8_t rand_bytes[32];
-	rwd_random_bytes(rand_bytes, sizeof(rand_bytes));
+	if (rwd_random_bytes(rand_bytes, sizeof(rand_bytes)) != 0) {
+		uint64_t ts = rss_timestamp_us();
+		memcpy(rand_bytes, &ts,
+		       sizeof(ts) < sizeof(rand_bytes) ? sizeof(ts) : sizeof(rand_bytes));
+	}
 
 	/* ICE ufrag: 4-8 characters */
 	size_t ulen = ufrag_len - 1 < 8 ? ufrag_len - 1 : 8;
@@ -120,6 +130,7 @@ static int create_udp_socket(int port)
 			close(fd);
 			return -1;
 		}
+		fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
 		return fd;
 	}
 
@@ -149,25 +160,44 @@ static int create_udp_socket(int port)
 static int create_http_socket(int port)
 {
 	int fd = socket(AF_INET6, SOCK_STREAM, 0);
-	if (fd < 0)
-		fd = socket(AF_INET, SOCK_STREAM, 0);
-	if (fd < 0)
-		return -1;
+	if (fd >= 0) {
+		int reuse = 1;
+		setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+		int off = 0;
+		setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof(off));
 
-	int reuse = 1;
-	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
-	int off = 0;
-	setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof(off));
-
-	struct sockaddr_in6 addr = {
-		.sin6_family = AF_INET6,
-		.sin6_port = htons(port),
-		.sin6_addr = IN6ADDR_ANY_INIT,
-	};
-	if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-		close(fd);
-		return -1;
+		struct sockaddr_in6 addr6 = {
+			.sin6_family = AF_INET6,
+			.sin6_port = htons(port),
+			.sin6_addr = IN6ADDR_ANY_INIT,
+		};
+		if (bind(fd, (struct sockaddr *)&addr6, sizeof(addr6)) < 0) {
+			close(fd);
+			fd = -1;
+		}
 	}
+
+	/* Fallback to IPv4 if IPv6 not available */
+	if (fd < 0) {
+		fd = socket(AF_INET, SOCK_STREAM, 0);
+		if (fd < 0)
+			return -1;
+
+		int reuse = 1;
+		setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+
+		struct sockaddr_in addr4 = {
+			.sin_family = AF_INET,
+			.sin_port = htons(port),
+			.sin_addr.s_addr = INADDR_ANY,
+		};
+		if (bind(fd, (struct sockaddr *)&addr4, sizeof(addr4)) < 0) {
+			close(fd);
+			return -1;
+		}
+	}
+
+	/* listen backlog of 8 provides implicit connection limiting */
 	if (listen(fd, 8) < 0) {
 		close(fd);
 		return -1;
@@ -287,11 +317,13 @@ static void rwd_run(rwd_server_t *srv)
 
 	/* Register UDP socket */
 	struct epoll_event ev = {.events = EPOLLIN, .data.fd = srv->udp_fd};
-	epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, srv->udp_fd, &ev);
+	if (epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, srv->udp_fd, &ev) < 0)
+		RSS_ERROR("epoll_ctl add udp_fd failed: %s", strerror(errno));
 
 	/* Register HTTP socket */
 	ev = (struct epoll_event){.events = EPOLLIN, .data.fd = srv->http_fd};
-	epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, srv->http_fd, &ev);
+	if (epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, srv->http_fd, &ev) < 0)
+		RSS_ERROR("epoll_ctl add http_fd failed: %s", strerror(errno));
 
 	/* Start media reader threads */
 	pthread_t video_tid, audio_tid;
@@ -318,8 +350,9 @@ static void rwd_run(rwd_server_t *srv)
 				for (int burst = 0; burst < 32; burst++) {
 					struct sockaddr_storage from;
 					socklen_t from_len = sizeof(from);
-					ssize_t n = recvfrom(srv->udp_fd, udp_buf, sizeof(udp_buf), 0,
-							     (struct sockaddr *)&from, &from_len);
+					ssize_t n =
+						recvfrom(srv->udp_fd, udp_buf, sizeof(udp_buf), 0,
+							 (struct sockaddr *)&from, &from_len);
 					if (n <= 0)
 						break;
 					handle_udp_packet(srv, udp_buf, n, &from, from_len);
@@ -328,10 +361,14 @@ static void rwd_run(rwd_server_t *srv)
 				/* Accept HTTP connection */
 				struct sockaddr_storage client_addr;
 				socklen_t client_len = sizeof(client_addr);
-				int client_fd = accept(srv->http_fd,
-						       (struct sockaddr *)&client_addr, &client_len);
+				int client_fd = accept(
+					srv->http_fd, (struct sockaddr *)&client_addr, &client_len);
 				if (client_fd < 0)
 					continue;
+
+				/* Guard against slow/malicious clients */
+				struct timeval tv = {.tv_sec = 5};
+				setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
 				/* Get local address for IP detection */
 				struct sockaddr_storage local_addr;
@@ -389,6 +426,8 @@ int main(int argc, char **argv)
 	}
 
 	rwd_server_t srv = {0};
+	srv.udp_fd = -1;
+	srv.http_fd = -1;
 	srv.cfg = dctx.cfg;
 	srv.config_path = dctx.config_path;
 	srv.running = dctx.running;
@@ -400,6 +439,9 @@ int main(int argc, char **argv)
 	if (srv.max_clients > RWD_MAX_CLIENTS)
 		srv.max_clients = RWD_MAX_CLIENTS;
 	pthread_mutex_init(&srv.clients_lock, NULL);
+
+	/* Initialize CRC32 table before any threads start */
+	rwd_crc32_init();
 
 	/* Auto-detect local IP */
 	const char *cfg_ip = rss_config_get_str(dctx.cfg, "webrtc", "local_ip", "");
@@ -452,8 +494,10 @@ cleanup:
 		close(srv.udp_fd);
 	if (srv.http_fd >= 0)
 		close(srv.http_fd);
-	if (srv.video_ring)
-		rss_ring_close(srv.video_ring);
+	for (int s = 0; s < RWD_STREAM_COUNT; s++) {
+		if (srv.video_rings[s])
+			rss_ring_close(srv.video_rings[s]);
+	}
 	if (srv.audio_ring)
 		rss_ring_close(srv.audio_ring);
 	if (srv.dtls) {

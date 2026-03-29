@@ -32,10 +32,14 @@ static const char webrtc_html[] =
 	"video{width:100%;max-height:90vh;object-fit:contain;background:#000}"
 	"button{margin:10px;padding:8px 24px;font-size:16px;cursor:pointer;"
 	"border:1px solid #555;background:#222;color:#fff;border-radius:4px}"
-	"button:hover{background:#333}#status{color:#888;font-size:14px}</style>\n"
+	"button:hover{background:#333}select{margin:10px;padding:8px;font-size:16px;"
+	"background:#222;color:#fff;border:1px solid #555;border-radius:4px}"
+	"#status{color:#888;font-size:14px}</style>\n"
 	"</head><body>\n"
 	"<video id='v' autoplay muted playsinline></video>\n"
-	"<div><button id='btn' onclick='toggle()'>Connect</button>"
+	"<div>"
+	"<select id='stream'><option value='0'>Main</option><option value='1'>Sub</option></select>"
+	"<button id='btn' onclick='toggle()'>Connect</button>"
 	"<button id='mute' onclick='toggleMute()' style='display:none'>Unmute</button>"
 	"<span id='status'></span></div>\n"
 	"<script>\n"
@@ -47,7 +51,8 @@ static const char webrtc_html[] =
 	"  pc=new RTCPeerConnection({iceServers:[]});\n"
 	"  pc.addTransceiver('video',{direction:'recvonly'});\n"
 	"  pc.addTransceiver('audio',{direction:'recvonly'});\n"
-	"  pc.ontrack=e=>{if(!v.srcObject){v.srcObject=new MediaStream()}v.srcObject.addTrack(e.track);v.muted=true;v.play().catch(()=>{})};\n"
+	"  pc.ontrack=e=>{if(!v.srcObject){v.srcObject=new "
+	"MediaStream()}v.srcObject.addTrack(e.track);v.muted=true;v.play().catch(()=>{})};\n"
 	"  pc.oniceconnectionstatechange=()=>{st.textContent=pc.iceConnectionState;"
 	"if(pc.iceConnectionState==='failed'||pc.iceConnectionState==='disconnected')stop()};\n"
 	"  const offer=await pc.createOffer();\n"
@@ -55,26 +60,36 @@ static const char webrtc_html[] =
 	"  /* Wait for ICE gathering to complete */\n"
 	"  await new Promise(r=>{if(pc.iceGatheringState==='complete')r();"
 	"else pc.onicegatheringstatechange=()=>{if(pc.iceGatheringState==='complete')r()}});\n"
-	"  const resp=await fetch('/whip',{method:'POST',"
+	"  const stream=document.getElementById('stream').value;\n"
+	"  const resp=await fetch('/whip?stream='+stream,{method:'POST',"
 	"headers:{'Content-Type':'application/sdp'},body:pc.localDescription.sdp});\n"
 	"  if(!resp.ok){st.textContent='Error: '+resp.status;return}\n"
 	"  resource=resp.headers.get('Location');\n"
 	"  const sdp=await resp.text();\n"
 	"  await pc.setRemoteDescription({type:'answer',sdp});\n"
-	"  btn.textContent='Disconnect';document.getElementById('mute').style.display='';\n"
+	"  btn.textContent='Disconnect';document.getElementById('mute').style.display='';"
+	"document.getElementById('stream').disabled=true;\n"
 	"}\n"
 	"async function stop(){\n"
 	"  if(resource)fetch(resource,{method:'DELETE'}).catch(()=>{});\n"
 	"  if(pc)pc.close();\n"
 	"  pc=null;resource=null;v.srcObject=null;\n"
-	"  btn.textContent='Connect';st.textContent='';document.getElementById('mute').style.display='none';\n"
+	"  "
+	"btn.textContent='Connect';st.textContent='';document.getElementById('mute').style.display="
+	"'none';document.getElementById('stream').disabled=false;\n"
 	"}\n"
 	"function toggle(){pc?stop():start()}\n"
-	"function toggleMute(){v.muted=!v.muted;document.getElementById('mute').textContent=v.muted?'Unmute':'Mute'}\n"
+	"function "
+	"toggleMute(){v.muted=!v.muted;document.getElementById('mute').textContent=v.muted?'Unmute'"
+	":'Mute'}\n"
 	"</script></body></html>\n";
 
 /* ── HTTP response helpers ── */
 
+/* NOTE: write() may do short writes but these are small HTTP responses
+ * (< 1KB headers + SDP body) on a fresh TCP socket, so short writes
+ * are not a practical concern here. SIGPIPE is ignored globally by
+ * rss_signal_init() in the raptor-common daemon init. */
 static void http_send(int fd, const char *status, const char *content_type, const char *body,
 		      size_t body_len, const char *extra_headers)
 {
@@ -91,6 +106,11 @@ static void http_send(int fd, const char *status, const char *content_type, cons
 			       "\r\n",
 			       status, content_type, body_len, extra_headers ? extra_headers : "");
 
+	if (hdr_len < 0)
+		hdr_len = 0;
+	if ((size_t)hdr_len > sizeof(hdr))
+		hdr_len = sizeof(hdr);
+
 	(void)!write(fd, hdr, hdr_len);
 	if (body && body_len > 0)
 		(void)!write(fd, body, body_len);
@@ -106,17 +126,21 @@ static void http_error(int fd, const char *status)
 static void generate_session_id(char *out, size_t out_size)
 {
 	uint8_t bytes[RWD_SESSION_ID_LEN];
-	rwd_random_bytes(bytes, sizeof(bytes));
+	if (rwd_random_bytes(bytes, sizeof(bytes)) != 0) {
+		uint64_t ts = rss_timestamp_us();
+		memcpy(bytes, &ts, sizeof(ts) < sizeof(bytes) ? sizeof(ts) : sizeof(bytes));
+	}
 	for (int i = 0; i < RWD_SESSION_ID_LEN && (size_t)(i * 2 + 2) < out_size; i++)
 		snprintf(out + i * 2, 3, "%02x", bytes[i]);
 }
 
 /* ── WHIP POST handler: SDP offer → answer ── */
 
-static void handle_whip_post(rwd_server_t *srv, int fd, const char *body,
-			     size_t body_len __attribute__((unused)),
-			     const struct sockaddr_storage *local_addr)
+static void handle_whip_post(rwd_server_t *srv, int fd, const char *body, size_t body_len,
+			     const struct sockaddr_storage *local_addr, int stream_idx)
 {
+	(void)body_len;
+	(void)local_addr;
 	/* Parse SDP offer */
 	rwd_sdp_offer_t offer;
 	if (rwd_sdp_parse_offer(body, &offer) != 0) {
@@ -142,6 +166,7 @@ static void handle_whip_post(rwd_server_t *srv, int fd, const char *body,
 
 	c->server = srv;
 	c->active = true;
+	c->stream_idx = stream_idx;
 	c->created_at = rss_timestamp_us();
 	memcpy(&c->offer, &offer, sizeof(offer));
 	rss_strlcpy(c->remote_ufrag, offer.ice_ufrag, sizeof(c->remote_ufrag));
@@ -162,22 +187,8 @@ static void handle_whip_post(rwd_server_t *srv, int fd, const char *body,
 		return;
 	}
 
-	/* Detect local IP from the HTTP socket if not already set */
-	if (!srv->local_ip[0] && local_addr) {
-		if (local_addr->ss_family == AF_INET) {
-			inet_ntop(AF_INET, &((struct sockaddr_in *)local_addr)->sin_addr, srv->local_ip,
-				  sizeof(srv->local_ip));
-		} else if (local_addr->ss_family == AF_INET6) {
-			struct sockaddr_in6 *a6 = (struct sockaddr_in6 *)local_addr;
-			/* Check for IPv4-mapped IPv6 */
-			if (IN6_IS_ADDR_V4MAPPED(&a6->sin6_addr))
-				inet_ntop(AF_INET, &a6->sin6_addr.s6_addr[12], srv->local_ip,
-					  sizeof(srv->local_ip));
-			else
-				inet_ntop(AF_INET6, &a6->sin6_addr, srv->local_ip,
-					  sizeof(srv->local_ip));
-		}
-	}
+	/* local_ip is set once in main() before the event loop starts,
+	 * so no per-request IP detection is needed here. */
 
 	/* Generate SDP answer */
 	char sdp_answer[RWD_SDP_BUF_SIZE];
@@ -276,12 +287,23 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 	}
 
 	/* POST /whip — SDP offer/answer */
-	if (strcmp(method, "POST") == 0 && strcmp(path, "/whip") == 0) {
+	if (strcmp(method, "POST") == 0 && strncmp(path, "/whip", 5) == 0) {
+		/* Parse ?stream=N from query string */
+		int stream_idx = 0;
+		const char *qs = strchr(path, '?');
+		if (qs) {
+			const char *sp = strstr(qs, "stream=");
+			if (sp)
+				stream_idx = atoi(sp + 7) == 1 ? 1 : 0;
+		}
 		/* Parse Content-Length */
 		size_t content_length = 0;
 		const char *cl = strcasestr(buf, "Content-Length:");
-		if (cl)
-			content_length = (size_t)atoi(cl + 15);
+		if (cl) {
+			int cl_val = atoi(cl + 15);
+			if (cl_val > 0 && cl_val < (int)sizeof(buf))
+				content_length = (size_t)cl_val;
+		}
 
 		/* Find body (after \r\n\r\n) */
 		const char *body = strstr(buf, "\r\n\r\n");
@@ -294,7 +316,10 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 		body += 4;
 		size_t body_len = n - (body - buf);
 
-		/* Read remaining body if we didn't get it all */
+		/* Read remaining body if we didn't get it all.
+		 * NOTE: 'body' points into 'buf', so it remains valid as we
+		 * append more data. With very slow clients the initial read
+		 * may not contain the full body, but SO_RCVTIMEO guards us. */
 		size_t need = content_length > 0 ? content_length : 0;
 		while (body_len < need && (size_t)n < sizeof(buf) - 1) {
 			ssize_t more = read(client_fd, buf + n, sizeof(buf) - 1 - n);
@@ -305,7 +330,7 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 			body_len = n - (body - buf);
 		}
 
-		handle_whip_post(srv, client_fd, body, body_len, local_addr);
+		handle_whip_post(srv, client_fd, body, body_len, local_addr, stream_idx);
 		close(client_fd);
 		return;
 	}

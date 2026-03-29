@@ -25,8 +25,8 @@
 #endif
 
 /* SRTP keying material sizes for AES_128_CM_HMAC_SHA1_80 */
-#define SRTP_MASTER_KEY_LEN  16
-#define SRTP_MASTER_SALT_LEN 14
+#define SRTP_MASTER_KEY_LEN   16
+#define SRTP_MASTER_SALT_LEN  14
 #define SRTP_KEY_MATERIAL_LEN (2 * SRTP_MASTER_KEY_LEN + 2 * SRTP_MASTER_SALT_LEN)
 
 /* ── BIO callbacks for non-blocking UDP I/O ── */
@@ -83,7 +83,11 @@ static int compute_cert_fingerprint(const mbedtls_x509_crt *cert, char *buf, siz
 	return 0;
 }
 
-/* ── Initialize shared DTLS server context ── */
+/* ── Initialize shared DTLS server context ──
+ *
+ * On early return (failure), the caller is responsible for calling
+ * rwd_dtls_free() which safely frees all partially-initialized
+ * mbedTLS contexts (mbedtls_*_free functions are no-ops on zeroed state). */
 
 int rwd_dtls_init(rwd_dtls_ctx_t *ctx, const char *cert_path, const char *key_path)
 {
@@ -288,8 +292,8 @@ int rwd_dtls_handshake_step(rwd_client_t *c)
 	if (ret != 0) {
 		char errbuf[128];
 		mbedtls_strerror(ret, errbuf, sizeof(errbuf));
-		RSS_ERROR("DTLS: handshake failed: %s (0x%04x) state=%d",
-			  errbuf, -ret, c->ssl.MBEDTLS_PRIVATE(state));
+		RSS_ERROR("DTLS: handshake failed: %s (0x%04x) state=%d", errbuf, -ret,
+			  c->ssl.MBEDTLS_PRIVATE(state));
 		c->dtls_state = RWD_DTLS_FAILED;
 		return -1;
 	}
