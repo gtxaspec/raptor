@@ -87,23 +87,27 @@ void rwd_generate_ice_credentials(char *ufrag, size_t ufrag_len, char *pwd, size
 {
 	static const char charset[] =
 		"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/";
-	uint8_t rand_bytes[32];
-	if (rwd_random_bytes(rand_bytes, sizeof(rand_bytes)) != 0) {
+	uint8_t ufrag_rand[8];
+	uint8_t pwd_rand[24];
+
+	if (rwd_random_bytes(ufrag_rand, sizeof(ufrag_rand)) != 0) {
 		uint64_t ts = rss_timestamp_us();
-		memcpy(rand_bytes, &ts,
-		       sizeof(ts) < sizeof(rand_bytes) ? sizeof(ts) : sizeof(rand_bytes));
+		memcpy(ufrag_rand, &ts, sizeof(ufrag_rand));
+	}
+	if (rwd_random_bytes(pwd_rand, sizeof(pwd_rand)) != 0) {
+		static uint32_t pwd_counter;
+		uint64_t ts = rss_timestamp_us() ^ (uint64_t)(++pwd_counter);
+		memcpy(pwd_rand, &ts, sizeof(ts) < sizeof(pwd_rand) ? sizeof(ts) : sizeof(pwd_rand));
 	}
 
-	/* ICE ufrag: 4-8 characters */
 	size_t ulen = ufrag_len - 1 < 8 ? ufrag_len - 1 : 8;
 	for (size_t i = 0; i < ulen; i++)
-		ufrag[i] = charset[rand_bytes[i] % (sizeof(charset) - 1)];
+		ufrag[i] = charset[ufrag_rand[i] % (sizeof(charset) - 1)];
 	ufrag[ulen] = '\0';
 
-	/* ICE pwd: 22-24 characters */
 	size_t plen = pwd_len - 1 < 24 ? pwd_len - 1 : 24;
 	for (size_t i = 0; i < plen; i++)
-		pwd[i] = charset[rand_bytes[8 + (i % 24)] % (sizeof(charset) - 1)];
+		pwd[i] = charset[pwd_rand[i] % (sizeof(charset) - 1)];
 	pwd[plen] = '\0';
 }
 
