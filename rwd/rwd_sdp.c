@@ -268,8 +268,8 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 		APPEND("a=mid:%s", c->offer.mid_audio[0] ? c->offer.mid_audio : "1");
 		APPEND("a=sendonly");
 		/* NOTE: sdes:mid extmap intentionally omitted — pion requires
-	 * HandleUndeclaredSSRCWithoutAnswer for PT-based track matching.
-	 * go2rtc sets this internally for webrtc: sources. */
+		 * HandleUndeclaredSSRCWithoutAnswer for PT-based track matching.
+		 * go2rtc sets this internally for webrtc: sources. */
 		APPEND("a=rtpmap:%d opus/48000/2", c->offer.audio_pt);
 		APPEND("a=fmtp:%d minptime=10;useinbandfec=1", c->offer.audio_pt);
 		APPEND("a=ssrc:%u cname:raptor", (unsigned)htonl(c->audio_ssrc));
