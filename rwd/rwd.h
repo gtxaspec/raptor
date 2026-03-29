@@ -108,6 +108,7 @@ struct rwd_client {
 	char remote_ufrag[64];
 	char remote_pwd[256];
 	bool ice_verified;
+	int64_t last_stun_at; /* last STUN binding request (consent freshness) */
 
 	/* DTLS */
 	rwd_dtls_state_t dtls_state;

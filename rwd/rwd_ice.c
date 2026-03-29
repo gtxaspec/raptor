@@ -305,6 +305,9 @@ int rwd_ice_process(rwd_server_t *srv, const uint8_t *buf, size_t len,
 		RSS_INFO("ICE: verified client %s", client->session_id);
 	}
 
+	/* Track consent freshness (RFC 7675) */
+	client->last_stun_at = rss_timestamp_us();
+
 	/* Send binding response */
 	return stun_send_response(srv, buf, from, from_len, client->local_pwd);
 }
