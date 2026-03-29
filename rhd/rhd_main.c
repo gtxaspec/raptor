@@ -33,6 +33,7 @@
 typedef struct {
 	int fd;
 	bool is_mjpeg; /* streaming MJPEG */
+	struct sockaddr_storage addr;
 	char recv_buf[RHD_RECV_BUF];
 	size_t recv_len;
 } rhd_client_t;
@@ -405,17 +406,29 @@ static int rhd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 	if (strstr(cmd_json, "\"clients\"")) {
-		int mjpeg = 0, snap = 0;
+		int n = snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"ok\",\"count\":%d,\"max_clients\":%d,\"clients\":[",
+				 srv->client_count, srv->max_clients);
 		for (int i = 0; i < srv->client_count; i++) {
-			if (srv->clients[i]->is_mjpeg)
-				mjpeg++;
-			else
-				snap++;
+			rhd_client_t *c = srv->clients[i];
+			char addr[INET6_ADDRSTRLEN] = "?";
+			if (c->addr.ss_family == AF_INET)
+				inet_ntop(AF_INET, &((struct sockaddr_in *)&c->addr)->sin_addr,
+					  addr, sizeof(addr));
+			else if (c->addr.ss_family == AF_INET6) {
+				struct sockaddr_in6 *s6 = (struct sockaddr_in6 *)&c->addr;
+				if (IN6_IS_ADDR_V4MAPPED(&s6->sin6_addr))
+					inet_ntop(AF_INET, &s6->sin6_addr.s6_addr[12], addr,
+						  sizeof(addr));
+				else
+					inet_ntop(AF_INET6, &s6->sin6_addr, addr, sizeof(addr));
+			}
+			n += snprintf(resp_buf + n, resp_buf_size - n,
+				      "%s{\"ip\":\"%s\",\"type\":\"%s\"}",
+				      i > 0 ? "," : "", addr,
+				      c->is_mjpeg ? "mjpeg" : "snapshot");
 		}
-		snprintf(resp_buf, resp_buf_size,
-			 "{\"status\":\"ok\",\"clients\":%d,\"mjpeg\":%d,\"snapshot\":%d,"
-			 "\"max_clients\":%d,\"jpeg_rings\":%d}",
-			 srv->client_count, mjpeg, snap, srv->max_clients, srv->jpeg_ring_count);
+		snprintf(resp_buf + n, resp_buf_size - n, "]}");
 		return (int)strlen(resp_buf);
 	}
 
@@ -584,6 +597,7 @@ static void server_run(rhd_server_t *srv)
 
 				rhd_client_t *c = calloc(1, sizeof(*c));
 				c->fd = cfd;
+				memcpy(&c->addr, &sa, sizeof(c->addr));
 				srv->clients[srv->client_count++] = c;
 
 				struct epoll_event cev = {.events = EPOLLIN, .data.fd = cfd};
