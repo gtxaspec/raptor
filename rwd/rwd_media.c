@@ -184,6 +184,41 @@ void rwd_media_teardown(rwd_client_t *c)
 	memset(&c->srtp_audio, 0, sizeof(c->srtp_audio));
 }
 
+/* ── Annex B start code scanner (handles both 3-byte and 4-byte) ── */
+
+/* Find next start code (00 00 01 or 00 00 00 01) starting at *pos.
+ * Returns pointer to NALU data (after start code), sets *sc_len to
+ * start code length (3 or 4). Returns NULL if no start code found. */
+static const uint8_t *find_start_code(const uint8_t *p, const uint8_t *end, int *sc_len)
+{
+	while (p < end - 3) {
+		if (p[0] == 0 && p[1] == 0) {
+			if (p[2] == 1) {
+				*sc_len = 3;
+				return p + 3;
+			}
+			if (p[2] == 0 && p + 3 < end && p[3] == 1) {
+				*sc_len = 4;
+				return p + 4;
+			}
+		}
+		p++;
+	}
+	return NULL;
+}
+
+/* Find the end of the current NALU (start of next start code, or end of buffer) */
+static const uint8_t *find_nalu_end(const uint8_t *nalu_start, const uint8_t *end)
+{
+	const uint8_t *p = nalu_start;
+	while (p < end - 3) {
+		if (p[0] == 0 && p[1] == 0 && (p[2] == 1 || (p[2] == 0 && p + 3 < end && p[3] == 1)))
+			return p;
+		p++;
+	}
+	return end;
+}
+
 /* ── Parse Annex B and send NALUs via SRTP ── */
 
 static void rwd_send_video_frame(rwd_client_t *c, const uint8_t *data, uint32_t len,
@@ -192,38 +227,29 @@ static void rwd_send_video_frame(rwd_client_t *c, const uint8_t *data, uint32_t 
 	if (!c->nal_video || !c->sending)
 		return;
 
+	const uint8_t *end = data + len;
+
 	/* First pass: collect SPS/PPS for STAP-A aggregation */
 	const uint8_t *sps_data = NULL, *pps_data = NULL;
 	uint32_t sps_len = 0, pps_len = 0;
 	const uint8_t *p = data;
-	const uint8_t *end = data + len;
+	int sc_len;
 
-	while (p < end - 4) {
-		if (!(p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] == 1)) {
-			p++;
-			continue;
-		}
-		const uint8_t *ns = p + 4;
-		const uint8_t *ne = end;
-		for (const uint8_t *q = ns + 1; q < end - 3; q++) {
-			if (q[0] == 0 && q[1] == 0 && q[2] == 0 && q[3] == 1) {
-				ne = q;
-				break;
-			}
-		}
-		uint32_t nl = (uint32_t)(ne - ns);
+	while ((p = find_start_code(p, end, &sc_len)) != NULL) {
+		const uint8_t *nalu_end = find_nalu_end(p, end);
+		uint32_t nl = (uint32_t)(nalu_end - p);
 		if (nl >= 1) {
-			uint8_t nt = ns[0] & 0x1F;
+			uint8_t nt = p[0] & 0x1F;
 			if (nt == 7) {
-				sps_data = ns;
+				sps_data = p;
 				sps_len = nl;
 			}
 			if (nt == 8) {
-				pps_data = ns;
+				pps_data = p;
 				pps_len = nl;
 			}
 		}
-		p = ne;
+		p = nalu_end;
 	}
 
 	/* Send STAP-A with SPS+PPS if both present (marker=false) */
@@ -247,19 +273,9 @@ static void rwd_send_video_frame(rwd_client_t *c, const uint8_t *data, uint32_t 
 
 	/* Second pass: send picture NALUs (skip SPS/PPS) */
 	p = data;
-	while (p < end - 4) {
-		if (!(p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] == 1)) {
-			p++;
-			continue;
-		}
-		const uint8_t *nalu_start = p + 4;
-		const uint8_t *nalu_end = end;
-		for (const uint8_t *q = nalu_start + 1; q < end - 3; q++) {
-			if (q[0] == 0 && q[1] == 0 && q[2] == 0 && q[3] == 1) {
-				nalu_end = q;
-				break;
-			}
-		}
+	while ((p = find_start_code(p, end, &sc_len)) != NULL) {
+		const uint8_t *nalu_start = p;
+		const uint8_t *nalu_end = find_nalu_end(nalu_start, end);
 		uint32_t nalu_len = (uint32_t)(nalu_end - nalu_start);
 		if (nalu_len < 1) {
 			p = nalu_end;
