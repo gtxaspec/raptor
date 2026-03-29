@@ -44,7 +44,7 @@
 #include <rss_ipc.h>
 #include <rss_common.h>
 
-static const char *daemons[] = {"rvd", "rsd", "rad", "rod", "rhd", "ric", "rmr", "rmd", NULL};
+static const char *daemons[] = {"rvd", "rsd", "rad", "rod", "rhd", "ric", "rmr", "rmd", "rwd", NULL};
 
 static void usage(void)
 {
