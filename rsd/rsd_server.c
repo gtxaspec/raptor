@@ -157,11 +157,15 @@ static void accept_client(rsd_server_t *srv)
 	if (fd < 0)
 		return;
 
-	if (srv->client_count >= RSD_MAX_CLIENTS) {
-		RSS_WARN("max clients reached, rejecting");
+	/* Check under lock to prevent race with concurrent accepts */
+	pthread_mutex_lock(&srv->clients_lock);
+	if (srv->client_count >= srv->max_clients) {
+		pthread_mutex_unlock(&srv->clients_lock);
+		RSS_WARN("max clients reached (%d), rejecting", srv->max_clients);
 		close(fd);
 		return;
 	}
+	pthread_mutex_unlock(&srv->clients_lock);
 
 	/* Keep fd blocking for writes — non-blocking would drop RTP packets
 	 * when the send buffer fills (78KB keyframes need multiple writes).
@@ -185,6 +189,7 @@ static void accept_client(rsd_server_t *srv)
 	client->addr = addr;
 	client->active = true;
 	client->waiting_keyframe = true;
+	client->last_activity = rss_timestamp_us();
 
 #ifdef COMPY_HAS_TLS
 	if (srv->tls_ctx) {
@@ -219,7 +224,7 @@ static void accept_client(rsd_server_t *srv)
 #else
 		 "",
 #endif
-		 srv->client_count, RSD_MAX_CLIENTS);
+		 srv->client_count, srv->max_clients);
 }
 
 static void handle_client_data(rsd_server_t *srv, int fd)
@@ -231,8 +236,8 @@ static void handle_client_data(rsd_server_t *srv, int fd)
 	/* Read into client's buffer */
 	size_t avail = sizeof(client->recv_buf) - client->recv_len;
 	if (avail == 0) {
-		RSS_WARN("client recv buffer full, dropping");
-		client->recv_len = 0;
+		RSS_WARN("client recv buffer full, disconnecting");
+		remove_client(srv, client);
 		return;
 	}
 
@@ -249,6 +254,7 @@ static void handle_client_data(rsd_server_t *srv, int fd)
 	}
 
 	client->recv_len += (size_t)n;
+	client->last_activity = rss_timestamp_us();
 	rsd_handle_rtsp_data(srv, client, client->recv_buf, client->recv_len);
 }
 
@@ -280,6 +286,12 @@ int rsd_server_init(rsd_server_t *srv)
 			continue;
 
 		const rss_ring_header_t *hdr = rss_ring_get_header(srv->video[s].ring);
+		if (!hdr || hdr->slot_count == 0) {
+			RSS_ERROR("ring[%d]: invalid header (slot_count=0), skipping", s);
+			rss_ring_close(srv->video[s].ring);
+			srv->video[s].ring = NULL;
+			continue;
+		}
 		RSS_INFO("ring[%d]: %s %ux%u @ %u/%u fps", s, hdr->codec == 0 ? "H.264" : "H.265",
 			 hdr->width, hdr->height, hdr->fps_num, hdr->fps_den);
 
@@ -403,7 +415,7 @@ static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			 "\"port\":%d,\"clients\":%d,"
 			 "\"max_clients\":%d,"
 			 "\"config_path\":\"%s\"}}",
-			 srv->port, srv->client_count, RSD_MAX_CLIENTS, srv->config_path);
+			 srv->port, srv->client_count, srv->max_clients, srv->config_path);
 		return (int)strlen(resp_buf);
 	}
 
@@ -471,6 +483,21 @@ void rsd_server_run(rsd_server_t *srv)
 				rss_ctrl_accept_and_handle(srv->ctrl, rsd_ctrl_handler, srv);
 			} else {
 				handle_client_data(srv, fd);
+			}
+		}
+
+		/* Idle timeout sweep — disconnect clients with no activity */
+		int64_t now = rss_timestamp_us();
+		int64_t timeout_us = (int64_t)RSD_IDLE_TIMEOUT_SEC * 1000000;
+		for (int i = srv->client_count - 1; i >= 0; i--) {
+			rsd_client_t *c = srv->clients[i];
+			if (c && !c->video.playing && !c->audio.playing &&
+			    (now - c->last_activity) > timeout_us) {
+				char addr[INET6_ADDRSTRLEN];
+				RSS_WARN("idle timeout: %s:%u (%ds)",
+					 client_addr_str(&c->addr, addr, sizeof(addr)),
+					 client_port(&c->addr), RSD_IDLE_TIMEOUT_SEC);
+				remove_client(srv, c);
 			}
 		}
 

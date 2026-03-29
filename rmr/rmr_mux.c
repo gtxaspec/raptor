@@ -22,7 +22,7 @@
 typedef struct {
 	uint32_t size;	    /* sample size in bytes */
 	uint32_t duration;  /* in timescale units */
-	uint32_t flags;	    /* 0x02000000 = non-key, 0x00000000 = key */
+	uint32_t flags;	    /* 0x02000000 = key (depends_on=2), 0x00000000 = non-key */
 	int32_t cts_offset; /* composition time offset (pts - dts) */
 } mux_sample_t;
 
