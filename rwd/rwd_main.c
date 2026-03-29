@@ -312,6 +312,21 @@ static void cleanup_stale_clients(rwd_server_t *srv)
 			free(c);
 			srv->clients[i] = NULL;
 			srv->client_count--;
+			continue;
+		}
+
+		/* RFC 7675 consent freshness: remove clients that stopped
+		 * sending STUN binding requests. Browsers send them every
+		 * ~5s; we allow 30s of silence before evicting. */
+		if (c->sending && c->last_stun_at > 0 &&
+		    (now - c->last_stun_at) > 30 * 1000000LL) {
+			RSS_WARN("removing session %s (consent expired, no STUN for 30s)",
+				 c->session_id);
+			rwd_media_teardown(c);
+			rwd_dtls_client_free(c);
+			free(c);
+			srv->clients[i] = NULL;
+			srv->client_count--;
 		}
 	}
 	pthread_mutex_unlock(&srv->clients_lock);
