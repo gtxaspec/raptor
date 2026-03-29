@@ -529,12 +529,20 @@ static void record_loop(rmr_state_t *st)
 				goto clip_handling;
 			}
 
-			/* On keyframe: flush previous fragment, check rotation */
-			if (meta.is_key && st->mux) {
-				rmr_mux_flush_fragment(st->mux);
-				if (rmr_storage_should_rotate(st->storage, st->segment_start_us)) {
-					close_segment(st);
-					rmr_storage_enforce_limit(st->storage);
+			/* Flush fragment periodically for steady write pattern.
+			 * On keyframe: also check segment rotation. */
+			if (st->mux) {
+				st->frames_since_flush++;
+				if (meta.is_key) {
+					rmr_mux_flush_fragment(st->mux);
+					st->frames_since_flush = 0;
+					if (rmr_storage_should_rotate(st->storage, st->segment_start_us)) {
+						close_segment(st);
+						rmr_storage_enforce_limit(st->storage);
+					}
+				} else if (st->frames_since_flush >= 10) {
+					rmr_mux_flush_fragment(st->mux);
+					st->frames_since_flush = 0;
 				}
 			}
 
