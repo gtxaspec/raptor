@@ -59,6 +59,9 @@ int main(int argc, char **argv)
 	srv.config_path = dctx.config_path;
 	srv.running = dctx.running;
 	srv.port = rss_config_get_int(dctx.cfg, "rtsp", "port", 554);
+	srv.max_clients = rss_config_get_int(dctx.cfg, "rtsp", "max_clients", RSD_MAX_CLIENTS);
+	if (srv.max_clients < 1) srv.max_clients = 1;
+	if (srv.max_clients > RSD_MAX_CLIENTS) srv.max_clients = RSD_MAX_CLIENTS;
 	rss_strlcpy(srv.endpoint_main, rss_config_get_str(dctx.cfg, "rtsp", "endpoint_main", ""),
 		    sizeof(srv.endpoint_main));
 	rss_strlcpy(srv.endpoint_sub, rss_config_get_str(dctx.cfg, "rtsp", "endpoint_sub", ""),
@@ -88,7 +91,11 @@ int main(int argc, char **argv)
 			srv.port = rss_config_get_int(dctx.cfg, "rtsp", "tls_port", srv.port);
 			RSS_INFO("RTSPS enabled (cert=%s, port=%d)", tls_cert, srv.port);
 		} else {
-			RSS_WARN("failed to load TLS cert/key — running plain RTSP");
+			RSS_FATAL("TLS enabled but failed to load cert/key (cert=%s, key=%s)",
+				  tls_cert, tls_key);
+			rss_config_free(dctx.cfg);
+			rss_daemon_cleanup("rsd");
+			return 1;
 		}
 	}
 #endif

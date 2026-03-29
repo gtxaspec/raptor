@@ -45,6 +45,7 @@ typedef struct {
 	rss_config_t *cfg;
 	const char *config_path;
 	int port;
+	int max_clients; /* runtime limit (≤ RHD_MAX_CLIENTS) */
 
 	rhd_client_t *clients[RHD_MAX_CLIENTS];
 	int client_count;
@@ -150,10 +151,19 @@ static bool http_check_auth(const rhd_server_t *srv, const char *request)
 	if (!srv->auth_user[0])
 		return true;
 
-	const char *auth = strstr(request, "Authorization: Basic ");
+	/* Search for header on a line boundary (after \n or at request start) */
+	const char *needle = "Authorization: Basic ";
+	const char *auth = NULL;
+	const char *p = request;
+	while ((p = strstr(p, needle)) != NULL) {
+		if (p == request || *(p - 1) == '\n') {
+			auth = p + strlen(needle);
+			break;
+		}
+		p++;
+	}
 	if (!auth)
 		return false;
-	auth += 21; /* skip "Authorization: Basic " */
 
 	/* Find end of base64 value */
 	const char *end = auth;
@@ -486,7 +496,7 @@ static void server_run(rhd_server_t *srv)
 				if (cfd < 0)
 					continue;
 
-				if (srv->client_count >= RHD_MAX_CLIENTS) {
+				if (srv->client_count >= srv->max_clients) {
 					http_error(cfd, "503 Service Unavailable",
 						   "Too many clients");
 					close(cfd);
@@ -520,8 +530,14 @@ static void server_run(rhd_server_t *srv)
 				continue;
 			}
 
-			ssize_t nr = read(c->fd, c->recv_buf + c->recv_len,
-					  sizeof(c->recv_buf) - c->recv_len - 1);
+			size_t space = sizeof(c->recv_buf) - c->recv_len - 1;
+			if (space == 0) {
+				/* Request too large — reject */
+				http_error(c->fd, "414 URI Too Long", "Request too large");
+				remove_client(srv, ci);
+				continue;
+			}
+			ssize_t nr = read(c->fd, c->recv_buf + c->recv_len, space);
 			if (nr <= 0) {
 				remove_client(srv, ci);
 				continue;
@@ -579,6 +595,9 @@ int main(int argc, char **argv)
 	srv.config_path = ctx.config_path;
 	srv.running = ctx.running;
 	srv.port = rss_config_get_int(ctx.cfg, "http", "port", 8080);
+	srv.max_clients = rss_config_get_int(ctx.cfg, "http", "max_clients", RHD_MAX_CLIENTS);
+	if (srv.max_clients < 1) srv.max_clients = 1;
+	if (srv.max_clients > RHD_MAX_CLIENTS) srv.max_clients = RHD_MAX_CLIENTS;
 
 	/* Basic auth — enabled when both username and password are set */
 	const char *http_user = rss_config_get_str(ctx.cfg, "http", "username", "");

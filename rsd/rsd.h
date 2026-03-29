@@ -14,10 +14,11 @@
 #include <stdint.h>
 #include <netinet/in.h>
 
-#define RSD_MAX_CLIENTS 8
-#define RSD_VIDEO_PT	96
-#define RSD_VIDEO_CLOCK 90000
-#define RSD_BUF_SIZE	4096
+#define RSD_MAX_CLIENTS	     8
+#define RSD_VIDEO_PT	     96
+#define RSD_VIDEO_CLOCK	     90000
+#define RSD_BUF_SIZE	     4096
+#define RSD_IDLE_TIMEOUT_SEC 60 /* disconnect idle clients (slowloris protection) */
 
 /* Audio codec IDs (matches RAD ring codec field) */
 #define RSD_CODEC_PCMU 0
@@ -79,6 +80,9 @@ typedef struct rsd_client {
 	/* RTSP parse buffer */
 	char recv_buf[RSD_BUF_SIZE];
 	size_t recv_len;
+
+	/* Connection tracking */
+	int64_t last_activity; /* monotonic timestamp (us) */
 } rsd_client_t;
 
 /* Per-ring reader state */
@@ -114,6 +118,7 @@ typedef struct {
 	volatile sig_atomic_t *running;
 
 	int port;
+	int max_clients; /* runtime limit (≤ RSD_MAX_CLIENTS) */
 
 	/* Digest auth (NULL = no auth required) */
 	Compy_Auth *auth;
