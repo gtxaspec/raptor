@@ -48,8 +48,8 @@ void rmr_prebuf_destroy(rmr_prebuf_t *pb)
 	free(pb);
 }
 
-void rmr_prebuf_push(rmr_prebuf_t *pb, const uint8_t *data, uint32_t len,
-		     int64_t timestamp, uint8_t is_key)
+void rmr_prebuf_push(rmr_prebuf_t *pb, const uint8_t *data, uint32_t len, int64_t timestamp,
+		     uint8_t is_key)
 {
 	if (!pb || !data || len == 0 || len > pb->data_size)
 		return;
@@ -95,7 +95,7 @@ uint32_t rmr_prebuf_find_keyframe(const rmr_prebuf_t *pb, int64_t max_age_us)
 		int64_t age = newest_ts - pb->slots[si].timestamp;
 		if (age >= max_age_us)
 			return i - 1; /* meets or exceeds target duration */
-		best = i - 1; /* track — use if nothing older qualifies */
+		best = i - 1;	      /* track — use if nothing older qualifies */
 	}
 	return best; /* oldest keyframe in buffer (may be < target) */
 }
@@ -114,8 +114,7 @@ uint32_t rmr_prebuf_find_frame_at(const rmr_prebuf_t *pb, int64_t min_ts)
 	return UINT32_MAX;
 }
 
-int rmr_prebuf_iterate(const rmr_prebuf_t *pb, uint32_t start_idx,
-		       rmr_prebuf_iter_fn fn, void *ctx)
+int rmr_prebuf_iterate(const rmr_prebuf_t *pb, uint32_t start_idx, rmr_prebuf_iter_fn fn, void *ctx)
 {
 	if (!pb || !fn || pb->count == 0)
 		return -1;

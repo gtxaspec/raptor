@@ -48,65 +48,66 @@ static const char *daemons[] = {"rvd", "rsd", "rad", "rod", "rhd", "ric", "rmr",
 
 static void usage(void)
 {
-	fprintf(stderr, "Usage: raptorctl <command>\n"
-			"\n"
-			"Commands:\n"
-			"  status                              Show daemon status\n"
-			"  memory                              Show memory usage (private/shared)\n"
-			"  get <section> <key>                 Read config value\n"
-			"  set <section> <key> <value>         Set config value\n"
-			"  config save                         Save running config to disk\n"
-			"  <daemon> status                     Show daemon details\n"
-			"  <daemon> config                     Show running config\n"
-			"  <daemon> <cmd> [args...]            Send command\n"
-			"\n"
-			"RVD commands:\n"
-			"  rvd set-bitrate <ch> <bps>          Change bitrate\n"
-			"  rvd set-gop <ch> <length>           Change GOP length\n"
-			"  rvd set-fps <ch> <fps>              Change frame rate\n"
-			"  rvd set-qp-bounds <ch> <min> <max>  Change QP range\n"
-			"  rvd request-idr [channel]           Request keyframe\n"
-			"  rvd privacy [on|off]                Toggle privacy mode\n"
-			"  rvd set-brightness <val>            ISP brightness (0-255)\n"
-			"  rvd set-contrast <val>              ISP contrast (0-255)\n"
-			"  rvd set-saturation <val>            ISP saturation (0-255)\n"
-			"  rvd set-sharpness <val>             ISP sharpness (0-255)\n"
-			"  rvd set-hue <val>                   ISP hue (0-255)\n"
-			"  rvd set-sinter <val>                Spatial NR (0-255)\n"
-			"  rvd set-temper <val>                Temporal NR (0-255)\n"
-			"  rvd set-hflip <0|1>                 Horizontal flip\n"
-			"  rvd set-vflip <0|1>                 Vertical flip\n"
-			"  rvd set-antiflicker <0|1|2>         Off/50Hz/60Hz\n"
-			"  rvd set-ae-comp <val>               AE compensation\n"
-			"  rvd set-max-again <val>             Max analog gain\n"
-			"  rvd set-max-dgain <val>             Max digital gain\n"
-			"  rvd set-defog <0|1>                 Defog enable\n"
-			"  rvd get-isp                         Show all ISP settings\n"
-			"\n"
-			"RSD commands:\n"
-			"  rsd clients                         List connected RTSP clients\n"
-			"\n"
-			"RAD commands:\n"
-			"  rad set-volume <val>                Change input volume\n"
-			"  rad set-gain <val>                  Change input gain\n"
-			"  rad set-ns <0|1> [level]            Noise suppression "
-			"(low/moderate/high/veryhigh)\n"
-			"  rad set-hpf <0|1>                   High-pass filter\n"
-			"  rad set-agc <0|1> [target] [comp]   Automatic gain control\n"
-			"\n"
-			"ROD commands:\n"
-			"  rod set-text <text>                 Change OSD text string\n"
-			"\n"
-			"RIC commands:\n"
-			"  ric mode <auto|day|night>           Set day/night mode\n"
-			"\n"
-			"RMR commands:\n"
-			"  rmr status                          Show recording status\n"
-			"\n"
-			"Testing:\n"
-			"  test-motion [sec]                   Trigger clip recording (default 10s)\n"
-			"\n"
-			"Daemons: rvd, rsd, rad, rod, rhd, ric, rmr, rmd\n");
+	fprintf(stderr,
+		"Usage: raptorctl <command>\n"
+		"\n"
+		"Commands:\n"
+		"  status                              Show daemon status\n"
+		"  memory                              Show memory usage (private/shared)\n"
+		"  get <section> <key>                 Read config value\n"
+		"  set <section> <key> <value>         Set config value\n"
+		"  config save                         Save running config to disk\n"
+		"  <daemon> status                     Show daemon details\n"
+		"  <daemon> config                     Show running config\n"
+		"  <daemon> <cmd> [args...]            Send command\n"
+		"\n"
+		"RVD commands:\n"
+		"  rvd set-bitrate <ch> <bps>          Change bitrate\n"
+		"  rvd set-gop <ch> <length>           Change GOP length\n"
+		"  rvd set-fps <ch> <fps>              Change frame rate\n"
+		"  rvd set-qp-bounds <ch> <min> <max>  Change QP range\n"
+		"  rvd request-idr [channel]           Request keyframe\n"
+		"  rvd privacy [on|off]                Toggle privacy mode\n"
+		"  rvd set-brightness <val>            ISP brightness (0-255)\n"
+		"  rvd set-contrast <val>              ISP contrast (0-255)\n"
+		"  rvd set-saturation <val>            ISP saturation (0-255)\n"
+		"  rvd set-sharpness <val>             ISP sharpness (0-255)\n"
+		"  rvd set-hue <val>                   ISP hue (0-255)\n"
+		"  rvd set-sinter <val>                Spatial NR (0-255)\n"
+		"  rvd set-temper <val>                Temporal NR (0-255)\n"
+		"  rvd set-hflip <0|1>                 Horizontal flip\n"
+		"  rvd set-vflip <0|1>                 Vertical flip\n"
+		"  rvd set-antiflicker <0|1|2>         Off/50Hz/60Hz\n"
+		"  rvd set-ae-comp <val>               AE compensation\n"
+		"  rvd set-max-again <val>             Max analog gain\n"
+		"  rvd set-max-dgain <val>             Max digital gain\n"
+		"  rvd set-defog <0|1>                 Defog enable\n"
+		"  rvd get-isp                         Show all ISP settings\n"
+		"\n"
+		"RSD commands:\n"
+		"  rsd clients                         List connected RTSP clients\n"
+		"\n"
+		"RAD commands:\n"
+		"  rad set-volume <val>                Change input volume\n"
+		"  rad set-gain <val>                  Change input gain\n"
+		"  rad set-ns <0|1> [level]            Noise suppression "
+		"(low/moderate/high/veryhigh)\n"
+		"  rad set-hpf <0|1>                   High-pass filter\n"
+		"  rad set-agc <0|1> [target] [comp]   Automatic gain control\n"
+		"\n"
+		"ROD commands:\n"
+		"  rod set-text <text>                 Change OSD text string\n"
+		"\n"
+		"RIC commands:\n"
+		"  ric mode <auto|day|night>           Set day/night mode\n"
+		"\n"
+		"RMR commands:\n"
+		"  rmr status                          Show recording status\n"
+		"\n"
+		"Testing:\n"
+		"  test-motion [sec]                   Trigger clip recording (default 10s)\n"
+		"\n"
+		"Daemons: rvd, rsd, rad, rod, rhd, ric, rmr, rmd\n");
 }
 
 /* Read private and shared memory from /proc/<pid>/smaps.
@@ -166,8 +167,8 @@ static void cmd_memory(void)
 		if (read_smaps(pid, &priv, &shared) < 0)
 			continue;
 
-		printf("%-6s  %6ld KB  %6ld KB  %6ld KB\n",
-		       daemons[i], priv, shared, priv + shared);
+		printf("%-6s  %6ld KB  %6ld KB  %6ld KB\n", daemons[i], priv, shared,
+		       priv + shared);
 		total_priv += priv;
 		total_shared += shared;
 		running++;
@@ -250,10 +251,10 @@ int main(int argc, char **argv)
 		const char *section;
 		const char *daemon;
 	} section_map[] = {
-		{"sensor", "rvd"}, {"stream0", "rvd"}, {"stream1", "rvd"}, {"jpeg", "rvd"},
-		{"ring", "rvd"},   {"audio", "rad"},   {"rtsp", "rsd"},	   {"http", "rhd"},
-		{"osd", "rod"},	   {"ircut", "ric"},   {"recording", "rmr"},
-		{"motion", "rmd"}, {"log", "rvd"},     {NULL, NULL},
+		{"sensor", "rvd"}, {"stream0", "rvd"}, {"stream1", "rvd"},   {"jpeg", "rvd"},
+		{"ring", "rvd"},   {"audio", "rad"},   {"rtsp", "rsd"},	     {"http", "rhd"},
+		{"osd", "rod"},	   {"ircut", "ric"},   {"recording", "rmr"}, {"motion", "rmd"},
+		{"log", "rvd"},	   {NULL, NULL},
 	};
 
 	/* raptorctl get <section> <key> — query live value from daemon, fall back to file */
@@ -357,8 +358,10 @@ int main(int argc, char **argv)
 		int dur = 10;
 		if (argc >= 3)
 			dur = (int)strtol(argv[2], NULL, 10);
-		if (dur < 1) dur = 1;
-		if (dur > 300) dur = 300;
+		if (dur < 1)
+			dur = 1;
+		if (dur > 300)
+			dur = 300;
 
 		printf("triggering motion clip for %d seconds...\n", dur);
 		int ret = send_cmd("rmr", "{\"cmd\":\"start\"}");

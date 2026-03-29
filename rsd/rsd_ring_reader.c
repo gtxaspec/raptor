@@ -162,8 +162,8 @@ void *rsd_video_reader_thread(void *arg)
 
 /* ── Audio ring reader thread ── */
 
-static void rsd_send_audio_frame(rsd_client_t *c, uint32_t codec, const uint8_t *data,
-				 uint32_t len, uint32_t rtp_ts)
+static void rsd_send_audio_frame(rsd_client_t *c, uint32_t codec, const uint8_t *data, uint32_t len,
+				 uint32_t rtp_ts)
 {
 	if (!c->audio.rtp || !c->audio.playing)
 		return;
@@ -187,9 +187,8 @@ static void rsd_send_audio_frame(rsd_client_t *c, uint32_t codec, const uint8_t 
 		marker = true;
 	}
 
-	(void)!Compy_RtpTransport_send_packet(c->audio.rtp, Compy_RtpTimestamp_Raw(rtp_ts),
-					      marker, payload_hdr,
-					      U8Slice99_new((uint8_t *)data, len));
+	(void)!Compy_RtpTransport_send_packet(c->audio.rtp, Compy_RtpTimestamp_Raw(rtp_ts), marker,
+					      payload_hdr, U8Slice99_new((uint8_t *)data, len));
 
 	/* Periodic RTCP SR */
 	int64_t now = rss_timestamp_us();
@@ -272,8 +271,7 @@ void *rsd_audio_reader_thread(void *arg)
 					c->audio_ts_base_set = true;
 				}
 				uint32_t client_ts = rtp_ts - c->audio_ts_offset;
-				rsd_send_audio_frame(c, audio_codec, audio_buf, length,
-						 client_ts);
+				rsd_send_audio_frame(c, audio_codec, audio_buf, length, client_ts);
 			}
 			pthread_mutex_unlock(&srv->clients_lock);
 		}

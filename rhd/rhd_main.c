@@ -183,7 +183,8 @@ static bool http_check_auth(const rhd_server_t *srv, const char *request)
 		return false;
 	*colon = '\0';
 
-	return rss_secure_compare(decoded, srv->auth_user) && rss_secure_compare(colon + 1, srv->auth_pass);
+	return rss_secure_compare(decoded, srv->auth_user) &&
+	       rss_secure_compare(colon + 1, srv->auth_pass);
 }
 
 static void http_send_mjpeg_header(int fd)
@@ -670,8 +671,10 @@ int main(int argc, char **argv)
 	srv.running = ctx.running;
 	srv.port = rss_config_get_int(ctx.cfg, "http", "port", 8080);
 	srv.max_clients = rss_config_get_int(ctx.cfg, "http", "max_clients", RHD_MAX_CLIENTS);
-	if (srv.max_clients < 1) srv.max_clients = 1;
-	if (srv.max_clients > RHD_MAX_CLIENTS) srv.max_clients = RHD_MAX_CLIENTS;
+	if (srv.max_clients < 1)
+		srv.max_clients = 1;
+	if (srv.max_clients > RHD_MAX_CLIENTS)
+		srv.max_clients = RHD_MAX_CLIENTS;
 
 	/* Basic auth — enabled when both username and password are set */
 	const char *http_user = rss_config_get_str(ctx.cfg, "http", "username", "");

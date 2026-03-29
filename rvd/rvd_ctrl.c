@@ -133,7 +133,7 @@ static int handle_isp_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 	if (strstr(cmd_json, "\"" name "\"")) {                                                    \
 		if (rss_json_get_int(cmd_json, "value", &val) == 0) {                              \
 			int ret = RSS_HAL_CALL(st->ops, fn, st->hal_ctx, val);                     \
-			snprintf(resp, resp_size, "{\"status\":\"%s\"}",                            \
+			snprintf(resp, resp_size, "{\"status\":\"%s\"}",                           \
 				 ret == 0 ? "ok" : "error");                                       \
 		} else {                                                                           \
 			snprintf(resp, resp_size,                                                  \
@@ -219,17 +219,20 @@ static int handle_ivs_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 		bool motion = atomic_load(&st->ivs_motion);
 		int64_t ts = atomic_load(&st->ivs_motion_ts);
 		snprintf(resp, resp_size,
-			 "{\"status\":\"ok\",\"active\":%s,\"motion\":%s,\"timestamp\":%" PRId64 "}",
+			 "{\"status\":\"ok\",\"active\":%s,\"motion\":%s,\"timestamp\":%" PRId64
+			 "}",
 			 st->ivs_active ? "true" : "false", motion ? "true" : "false", ts);
 		return 1;
 	}
 
 	if (strstr(cmd_json, "\"ivs-set-sensitivity\"")) {
 		int sens = -1;
-		if (rss_json_get_int(cmd_json, "value", &sens) == 0 && st->ivs_active && sens >= 0) {
+		if (rss_json_get_int(cmd_json, "value", &sens) == 0 && st->ivs_active &&
+		    sens >= 0) {
 			rss_ivs_move_param_t mp;
 			memset(&mp, 0, sizeof(mp));
-			if (RSS_HAL_CALL(st->ops, ivs_get_param, st->hal_ctx, st->ivs_chn, &mp) == 0) {
+			if (RSS_HAL_CALL(st->ops, ivs_get_param, st->hal_ctx, st->ivs_chn, &mp) ==
+			    0) {
 				for (int i = 0; i < mp.roi_count; i++)
 					mp.sense[i] = sens;
 				RSS_HAL_CALL(st->ops, ivs_set_param, st->hal_ctx, st->ivs_chn, &mp);
@@ -316,15 +319,15 @@ static int handle_config_cmd(const char *cmd_json, rvd_state_t *st, char *resp, 
 			uint32_t avg_br = 0;
 			RSS_HAL_CALL(st->ops, enc_get_avg_bitrate, st->hal_ctx, st->streams[i].chn,
 				     &avg_br);
-			int n = snprintf(resp + off, resp_size - off,
-					 "%s{\"chn\":%d,\"w\":%u,\"h\":%u,\"codec\":%u,"
-					 "\"bitrate\":%u,\"avg_bitrate\":%u,\"gop\":%u,"
-					 "\"fps\":%u}",
-					 i > 0 ? "," : "", st->streams[i].chn,
-					 st->streams[i].enc_cfg.width, st->streams[i].enc_cfg.height,
-					 st->streams[i].enc_cfg.codec, st->streams[i].enc_cfg.bitrate,
-					 avg_br, st->streams[i].enc_cfg.gop_length,
-					 st->streams[i].enc_cfg.fps_num);
+			int n = snprintf(
+				resp + off, resp_size - off,
+				"%s{\"chn\":%d,\"w\":%u,\"h\":%u,\"codec\":%u,"
+				"\"bitrate\":%u,\"avg_bitrate\":%u,\"gop\":%u,"
+				"\"fps\":%u}",
+				i > 0 ? "," : "", st->streams[i].chn, st->streams[i].enc_cfg.width,
+				st->streams[i].enc_cfg.height, st->streams[i].enc_cfg.codec,
+				st->streams[i].enc_cfg.bitrate, avg_br,
+				st->streams[i].enc_cfg.gop_length, st->streams[i].enc_cfg.fps_num);
 			if (n > 0 && off + n < resp_size)
 				off += n;
 		}

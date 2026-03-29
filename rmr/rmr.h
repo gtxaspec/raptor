@@ -20,8 +20,8 @@
 
 /* Recording mode */
 #define RMR_MODE_CONTINUOUS 0 /* always recording */
-#define RMR_MODE_MOTION     1 /* record only on motion trigger */
-#define RMR_MODE_BOTH       2 /* continuous + motion clips */
+#define RMR_MODE_MOTION	    1 /* record only on motion trigger */
+#define RMR_MODE_BOTH	    2 /* continuous + motion clips */
 
 typedef struct {
 	/* Config */
@@ -65,9 +65,9 @@ typedef struct {
 	rmr_mux_t *clip_mux;
 	int clip_fd;
 	char clip_path[256];
-	int64_t clip_v_ts_base;  /* first video timestamp in clip */
-	int64_t clip_a_dts;      /* audio DTS counter for clip */
-	int64_t clip_start_us;   /* wall clock when clip opened */
+	int64_t clip_v_ts_base; /* first video timestamp in clip */
+	int64_t clip_a_dts;	/* audio DTS counter for clip */
+	int64_t clip_start_us;	/* wall clock when clip opened */
 	uint64_t clip_bytes;
 
 	/* Frame read buffer (main thread only) */
@@ -86,7 +86,7 @@ typedef struct {
 
 	/* State */
 	volatile sig_atomic_t *running;
-	_Atomic bool recording;      /* continuous recording active */
+	_Atomic bool recording;	     /* continuous recording active */
 	_Atomic bool clip_recording; /* motion clip active */
 
 	/* Stats (main thread only) */
