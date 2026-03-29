@@ -177,11 +177,19 @@ static void handle_whip_post(rwd_server_t *srv, int fd, const char *body, size_t
 				     sizeof(c->local_pwd));
 	uint8_t ssrc_bytes[8];
 	if (rwd_random_bytes(ssrc_bytes, sizeof(ssrc_bytes)) != 0) {
+		/* Fallback: mix timestamp with a counter to avoid collisions */
+		static uint32_t ssrc_counter;
 		uint64_t ts = rss_timestamp_us();
 		memcpy(ssrc_bytes, &ts, sizeof(ssrc_bytes));
+		ssrc_bytes[0] ^= (uint8_t)(ssrc_counter);
+		ssrc_bytes[4] ^= (uint8_t)(ssrc_counter >> 8);
+		ssrc_counter++;
 	}
 	memcpy(&c->video_ssrc, ssrc_bytes, 4);
 	memcpy(&c->audio_ssrc, ssrc_bytes + 4, 4);
+	/* Ensure video and audio SSRCs differ */
+	if (c->video_ssrc == c->audio_ssrc)
+		c->audio_ssrc ^= 0x01;
 
 	/* Generate session ID */
 	generate_session_id(c->session_id, sizeof(c->session_id));
