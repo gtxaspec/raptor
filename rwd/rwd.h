@@ -77,6 +77,7 @@ typedef struct {
 	char mid_video[16];   /* BUNDLE mid for video */
 	char mid_audio[16];   /* BUNDLE mid for audio */
 
+	int mid_ext_id; /* extmap ID for sdes:mid (-1 if not offered) */
 	bool has_video;
 	bool has_audio;
 } rwd_sdp_offer_t;
@@ -132,6 +133,10 @@ struct rwd_client {
 	int64_t last_rtcp_video;
 	int64_t last_rtcp_audio;
 	bool media_ready; /* set after SRTP stack fully initialized */
+
+	/* Pre-generated SSRCs (declared in SDP, set on RTP transports) */
+	uint32_t video_ssrc;
+	uint32_t audio_ssrc;
 
 	/* Media state */
 	int stream_idx; /* 0=main, 1=sub */

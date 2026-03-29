@@ -97,6 +97,13 @@ int rwd_media_setup(rwd_client_t *c)
 
 	int video_pt = c->offer.video_pt > 0 ? c->offer.video_pt : RWD_VIDEO_PT;
 	c->rtp_video = Compy_RtpTransport_new(c->srtp_video, (uint8_t)video_pt, RWD_VIDEO_CLOCK);
+	Compy_RtpTransport_set_ssrc(c->rtp_video, c->video_ssrc);
+	/* sdes:mid extension for BUNDLE demux (pion/go2rtc requires it) */
+	if (c->offer.mid_ext_id > 0 && c->offer.mid_ext_id <= 14) {
+		const char *vmid = c->offer.mid_video[0] ? c->offer.mid_video : "0";
+		Compy_RtpTransport_set_extension(c->rtp_video, (uint8_t)c->offer.mid_ext_id,
+						 (const uint8_t *)vmid, (uint8_t)strlen(vmid));
+	}
 	c->nal_video = Compy_NalTransport_new(c->rtp_video);
 
 	/* Video RTCP (SRTCP) */
@@ -115,6 +122,15 @@ int rwd_media_setup(rwd_client_t *c)
 			int audio_pt = c->offer.audio_pt > 0 ? c->offer.audio_pt : RWD_AUDIO_PT;
 			c->rtp_audio = Compy_RtpTransport_new(c->srtp_audio, (uint8_t)audio_pt,
 							      RWD_AUDIO_CLOCK);
+			Compy_RtpTransport_set_ssrc(c->rtp_audio, c->audio_ssrc);
+			/* sdes:mid extension for audio */
+			if (c->offer.mid_ext_id > 0 && c->offer.mid_ext_id <= 14) {
+				const char *amid =
+					c->offer.mid_audio[0] ? c->offer.mid_audio : "1";
+				Compy_RtpTransport_set_extension(
+					c->rtp_audio, (uint8_t)c->offer.mid_ext_id,
+					(const uint8_t *)amid, (uint8_t)strlen(amid));
+			}
 
 			/* Audio RTCP */
 			Compy_Transport udp_rtcp_a =
