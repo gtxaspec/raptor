@@ -152,6 +152,11 @@ $CC $CFLAGS -c "$RAPTOR_DIR/tests/create_rings.c" -o "$OUT/create_rings.o"
 $CC -o "$OUT/create_rings" "$OUT/create_rings.o" $LIBS $LDFLAGS
 echo "  -> create_rings"
 
+# RWD is skipped in ASAN builds — requires mbedTLS with DTLS-SRTP support
+# (cross-build only via build.sh with TLS=1).
+echo "=== RWD ==="
+echo "  (skipped — requires mbedTLS DTLS-SRTP, use build.sh for cross-build)"
+
 echo ""
 echo "Done. All binaries in asan-out/"
 ls -1 "$OUT"/rvd "$OUT"/rsd "$OUT"/rad "$OUT"/rhd "$OUT"/rod "$OUT"/ric "$OUT"/rmd "$OUT"/rmr "$OUT"/raptorctl "$OUT"/ringdump "$OUT"/rac "$OUT"/create_rings 2>/dev/null | while read f; do echo "  $(basename $f)"; done
