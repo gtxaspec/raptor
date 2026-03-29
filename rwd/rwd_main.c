@@ -242,12 +242,20 @@ static void handle_udp_packet(rwd_server_t *srv, const uint8_t *buf, size_t len,
 		return;
 	}
 
-	/* DTLS: 0x14-0x15 (also 0x16-0x19 for handshake records) */
+	/* DTLS: 0x14-0x19 (ChangeCipherSpec, Alert, Handshake, AppData)
+	 *
+	 * Single-buffer design: each recvfrom returns one UDP datagram = one
+	 * DTLS record. The buffer is consumed synchronously by handshake_step
+	 * before the next recvfrom. Safe as long as packet processing is not
+	 * batched ahead of DTLS handling. */
 	if (first >= 0x14 && first <= 0x19) {
 		pthread_mutex_lock(&srv->clients_lock);
 		rwd_client_t *c = find_client_by_addr(srv, from, from_len);
 		if (c && c->dtls_state != RWD_DTLS_FAILED) {
-			/* Buffer the DTLS record for mbedTLS */
+			/* Guard: previous record must be consumed */
+			if (c->dtls_buf_len > 0)
+				RSS_WARN("DTLS: overwriting unconsumed record (%zu bytes)",
+					 c->dtls_buf_len);
 			size_t copy = len < sizeof(c->dtls_buf) ? len : sizeof(c->dtls_buf);
 			memcpy(c->dtls_buf, buf, copy);
 			c->dtls_buf_len = copy;
