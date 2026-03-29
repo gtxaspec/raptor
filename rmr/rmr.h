@@ -93,6 +93,7 @@ typedef struct {
 	uint64_t frames_written;
 	uint64_t frames_dropped;
 	uint64_t bytes_written;
+	int frames_since_flush;
 
 	/* Timestamps (main thread only) */
 	int64_t v_dts;
