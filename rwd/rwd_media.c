@@ -113,8 +113,10 @@ int rwd_media_setup(rwd_client_t *c)
 		c->rtcp_video = Compy_Rtcp_new(c->rtp_video, srtcp_v, "raptor");
 	}
 
-	/* Audio: UDP → SRTP → RTP (no NAL for audio) */
-	if (c->offer.has_audio && c->offer.audio_pt >= 0 && srv->has_audio) {
+	/* Audio: UDP → SRTP → RTP (no NAL for audio)
+	 * Check audio_ring directly instead of has_audio flag — the flag may
+	 * not be set yet if the audio reader thread is still starting up. */
+	if (c->offer.has_audio && c->offer.audio_pt >= 0 && srv->audio_ring) {
 		Compy_Transport udp_a = rwd_transport_sendto(srv->udp_fd, &c->addr, c->addr_len);
 		if (udp_a.self) {
 			c->srtp_audio = compy_transport_srtp(udp_a, suite, &send_key);
