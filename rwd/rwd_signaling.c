@@ -172,9 +172,16 @@ static void handle_whip_post(rwd_server_t *srv, int fd, const char *body, size_t
 	rss_strlcpy(c->remote_ufrag, offer.ice_ufrag, sizeof(c->remote_ufrag));
 	rss_strlcpy(c->remote_pwd, offer.ice_pwd, sizeof(c->remote_pwd));
 
-	/* Generate local ICE credentials */
+	/* Generate local ICE credentials and SSRCs */
 	rwd_generate_ice_credentials(c->local_ufrag, sizeof(c->local_ufrag), c->local_pwd,
 				     sizeof(c->local_pwd));
+	uint8_t ssrc_bytes[8];
+	if (rwd_random_bytes(ssrc_bytes, sizeof(ssrc_bytes)) != 0) {
+		uint64_t ts = rss_timestamp_us();
+		memcpy(ssrc_bytes, &ts, sizeof(ssrc_bytes));
+	}
+	memcpy(&c->video_ssrc, ssrc_bytes, 4);
+	memcpy(&c->audio_ssrc, ssrc_bytes + 4, 4);
 
 	/* Generate session ID */
 	generate_session_id(c->session_id, sizeof(c->session_id));

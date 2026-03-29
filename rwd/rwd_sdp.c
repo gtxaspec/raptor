@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <arpa/inet.h>
 
 #include "rwd.h"
 
@@ -60,6 +61,7 @@ int rwd_sdp_parse_offer(const char *sdp, rwd_sdp_offer_t *offer)
 	memset(offer, 0, sizeof(*offer));
 	offer->video_pt = -1;
 	offer->audio_pt = -1;
+	offer->mid_ext_id = -1;
 
 	char line[512];
 	const char *p = sdp;
@@ -159,6 +161,18 @@ int rwd_sdp_parse_offer(const char *sdp, rwd_sdp_offer_t *offer)
 			}
 			continue;
 		}
+
+		/* extmap: find sdes:mid extension ID */
+		val = sdp_attr_value(line, "extmap");
+		if (val && offer->mid_ext_id < 0) {
+			int eid;
+			char ext_uri[128];
+			if (sscanf(val, "%d %127s", &eid, ext_uri) == 2) {
+				if (strstr(ext_uri, "sdes:mid"))
+					offer->mid_ext_id = eid;
+			}
+			continue;
+		}
 	}
 
 	if (!offer->ice_ufrag[0] || !offer->ice_pwd[0]) {
@@ -223,6 +237,9 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 	APPEND("a=setup:passive");
 	APPEND("a=mid:%s", c->offer.mid_video[0] ? c->offer.mid_video : "0");
 	APPEND("a=sendonly");
+	/* NOTE: sdes:mid extmap intentionally omitted — pion requires
+	 * HandleUndeclaredSSRCWithoutAnswer for PT-based track matching.
+	 * go2rtc sets this internally for webrtc: sources. */
 	APPEND("a=rtpmap:%d H264/90000", c->offer.video_pt);
 	if (c->offer.video_fmtp[0])
 		APPEND("a=fmtp:%d %s", c->offer.video_pt, c->offer.video_fmtp);
@@ -233,6 +250,9 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 	APPEND("a=rtcp-fb:%d nack", c->offer.video_pt);
 	APPEND("a=rtcp-fb:%d nack pli", c->offer.video_pt);
 	APPEND("a=rtcp-fb:%d ccm fir", c->offer.video_pt);
+	/* SSRC declared for pion/go2rtc compatibility. htonl because compy
+	 * writes SSRC in host byte order but pion reads as network byte order. */
+	APPEND("a=ssrc:%u cname:raptor", (unsigned)htonl(c->video_ssrc));
 	APPEND("a=candidate:1 1 UDP 2130706431 %s %d typ host", srv->local_ip, srv->udp_port);
 
 	/* Audio m-line (if browser offered Opus) */
@@ -247,8 +267,12 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 		APPEND("a=setup:passive");
 		APPEND("a=mid:%s", c->offer.mid_audio[0] ? c->offer.mid_audio : "1");
 		APPEND("a=sendonly");
+		/* NOTE: sdes:mid extmap intentionally omitted — pion requires
+	 * HandleUndeclaredSSRCWithoutAnswer for PT-based track matching.
+	 * go2rtc sets this internally for webrtc: sources. */
 		APPEND("a=rtpmap:%d opus/48000/2", c->offer.audio_pt);
 		APPEND("a=fmtp:%d minptime=10;useinbandfec=1", c->offer.audio_pt);
+		APPEND("a=ssrc:%u cname:raptor", (unsigned)htonl(c->audio_ssrc));
 		APPEND("a=candidate:1 1 UDP 2130706431 %s %d typ host", srv->local_ip,
 		       srv->udp_port);
 	}
