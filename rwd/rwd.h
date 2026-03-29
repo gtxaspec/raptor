@@ -28,28 +28,28 @@
 #include <mbedtls/timing.h>
 #include <mbedtls/sha256.h>
 
-#define RWD_MAX_CLIENTS       4
-#define RWD_UDP_BUF_SIZE      2048
-#define RWD_HTTP_BUF_SIZE     8192
-#define RWD_SDP_BUF_SIZE      4096
-#define RWD_SESSION_ID_LEN    16
+#define RWD_MAX_CLIENTS	   4
+#define RWD_UDP_BUF_SIZE   2048
+#define RWD_HTTP_BUF_SIZE  8192
+#define RWD_SDP_BUF_SIZE   4096
+#define RWD_SESSION_ID_LEN 16
 
 /* RTP payload types and clocks */
-#define RWD_VIDEO_PT    96
-#define RWD_AUDIO_PT    111
+#define RWD_VIDEO_PT	96
+#define RWD_AUDIO_PT	111
 #define RWD_VIDEO_CLOCK 90000
 #define RWD_AUDIO_CLOCK 48000 /* Opus RTP clock per RFC 7587 */
 
 /* STUN constants (RFC 5389) */
-#define STUN_HEADER_SIZE          20
-#define STUN_MAGIC_COOKIE         0x2112A442
-#define STUN_BINDING_REQUEST      0x0001
-#define STUN_BINDING_RESPONSE     0x0101
-#define STUN_ATTR_USERNAME        0x0006
+#define STUN_HEADER_SIZE	    20
+#define STUN_MAGIC_COOKIE	    0x2112A442
+#define STUN_BINDING_REQUEST	    0x0001
+#define STUN_BINDING_RESPONSE	    0x0101
+#define STUN_ATTR_USERNAME	    0x0006
 #define STUN_ATTR_MESSAGE_INTEGRITY 0x0008
-#define STUN_ATTR_XOR_MAPPED_ADDR 0x0020
-#define STUN_ATTR_FINGERPRINT     0x8028
-#define STUN_FINGERPRINT_XOR      0x5354554E
+#define STUN_ATTR_XOR_MAPPED_ADDR   0x0020
+#define STUN_ATTR_FINGERPRINT	    0x8028
+#define STUN_FINGERPRINT_XOR	    0x5354554E
 
 /* ── DTLS server context (shared by all clients) ── */
 
@@ -69,13 +69,13 @@ typedef struct {
 	char ice_ufrag[64];
 	char ice_pwd[256];
 	char fingerprint[256]; /* browser's DTLS fingerprint */
-	char setup[16];        /* actpass / active / passive */
+	char setup[16];	       /* actpass / active / passive */
 
-	int video_pt;       /* browser's H264 payload type (-1 if none) */
+	int video_pt;	      /* browser's H264 payload type (-1 if none) */
 	char video_fmtp[256]; /* browser's fmtp for the matched H264 PT */
-	int audio_pt;       /* browser's Opus payload type (-1 if none) */
-	char mid_video[16]; /* BUNDLE mid for video */
-	char mid_audio[16]; /* BUNDLE mid for audio */
+	int audio_pt;	      /* browser's Opus payload type (-1 if none) */
+	char mid_video[16];   /* BUNDLE mid for video */
+	char mid_audio[16];   /* BUNDLE mid for audio */
 
 	bool has_video;
 	bool has_audio;
@@ -134,6 +134,7 @@ struct rwd_client {
 	bool media_ready; /* set after SRTP stack fully initialized */
 
 	/* Media state */
+	int stream_idx; /* 0=main, 1=sub */
 	bool sending;
 	bool waiting_keyframe;
 	uint32_t video_ts_offset;
@@ -152,15 +153,6 @@ struct rwd_client {
 	rwd_server_t *server;
 };
 
-/* ── HTTP signaling client (WHIP) ── */
-
-typedef struct {
-	int fd;
-	char buf[RWD_HTTP_BUF_SIZE];
-	size_t buf_len;
-	struct sockaddr_storage local_addr; /* for determining our IP */
-} rwd_http_client_t;
-
 /* ── Server state ── */
 
 struct rwd_server {
@@ -178,11 +170,12 @@ struct rwd_server {
 	int client_count;
 	pthread_mutex_t clients_lock;
 
-	/* Video ring reader */
-	rss_ring_t *video_ring;
-	uint64_t video_read_seq;
-	uint8_t *video_buf;
-	uint32_t video_buf_size;
+	/* Video ring readers (0=main, 1=sub) */
+#define RWD_STREAM_COUNT 2
+	rss_ring_t *video_rings[RWD_STREAM_COUNT];
+	uint64_t video_read_seq[RWD_STREAM_COUNT];
+	uint8_t *video_bufs[RWD_STREAM_COUNT];
+	uint32_t video_buf_sizes[RWD_STREAM_COUNT];
 
 	/* Audio ring */
 	rss_ring_t *audio_ring;
@@ -207,6 +200,7 @@ int rwd_dtls_export_srtp_keys(rwd_client_t *c, Compy_SrtpKeyMaterial *send_key,
 
 /* ── rwd_ice.c ── */
 
+void rwd_crc32_init(void);
 int rwd_ice_process(rwd_server_t *srv, const uint8_t *buf, size_t len,
 		    const struct sockaddr_storage *from, socklen_t from_len);
 
@@ -222,7 +216,8 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 
 /* ── rwd_media.c ── */
 
-Compy_Transport rwd_transport_sendto(int fd, const struct sockaddr_storage *addr, socklen_t addr_len);
+Compy_Transport rwd_transport_sendto(int fd, const struct sockaddr_storage *addr,
+				     socklen_t addr_len);
 int rwd_media_setup(rwd_client_t *c);
 void rwd_media_teardown(rwd_client_t *c);
 void *rwd_video_reader_thread(void *arg);

@@ -134,6 +134,8 @@ int rwd_sdp_parse_offer(const char *sdp, rwd_sdp_offer_t *offer)
 			int pt;
 			char codec_name[32];
 			if (sscanf(val, "%d %31s", &pt, codec_name) == 2) {
+				if (pt < 0 || pt > 127)
+					continue;
 				if (in_video && strncasecmp(codec_name, "H264/", 5) == 0 &&
 				    offer->video_pt < 0)
 					offer->video_pt = pt;
@@ -188,12 +190,12 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 
 	uint32_t session_id = (uint32_t)rss_timestamp_us();
 
-#define APPEND(fmt, ...)                                                                          \
-	do {                                                                                      \
-		ret = snprintf(buf + off, buf_size - off, fmt "\r\n", ##__VA_ARGS__);             \
-		if (ret < 0 || (size_t)ret >= buf_size - off)                                     \
-			return -1;                                                                \
-		off += ret;                                                                       \
+#define APPEND(fmt, ...)                                                                           \
+	do {                                                                                       \
+		ret = snprintf(buf + off, buf_size - off, fmt "\r\n", ##__VA_ARGS__);              \
+		if (ret < 0 || (size_t)ret >= buf_size - off)                                      \
+			return -1;                                                                 \
+		off += ret;                                                                        \
 	} while (0)
 
 	/* Session description */
@@ -225,7 +227,8 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 	if (c->offer.video_fmtp[0])
 		APPEND("a=fmtp:%d %s", c->offer.video_pt, c->offer.video_fmtp);
 	else
-		APPEND("a=fmtp:%d level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
+		APPEND("a=fmtp:%d "
+		       "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
 		       c->offer.video_pt);
 	APPEND("a=rtcp-fb:%d nack", c->offer.video_pt);
 	APPEND("a=rtcp-fb:%d nack pli", c->offer.video_pt);

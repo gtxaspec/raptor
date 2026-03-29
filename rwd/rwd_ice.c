@@ -18,24 +18,20 @@
 /* ── CRC32 (ISO 3309 / ITU-T V.42) for STUN FINGERPRINT ── */
 
 static uint32_t crc32_table[256];
-static bool crc32_initialized;
 
-static void crc32_init(void)
+/* Called from main() before any threads start */
+void rwd_crc32_init(void)
 {
-	if (crc32_initialized)
-		return;
 	for (uint32_t i = 0; i < 256; i++) {
 		uint32_t c = i;
 		for (int j = 0; j < 8; j++)
 			c = (c >> 1) ^ (c & 1 ? 0xEDB88320u : 0);
 		crc32_table[i] = c;
 	}
-	crc32_initialized = true;
 }
 
 static uint32_t crc32_compute(const uint8_t *data, size_t len)
 {
-	crc32_init();
 	uint32_t crc = 0xFFFFFFFF;
 	for (size_t i = 0; i < len; i++)
 		crc = crc32_table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
@@ -86,6 +82,9 @@ static int stun_verify_integrity(const uint8_t *msg, size_t msg_len, const char 
 		uint16_t attr_len = rd16(p + 2);
 		size_t padded = (attr_len + 3) & ~3u;
 
+		if (p + 4 + attr_len > end)
+			break;
+
 		if (attr_type == STUN_ATTR_MESSAGE_INTEGRITY) {
 			if (attr_len != 20)
 				return -1;
@@ -93,6 +92,8 @@ static int stun_verify_integrity(const uint8_t *msg, size_t msg_len, const char 
 			mi_offset = (size_t)(p - msg);
 			break;
 		}
+		if (p + 4 + padded > end)
+			break;
 		p += 4 + padded;
 	}
 
@@ -138,6 +139,9 @@ static int stun_get_username(const uint8_t *msg, size_t msg_len, char *buf, size
 		uint16_t attr_len = rd16(p + 2);
 		size_t padded = (attr_len + 3) & ~3u;
 
+		if (p + 4 + attr_len > end)
+			break;
+
 		if (attr_type == STUN_ATTR_USERNAME) {
 			if (attr_len >= buf_size)
 				return -1;
@@ -145,9 +149,9 @@ static int stun_get_username(const uint8_t *msg, size_t msg_len, char *buf, size
 			buf[attr_len] = '\0';
 			return 0;
 		}
-		p += 4 + padded;
-		if (p > end)
+		if (p + 4 + padded > end)
 			break;
+		p += 4 + padded;
 	}
 	return -1;
 }
@@ -177,7 +181,7 @@ static int stun_send_response(rwd_server_t *srv, const uint8_t *request,
 		const struct sockaddr_in *a4 = (const struct sockaddr_in *)to;
 		wr16(resp + off, 8); /* attribute length */
 		off += 2;
-		resp[off++] = 0; /* reserved */
+		resp[off++] = 0;    /* reserved */
 		resp[off++] = 0x01; /* family: IPv4 */
 		uint16_t xport = ntohs(a4->sin_port) ^ (uint16_t)(STUN_MAGIC_COOKIE >> 16);
 		wr16(resp + off, xport);
@@ -274,7 +278,7 @@ int rwd_ice_process(rwd_server_t *srv, const uint8_t *buf, size_t len,
 	/* Find matching client by local ICE ufrag */
 	rwd_client_t *client = NULL;
 	pthread_mutex_lock(&srv->clients_lock);
-	for (int i = 0; i < srv->client_count; i++) {
+	for (int i = 0; i < RWD_MAX_CLIENTS; i++) {
 		if (srv->clients[i] && strcmp(srv->clients[i]->local_ufrag, local_ufrag) == 0) {
 			client = srv->clients[i];
 			break;
