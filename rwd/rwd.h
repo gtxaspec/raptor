@@ -165,6 +165,7 @@ struct rwd_server {
 	int udp_fd;  /* STUN / DTLS / SRTP */
 	int http_fd; /* HTTP listener for WHIP signaling */
 	int epoll_fd;
+	rss_ctrl_t *ctrl; /* raptorctl control socket */
 
 	rss_config_t *cfg;
 	const char *config_path;

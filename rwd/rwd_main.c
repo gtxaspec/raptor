@@ -349,6 +349,79 @@ static void cleanup_stale_clients(rwd_server_t *srv)
 	pthread_mutex_unlock(&srv->clients_lock);
 }
 
+/* ── Control socket handler (raptorctl) ── */
+
+static int rwd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, void *userdata)
+{
+	rwd_server_t *srv = userdata;
+
+	if (strstr(cmd_json, "\"clients\"")) {
+		int n = snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"ok\",\"count\":%d,\"max_clients\":%d,\"clients\":[",
+				 srv->client_count, srv->max_clients);
+		pthread_mutex_lock(&srv->clients_lock);
+		int first = 1;
+		for (int i = 0; i < RWD_MAX_CLIENTS; i++) {
+			rwd_client_t *c = srv->clients[i];
+			if (!c)
+				continue;
+			char addr[INET6_ADDRSTRLEN] = "?";
+			if (c->addr.ss_family == AF_INET)
+				inet_ntop(AF_INET, &((struct sockaddr_in *)&c->addr)->sin_addr,
+					  addr, sizeof(addr));
+			else if (c->addr.ss_family == AF_INET6) {
+				struct sockaddr_in6 *s6 = (struct sockaddr_in6 *)&c->addr;
+				if (IN6_IS_ADDR_V4MAPPED(&s6->sin6_addr))
+					inet_ntop(AF_INET, &s6->sin6_addr.s6_addr[12], addr,
+						  sizeof(addr));
+				else
+					inet_ntop(AF_INET6, &s6->sin6_addr, addr, sizeof(addr));
+			}
+			n += snprintf(resp_buf + n, resp_buf_size - n,
+				      "%s{\"ip\":\"%s\",\"stream\":%d,\"sending\":%s,"
+				      "\"ice\":%s,\"dtls\":\"%s\"}",
+				      first ? "" : ",", addr, c->stream_idx,
+				      c->sending ? "true" : "false",
+				      c->ice_verified ? "true" : "false",
+				      c->dtls_state == RWD_DTLS_ESTABLISHED ? "established"
+				      : c->dtls_state == RWD_DTLS_HANDSHAKING ? "handshaking"
+				      : c->dtls_state == RWD_DTLS_FAILED ? "failed"
+								         : "new");
+			first = 0;
+		}
+		pthread_mutex_unlock(&srv->clients_lock);
+		snprintf(resp_buf + n, resp_buf_size - n, "]}");
+		return (int)strlen(resp_buf);
+	}
+
+	if (strstr(cmd_json, "\"config-get\"")) {
+		char section[64], key[64];
+		if (rss_json_get_str(cmd_json, "section", section, sizeof(section)) == 0 &&
+		    rss_json_get_str(cmd_json, "key", key, sizeof(key)) == 0) {
+			const char *v = rss_config_get_str(srv->cfg, section, key, NULL);
+			if (v)
+				snprintf(resp_buf, resp_buf_size, "%s", v);
+			else
+				resp_buf[0] = '\0';
+		} else {
+			resp_buf[0] = '\0';
+		}
+		return (int)strlen(resp_buf);
+	}
+
+	if (strstr(cmd_json, "\"config-save\"")) {
+		int ret = rss_config_save(srv->cfg, srv->config_path);
+		snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
+		return (int)strlen(resp_buf);
+	}
+
+	/* Default: status */
+	snprintf(resp_buf, resp_buf_size,
+		 "{\"status\":\"ok\",\"clients\":%d,\"udp_port\":%d,\"http_port\":%d}",
+		 srv->client_count, srv->udp_port, srv->http_port);
+	return (int)strlen(resp_buf);
+}
+
 /* ── Main event loop ── */
 
 static void rwd_run(rwd_server_t *srv)
@@ -368,6 +441,19 @@ static void rwd_run(rwd_server_t *srv)
 	ev = (struct epoll_event){.events = EPOLLIN, .data.fd = srv->http_fd};
 	if (epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, srv->http_fd, &ev) < 0)
 		RSS_ERROR("epoll_ctl add http_fd failed: %s", strerror(errno));
+
+	/* Register control socket */
+	rss_mkdir_p("/var/run/rss");
+	srv->ctrl = rss_ctrl_listen("/var/run/rss/rwd.sock");
+	int ctrl_fd = -1;
+	if (srv->ctrl) {
+		ctrl_fd = rss_ctrl_get_fd(srv->ctrl);
+		if (ctrl_fd >= 0) {
+			ev = (struct epoll_event){.events = EPOLLIN, .data.fd = ctrl_fd};
+			if (epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, ctrl_fd, &ev) < 0)
+				RSS_ERROR("epoll_ctl add ctrl_fd failed: %s", strerror(errno));
+		}
+	}
 
 	/* Start media reader threads */
 	pthread_t video_tid, audio_tid;
@@ -420,6 +506,8 @@ static void rwd_run(rwd_server_t *srv)
 				getsockname(client_fd, (struct sockaddr *)&local_addr, &local_len);
 
 				rwd_signaling_handle(srv, client_fd, &local_addr);
+			} else if (fd == ctrl_fd) {
+				rss_ctrl_accept_and_handle(srv->ctrl, rwd_ctrl_handler, srv);
 			}
 		}
 
