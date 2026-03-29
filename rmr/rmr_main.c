@@ -390,6 +390,7 @@ static void record_loop(rmr_state_t *st)
 	bool was_recording = false;
 
 	int ctrl_fd = st->ctrl ? rss_ctrl_get_fd(st->ctrl) : -1;
+	int audio_retry = 0;
 
 	while (*st->running) {
 		/* Handle control socket */
@@ -400,6 +401,29 @@ static void record_loop(rmr_state_t *st)
 			FD_SET(ctrl_fd, &fds);
 			if (select(ctrl_fd + 1, &fds, NULL, NULL, &tv) > 0)
 				rss_ctrl_accept_and_handle(st->ctrl, rmr_ctrl_handler, st);
+		}
+
+		/* Lazy audio ring attach — retry every ~2s until found */
+		if (st->audio_enabled && !st->audio_ring && ++audio_retry >= 50) {
+			audio_retry = 0;
+			st->audio_ring = rss_ring_open("audio");
+			if (st->audio_ring) {
+				const rss_ring_header_t *ahdr = rss_ring_get_header(st->audio_ring);
+				st->audio_codec = ahdr->codec;
+				st->audio_sample_rate = ahdr->fps_num;
+				/* Start reading from current position (skip stale frames) */
+				st->audio_read_seq = atomic_load(&ahdr->write_seq);
+				/* Update audio codec params */
+				audio_bps = (st->audio_codec == RMR_AUDIO_PCMU ||
+					     st->audio_codec == RMR_AUDIO_PCMA) ? 1 : 2;
+				audio_samples_per_frame = 0;
+				if (st->audio_codec == RMR_AUDIO_AAC)
+					audio_samples_per_frame = 1024;
+				else if (st->audio_codec == RMR_AUDIO_OPUS)
+					audio_samples_per_frame = st->audio_sample_rate / 50;
+				RSS_INFO("audio ring attached (late): codec=%u rate=%u",
+					 st->audio_codec, st->audio_sample_rate);
+			}
 		}
 
 		/* ── Read video frame from ring ── */
