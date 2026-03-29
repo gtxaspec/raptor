@@ -18,11 +18,13 @@ for ISP exposure queries via RVD's control socket).
   [RVD] --shm rings--> [RSD] RTSP/RTSPS server (via compy)
    |  \                 [RHD] HTTP snapshots / MJPEG
    |   \                [RMR] fragmented MP4 recording
-   |    `--osd shm <--- [ROD] OSD text / logo renderer
-   |    `--ivs -------> [RMD] motion detection → triggers RMR
+   |    \               [RWD] WebRTC/WHIP server (DTLS-SRTP via mbedTLS + compy)
+   |     `--osd shm <-- [ROD] OSD text / logo renderer
+   |     `--ivs ------> [RMD] motion detection → triggers RMR
    |
   [RAD] --audio ring--> [RSD] (interleaved A/V)
    |                    [RMR] (muxed A/V)
+   |                    [RWD] (WebRTC A/V)
    |
   [RIC] ---- ctrl sock --> [RVD] (exposure queries, ISP mode switch)
 ```
@@ -39,6 +41,7 @@ for ISP exposure queries via RVD's control socket).
 | RIC  | `ric`  | IR-Cut Controller. Polls ISP exposure via RVD's control socket and switches between day/night modes with configurable hysteresis. Controls IR-cut filter and IR LED GPIOs. |
 | RMR  | `rmr`  | Recording/Muxing Daemon. Reads H.264/H.265 + audio from rings and writes crash-safe fragmented MP4 segments to SD card. Own fMP4 muxer with zero external dependencies. |
 | RMD  | `rmd`  | Motion Detection Daemon. Queries RVD for IVS hardware motion results (configurable grid ROI), manages idle/active/cooldown state machine, triggers recording via RMR and GPIO output on motion events. |
+| RWD  | `rwd`  | WebRTC Daemon. Sends live H.264 + Opus to browsers and go2rtc via WHIP signaling with sub-second latency. ICE-lite, DTLS-SRTP (mbedTLS), SRTP (compy). Embedded player at `/webrtc`. Requires `TLS=1` and `MBEDTLS_SSL_DTLS_SRTP`. |
 
 ### Tools
 
@@ -71,6 +74,7 @@ Runtime shared libraries from the Ingenic SDK / Buildroot sysroot:
 - `libhelix-aac` / `libhelix-mp3` -- AAC/MP3 decoders (optional, for rac playback)
 - `libopus` -- Opus codec (optional, `OPUS=1`)
 - `libaudioProcess` -- Ingenic audio effects (optional, `AUDIO_EFFECTS=1`)
+- `libmbedtls` / `libmbedcrypto` / `libmbedx509` -- TLS/DTLS (optional, `TLS=1`, required for RTSPS and WebRTC)
 
 ## Build
 
@@ -132,7 +136,7 @@ and the init script to `$DESTDIR/etc/init.d/S31raptor`.
 All daemons share a single INI-style config file: `/etc/raptor.conf`.
 
 Sections: `[sensor]`, `[stream0]`, `[stream1]`, `[jpeg]`, `[ring]`, `[audio]`,
-`[rtsp]`, `[http]`, `[osd]`, `[ircut]`, `[recording]`, `[motion]`, `[log]`.
+`[rtsp]`, `[http]`, `[osd]`, `[ircut]`, `[recording]`, `[webrtc]`, `[motion]`, `[log]`.
 
 See `config/raptor.conf` for the full reference with defaults and comments.
 
@@ -152,7 +156,7 @@ manages startup order:
 
 1. **RVD** starts first and creates the SHM ring buffers.
 2. The script waits (up to 5 seconds) for `/dev/shm/rss_ring_main` to appear.
-3. **RAD**, **ROD**, **RSD**, **RHD**, **RMR**, **RIC**, and **RMD** start.
+3. **RAD**, **ROD**, **RSD**, **RHD**, **RMR**, **RIC**, **RMD**, and **RWD** start.
    Each daemon checks its own `enabled` flag in the config and exits cleanly
    if disabled, so all can be started unconditionally.
 4. Shutdown reverses the order: consumers stop first, then RVD.
