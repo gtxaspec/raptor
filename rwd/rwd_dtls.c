@@ -152,9 +152,22 @@ int rwd_dtls_init(rwd_dtls_ctx_t *ctx, const char *cert_path, const char *key_pa
 	/* WebRTC uses self-signed certs — trust is via SDP fingerprint */
 	mbedtls_ssl_conf_authmode(&ctx->conf, MBEDTLS_SSL_VERIFY_NONE);
 
-	/* Keep TLS 1.3 code paths enabled — mbedTLS needs them to reassemble
-	 * fragmented DTLS ClientHello (Firefox sends >1400 byte ClientHello
-	 * with TLS 1.3 extensions that cause DTLS-level fragmentation) */
+	/* Prefer SHA256-based ciphersuites for SRTP key derivation compatibility.
+	 * Include SHA1 fallbacks for broader client support (Chrome, go2rtc).
+	 * SHA384 ciphersuites are excluded — the TLS PRF fallback for SRTP key
+	 * export produces wrong keys with SHA384 (go2rtc/pion). */
+	static const int ciphersuites[] = {
+		MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+		MBEDTLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+		MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256,
+		MBEDTLS_TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256,
+		MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA,
+		MBEDTLS_TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,
+		MBEDTLS_TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+		MBEDTLS_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+		0,
+	};
+	mbedtls_ssl_conf_ciphersuites(&ctx->conf, ciphersuites);
 
 	/* DTLS-SRTP protection profiles (UNSET-terminated) */
 	static const mbedtls_ssl_srtp_profile profiles[] = {
@@ -358,6 +371,9 @@ int rwd_dtls_export_srtp_keys(rwd_client_t *c, Compy_SrtpKeyMaterial *send_key,
 	memcpy(recv_key->master_key, key_material, SRTP_MASTER_KEY_LEN);
 	memcpy(recv_key->master_salt, key_material + 2 * SRTP_MASTER_KEY_LEN, SRTP_MASTER_SALT_LEN);
 
-	RSS_INFO("DTLS: SRTP keys exported");
+	RSS_INFO("DTLS: SRTP keys exported (prf=%d, send_key=%02x%02x%02x%02x salt=%02x%02x)",
+		 c->tls_prf, send_key->master_key[0], send_key->master_key[1],
+		 send_key->master_key[2], send_key->master_key[3], send_key->master_salt[0],
+		 send_key->master_salt[1]);
 	return 0;
 }
