@@ -125,8 +125,7 @@ int rwd_media_setup(rwd_client_t *c)
 			Compy_RtpTransport_set_ssrc(c->rtp_audio, c->audio_ssrc);
 			/* sdes:mid extension for audio */
 			if (c->offer.mid_ext_id > 0 && c->offer.mid_ext_id <= 14) {
-				const char *amid =
-					c->offer.mid_audio[0] ? c->offer.mid_audio : "1";
+				const char *amid = c->offer.mid_audio[0] ? c->offer.mid_audio : "1";
 				Compy_RtpTransport_set_extension(
 					c->rtp_audio, (uint8_t)c->offer.mid_ext_id,
 					(const uint8_t *)amid, (uint8_t)strlen(amid));
@@ -402,7 +401,8 @@ void *rwd_video_reader_thread(void *arg)
 					c->waiting_keyframe = false;
 					c->video_ts_offset = rtp_ts;
 					c->video_ts_base_set = true;
-					RSS_INFO("media: client[%d] got keyframe, starting send", s);
+					RSS_INFO("media: client[%d] got keyframe, starting send",
+						 s);
 				}
 
 				uint32_t client_ts = rtp_ts - c->video_ts_offset;
