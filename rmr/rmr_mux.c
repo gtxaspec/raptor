@@ -456,8 +456,8 @@ static void write_stsd_hev1(rmr_mux_t *m)
 /* AAC AudioSpecificConfig — compute from sample rate + AAC-LC + mono */
 static uint16_t aac_audio_specific_config(uint32_t sample_rate)
 {
-	static const int sr_table[] = {96000, 88200, 64000, 48000, 44100, 32000,
-				       24000, 22050, 16000, 12000, 11025, 8000, 7350};
+	static const int sr_table[] = {96000, 88200, 64000, 48000, 44100, 32000, 24000,
+				       22050, 16000, 12000, 11025, 8000,  7350};
 	int sr_idx = 4; /* default 44100 */
 	for (int i = 0; i < 13; i++) {
 		if (sr_table[i] == (int)sample_rate) {
@@ -474,30 +474,31 @@ static void write_esds(rmr_mux_t *m, uint16_t asc)
 	uint32_t esds_off = bb_fullbox_begin(m, "esds", 0, 0);
 
 	/* ES_Descriptor */
-	bb_w8(m, 0x03);	 /* tag: ES_DescrTag */
-	bb_w8(m, 23);		 /* length */
-	bb_w16(m, 1);		 /* ES_ID */
-	bb_w8(m, 0);		 /* stream priority */
+	bb_w8(m, 0x03); /* tag: ES_DescrTag */
+	bb_w8(m, 23);	/* length */
+	bb_w16(m, 1);	/* ES_ID */
+	bb_w8(m, 0);	/* stream priority */
 
 	/* DecoderConfigDescriptor */
-	bb_w8(m, 0x04);	 /* tag: DecoderConfigDescrTag */
-	bb_w8(m, 15);		 /* length */
-	bb_w8(m, 0x40);	 /* objectTypeIndication: Audio ISO/IEC 14496-3 */
-	bb_w8(m, 0x15);	 /* streamType: audio (5<<2 | 1) */
-	bb_w8(m, 0); bb_w16(m, 0); /* bufferSizeDB (3 bytes) */
-	bb_w32(m, 0);		 /* maxBitrate (0 = unknown) */
-	bb_w32(m, 0);		 /* avgBitrate (0 = unknown) */
+	bb_w8(m, 0x04); /* tag: DecoderConfigDescrTag */
+	bb_w8(m, 15);	/* length */
+	bb_w8(m, 0x40); /* objectTypeIndication: Audio ISO/IEC 14496-3 */
+	bb_w8(m, 0x15); /* streamType: audio (5<<2 | 1) */
+	bb_w8(m, 0);
+	bb_w16(m, 0); /* bufferSizeDB (3 bytes) */
+	bb_w32(m, 0); /* maxBitrate (0 = unknown) */
+	bb_w32(m, 0); /* avgBitrate (0 = unknown) */
 
 	/* DecoderSpecificInfo (AudioSpecificConfig) */
-	bb_w8(m, 0x05);	 /* tag: DecSpecificInfoTag */
-	bb_w8(m, 2);		 /* length */
+	bb_w8(m, 0x05); /* tag: DecSpecificInfoTag */
+	bb_w8(m, 2);	/* length */
 	bb_w8(m, (uint8_t)(asc >> 8));
 	bb_w8(m, (uint8_t)(asc & 0xFF));
 
 	/* SLConfigDescriptor */
-	bb_w8(m, 0x06);	 /* tag: SLConfigDescrTag */
-	bb_w8(m, 1);		 /* length */
-	bb_w8(m, 0x02);	 /* predefined: MP4 */
+	bb_w8(m, 0x06); /* tag: SLConfigDescrTag */
+	bb_w8(m, 1);	/* length */
+	bb_w8(m, 0x02); /* predefined: MP4 */
 
 	bb_box_end(m, esds_off);
 }
@@ -506,12 +507,12 @@ static void write_esds(rmr_mux_t *m, uint16_t asc)
 static void write_dops(rmr_mux_t *m, uint32_t sample_rate)
 {
 	uint32_t dops_off = bb_box_begin(m, "dOps");
-	bb_w8(m, 0);			/* Version */
-	bb_w8(m, 1);			/* OutputChannelCount (mono) */
+	bb_w8(m, 0);		/* Version */
+	bb_w8(m, 1);		/* OutputChannelCount (mono) */
 	bb_w16(m, 312);		/* PreSkip (typical for Opus) */
-	bb_w32(m, sample_rate);		/* InputSampleRate */
-	bb_w16(m, 0);			/* OutputGain (0 dB) */
-	bb_w8(m, 0);			/* ChannelMappingFamily (0 = mono/stereo) */
+	bb_w32(m, sample_rate); /* InputSampleRate */
+	bb_w16(m, 0);		/* OutputGain (0 dB) */
+	bb_w8(m, 0);		/* ChannelMappingFamily (0 = mono/stereo) */
 	bb_box_end(m, dops_off);
 }
 
@@ -524,27 +525,27 @@ static void write_stsd_audio(rmr_mux_t *m)
 	if (m->audio.codec == RMR_AUDIO_AAC) {
 		/* mp4a + esds */
 		uint32_t entry_off = bb_box_begin(m, "mp4a");
-		bb_zeros(m, 6);				       /* reserved */
-		bb_w16(m, 1);				       /* data_reference_index */
-		bb_zeros(m, 8);				       /* reserved */
+		bb_zeros(m, 6); /* reserved */
+		bb_w16(m, 1);	/* data_reference_index */
+		bb_zeros(m, 8); /* reserved */
 		bb_w16(m, m->audio.channels);
-		bb_w16(m, 16);				       /* sample_size */
-		bb_w16(m, 0);				       /* compression_id */
-		bb_w16(m, 0);				       /* packet_size */
-		bb_w32(m, m->audio.sample_rate << 16);	       /* sample_rate 16.16 */
+		bb_w16(m, 16);			       /* sample_size */
+		bb_w16(m, 0);			       /* compression_id */
+		bb_w16(m, 0);			       /* packet_size */
+		bb_w32(m, m->audio.sample_rate << 16); /* sample_rate 16.16 */
 		write_esds(m, aac_audio_specific_config(m->audio.sample_rate));
 		bb_box_end(m, entry_off);
 	} else if (m->audio.codec == RMR_AUDIO_OPUS) {
 		/* Opus + dOps */
 		uint32_t entry_off = bb_box_begin(m, "Opus");
-		bb_zeros(m, 6);				       /* reserved */
-		bb_w16(m, 1);				       /* data_reference_index */
-		bb_zeros(m, 8);				       /* reserved */
+		bb_zeros(m, 6); /* reserved */
+		bb_w16(m, 1);	/* data_reference_index */
+		bb_zeros(m, 8); /* reserved */
 		bb_w16(m, m->audio.channels);
-		bb_w16(m, 16);				       /* sample_size */
-		bb_w16(m, 0);				       /* compression_id */
-		bb_w16(m, 0);				       /* packet_size */
-		bb_w32(m, 48000 << 16);			       /* sample_rate 16.16 (always 48kHz) */
+		bb_w16(m, 16);		/* sample_size */
+		bb_w16(m, 0);		/* compression_id */
+		bb_w16(m, 0);		/* packet_size */
+		bb_w32(m, 48000 << 16); /* sample_rate 16.16 (always 48kHz) */
 		write_dops(m, m->audio.sample_rate);
 		bb_box_end(m, entry_off);
 	} else {

@@ -596,12 +596,16 @@ int rvd_pipeline_init(rvd_state_t *st)
 	} else {
 		uint32_t bps = st->streams[0].enc_cfg.bitrate;
 		uint32_t fps = st->streams[0].enc_cfg.fps_num;
-		if (fps == 0) fps = 25;
+		if (fps == 0)
+			fps = 25;
 		uint32_t max_frame = (uint32_t)((uint64_t)bps * 4 / 8 / fps);
-		if (max_frame < 8192) max_frame = 8192;
+		if (max_frame < 8192)
+			max_frame = 8192;
 		main_data = max_frame * (uint32_t)ring_main_slots;
-		if (main_data < 256 * 1024) main_data = 256 * 1024;
-		if (main_data > 8 * 1024 * 1024) main_data = 8 * 1024 * 1024;
+		if (main_data < 256 * 1024)
+			main_data = 256 * 1024;
+		if (main_data > 8 * 1024 * 1024)
+			main_data = 8 * 1024 * 1024;
 	}
 	RSS_INFO("main ring: %u slots, %u KB data", ring_main_slots, main_data / 1024);
 
@@ -623,12 +627,16 @@ int rvd_pipeline_init(rvd_state_t *st)
 		} else {
 			uint32_t bps = st->streams[1].enc_cfg.bitrate;
 			uint32_t fps = st->streams[1].enc_cfg.fps_num;
-			if (fps == 0) fps = 25;
+			if (fps == 0)
+				fps = 25;
 			uint32_t max_frame = (uint32_t)((uint64_t)bps * 4 / 8 / fps);
-			if (max_frame < 4096) max_frame = 4096;
+			if (max_frame < 4096)
+				max_frame = 4096;
 			sub_data = max_frame * (uint32_t)ring_sub_slots;
-			if (sub_data < 128 * 1024) sub_data = 128 * 1024;
-			if (sub_data > 4 * 1024 * 1024) sub_data = 4 * 1024 * 1024;
+			if (sub_data < 128 * 1024)
+				sub_data = 128 * 1024;
+			if (sub_data > 4 * 1024 * 1024)
+				sub_data = 4 * 1024 * 1024;
 		}
 		RSS_INFO("sub ring: %u slots, %u KB data", ring_sub_slots, sub_data / 1024);
 
@@ -656,9 +664,11 @@ int rvd_pipeline_init(rvd_state_t *st)
 		uint32_t w = st->streams[ji].enc_cfg.width;
 		uint32_t h = st->streams[ji].enc_cfg.height;
 		uint32_t jpeg_max = w * h / 4; /* ~25% of uncompressed */
-		if (jpeg_max < 65536) jpeg_max = 65536;
+		if (jpeg_max < 65536)
+			jpeg_max = 65536;
 		uint32_t jpeg_data = jpeg_max * 16;
-		if (jpeg_data > 4 * 1024 * 1024) jpeg_data = 4 * 1024 * 1024;
+		if (jpeg_data > 4 * 1024 * 1024)
+			jpeg_data = 4 * 1024 * 1024;
 		RSS_INFO("%s ring: 16 slots, %u KB data", ring_name, jpeg_data / 1024);
 
 		st->streams[ji].ring = rss_ring_create(ring_name, 16, jpeg_data);
@@ -701,8 +711,7 @@ void rvd_pipeline_deinit(rvd_state_t *st)
 			int len = st->bind_chain_len[i];
 			for (int j = len - 1; j > 0; j--)
 				RSS_HAL_CALL(st->ops, unbind, st->hal_ctx,
-					     &st->bind_chain[i][j - 1],
-					     &st->bind_chain[i][j]);
+					     &st->bind_chain[i][j - 1], &st->bind_chain[i][j]);
 		}
 
 		RSS_HAL_CALL(st->ops, enc_unregister_channel, st->hal_ctx, chn);

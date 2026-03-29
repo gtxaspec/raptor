@@ -60,8 +60,10 @@ int main(int argc, char **argv)
 	srv.running = dctx.running;
 	srv.port = rss_config_get_int(dctx.cfg, "rtsp", "port", 554);
 	srv.max_clients = rss_config_get_int(dctx.cfg, "rtsp", "max_clients", RSD_MAX_CLIENTS);
-	if (srv.max_clients < 1) srv.max_clients = 1;
-	if (srv.max_clients > RSD_MAX_CLIENTS) srv.max_clients = RSD_MAX_CLIENTS;
+	if (srv.max_clients < 1)
+		srv.max_clients = 1;
+	if (srv.max_clients > RSD_MAX_CLIENTS)
+		srv.max_clients = RSD_MAX_CLIENTS;
 	rss_strlcpy(srv.endpoint_main, rss_config_get_str(dctx.cfg, "rtsp", "endpoint_main", ""),
 		    sizeof(srv.endpoint_main));
 	rss_strlcpy(srv.endpoint_sub, rss_config_get_str(dctx.cfg, "rtsp", "endpoint_sub", ""),

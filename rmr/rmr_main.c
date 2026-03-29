@@ -99,11 +99,26 @@ static void setup_mux_tracks(rmr_mux_t *mux, rmr_state_t *st)
 	if (st->audio_ring) {
 		rmr_audio_params_t ap = {.sample_rate = st->audio_sample_rate, .channels = 1};
 		switch (st->audio_codec) {
-		case RMR_AUDIO_PCMU: ap.codec = RMR_AUDIO_PCMU; ap.bits_per_sample = 8; break;
-		case RMR_AUDIO_PCMA: ap.codec = RMR_AUDIO_PCMA; ap.bits_per_sample = 8; break;
-		case RMR_AUDIO_AAC:  ap.codec = RMR_AUDIO_AAC;  ap.bits_per_sample = 16; break;
-		case RMR_AUDIO_OPUS: ap.codec = RMR_AUDIO_OPUS; ap.bits_per_sample = 16; break;
-		default:             ap.codec = RMR_AUDIO_L16;   ap.bits_per_sample = 16; break;
+		case RMR_AUDIO_PCMU:
+			ap.codec = RMR_AUDIO_PCMU;
+			ap.bits_per_sample = 8;
+			break;
+		case RMR_AUDIO_PCMA:
+			ap.codec = RMR_AUDIO_PCMA;
+			ap.bits_per_sample = 8;
+			break;
+		case RMR_AUDIO_AAC:
+			ap.codec = RMR_AUDIO_AAC;
+			ap.bits_per_sample = 16;
+			break;
+		case RMR_AUDIO_OPUS:
+			ap.codec = RMR_AUDIO_OPUS;
+			ap.bits_per_sample = 16;
+			break;
+		default:
+			ap.codec = RMR_AUDIO_L16;
+			ap.bits_per_sample = 16;
+			break;
 		}
 		rmr_mux_set_audio(mux, &ap);
 	}
@@ -187,7 +202,8 @@ static void close_clip(rmr_state_t *st)
 	}
 	if (st->clip_fd >= 0) {
 		rmr_storage_close_segment(st->clip_fd);
-		RSS_INFO("motion clip closed: %s (%" PRIu64 " bytes)", st->clip_path, st->clip_bytes);
+		RSS_INFO("motion clip closed: %s (%" PRIu64 " bytes)", st->clip_path,
+			 st->clip_bytes);
 		st->clip_fd = -1;
 	}
 }
@@ -217,8 +233,7 @@ static void clip_write_video(rmr_state_t *st, const uint8_t *avcc, uint32_t avcc
 }
 
 /* Write an audio frame to the clip mux with independent DTS. */
-static void clip_write_audio(rmr_state_t *st, const uint8_t *data, uint32_t len,
-			     uint32_t samples)
+static void clip_write_audio(rmr_state_t *st, const uint8_t *data, uint32_t len, uint32_t samples)
 {
 	if (!st->clip_mux)
 		return;
@@ -239,7 +254,7 @@ typedef struct {
 	uint32_t audio_samples_per_frame;
 	uint32_t audio_bps;
 	int max_frames; /* limit replay count, -1 = unlimited */
-	int count;      /* frames replayed so far */
+	int count;	/* frames replayed so far */
 } replay_ctx_t;
 
 static int replay_video_frame(const rmr_prebuf_slot_t *slot, const uint8_t *data, void *ctx)
@@ -255,9 +270,8 @@ static int replay_audio_frame(const rmr_prebuf_slot_t *slot, const uint8_t *data
 	replay_ctx_t *rc = ctx;
 	if (rc->max_frames >= 0 && rc->count >= rc->max_frames)
 		return 1; /* stop iteration */
-	uint32_t samples = rc->audio_samples_per_frame
-				   ? rc->audio_samples_per_frame
-				   : slot->data_length / rc->audio_bps;
+	uint32_t samples = rc->audio_samples_per_frame ? rc->audio_samples_per_frame
+						       : slot->data_length / rc->audio_bps;
 	clip_write_audio(rc->st, data, slot->data_length, samples);
 	rc->count++;
 	return 0;
@@ -297,8 +311,7 @@ static int open_clip_with_prebuffer(rmr_state_t *st, uint32_t audio_samples_per_
 
 	/* Replay video pre-buffer */
 	int vcount = rmr_prebuf_iterate(st->video_pb, vstart, replay_video_frame, &rc);
-	RSS_INFO("pre-buffer: replayed %d video frames (%.1fs)",
-		 vcount, v_duration_us / 1000000.0);
+	RSS_INFO("pre-buffer: replayed %d video frames (%.1fs)", vcount, v_duration_us / 1000000.0);
 
 	/* Replay audio pre-buffer — match video duration by frame count.
 	 * Timestamp matching is unreliable across rings, so calculate
@@ -307,8 +320,8 @@ static int open_clip_with_prebuffer(rmr_state_t *st, uint32_t audio_samples_per_
 		/* Audio frame duration in microseconds */
 		int64_t audio_frame_us;
 		if (audio_samples_per_frame > 0 && st->audio_sample_rate > 0)
-			audio_frame_us = (int64_t)audio_samples_per_frame * 1000000
-					 / st->audio_sample_rate;
+			audio_frame_us =
+				(int64_t)audio_samples_per_frame * 1000000 / st->audio_sample_rate;
 		else
 			audio_frame_us = 20000; /* fallback: 20ms */
 
@@ -323,10 +336,9 @@ static int open_clip_with_prebuffer(rmr_state_t *st, uint32_t audio_samples_per_
 
 		rc.max_frames = audio_frame_count;
 		rc.count = 0;
-		int acount = rmr_prebuf_iterate(st->audio_pb, astart,
-						replay_audio_frame, &rc);
-		RSS_INFO("pre-buffer: replayed %d audio frames (target %d, %.1fs)",
-			 acount, audio_frame_count, v_duration_us / 1000000.0);
+		int acount = rmr_prebuf_iterate(st->audio_pb, astart, replay_audio_frame, &rc);
+		RSS_INFO("pre-buffer: replayed %d audio frames (target %d, %.1fs)", acount,
+			 audio_frame_count, v_duration_us / 1000000.0);
 	}
 
 	return 0;
@@ -359,12 +371,12 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	if (strstr(cmd_json, "\"status\"")) {
 		snprintf(resp_buf, resp_buf_size,
 			 "{\"recording\":%s,\"clip\":%s,\"mode\":%d,"
-			 "\"file\":\"%s\",\"frames\":%" PRIu64
-			 ",\"dropped\":%" PRIu64 ",\"bytes\":%" PRIu64 "}",
+			 "\"file\":\"%s\",\"frames\":%" PRIu64 ",\"dropped\":%" PRIu64
+			 ",\"bytes\":%" PRIu64 "}",
 			 atomic_load(&st->recording) ? "true" : "false",
-			 atomic_load(&st->clip_recording) ? "true" : "false",
-			 st->mode, st->segment_path,
-			 st->frames_written, st->frames_dropped, st->bytes_written);
+			 atomic_load(&st->clip_recording) ? "true" : "false", st->mode,
+			 st->segment_path, st->frames_written, st->frames_dropped,
+			 st->bytes_written);
 		return (int)strlen(resp_buf);
 	}
 
@@ -379,8 +391,8 @@ static void record_loop(rmr_state_t *st)
 	int64_t v_ts_base = -1; /* continuous segment video timestamp base */
 
 	/* Audio DTS increment per ring frame. */
-	uint32_t audio_bps = (st->audio_codec == RMR_AUDIO_PCMU ||
-			      st->audio_codec == RMR_AUDIO_PCMA) ? 1 : 2;
+	uint32_t audio_bps =
+		(st->audio_codec == RMR_AUDIO_PCMU || st->audio_codec == RMR_AUDIO_PCMA) ? 1 : 2;
 	uint32_t audio_samples_per_frame = 0;
 	if (st->audio_codec == RMR_AUDIO_AAC)
 		audio_samples_per_frame = 1024;
@@ -415,7 +427,9 @@ static void record_loop(rmr_state_t *st)
 				st->audio_read_seq = atomic_load(&ahdr->write_seq);
 				/* Update audio codec params */
 				audio_bps = (st->audio_codec == RMR_AUDIO_PCMU ||
-					     st->audio_codec == RMR_AUDIO_PCMA) ? 1 : 2;
+					     st->audio_codec == RMR_AUDIO_PCMA)
+						    ? 1
+						    : 2;
 				audio_samples_per_frame = 0;
 				if (st->audio_codec == RMR_AUDIO_AAC)
 					audio_samples_per_frame = 1024;
@@ -487,8 +501,8 @@ static void record_loop(rmr_state_t *st)
 				uint32_t alen;
 				rss_ring_slot_t ameta;
 				ret = rss_ring_read(st->audio_ring, &st->audio_read_seq,
-						    st->audio_buf, sizeof(st->audio_buf),
-						    &alen, &ameta);
+						    st->audio_buf, sizeof(st->audio_buf), &alen,
+						    &ameta);
 				if (ret == RSS_EOVERFLOW || ret != 0)
 					break;
 
@@ -502,9 +516,8 @@ static void record_loop(rmr_state_t *st)
 					memcpy(audio_frames[audio_count].data, st->audio_buf, alen);
 					audio_frames[audio_count].len = alen;
 					audio_frames[audio_count].samples =
-						audio_samples_per_frame
-							? audio_samples_per_frame
-							: alen / audio_bps;
+						audio_samples_per_frame ? audio_samples_per_frame
+									: alen / audio_bps;
 					audio_count++;
 				}
 			}
@@ -536,7 +549,8 @@ static void record_loop(rmr_state_t *st)
 				if (meta.is_key) {
 					rmr_mux_flush_fragment(st->mux);
 					st->frames_since_flush = 0;
-					if (rmr_storage_should_rotate(st->storage, st->segment_start_us)) {
+					if (rmr_storage_should_rotate(st->storage,
+								      st->segment_start_us)) {
 						close_segment(st);
 						rmr_storage_enforce_limit(st->storage);
 					}
@@ -591,7 +605,7 @@ static void record_loop(rmr_state_t *st)
 			}
 		}
 
-clip_handling:
+	clip_handling:
 		/* ── Motion clip handling ── */
 		if (st->mode == RMR_MODE_MOTION || st->mode == RMR_MODE_BOTH) {
 			bool clip_want = (st->mode == RMR_MODE_BOTH)
@@ -601,8 +615,8 @@ clip_handling:
 			/* Start clip with pre-buffer */
 			if (clip_want && !st->clip_mux) {
 				if (open_clip_with_prebuffer(st, audio_samples_per_frame,
-							    audio_bps) == 0) {
-		RSS_INFO("motion clip active");
+							     audio_bps) == 0) {
+					RSS_INFO("motion clip active");
 				}
 			}
 
@@ -625,7 +639,8 @@ clip_handling:
 						 * clip (no pre-buffer on continuation) */
 						if (clip_want) {
 							if (open_clip(st) == 0) {
-								RSS_INFO("clip rotated (length cap)");
+								RSS_INFO("clip rotated (length "
+									 "cap)");
 							}
 						}
 					}
@@ -694,8 +709,10 @@ int main(int argc, char **argv)
 		st.mode = RMR_MODE_CONTINUOUS;
 
 	st.prebuffer_sec = rss_config_get_int(dctx.cfg, "recording", "prebuffer_sec", 5);
-	if (st.prebuffer_sec < 0) st.prebuffer_sec = 0;
-	if (st.prebuffer_sec > 5) st.prebuffer_sec = 5;
+	if (st.prebuffer_sec < 0)
+		st.prebuffer_sec = 0;
+	if (st.prebuffer_sec > 5)
+		st.prebuffer_sec = 5;
 
 	st.clip_length_sec = rss_config_get_int(dctx.cfg, "recording", "clip_length_sec", 60);
 
@@ -756,8 +773,10 @@ int main(int argc, char **argv)
 		/* Data size: bitrate * prebuffer_sec * 2.5 (headroom for I-frames) / 8 */
 		uint32_t bps = rss_config_get_int(dctx.cfg, "stream0", "bitrate", 2000000);
 		uint64_t v_data = (uint64_t)bps * (uint32_t)st.prebuffer_sec * 5 / 2 / 8;
-		if (v_data < 1024 * 1024) v_data = 1024 * 1024;  /* min 1MB */
-		if (v_data > 10 * 1024 * 1024) v_data = 10 * 1024 * 1024; /* max 10MB */
+		if (v_data < 1024 * 1024)
+			v_data = 1024 * 1024; /* min 1MB */
+		if (v_data > 10 * 1024 * 1024)
+			v_data = 10 * 1024 * 1024; /* max 10MB */
 
 		st.video_pb = rmr_prebuf_create(v_slots, (uint32_t)v_data);
 		if (st.video_pb)
@@ -772,7 +791,8 @@ int main(int argc, char **argv)
 			uint32_t a_slots = next_pow2(a_frames);
 			/* Audio data: small frames, 1KB each is generous */
 			uint32_t a_data = a_slots * 1024;
-			if (a_data < 128 * 1024) a_data = 128 * 1024;
+			if (a_data < 128 * 1024)
+				a_data = 128 * 1024;
 
 			st.audio_pb = rmr_prebuf_create(a_slots, a_data);
 			if (st.audio_pb)
@@ -811,7 +831,8 @@ int main(int argc, char **argv)
 		rmr_storage_config_t ccfg = {
 			.base_path = clip_path,
 			.segment_minutes = (st.clip_length_sec + 59) / 60,
-			.max_storage_mb = rss_config_get_int(dctx.cfg, "recording", "clip_max_mb", 100),
+			.max_storage_mb =
+				rss_config_get_int(dctx.cfg, "recording", "clip_max_mb", 100),
 		};
 		if (ccfg.segment_minutes < 1)
 			ccfg.segment_minutes = 1;

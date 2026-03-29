@@ -104,9 +104,14 @@ int rvd_ivs_start(rvd_state_t *st)
 			int gx = 4, gy = 4;
 			if (sscanf(grid_str, "%dx%d", &gx, &gy) < 2)
 				RSS_WARN("IVS: invalid grid '%s', using 4x4", grid_str);
-			if (gx < 1) gx = 1;
-			if (gy < 1) gy = 1;
-			if (gx * gy > RSS_IVS_MAX_ROI) { gx = 4; gy = 4; }
+			if (gx < 1)
+				gx = 1;
+			if (gy < 1)
+				gy = 1;
+			if (gx * gy > RSS_IVS_MAX_ROI) {
+				gx = 4;
+				gy = 4;
+			}
 
 			mp.roi_count = gx * gy;
 			int cw = w / gx;
@@ -123,7 +128,8 @@ int rvd_ivs_start(rvd_state_t *st)
 					mp.sense[idx] = sensitivity > 4 ? 4 : sensitivity;
 				}
 			}
-			RSS_INFO("IVS: %dx%d grid (%d zones, %dx%d each)", gx, gy, mp.roi_count, cw, ch);
+			RSS_INFO("IVS: %dx%d grid (%d zones, %dx%d each)", gx, gy, mp.roi_count, cw,
+				 ch);
 		}
 
 		if (st->ops->ivs_create_move_interface)
@@ -160,8 +166,8 @@ int rvd_ivs_start(rvd_state_t *st)
 	atomic_store(&st->ivs_motion, false);
 	atomic_store(&st->ivs_motion_ts, 0);
 
-	RSS_INFO("IVS: %s started on %dx%d (chn=%d, sensitivity=%d, skip=%d)",
-		 algo, w, h, IVS_CHN, sensitivity, skip);
+	RSS_INFO("IVS: %s started on %dx%d (chn=%d, sensitivity=%d, skip=%d)", algo, w, h, IVS_CHN,
+		 sensitivity, skip);
 	return RSS_OK;
 
 err_unreg:
@@ -258,8 +264,8 @@ void *rvd_ivs_thread(void *arg)
 			int off = 0;
 			for (int i = 0; i < RSS_IVS_MAX_ROI && off < (int)sizeof(zones) - 4; i++) {
 				if (mr->ret_roi[i])
-					off += snprintf(zones + off, sizeof(zones) - off,
-							"%s%d", off > 0 ? "," : "", i);
+					off += snprintf(zones + off, sizeof(zones) - off, "%s%d",
+							off > 0 ? "," : "", i);
 			}
 			RSS_DEBUG("IVS: motion detected (zones: %s)", zones);
 		} else if (!motion && prev) {

@@ -285,8 +285,10 @@ void rvd_osd_init(rvd_state_t *st)
 		{
 			const char *logo_path = rss_config_get_str(cfg, "osd", "logo", "");
 			if (logo_path[0] && access(logo_path, R_OK) == 0) {
-				uint32_t lw = rss_config_get_int(cfg, "osd", "logo_width", OSD_LOGO_W);
-				uint32_t lh = rss_config_get_int(cfg, "osd", "logo_height", OSD_LOGO_H);
+				uint32_t lw =
+					rss_config_get_int(cfg, "osd", "logo_width", OSD_LOGO_W);
+				uint32_t lh =
+					rss_config_get_int(cfg, "osd", "logo_height", OSD_LOGO_H);
 				if (create_region(st, s, RVD_OSD_LOGO, lw, lh))
 					region_count++;
 			}
