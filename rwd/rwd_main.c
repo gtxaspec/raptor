@@ -97,7 +97,8 @@ void rwd_generate_ice_credentials(char *ufrag, size_t ufrag_len, char *pwd, size
 	if (rwd_random_bytes(pwd_rand, sizeof(pwd_rand)) != 0) {
 		static uint32_t pwd_counter;
 		uint64_t ts = rss_timestamp_us() ^ (uint64_t)(++pwd_counter);
-		memcpy(pwd_rand, &ts, sizeof(ts) < sizeof(pwd_rand) ? sizeof(ts) : sizeof(pwd_rand));
+		memcpy(pwd_rand, &ts,
+		       sizeof(ts) < sizeof(pwd_rand) ? sizeof(ts) : sizeof(pwd_rand));
 	}
 
 	size_t ulen = ufrag_len - 1 < 8 ? ufrag_len - 1 : 8;
@@ -335,8 +336,7 @@ static void cleanup_stale_clients(rwd_server_t *srv)
 		/* RFC 7675 consent freshness: remove clients that stopped
 		 * sending STUN binding requests. Browsers send them every
 		 * ~5s; we allow 30s of silence before evicting. */
-		if (c->sending && c->last_stun_at > 0 &&
-		    (now - c->last_stun_at) > 30 * 1000000LL) {
+		if (c->sending && c->last_stun_at > 0 && (now - c->last_stun_at) > 30 * 1000000LL) {
 			RSS_WARN("removing session %s (consent expired, no STUN for 30s)",
 				 c->session_id);
 			rwd_media_teardown(c);
@@ -383,10 +383,10 @@ static int rwd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				      first ? "" : ",", addr, c->stream_idx,
 				      c->sending ? "true" : "false",
 				      c->ice_verified ? "true" : "false",
-				      c->dtls_state == RWD_DTLS_ESTABLISHED ? "established"
+				      c->dtls_state == RWD_DTLS_ESTABLISHED   ? "established"
 				      : c->dtls_state == RWD_DTLS_HANDSHAKING ? "handshaking"
-				      : c->dtls_state == RWD_DTLS_FAILED ? "failed"
-								         : "new");
+				      : c->dtls_state == RWD_DTLS_FAILED      ? "failed"
+									      : "new");
 			first = 0;
 		}
 		pthread_mutex_unlock(&srv->clients_lock);
@@ -528,8 +528,7 @@ static void rwd_run(rwd_server_t *srv)
 				/* Non-blocking to prevent slow-loris: if a
 				 * complete request isn't available immediately,
 				 * we close. WHIP clients send in one burst. */
-				fcntl(client_fd, F_SETFL,
-				      fcntl(client_fd, F_GETFL) | O_NONBLOCK);
+				fcntl(client_fd, F_SETFL, fcntl(client_fd, F_GETFL) | O_NONBLOCK);
 
 				/* Get local address for IP detection */
 				struct sockaddr_storage local_addr;

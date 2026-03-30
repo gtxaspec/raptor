@@ -125,7 +125,7 @@ static int wt_tls_connect(wt_tls_t *tls, const char *host, const char *port)
 	mbedtls_ctr_drbg_init(&tls->ctr_drbg);
 
 	ret = mbedtls_ctr_drbg_seed(&tls->ctr_drbg, mbedtls_entropy_func, &tls->entropy,
-				     (const uint8_t *)"wt", 2);
+				    (const uint8_t *)"wt", 2);
 	if (ret != 0)
 		goto fail;
 
@@ -372,7 +372,8 @@ static int ws_upgrade(wt_tls_t *tls, const char *host, const char *path)
 	uint8_t key_raw[16];
 	rwd_random_bytes(key_raw, sizeof(key_raw));
 
-	static const char b64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+	static const char b64[] =
+		"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 	char key_b64[25];
 	int j = 0;
 	for (int i = 0; i < 16; i += 3) {
@@ -540,7 +541,7 @@ static int json_get_object(const char *json, const char *key, char *out, size_t 
 /* ── STUN client (discover server-reflexive address) ── */
 
 int rwd_stun_discover_srflx(int udp_fd, const char *server, int port, char *ip_out, size_t ip_size,
-			     uint16_t *port_out)
+			    uint16_t *port_out)
 {
 	struct addrinfo hints = {.ai_family = AF_INET, .ai_socktype = SOCK_DGRAM};
 	struct addrinfo *res;
@@ -574,7 +575,8 @@ int rwd_stun_discover_srflx(int udp_fd, const char *server, int port, char *ip_o
 		uint8_t buf[256];
 		struct sockaddr_storage from;
 		socklen_t from_len = sizeof(from);
-		ssize_t n = recvfrom(udp_fd, buf, sizeof(buf), 0, (struct sockaddr *)&from, &from_len);
+		ssize_t n =
+			recvfrom(udp_fd, buf, sizeof(buf), 0, (struct sockaddr *)&from, &from_len);
 		if (n < 20)
 			continue;
 		if (buf[0] != 0x01 || buf[1] != 0x01) /* Not Binding Response */
@@ -654,7 +656,7 @@ static void generate_random_id(char *out, size_t len)
 	static const char cs[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 	/* 62 chars: reject values >= 248 to eliminate modulo bias (256 % 62 = 8) */
 	size_t n = len - 1;
-	uint8_t raw[64]; /* batch read — avoids one syscall per character */
+	uint8_t raw[64];	       /* batch read — avoids one syscall per character */
 	size_t w = 0, r = sizeof(raw); /* r starts past end to force first fill */
 	while (w < n) {
 		if (r >= sizeof(raw)) {
@@ -682,7 +684,7 @@ static int wt_announce(wt_tls_t *tls, const char *info_hash, const char *peer_id
 }
 
 static int wt_send_answer(wt_tls_t *tls, const char *info_hash, const char *peer_id,
-			   const char *to_peer_id, const char *offer_id, const char *sdp_answer)
+			  const char *to_peer_id, const char *offer_id, const char *sdp_answer)
 {
 	/* Escape all strings that may contain special chars.
 	 * to_peer_id and offer_id come from the tracker (untrusted). */
@@ -947,7 +949,7 @@ int rwd_webtorrent_start(rwd_webtorrent_t *wt, rwd_server_t *srv)
 
 	/* Discover server-reflexive address via STUN (before threads start) */
 	if (rwd_stun_discover_srflx(srv->udp_fd, wt->stun_server, wt->stun_port, srv->srflx_ip,
-				     sizeof(srv->srflx_ip), &srv->srflx_port) == 0) {
+				    sizeof(srv->srflx_ip), &srv->srflx_port) == 0) {
 		srv->has_srflx = true;
 		RSS_INFO("webtorrent: STUN srflx %s:%u", srv->srflx_ip, srv->srflx_port);
 	} else {
