@@ -1023,7 +1023,7 @@ int rmr_mux_flush_fragment(rmr_mux_t *mux)
 		if (mux->v_count > 1)
 			mux->v_samples[mux->v_count - 1].duration =
 				mux->v_samples[mux->v_count - 2].duration;
-		else if (mux->video.timescale > 0 && mux->video.timescale > 0)
+		else if (mux->video.timescale > 0)
 			mux->v_samples[0].duration = mux->video.timescale / 25; /* fallback */
 	}
 
