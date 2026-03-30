@@ -168,7 +168,13 @@ static int http_send_async(rhd_client_t *c, int epoll_fd, const char *content_ty
 
 	/* Switch to EPOLLOUT to drive the send */
 	struct epoll_event ev = {.events = EPOLLOUT | EPOLLHUP | EPOLLERR, .data.fd = c->fd};
-	epoll_ctl(epoll_fd, EPOLL_CTL_MOD, c->fd, &ev);
+	if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, c->fd, &ev) < 0) {
+		RSS_ERROR("epoll_ctl mod client fd: %s", strerror(errno));
+		free(c->send_buf);
+		c->send_buf = NULL;
+		c->send_len = 0;
+		return -1;
+	}
 	return 0;
 }
 
@@ -493,7 +499,8 @@ static int server_init(rhd_server_t *srv)
 
 	srv->epoll_fd = epoll_create1(0);
 	struct epoll_event ev = {.events = EPOLLIN, .data.fd = srv->listen_fd};
-	epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, srv->listen_fd, &ev);
+	if (epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, srv->listen_fd, &ev) < 0)
+		RSS_ERROR("epoll_ctl add listen_fd: %s", strerror(errno));
 
 	/* Control socket */
 	rss_mkdir_p("/var/run/rss");
@@ -502,7 +509,8 @@ static int server_init(rhd_server_t *srv)
 		int ctrl_fd = rss_ctrl_get_fd(srv->ctrl);
 		if (ctrl_fd >= 0) {
 			ev = (struct epoll_event){.events = EPOLLIN, .data.fd = ctrl_fd};
-			epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, ctrl_fd, &ev);
+			if (epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, ctrl_fd, &ev) < 0)
+				RSS_ERROR("epoll_ctl add ctrl_fd: %s", strerror(errno));
 		}
 	}
 
@@ -624,7 +632,12 @@ static void server_run(rhd_server_t *srv)
 					 client_port(&sa), srv->client_count, srv->max_clients);
 
 				struct epoll_event cev = {.events = EPOLLIN, .data.fd = cfd};
-				epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, cfd, &cev);
+				if (epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, cfd, &cev) < 0) {
+					RSS_ERROR("epoll_ctl add client fd: %s", strerror(errno));
+					srv->client_count--;
+					free(c);
+					close(cfd);
+				}
 				continue;
 			}
 

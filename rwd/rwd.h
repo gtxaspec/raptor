@@ -274,6 +274,7 @@ typedef struct {
 	char stun_server[128];
 	int stun_port;
 	char viewer_base_url[256];
+	bool tls_verify;
 } rwd_webtorrent_t;
 
 int rwd_webtorrent_start(rwd_webtorrent_t *wt, rwd_server_t *srv);

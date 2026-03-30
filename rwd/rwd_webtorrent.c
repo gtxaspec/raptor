@@ -28,6 +28,7 @@
 #include <mbedtls/entropy.h>
 #include <mbedtls/ctr_drbg.h>
 #include <mbedtls/md.h>
+#include <mbedtls/x509_crt.h>
 
 #include "rwd.h"
 
@@ -39,6 +40,8 @@ typedef struct {
 	mbedtls_ssl_config conf;
 	mbedtls_entropy_context entropy;
 	mbedtls_ctr_drbg_context ctr_drbg;
+	mbedtls_x509_crt ca_cert;
+	bool has_ca;
 	bool connected;
 } wt_tls_t;
 
@@ -113,7 +116,7 @@ static int tcp_connect(const char *host, const char *port)
 
 /* ── TLS connect / disconnect ── */
 
-static int wt_tls_connect(wt_tls_t *tls, const char *host, const char *port)
+static int wt_tls_connect(wt_tls_t *tls, const char *host, const char *port, bool tls_verify)
 {
 	int ret;
 	memset(tls, 0, sizeof(*tls));
@@ -123,6 +126,8 @@ static int wt_tls_connect(wt_tls_t *tls, const char *host, const char *port)
 	mbedtls_ssl_config_init(&tls->conf);
 	mbedtls_entropy_init(&tls->entropy);
 	mbedtls_ctr_drbg_init(&tls->ctr_drbg);
+	mbedtls_x509_crt_init(&tls->ca_cert);
+	tls->has_ca = false;
 
 	ret = mbedtls_ctr_drbg_seed(&tls->ctr_drbg, mbedtls_entropy_func, &tls->entropy,
 				    (const uint8_t *)"wt", 2);
@@ -140,10 +145,19 @@ static int wt_tls_connect(wt_tls_t *tls, const char *host, const char *port)
 	if (ret != 0)
 		goto fail;
 
-	/* No cert verification for tracker — SDP content is not secret and
-	 * DTLS-SRTP provides the actual media security. Embedding a CA bundle
-	 * on the device would add ~200KB for minimal benefit. */
-	mbedtls_ssl_conf_authmode(&tls->conf, MBEDTLS_SSL_VERIFY_NONE);
+	/* Try to load system CA bundle for tracker cert verification.
+	 * If unavailable or tls_verify is disabled, fall back to no verification
+	 * (DTLS-SRTP still secures the media path regardless). */
+	if (tls_verify &&
+	    mbedtls_x509_crt_parse_file(&tls->ca_cert, "/etc/ssl/certs/ca-certificates.crt") > 0) {
+		mbedtls_ssl_conf_ca_chain(&tls->conf, &tls->ca_cert, NULL);
+		mbedtls_ssl_conf_authmode(&tls->conf, MBEDTLS_SSL_VERIFY_REQUIRED);
+		tls->has_ca = true;
+	} else {
+		if (tls_verify)
+			RSS_WARN("webtorrent: CA bundle not found, TLS verify disabled");
+		mbedtls_ssl_conf_authmode(&tls->conf, MBEDTLS_SSL_VERIFY_NONE);
+	}
 	mbedtls_ssl_conf_rng(&tls->conf, mbedtls_ctr_drbg_random, &tls->ctr_drbg);
 	mbedtls_ssl_conf_read_timeout(&tls->conf, 5000);
 
@@ -170,6 +184,7 @@ fail:
 	tls->fd = -1;
 	mbedtls_ssl_free(&tls->ssl);
 	mbedtls_ssl_config_free(&tls->conf);
+	mbedtls_x509_crt_free(&tls->ca_cert);
 	mbedtls_ctr_drbg_free(&tls->ctr_drbg);
 	mbedtls_entropy_free(&tls->entropy);
 	return -1;
@@ -182,6 +197,7 @@ static void wt_tls_close(wt_tls_t *tls)
 	tls->connected = false;
 	mbedtls_ssl_free(&tls->ssl);
 	mbedtls_ssl_config_free(&tls->conf);
+	mbedtls_x509_crt_free(&tls->ca_cert);
 	mbedtls_ctr_drbg_free(&tls->ctr_drbg);
 	mbedtls_entropy_free(&tls->entropy);
 	if (tls->fd >= 0)
@@ -301,6 +317,9 @@ static int ws_recv_frame(wt_tls_t *tls, char *buf, size_t buf_size)
 			uint8_t ext[8];
 			if (tls_read_exact(tls, ext, 8, false) != 0)
 				return -1;
+			/* RFC 6455 §5.2: MSB must be 0 */
+			if (ext[0] & 0x80)
+				return -1;
 			payload_len = 0;
 			for (int i = 0; i < 8; i++)
 				payload_len = (payload_len << 8) | ext[i];
@@ -312,7 +331,12 @@ static int ws_recv_frame(wt_tls_t *tls, char *buf, size_t buf_size)
 				return -1;
 		}
 
-		/* Skip oversized frames */
+		/* Reject absurdly large frames — tracker messages are
+		 * at most a few KB; anything over 64KB is malicious. */
+		if (payload_len > 65536)
+			return -1;
+
+		/* Skip oversized frames (within the 64KB cap) */
 		if (payload_len >= buf_size) {
 			uint8_t skip[256];
 			uint64_t rem = payload_len;
@@ -423,7 +447,8 @@ static int ws_upgrade(wt_tls_t *tls, const char *host, const char *path)
 			break;
 	}
 
-	return strstr(resp, "101") ? 0 : -1;
+	/* Check for "101" in the status line (first line only) */
+	return strncmp(resp, "HTTP/1.1 101", 12) == 0 ? 0 : -1;
 }
 
 /* ── JSON helpers (minimal, for tracker protocol) ── */
@@ -456,14 +481,35 @@ static size_t json_escape(const char *in, char *out, size_t out_size)
 	return w;
 }
 
+/* Find key at JSON key position (not inside a string value).
+ * Counts unescaped quotes before each match — even = key position. */
+static const char *json_find_key(const char *json, const char *needle, size_t needle_len)
+{
+	const char *p = json;
+	while ((p = strstr(p, needle)) != NULL) {
+		/* Count unescaped quotes from start to match position */
+		int quotes = 0;
+		for (const char *q = json; q < p; q++) {
+			if (*q == '"' && (q == json || q[-1] != '\\'))
+				quotes++;
+		}
+		if (quotes % 2 == 0)
+			return p; /* outside a string — real key */
+		p += needle_len;
+	}
+	return NULL;
+}
+
 static int json_get_str(const char *json, const char *key, char *out, size_t out_size)
 {
+	if (out_size == 0)
+		return -1;
 	char needle[128];
-	snprintf(needle, sizeof(needle), "\"%s\":", key);
-	const char *p = strstr(json, needle);
+	int nlen = snprintf(needle, sizeof(needle), "\"%s\":", key);
+	const char *p = json_find_key(json, needle, (size_t)nlen);
 	if (!p)
 		return -1;
-	p += strlen(needle);
+	p += nlen;
 	while (*p == ' ')
 		p++;
 	if (*p != '"')
@@ -500,11 +546,11 @@ static int json_get_str(const char *json, const char *key, char *out, size_t out
 static int json_get_object(const char *json, const char *key, char *out, size_t out_size)
 {
 	char needle[128];
-	snprintf(needle, sizeof(needle), "\"%s\":", key);
-	const char *p = strstr(json, needle);
+	int nlen = snprintf(needle, sizeof(needle), "\"%s\":", key);
+	const char *p = json_find_key(json, needle, (size_t)nlen);
 	if (!p)
 		return -1;
-	p += strlen(needle);
+	p += nlen;
 	while (*p == ' ')
 		p++;
 	if (*p != '{')
@@ -850,7 +896,7 @@ static void *webtorrent_thread(void *arg)
 		RSS_INFO("webtorrent: connecting to %s:%s%s", host, port, path);
 
 		wt_tls_t tls;
-		if (wt_tls_connect(&tls, host, port) != 0) {
+		if (wt_tls_connect(&tls, host, port, wt->tls_verify) != 0) {
 			RSS_WARN("webtorrent: connection failed, retry in %ds", backoff);
 			for (int i = 0; i < backoff && wt->running && *srv->running; i++)
 				sleep(1);

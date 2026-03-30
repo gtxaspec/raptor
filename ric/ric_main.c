@@ -8,6 +8,7 @@
  * Supports manual override via raptorctl: ric mode auto|day|night
  */
 
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -159,7 +160,8 @@ int main(int argc, char **argv)
 		epoll_fd = epoll_create1(0);
 		if (epoll_fd >= 0) {
 			struct epoll_event ev = {.events = EPOLLIN, .data.fd = ctrl_fd};
-			epoll_ctl(epoll_fd, EPOLL_CTL_ADD, ctrl_fd, &ev);
+			if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, ctrl_fd, &ev) < 0)
+				RSS_ERROR("epoll_ctl add ctrl_fd: %s", strerror(errno));
 		}
 	}
 

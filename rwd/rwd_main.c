@@ -639,6 +639,7 @@ int main(int argc, char **argv)
 					       "stun.l.google.com"),
 			    sizeof(wt.stun_server));
 		wt.stun_port = rss_config_get_int(dctx.cfg, "webtorrent", "stun_port", 19302);
+		wt.tls_verify = rss_config_get_bool(dctx.cfg, "webtorrent", "tls_verify", true);
 		rss_strlcpy(wt.viewer_base_url,
 			    rss_config_get_str(dctx.cfg, "webtorrent", "viewer_url",
 					       "https://viewer.thingino.com/share.html"),

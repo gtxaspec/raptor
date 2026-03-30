@@ -13,8 +13,6 @@
 
 #include "rsd.h"
 
-/* Server pointer for SDP generation (set by rsd_handle_rtsp_data) */
-static rsd_server_t *g_srv = NULL;
 
 /* ── Backchannel audio receiver (separate type for interface99) ── */
 
@@ -120,9 +118,9 @@ static CharSlice99 uri_strip_last(CharSlice99 uri)
 }
 
 /* Detect stream index from URI. Returns -1 for unknown endpoints. */
-static int detect_stream_idx(CharSlice99 uri)
+static int detect_stream_idx(const rsd_server_t *srv, CharSlice99 uri)
 {
-	bool custom = g_srv && (g_srv->endpoint_main[0] || g_srv->endpoint_sub[0]);
+	bool custom = srv->endpoint_main[0] || srv->endpoint_sub[0];
 
 	/* Strip /audio or /backchannel suffix to get base stream path */
 	CharSlice99 base = uri;
@@ -135,9 +133,9 @@ static int detect_stream_idx(CharSlice99 uri)
 
 	if (custom) {
 		/* Custom endpoints — exclusive, defaults disabled */
-		if (g_srv->endpoint_sub[0] && uri_ends_with(base, g_srv->endpoint_sub))
+		if (srv->endpoint_sub[0] && uri_ends_with(base, srv->endpoint_sub))
 			return RSD_STREAM_SUB;
-		if (g_srv->endpoint_main[0] && uri_ends_with(base, g_srv->endpoint_main))
+		if (srv->endpoint_main[0] && uri_ends_with(base, srv->endpoint_main))
 			return RSD_STREAM_MAIN;
 	} else {
 		/* Default endpoints */
@@ -160,19 +158,19 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 	VSELF(rsd_client_t);
 
 	/* Determine which stream from URI */
-	self->stream_idx = detect_stream_idx(req->start_line.uri);
+	self->stream_idx = detect_stream_idx(self->srv, req->start_line.uri);
 	if (self->stream_idx < 0) {
 		compy_respond(ctx, COMPY_STATUS_NOT_FOUND, "Unknown stream endpoint");
 		return;
 	}
 
 	/* Check if the requested stream's ring exists */
-	if (!g_srv || !g_srv->video[self->stream_idx].ring) {
+	if (!self->srv->video[self->stream_idx].ring) {
 		compy_respond(ctx, COMPY_STATUS_NOT_FOUND, "Stream not available");
 		return;
 	}
 
-	const rss_ring_header_t *hdr = rss_ring_get_header(g_srv->video[self->stream_idx].ring);
+	const rss_ring_header_t *hdr = rss_ring_get_header(self->srv->video[self->stream_idx].ring);
 
 	char sdp[2048] = {0};
 	Compy_Writer sdp_w = compy_string_writer(sdp);
@@ -208,8 +206,8 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 			(COMPY_SDP_ATTR, "framerate:%u", hdr->fps_num));
 	}
 
-	if (g_srv->has_audio) {
-		const rss_ring_header_t *ahdr = rss_ring_get_header(g_srv->ring_audio);
+	if (self->srv->has_audio) {
+		const rss_ring_header_t *ahdr = rss_ring_get_header(self->srv->ring_audio);
 		uint32_t codec = ahdr->codec;
 		int aclk = ahdr->fps_num; /* fps_num holds sample_rate */
 
@@ -430,8 +428,8 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 		/* Determine PT and clock from ring metadata */
 		int apt = 0;
 		int aclk = 8000;
-		if (g_srv && g_srv->ring_audio) {
-			const rss_ring_header_t *ahdr = rss_ring_get_header(g_srv->ring_audio);
+		if (self->srv->ring_audio) {
+			const rss_ring_header_t *ahdr = rss_ring_get_header(self->srv->ring_audio);
 			aclk = ahdr->fps_num;
 			switch (ahdr->codec) {
 			case RSD_CODEC_PCMU:
@@ -473,7 +471,7 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 	}
 
 	compy_header(ctx, COMPY_HEADER_SESSION, "%" PRIu64 ";timeout=%d",
-		     self->session_id, g_srv ? g_srv->session_timeout : 60);
+		     self->session_id, self->srv->session_timeout);
 	compy_respond_ok(ctx);
 }
 
@@ -579,8 +577,8 @@ static Compy_ControlFlow rsd_client_t_before(VSelf, Compy_Context *ctx, const Co
 	VSELF(rsd_client_t);
 	(void)self;
 
-	if (g_srv && g_srv->auth) {
-		if (compy_auth_check(g_srv->auth, ctx, req) != 0)
+	if (self->srv->auth) {
+		if (compy_auth_check(self->srv->auth, ctx, req) != 0)
 			return Compy_ControlFlow_Break;
 	}
 
@@ -609,10 +607,8 @@ impl(Compy_Controller, rsd_client_t);
 
 /* ── RTSP request parsing and dispatch ── */
 
-void rsd_handle_rtsp_data(rsd_server_t *srv, rsd_client_t *client, const char *data, size_t len)
+void rsd_handle_rtsp_data(rsd_client_t *client, const char *data, size_t len)
 {
-	g_srv = srv;
-
 	/* Handle TCP interleaved frames ($ + channel + 2-byte length + payload).
 	 * These arrive on the same TCP connection as RTSP signaling. */
 	while (len >= 4 && data[0] == '$') {

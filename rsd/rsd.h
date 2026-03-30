@@ -10,6 +10,7 @@
 #include <rss_common.h>
 
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <netinet/in.h>
@@ -44,11 +45,12 @@ typedef struct {
 	Compy_NalTransport *nal; /* video only */
 	Compy_Rtcp *rtcp;
 	int64_t last_rtcp;
-	bool playing;
+	atomic_bool playing;
 } rsd_stream_t;
 
 /* Per-client state */
 typedef struct rsd_client {
+	struct rsd_server *srv; /* back-pointer to server (set once at accept) */
 	int fd;
 	struct sockaddr_storage addr;
 #ifdef COMPY_HAS_TLS
@@ -100,7 +102,7 @@ typedef struct {
 } rsd_ring_ctx_t;
 
 /* Server state */
-typedef struct {
+typedef struct rsd_server {
 	int listen_fd;
 	int epoll_fd;
 	rss_ctrl_t *ctrl;
@@ -145,7 +147,7 @@ void rsd_server_run(rsd_server_t *srv);
 void rsd_server_deinit(rsd_server_t *srv);
 
 /* rsd_session.c */
-void rsd_handle_rtsp_data(rsd_server_t *srv, rsd_client_t *client, const char *data, size_t len);
+void rsd_handle_rtsp_data(rsd_client_t *client, const char *data, size_t len);
 
 /* rsd_ring_reader.c */
 void rsd_set_server_for_readers(rsd_server_t *srv);

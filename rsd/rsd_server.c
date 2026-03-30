@@ -164,6 +164,7 @@ static void accept_client(rsd_server_t *srv)
 		close(fd);
 		return;
 	}
+	client->srv = srv;
 	client->udp_rtp_fd = -1;
 	client->udp_rtcp_fd = -1;
 	client->video_rtcp_ch = 0xFF; /* invalid until SETUP sets it */
@@ -194,7 +195,16 @@ static void accept_client(rsd_server_t *srv)
 		.events = EPOLLIN,
 		.data.fd = fd,
 	};
-	epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, fd, &ev);
+	if (epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, fd, &ev) < 0) {
+		RSS_ERROR("epoll_ctl add client fd: %s", strerror(errno));
+#ifdef COMPY_HAS_TLS
+		if (client->tls)
+			Compy_TlsConn_free(client->tls);
+#endif
+		close(fd);
+		free(client);
+		return;
+	}
 
 	pthread_mutex_lock(&srv->clients_lock);
 	srv->clients[srv->client_count++] = client;
@@ -239,7 +249,7 @@ static void handle_client_data(rsd_server_t *srv, int fd)
 
 	client->recv_len += (size_t)n;
 	client->last_activity = rss_timestamp_us();
-	rsd_handle_rtsp_data(srv, client, client->recv_buf, client->recv_len);
+	rsd_handle_rtsp_data(client, client->recv_buf, client->recv_len);
 }
 
 int rsd_server_init(rsd_server_t *srv)
@@ -343,7 +353,8 @@ int rsd_server_init(rsd_server_t *srv)
 	}
 
 	struct epoll_event ev = {.events = EPOLLIN, .data.fd = srv->listen_fd};
-	epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, srv->listen_fd, &ev);
+	if (epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, srv->listen_fd, &ev) < 0)
+		RSS_ERROR("epoll_ctl add listen_fd: %s", strerror(errno));
 
 	/* Control socket */
 	rss_mkdir_p("/var/run/rss");
@@ -353,7 +364,8 @@ int rsd_server_init(rsd_server_t *srv)
 		int ctrl_fd = rss_ctrl_get_fd(srv->ctrl);
 		if (ctrl_fd >= 0) {
 			ev = (struct epoll_event){.events = EPOLLIN, .data.fd = ctrl_fd};
-			epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, ctrl_fd, &ev);
+			if (epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, ctrl_fd, &ev) < 0)
+				RSS_ERROR("epoll_ctl add ctrl_fd: %s", strerror(errno));
 		}
 	}
 

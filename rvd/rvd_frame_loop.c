@@ -7,6 +7,7 @@
  * the other and eliminates frame drops on dual-stream setups.
  */
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -144,7 +145,8 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running)
 		ctrl_fd = rss_ctrl_get_fd(st->ctrl);
 		if (ctrl_fd >= 0) {
 			struct epoll_event ev = {.events = EPOLLIN, .data.fd = ctrl_fd};
-			epoll_ctl(epoll_fd, EPOLL_CTL_ADD, ctrl_fd, &ev);
+			if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, ctrl_fd, &ev) < 0)
+				RSS_ERROR("epoll_ctl add ctrl_fd: %s", strerror(errno));
 		}
 	}
 

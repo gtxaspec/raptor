@@ -5,6 +5,7 @@
  * state machine (idle/active/cooldown), triggers recording and GPIO.
  */
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -177,7 +178,8 @@ int main(int argc, char **argv)
 		ctrl_fd = rss_ctrl_get_fd(ctx.ctrl);
 		if (ctrl_fd >= 0) {
 			struct epoll_event ev = {.events = EPOLLIN, .data.fd = ctrl_fd};
-			epoll_ctl(epoll_fd, EPOLL_CTL_ADD, ctrl_fd, &ev);
+			if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, ctrl_fd, &ev) < 0)
+				RSS_ERROR("epoll_ctl add ctrl_fd: %s", strerror(errno));
 		}
 	}
 
