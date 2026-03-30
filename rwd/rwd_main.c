@@ -574,8 +574,6 @@ static void rwd_run(rwd_server_t *srv)
 
 int main(int argc, char **argv)
 {
-	srand(time(NULL));
-
 	rss_daemon_ctx_t dctx;
 	int ret = rss_daemon_init(&dctx, "rwd", argc, argv);
 	if (ret != 0)
