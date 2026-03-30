@@ -41,7 +41,7 @@ for ISP exposure queries via RVD's control socket).
 | RIC  | `ric`  | IR-Cut Controller. Polls ISP exposure via RVD's control socket and switches between day/night modes with configurable hysteresis. Controls IR-cut filter and IR LED GPIOs. |
 | RMR  | `rmr`  | Recording/Muxing Daemon. Reads H.264/H.265 + audio from rings and writes crash-safe fragmented MP4 segments to SD card. Own fMP4 muxer with zero external dependencies. |
 | RMD  | `rmd`  | Motion Detection Daemon. Queries RVD for IVS hardware motion results (configurable grid ROI), manages idle/active/cooldown state machine, triggers recording via RMR and GPIO output on motion events. |
-| RWD  | `rwd`  | WebRTC Daemon. Sends live H.264 + Opus to browsers and go2rtc via WHIP signaling with sub-second latency. ICE-lite, DTLS-SRTP (mbedTLS), SRTP (compy). Embedded player at `/webrtc`. Requires `TLS=1` and `MBEDTLS_SSL_DTLS_SRTP`. |
+| RWD  | `rwd`  | WebRTC Daemon. Sends live H.264 + Opus to browsers and go2rtc via WHIP signaling with sub-second latency. ICE-lite, DTLS-SRTP (mbedTLS), SRTP (compy). Embedded player at `/webrtc`. Optional WebTorrent sharing (`WEBTORRENT=1`) enables external viewing without port forwarding via public tracker signaling + STUN NAT traversal. Requires `TLS=1` and `MBEDTLS_SSL_DTLS_SRTP`. |
 
 ### Tools
 
@@ -112,7 +112,8 @@ Optional variables:
 - `MP3=1` -- enable MP3 decode support (rac playback)
 - `OPUS=1` -- enable Opus encode/decode support
 - `AUDIO_EFFECTS=1` -- enable noise suppression, HPF, AGC
-- `TLS=1` -- enable RTSPS (TLS-encrypted RTSP via mbedTLS)
+- `TLS=1` -- enable RTSPS (TLS-encrypted RTSP via mbedTLS) and WebRTC (RWD)
+- `WEBTORRENT=1` -- enable WebTorrent external sharing in RWD (requires `TLS=1`)
 - `V=1` -- verbose build output
 
 Build individual targets:
@@ -136,7 +137,7 @@ and the init script to `$DESTDIR/etc/init.d/S31raptor`.
 All daemons share a single INI-style config file: `/etc/raptor.conf`.
 
 Sections: `[sensor]`, `[stream0]`, `[stream1]`, `[jpeg]`, `[ring]`, `[audio]`,
-`[rtsp]`, `[http]`, `[osd]`, `[ircut]`, `[recording]`, `[webrtc]`, `[motion]`, `[log]`.
+`[rtsp]`, `[http]`, `[osd]`, `[ircut]`, `[recording]`, `[webrtc]`, `[webtorrent]`, `[motion]`, `[log]`.
 
 See `config/raptor.conf` for the full reference with defaults and comments.
 
