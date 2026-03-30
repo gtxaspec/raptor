@@ -550,10 +550,19 @@ static void server_run(rhd_server_t *srv)
 	}
 
 	frame_buf = malloc(frame_buf_size);
+	if (!frame_buf) {
+		RSS_FATAL("failed to allocate frame buffer (%u bytes)", frame_buf_size);
+		return;
+	}
 
 	/* Snapshot buffer (shared with handle_request, single-threaded) */
 	srv->snap_buf_size = frame_buf_size;
 	srv->snap_buf = malloc(srv->snap_buf_size);
+	if (!srv->snap_buf) {
+		RSS_FATAL("failed to allocate snapshot buffer (%u bytes)", srv->snap_buf_size);
+		free(frame_buf);
+		return;
+	}
 
 	struct epoll_event events[16];
 	int ctrl_fd = srv->ctrl ? rss_ctrl_get_fd(srv->ctrl) : -1;

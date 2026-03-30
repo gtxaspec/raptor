@@ -296,10 +296,8 @@ static int open_clip_with_prebuffer(rmr_state_t *st, uint32_t audio_samples_per_
 	}
 
 	/* Get the video pre-buffer time range */
-	uint32_t vsi = vstart & st->video_pb->mask;
-	int64_t kf_ts = st->video_pb->slots[vsi].timestamp;
-	uint32_t newest_vi = (st->video_pb->write_idx - 1) & st->video_pb->mask;
-	int64_t newest_v_ts = st->video_pb->slots[newest_vi].timestamp;
+	int64_t kf_ts = rmr_prebuf_timestamp(st->video_pb, vstart);
+	int64_t newest_v_ts = rmr_prebuf_timestamp(st->video_pb, rmr_prebuf_newest(st->video_pb));
 	int64_t v_duration_us = newest_v_ts - kf_ts;
 
 	replay_ctx_t rc = {
@@ -317,7 +315,7 @@ static int open_clip_with_prebuffer(rmr_state_t *st, uint32_t audio_samples_per_
 	/* Replay audio pre-buffer — match video duration by frame count.
 	 * Timestamp matching is unreliable across rings, so calculate
 	 * how many audio frames fit in the video pre-buffer duration. */
-	if (st->audio_pb && st->audio_pb->count > 0 && v_duration_us > 0) {
+	if (st->audio_pb && rmr_prebuf_count(st->audio_pb) > 0 && v_duration_us > 0) {
 		/* Audio frame duration in microseconds */
 		int64_t audio_frame_us;
 		if (audio_samples_per_frame > 0 && st->audio_sample_rate > 0)
@@ -329,11 +327,11 @@ static int open_clip_with_prebuffer(rmr_state_t *st, uint32_t audio_samples_per_
 		int audio_frame_count = (int)(v_duration_us / audio_frame_us);
 		if (audio_frame_count < 1)
 			audio_frame_count = 1;
-		if ((uint32_t)audio_frame_count > st->audio_pb->count)
-			audio_frame_count = (int)st->audio_pb->count;
+		if ((uint32_t)audio_frame_count > rmr_prebuf_count(st->audio_pb))
+			audio_frame_count = (int)rmr_prebuf_count(st->audio_pb);
 
 		/* Rewind from the head by audio_frame_count frames */
-		uint32_t astart = st->audio_pb->write_idx - (uint32_t)audio_frame_count;
+		uint32_t astart = rmr_prebuf_write_idx(st->audio_pb) - (uint32_t)audio_frame_count;
 
 		rc.max_frames = audio_frame_count;
 		rc.count = 0;

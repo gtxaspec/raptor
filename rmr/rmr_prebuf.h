@@ -64,4 +64,22 @@ static inline uint32_t rmr_prebuf_count(const rmr_prebuf_t *pb)
 	return pb ? pb->count : 0;
 }
 
+/* Return the timestamp of a slot by absolute index. */
+static inline int64_t rmr_prebuf_timestamp(const rmr_prebuf_t *pb, uint32_t abs_idx)
+{
+	return pb->slots[abs_idx & pb->mask].timestamp;
+}
+
+/* Return the absolute index of the newest slot. */
+static inline uint32_t rmr_prebuf_newest(const rmr_prebuf_t *pb)
+{
+	return (pb->write_idx - 1) & pb->mask;
+}
+
+/* Return the current write index (monotonic, for arithmetic). */
+static inline uint32_t rmr_prebuf_write_idx(const rmr_prebuf_t *pb)
+{
+	return pb->write_idx;
+}
+
 #endif /* RMR_PREBUF_H */
