@@ -747,8 +747,8 @@ int main(int argc, char **argv)
 	const char *http_user = rss_config_get_str(ctx.cfg, "http", "username", "");
 	const char *http_pass = rss_config_get_str(ctx.cfg, "http", "password", "");
 	if (http_user[0] && http_pass[0]) {
-		strncpy(srv.auth_user, http_user, sizeof(srv.auth_user) - 1);
-		strncpy(srv.auth_pass, http_pass, sizeof(srv.auth_pass) - 1);
+		rss_strlcpy(srv.auth_user, http_user, sizeof(srv.auth_user));
+		rss_strlcpy(srv.auth_pass, http_pass, sizeof(srv.auth_pass));
 		RSS_INFO("HTTP Basic auth enabled");
 	}
 

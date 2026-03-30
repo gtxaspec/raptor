@@ -22,8 +22,7 @@ static bool rsd_credential_lookup(const char *username, char *password_out, size
 	const rsd_credentials_t *creds = user_data;
 	if (strcmp(username, creds->username) != 0)
 		return false;
-	strncpy(password_out, creds->password, password_max - 1);
-	password_out[password_max - 1] = '\0';
+	rss_strlcpy(password_out, creds->password, password_max);
 	return true;
 }
 
@@ -32,8 +31,8 @@ static rsd_credentials_t g_creds;
 
 static Compy_Auth *rsd_auth_new(const char *username, const char *password)
 {
-	strncpy(g_creds.username, username, sizeof(g_creds.username) - 1);
-	strncpy(g_creds.password, password, sizeof(g_creds.password) - 1);
+	rss_strlcpy(g_creds.username, username, sizeof(g_creds.username));
+	rss_strlcpy(g_creds.password, password, sizeof(g_creds.password));
 	return Compy_Auth_new("Raptor", rsd_credential_lookup, &g_creds);
 }
 
