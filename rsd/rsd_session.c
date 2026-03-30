@@ -472,7 +472,8 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 		}
 	}
 
-	compy_header(ctx, COMPY_HEADER_SESSION, "%" PRIu64 ";timeout=60", self->session_id);
+	compy_header(ctx, COMPY_HEADER_SESSION, "%" PRIu64 ";timeout=%d",
+		     self->session_id, g_srv ? g_srv->session_timeout : 60);
 	compy_respond_ok(ctx);
 }
 

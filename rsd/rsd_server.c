@@ -488,7 +488,7 @@ void rsd_server_run(rsd_server_t *srv)
 
 		/* Idle timeout sweep — disconnect clients with no activity */
 		int64_t now = rss_timestamp_us();
-		int64_t timeout_us = (int64_t)RSD_IDLE_TIMEOUT_SEC * 1000000;
+		int64_t timeout_us = (int64_t)srv->session_timeout * 1000000;
 		for (int i = srv->client_count - 1; i >= 0; i--) {
 			rsd_client_t *c = srv->clients[i];
 			if (c && !c->video.playing && !c->audio.playing &&
@@ -496,7 +496,7 @@ void rsd_server_run(rsd_server_t *srv)
 				char addr[INET6_ADDRSTRLEN];
 				RSS_WARN("idle timeout: %s:%u (%ds)",
 					 client_addr_str(&c->addr, addr, sizeof(addr)),
-					 client_port(&c->addr), RSD_IDLE_TIMEOUT_SEC);
+					 client_port(&c->addr), srv->session_timeout);
 				remove_client(srv, c);
 			}
 		}

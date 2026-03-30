@@ -63,6 +63,9 @@ int main(int argc, char **argv)
 		srv.max_clients = 1;
 	if (srv.max_clients > RSD_MAX_CLIENTS)
 		srv.max_clients = RSD_MAX_CLIENTS;
+	srv.session_timeout = rss_config_get_int(dctx.cfg, "rtsp", "session_timeout", 60);
+	if (srv.session_timeout < 10)
+		srv.session_timeout = 10;
 	rss_strlcpy(srv.endpoint_main, rss_config_get_str(dctx.cfg, "rtsp", "endpoint_main", ""),
 		    sizeof(srv.endpoint_main));
 	rss_strlcpy(srv.endpoint_sub, rss_config_get_str(dctx.cfg, "rtsp", "endpoint_sub", ""),
