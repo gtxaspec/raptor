@@ -16,6 +16,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <time.h>
 #include <sys/socket.h>
 #include <sys/epoll.h>
 #include <poll.h>
@@ -36,7 +37,15 @@ typedef struct {
 	struct sockaddr_storage addr;
 	char recv_buf[RHD_RECV_BUF];
 	size_t recv_len;
+
+	/* Non-blocking send buffer (snapshot / one-shot responses) */
+	uint8_t *send_buf;  /* heap-allocated response (header + body) */
+	uint32_t send_len;  /* total bytes to send */
+	uint32_t send_off;  /* bytes sent so far */
+	int64_t send_start; /* monotonic timestamp for stall timeout */
 } rhd_client_t;
+
+#define RHD_SEND_TIMEOUT_MS 3000 /* max time to drain a one-shot response */
 
 #define RHD_MAX_JPEG 2
 
@@ -108,8 +117,7 @@ static int base64_decode(const char *in, size_t in_len, char *out, size_t out_ma
 
 /* ── HTTP response helpers ── */
 
-static int nb_write_all(int fd, const void *buf, size_t len);
-
+/* Small synchronous send for error/status responses (< 1KB, always fits in socket buffer) */
 static void http_send(int fd, const char *status, const char *content_type, const void *body,
 		      int body_len)
 {
@@ -122,10 +130,42 @@ static void http_send(int fd, const char *status, const char *content_type, cons
 			    "Access-Control-Allow-Origin: *\r\n"
 			    "\r\n",
 			    status, content_type, body_len);
-	if (nb_write_all(fd, header, hlen) < 0)
-		return;
+	write(fd, header, hlen);
 	if (body && body_len > 0)
-		nb_write_all(fd, body, body_len);
+		write(fd, body, body_len);
+}
+
+/* Queue a large response for non-blocking send via epoll.
+ * Builds header + body into a single heap buffer on the client. */
+static int http_send_async(rhd_client_t *c, int epoll_fd, const char *content_type,
+			   const void *body, uint32_t body_len)
+{
+	char header[512];
+	int hlen = snprintf(header, sizeof(header),
+			    "HTTP/1.1 200 OK\r\n"
+			    "Content-Type: %s\r\n"
+			    "Content-Length: %u\r\n"
+			    "Connection: close\r\n"
+			    "Access-Control-Allow-Origin: *\r\n"
+			    "\r\n",
+			    content_type, body_len);
+
+	c->send_buf = malloc((uint32_t)hlen + body_len);
+	if (!c->send_buf)
+		return -1;
+	memcpy(c->send_buf, header, hlen);
+	memcpy(c->send_buf + hlen, body, body_len);
+	c->send_len = (uint32_t)hlen + body_len;
+	c->send_off = 0;
+
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	c->send_start = ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+
+	/* Switch to EPOLLOUT to drive the send */
+	struct epoll_event ev = {.events = EPOLLOUT | EPOLLHUP | EPOLLERR, .data.fd = c->fd};
+	epoll_ctl(epoll_fd, EPOLL_CTL_MOD, c->fd, &ev);
+	return 0;
 }
 
 static void http_error(int fd, const char *status, const char *msg)
@@ -254,11 +294,12 @@ static int http_send_mjpeg_frame(int fd, const uint8_t *data, uint32_t len)
 
 /* ── Snapshot handler — serve latest JPEG from ring ── */
 
-static void handle_snapshot(int fd, rss_ring_t *ring, uint8_t *buf, uint32_t buf_size)
+static bool handle_snapshot(rhd_client_t *c, int epoll_fd, rss_ring_t *ring,
+			    uint8_t *buf, uint32_t buf_size)
 {
 	if (!ring || !buf) {
-		http_error(fd, "503 Service Unavailable", "JPEG ring not available");
-		return;
+		http_error(c->fd, "503 Service Unavailable", "JPEG ring not available");
+		return false;
 	}
 
 	/* Read the latest completed frame from the ring.
@@ -275,11 +316,16 @@ static void handle_snapshot(int fd, rss_ring_t *ring, uint8_t *buf, uint32_t buf
 	}
 
 	if (ret != 0 || length < 2 || buf[0] != 0xFF || buf[1] != 0xD8) {
-		http_error(fd, "503 Service Unavailable", "No snapshot available yet");
-		return;
+		http_error(c->fd, "503 Service Unavailable", "No snapshot available yet");
+		return false;
 	}
 
-	http_send(fd, "200 OK", "image/jpeg", buf, (int)length);
+	/* Queue for non-blocking send via epoll */
+	if (http_send_async(c, epoll_fd, "image/jpeg", buf, length) < 0) {
+		http_error(c->fd, "500 Internal Server Error", "Out of memory");
+		return false;
+	}
+	return true; /* keep alive — epoll will drain and close */
 }
 
 /* ── Client management ── */
@@ -289,6 +335,7 @@ static void remove_client(rhd_server_t *srv, int idx)
 	rhd_client_t *c = srv->clients[idx];
 	epoll_ctl(srv->epoll_fd, EPOLL_CTL_DEL, c->fd, NULL);
 	close(c->fd);
+	free(c->send_buf);
 	free(c);
 	srv->clients[idx] = srv->clients[--srv->client_count];
 }
@@ -339,11 +386,13 @@ static void handle_request(rhd_server_t *srv, rhd_client_t *c)
 
 	if (strncmp(path, "/snap", 5) == 0) {
 		int si = parse_stream_param(path);
-		if (si < srv->jpeg_ring_count && srv->jpeg_rings[si])
-			handle_snapshot(c->fd, srv->jpeg_rings[si], srv->snap_buf,
-					srv->snap_buf_size);
-		else
+		if (si < srv->jpeg_ring_count && srv->jpeg_rings[si]) {
+			if (handle_snapshot(c, srv->epoll_fd, srv->jpeg_rings[si],
+					    srv->snap_buf, srv->snap_buf_size))
+				return; /* keep alive — async send in progress */
+		} else {
 			http_error(c->fd, "404 Not Found", "Stream not available");
+		}
 	} else if (strncmp(path, "/mjpeg", 6) == 0 || strncmp(path, "/mjpg", 5) == 0) {
 		/* Start MJPEG stream — don't close connection */
 		http_send_mjpeg_header(c->fd);
@@ -620,6 +669,22 @@ static void server_run(rhd_server_t *srv)
 				continue;
 			}
 
+			/* Async send in progress — drain via EPOLLOUT */
+			if (c->send_buf && (events[i].events & EPOLLOUT)) {
+				uint32_t remain = c->send_len - c->send_off;
+				ssize_t nw = write(c->fd, c->send_buf + c->send_off, remain);
+				if (nw > 0) {
+					c->send_off += (uint32_t)nw;
+					if (c->send_off >= c->send_len) {
+						/* Done — close connection */
+						remove_client(srv, ci);
+					}
+				} else if (nw < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+					remove_client(srv, ci);
+				}
+				continue;
+			}
+
 			size_t space = sizeof(c->recv_buf) - c->recv_len - 1;
 			if (space == 0) {
 				/* Request too large — reject */
@@ -638,9 +703,21 @@ static void server_run(rhd_server_t *srv)
 			/* Check for complete HTTP request */
 			if (strstr(c->recv_buf, "\r\n\r\n")) {
 				handle_request(srv, c);
-				/* Close non-streaming connections */
-				if (!c->is_mjpeg)
+				/* Close non-streaming, non-async connections */
+				if (!c->is_mjpeg && !c->send_buf)
 					remove_client(srv, ci);
+			}
+		}
+
+		/* Reap stalled async sends */
+		{
+			struct timespec ts;
+			clock_gettime(CLOCK_MONOTONIC, &ts);
+			int64_t now = ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+			for (int i = srv->client_count - 1; i >= 0; i--) {
+				rhd_client_t *c = srv->clients[i];
+				if (c->send_buf && (now - c->send_start) > RHD_SEND_TIMEOUT_MS)
+					remove_client(srv, i);
 			}
 		}
 
