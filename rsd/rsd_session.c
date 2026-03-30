@@ -327,15 +327,19 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 		compy_header(ctx, COMPY_HEADER_TRANSPORT,
 			     "RTP/AVP/TCP;unicast;interleaved=%" PRIu8 "-%" PRIu8, rtp_ch, rtcp_ch);
 
-		RSS_INFO("client SETUP: video TCP interleaved %u-%u", rtp_ch, rtcp_ch);
+		RSS_INFO("client SETUP: %s TCP interleaved %u-%u",
+			 is_backchannel ? "backchannel"
+			 : is_audio	? "audio"
+					: "video",
+			 rtp_ch, rtcp_ch);
 
 		/* Track RTCP channel for incoming RR routing */
-		if (is_backchannel)
-			; /* backchannel channels handled by receiver */
-		else if (!self->video.rtp)
-			self->video_rtcp_ch = rtcp_ch;
-		else
-			self->audio_rtcp_ch = rtcp_ch;
+		if (!is_backchannel) {
+			if (is_audio)
+				self->audio_rtcp_ch = rtcp_ch;
+			else
+				self->video_rtcp_ch = rtcp_ch;
+		}
 	} else {
 		/* UDP */
 		uint16_t cli_rtp = 0, cli_rtcp = 0;
