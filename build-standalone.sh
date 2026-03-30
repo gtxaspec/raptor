@@ -159,25 +159,27 @@ PLATFORM_UPPER=$(echo "$PLATFORM" | tr a-z A-Z)
 
 # ── Clean ──
 
-if [ "$OPT_CLEAN_ALL" = 1 ]; then
-    echo "Removing all deps and build artifacts..."
-    rm -rf "$DEPS_DIR" "$SCRIPT_DIR/build"
-    echo "Done."
-    exit 0
-fi
+if [ "$OPT_CLEAN_ALL" = 1 ] || [ "$OPT_CLEAN" = 1 ]; then
+    # Clean raptor daemons first
+    make clean 2>/dev/null || true
 
-if [ "$OPT_CLEAN" = 1 ]; then
-    echo "Cleaning build artifacts (keeping downloaded deps)..."
-    rm -rf "$SYSROOT_DIR" "$LOG_DIR" "$SCRIPT_DIR/build"
-    for d in raptor-hal raptor-ipc raptor-common; do
-        [ -d "$DEPS_DIR/$d" ] && make -C "$DEPS_DIR/$d" clean 2>/dev/null || true
-    done
-    rm -rf "$DEPS_DIR/compy/build-cross" "$DEPS_DIR/mbedtls/build-cross"
-    rm -rf "$DEPS_DIR/faac/build-cross" "$DEPS_DIR/opus/config.status"
-    rm -f "$DEPS_DIR/ESP8266Audio/src/libhelix-aac/"*.o
-    rm -f "$DEPS_DIR/ESP8266Audio/src/libhelix-mp3/"*.o
-    rm -f "$DEPS_DIR/libschrift/schrift.o" "$DEPS_DIR/libschrift/libschrift.so"
-    echo "Done. Next build will rebuild deps from cached sources."
+    if [ "$OPT_CLEAN_ALL" = 1 ]; then
+        echo "Removing all deps and build artifacts..."
+        rm -rf "$DEPS_DIR" "$SCRIPT_DIR/build"
+    else
+        echo "Cleaning build artifacts (keeping downloaded deps)..."
+        rm -rf "$SYSROOT_DIR" "$LOG_DIR" "$SCRIPT_DIR/build"
+        for d in raptor-hal raptor-ipc raptor-common; do
+            [ -d "$DEPS_DIR/$d" ] && make -C "$DEPS_DIR/$d" clean 2>/dev/null || true
+        done
+        rm -rf "$DEPS_DIR/compy/build-cross" "$DEPS_DIR/mbedtls/build-cross"
+        rm -rf "$DEPS_DIR/faac/build-cross" "$DEPS_DIR/opus/config.status"
+        rm -f "$DEPS_DIR/ESP8266Audio/src/libhelix-aac/"*.o
+        rm -f "$DEPS_DIR/ESP8266Audio/src/libhelix-mp3/"*.o
+        rm -f "$DEPS_DIR/libschrift/schrift.o" "$DEPS_DIR/libschrift/libschrift.so" "$DEPS_DIR/libschrift/libschrift.a"
+        rm -f "$DEPS_DIR/uclibc_shim.o" "$DEPS_DIR/musl_shim.o"
+    fi
+    echo "Done."
     exit 0
 fi
 
