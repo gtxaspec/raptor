@@ -251,7 +251,7 @@ static int ws_send_text(wt_tls_t *tls, const char *msg, size_t len)
 		return -1; /* messages > 64KB not supported */
 	}
 
-	uint8_t mask[4];
+	uint8_t mask[4] = {0};
 	rwd_random_bytes(mask, 4);
 	memcpy(frame + hdr_len, mask, 4);
 	hdr_len += 4;
@@ -339,7 +339,7 @@ static int ws_recv_frame(wt_tls_t *tls, char *buf, size_t buf_size)
 				return -1; /* ping flood */
 			/* RFC 6455: ping payload max 125 bytes (control frame limit) */
 			uint8_t pong[131]; /* 6 header + 125 payload */
-			uint8_t pong_mask[4];
+			uint8_t pong_mask[4] = {0};
 			rwd_random_bytes(pong_mask, 4);
 			size_t plen = payload_len < 125 ? (size_t)payload_len : 0;
 			pong[0] = 0x8A; /* FIN + PONG */
