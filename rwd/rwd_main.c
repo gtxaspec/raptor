@@ -43,11 +43,16 @@ void rwd_hmac_sha1(const uint8_t *key, size_t key_len, const uint8_t *data, size
 
 /* ── Utility: CSPRNG via /dev/urandom ── */
 
-int rwd_random_bytes(uint8_t *buf, size_t len)
+static int urandom_fd = -1;
+
+void rwd_random_init(void)
 {
-	static int urandom_fd = -1;
 	if (urandom_fd < 0)
 		urandom_fd = open("/dev/urandom", O_RDONLY);
+}
+
+int rwd_random_bytes(uint8_t *buf, size_t len)
+{
 	if (urandom_fd < 0)
 		return -1;
 	ssize_t n = read(urandom_fd, buf, len);
@@ -558,6 +563,8 @@ int main(int argc, char **argv)
 		rss_daemon_cleanup("rwd");
 		return 0;
 	}
+
+	rwd_random_init();
 
 	rwd_server_t srv = {0};
 	srv.udp_fd = -1;

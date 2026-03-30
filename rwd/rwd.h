@@ -254,6 +254,7 @@ int rwd_get_local_ip(char *buf, size_t buflen);
 void rwd_generate_ice_credentials(char *ufrag, size_t ufrag_len, char *pwd, size_t pwd_len);
 void rwd_hmac_sha1(const uint8_t *key, size_t key_len, const uint8_t *data, size_t data_len,
 		   uint8_t out[20]);
+void rwd_random_init(void);
 int rwd_random_bytes(uint8_t *buf, size_t len);
 
 /* ── rwd_webtorrent.c (optional, RAPTOR_WEBTORRENT) ── */
