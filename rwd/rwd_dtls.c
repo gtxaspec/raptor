@@ -312,6 +312,24 @@ int rwd_dtls_handshake_step(rwd_client_t *c)
 		return -1;
 	}
 
+	/* Verify peer certificate fingerprint against SDP offer.
+	 * WebRTC uses self-signed certs — trust is established by matching
+	 * the cert fingerprint to the one declared in the SDP exchange. */
+	const mbedtls_x509_crt *peer_cert = mbedtls_ssl_get_peer_cert(&c->ssl);
+	if (peer_cert && c->offer.fingerprint[0]) {
+		char peer_fp[128];
+		if (compute_cert_fingerprint(peer_cert, peer_fp, sizeof(peer_fp)) == 0) {
+			if (strcasecmp(peer_fp, c->offer.fingerprint) != 0) {
+				RSS_ERROR("DTLS: peer fingerprint mismatch");
+				RSS_ERROR("  expected: %s", c->offer.fingerprint);
+				RSS_ERROR("  got:      %s", peer_fp);
+				c->dtls_state = RWD_DTLS_FAILED;
+				return -1;
+			}
+			RSS_DEBUG("DTLS: peer fingerprint verified");
+		}
+	}
+
 	/* Handshake complete — verify SRTP profile was negotiated */
 	mbedtls_dtls_srtp_info srtp_info;
 	mbedtls_ssl_get_dtls_srtp_negotiation_result(&c->ssl, &srtp_info);
