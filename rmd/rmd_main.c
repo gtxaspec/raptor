@@ -98,43 +98,9 @@ static int rmd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 {
 	rmd_ctx_t *ctx = userdata;
 
-	if (strstr(cmd_json, "\"config-get\"")) {
-		char section[64], key[64];
-		/* reuse simple JSON parsing */
-		const char *sp = strstr(cmd_json, "\"section\":\"");
-		const char *kp = strstr(cmd_json, "\"key\":\"");
-		if (sp && kp) {
-			sp += 11;
-			const char *se = strchr(sp, '"');
-			kp += 7;
-			const char *ke = strchr(kp, '"');
-			if (se && ke) {
-				int sn = (int)(se - sp);
-				int kn = (int)(ke - kp);
-				if (sn < (int)sizeof(section) && kn < (int)sizeof(key)) {
-					memcpy(section, sp, sn);
-					section[sn] = '\0';
-					memcpy(key, kp, kn);
-					key[kn] = '\0';
-					const char *v =
-						rss_config_get_str(ctx->config, section, key, NULL);
-					if (v)
-						snprintf(resp_buf, resp_buf_size, "%s", v);
-					else
-						resp_buf[0] = '\0';
-					return (int)strlen(resp_buf);
-				}
-			}
-		}
-		resp_buf[0] = '\0';
-		return 0;
-	}
-
-	if (strstr(cmd_json, "\"config-save\"")) {
-		int ret = rss_config_save(ctx->config, ctx->config_path);
-		snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
-		return (int)strlen(resp_buf);
-	}
+	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, ctx->config, ctx->config_path);
+	if (rc >= 0)
+		return rc;
 
 	if (strstr(cmd_json, "\"sensitivity\"")) {
 		int val;

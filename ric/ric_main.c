@@ -46,6 +46,10 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 {
 	ric_state_t *st = userdata;
 
+	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, st->config, st->config_path);
+	if (rc >= 0)
+		return rc;
+
 	if (strstr(cmd_json, "\"mode\"")) {
 		char val[16];
 		if (rss_json_get_str(cmd_json, "value", val, sizeof(val)) == 0) {
@@ -66,29 +70,6 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				 ? "auto"
 				 : (st->cfg.opmode == RIC_FORCE_DAY ? "day" : "night"),
 			 st->current_mode == RIC_MODE_DAY ? "day" : "night");
-		return (int)strlen(resp_buf);
-	}
-
-	if (strstr(cmd_json, "\"config-get\"")) {
-		char section[64], key[64];
-		if (rss_json_get_str(cmd_json, "section", section, sizeof(section)) == 0 &&
-		    rss_json_get_str(cmd_json, "key", key, sizeof(key)) == 0) {
-			const char *v = rss_config_get_str(st->config, section, key, NULL);
-			if (v)
-				snprintf(resp_buf, resp_buf_size, "%s", v);
-			else
-				resp_buf[0] = '\0';
-		} else {
-			resp_buf[0] = '\0';
-		}
-		return (int)strlen(resp_buf);
-	}
-
-	if (strstr(cmd_json, "\"config-save\"")) {
-		int ret = rss_config_save(st->config, st->config_path);
-		snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
-		if (ret == 0)
-			RSS_INFO("running config saved to %s", st->config_path);
 		return (int)strlen(resp_buf);
 	}
 

@@ -252,28 +252,9 @@ static int handle_ivs_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 
 static int handle_config_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int resp_size)
 {
-	if (strstr(cmd_json, "\"config-get\"")) {
-		char section[64], key[64];
-		if (rss_json_get_str(cmd_json, "section", section, sizeof(section)) == 0 &&
-		    rss_json_get_str(cmd_json, "key", key, sizeof(key)) == 0) {
-			const char *v = rss_config_get_str(st->cfg, section, key, NULL);
-			if (v)
-				snprintf(resp, resp_size, "%s", v);
-			else
-				resp[0] = '\0';
-		} else {
-			resp[0] = '\0';
-		}
+	int rc = rss_ctrl_handle_common(cmd_json, resp, resp_size, st->cfg, st->config_path);
+	if (rc >= 0)
 		return 1;
-	}
-
-	if (strstr(cmd_json, "\"config-save\"")) {
-		int ret = rss_config_save(st->cfg, st->config_path);
-		snprintf(resp, resp_size, "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
-		if (ret == 0)
-			RSS_INFO("running config saved to %s", st->config_path);
-		return 1;
-	}
 
 	if (strstr(cmd_json, "\"config-show\"")) {
 		int off = snprintf(resp, resp_size, "{\"status\":\"ok\",\"config\":{\"streams\":[");

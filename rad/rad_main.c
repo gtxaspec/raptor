@@ -130,20 +130,9 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	rad_ctrl_ctx_t *ctx = userdata;
 	int val;
 
-	if (strstr(cmd_json, "\"config-get\"")) {
-		char section[64], key[64];
-		if (rss_json_get_str(cmd_json, "section", section, sizeof(section)) == 0 &&
-		    rss_json_get_str(cmd_json, "key", key, sizeof(key)) == 0) {
-			const char *v = rss_config_get_str(ctx->cfg, section, key, NULL);
-			if (v)
-				snprintf(resp_buf, resp_buf_size, "%s", v);
-			else
-				resp_buf[0] = '\0';
-		} else {
-			resp_buf[0] = '\0';
-		}
-		CTRL_RESP(resp_buf);
-	}
+	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, ctx->cfg, ctx->config_path);
+	if (rc >= 0)
+		return rc;
 
 	if (strstr(cmd_json, "\"set-volume\"")) {
 		if (rss_json_get_int(cmd_json, "value", &val) == 0) {
@@ -272,14 +261,6 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				 "{\"status\":\"error\",\"reason\":\"%s\"}",
 				 ctx->ao_enabled ? "need value" : "ao disabled");
 		}
-		CTRL_RESP(resp_buf);
-	}
-
-	if (strstr(cmd_json, "\"config-save\"")) {
-		int ret = rss_config_save(ctx->cfg, ctx->config_path);
-		snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
-		if (ret == 0)
-			RSS_INFO("running config saved to %s", ctx->config_path);
 		CTRL_RESP(resp_buf);
 	}
 

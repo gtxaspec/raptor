@@ -16,40 +16,10 @@
 #include <pthread.h>
 
 #include "rsd.h"
+#include <rss_net.h>
 
-/* Format client address for logging (IPv4-mapped shown as plain IPv4) */
-static const char *client_addr_str(const struct sockaddr_storage *ss, char *buf, size_t bufsz)
-{
-	if (ss->ss_family == AF_INET) {
-		inet_ntop(AF_INET, &((const struct sockaddr_in *)ss)->sin_addr, buf, bufsz);
-	} else if (ss->ss_family == AF_INET6) {
-		const struct sockaddr_in6 *s6 = (const struct sockaddr_in6 *)ss;
-		if (IN6_IS_ADDR_V4MAPPED(&s6->sin6_addr))
-			inet_ntop(AF_INET, &s6->sin6_addr.s6_addr[12], buf, bufsz);
-		else
-			inet_ntop(AF_INET6, &s6->sin6_addr, buf, bufsz);
-	} else {
-		snprintf(buf, bufsz, "???");
-	}
-	return buf;
-}
-
-static uint16_t client_port(const struct sockaddr_storage *ss)
-{
-	if (ss->ss_family == AF_INET)
-		return ntohs(((const struct sockaddr_in *)ss)->sin_port);
-	if (ss->ss_family == AF_INET6)
-		return ntohs(((const struct sockaddr_in6 *)ss)->sin6_port);
-	return 0;
-}
-
-static int set_nonblocking(int fd)
-{
-	int flags = fcntl(fd, F_GETFL, 0);
-	if (flags < 0)
-		return -1;
-	return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-}
+#define client_addr_str rss_addr_str
+#define client_port     rss_addr_port
 
 static rsd_client_t *find_client_by_fd(rsd_server_t *srv, int fd)
 {
@@ -344,7 +314,7 @@ int rsd_server_init(rsd_server_t *srv)
 	int zero = 0;
 	setsockopt(srv->listen_fd, IPPROTO_IPV6, IPV6_V6ONLY, &zero, sizeof(zero));
 
-	set_nonblocking(srv->listen_fd);
+	rss_set_nonblocking(srv->listen_fd);
 
 	struct sockaddr_in6 addr = {
 		.sin6_family = AF_INET6,
@@ -400,28 +370,9 @@ static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 {
 	rsd_server_t *srv = userdata;
 
-	if (strstr(cmd_json, "\"config-get\"")) {
-		char section[64], key[64];
-		if (rss_json_get_str(cmd_json, "section", section, sizeof(section)) == 0 &&
-		    rss_json_get_str(cmd_json, "key", key, sizeof(key)) == 0) {
-			const char *v = rss_config_get_str(srv->cfg, section, key, NULL);
-			if (v)
-				snprintf(resp_buf, resp_buf_size, "%s", v);
-			else
-				resp_buf[0] = '\0';
-		} else {
-			resp_buf[0] = '\0';
-		}
-		return (int)strlen(resp_buf);
-	}
-
-	if (strstr(cmd_json, "\"config-save\"")) {
-		int ret = rss_config_save(srv->cfg, srv->config_path);
-		snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
-		if (ret == 0)
-			RSS_INFO("running config saved to %s", srv->config_path);
-		return (int)strlen(resp_buf);
-	}
+	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, srv->cfg, srv->config_path);
+	if (rc >= 0)
+		return rc;
 
 	if (strstr(cmd_json, "\"config-show\"")) {
 		snprintf(resp_buf, resp_buf_size,

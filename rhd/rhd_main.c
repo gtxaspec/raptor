@@ -26,6 +26,7 @@
 
 #include <rss_ipc.h>
 #include <rss_common.h>
+#include <rss_net.h>
 
 #define RHD_MAX_CLIENTS	   8
 #define RHD_RECV_BUF	   4096
@@ -76,32 +77,9 @@ typedef struct {
 	char auth_pass[128];
 } rhd_server_t;
 
-/* ── Address helpers ── */
-
-static const char *client_addr_str(const struct sockaddr_storage *ss, char *buf, size_t bufsz)
-{
-	if (ss->ss_family == AF_INET) {
-		inet_ntop(AF_INET, &((const struct sockaddr_in *)ss)->sin_addr, buf, bufsz);
-	} else if (ss->ss_family == AF_INET6) {
-		const struct sockaddr_in6 *s6 = (const struct sockaddr_in6 *)ss;
-		if (IN6_IS_ADDR_V4MAPPED(&s6->sin6_addr))
-			inet_ntop(AF_INET, &s6->sin6_addr.s6_addr[12], buf, bufsz);
-		else
-			inet_ntop(AF_INET6, &s6->sin6_addr, buf, bufsz);
-	} else {
-		snprintf(buf, bufsz, "???");
-	}
-	return buf;
-}
-
-static uint16_t client_port(const struct sockaddr_storage *ss)
-{
-	if (ss->ss_family == AF_INET)
-		return ntohs(((const struct sockaddr_in *)ss)->sin_port);
-	if (ss->ss_family == AF_INET6)
-		return ntohs(((const struct sockaddr_in6 *)ss)->sin6_port);
-	return 0;
-}
+/* Address helpers — use shared rss_net.h */
+#define client_addr_str rss_addr_str
+#define client_port     rss_addr_port
 
 /* ── Base64 decode (RFC 4648) ── */
 
@@ -473,26 +451,9 @@ static int rhd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 {
 	rhd_server_t *srv = userdata;
 
-	if (strstr(cmd_json, "\"config-get\"")) {
-		char section[64], key[64];
-		if (rss_json_get_str(cmd_json, "section", section, sizeof(section)) == 0 &&
-		    rss_json_get_str(cmd_json, "key", key, sizeof(key)) == 0) {
-			const char *v = rss_config_get_str(srv->cfg, section, key, NULL);
-			if (v)
-				snprintf(resp_buf, resp_buf_size, "%s", v);
-			else
-				resp_buf[0] = '\0';
-		} else {
-			resp_buf[0] = '\0';
-		}
-		return (int)strlen(resp_buf);
-	}
-
-	if (strstr(cmd_json, "\"config-save\"")) {
-		int ret = rss_config_save(srv->cfg, srv->config_path);
-		snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
-		return (int)strlen(resp_buf);
-	}
+	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, srv->cfg, srv->config_path);
+	if (rc >= 0)
+		return rc;
 
 	if (strstr(cmd_json, "\"clients\"")) {
 		int n = snprintf(resp_buf, resp_buf_size,
@@ -500,18 +461,8 @@ static int rhd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				 srv->client_count, srv->max_clients);
 		for (int i = 0; i < srv->client_count; i++) {
 			rhd_client_t *c = srv->clients[i];
-			char addr[INET6_ADDRSTRLEN] = "?";
-			if (c->addr.ss_family == AF_INET)
-				inet_ntop(AF_INET, &((struct sockaddr_in *)&c->addr)->sin_addr,
-					  addr, sizeof(addr));
-			else if (c->addr.ss_family == AF_INET6) {
-				struct sockaddr_in6 *s6 = (struct sockaddr_in6 *)&c->addr;
-				if (IN6_IS_ADDR_V4MAPPED(&s6->sin6_addr))
-					inet_ntop(AF_INET, &s6->sin6_addr.s6_addr[12], addr,
-						  sizeof(addr));
-				else
-					inet_ntop(AF_INET6, &s6->sin6_addr, addr, sizeof(addr));
-			}
+			char addr[INET6_ADDRSTRLEN];
+			client_addr_str(&c->addr, addr, sizeof(addr));
 			n += snprintf(resp_buf + n, resp_buf_size - n,
 				      "%s{\"ip\":\"%s\",\"type\":\"%s\"}",
 				      i > 0 ? "," : "", addr,
@@ -535,34 +486,9 @@ static int rhd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 
 static int server_init(rhd_server_t *srv)
 {
-	srv->listen_fd = socket(AF_INET6, SOCK_STREAM, 0);
+	srv->listen_fd = rss_listen_tcp(srv->port, 8);
 	if (srv->listen_fd < 0) {
-		RSS_FATAL("socket: %s", strerror(errno));
-		return -1;
-	}
-
-	int opt = 1;
-	setsockopt(srv->listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-
-	/* Dual-stack: accept both IPv4 and IPv6 */
-	opt = 0;
-	setsockopt(srv->listen_fd, IPPROTO_IPV6, IPV6_V6ONLY, &opt, sizeof(opt));
-
-	struct sockaddr_in6 addr = {
-		.sin6_family = AF_INET6,
-		.sin6_port = htons(srv->port),
-		.sin6_addr = in6addr_any,
-	};
-
-	if (bind(srv->listen_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-		RSS_FATAL("bind port %d: %s", srv->port, strerror(errno));
-		close(srv->listen_fd);
-		return -1;
-	}
-
-	if (listen(srv->listen_fd, 8) < 0) {
-		RSS_FATAL("listen: %s", strerror(errno));
-		close(srv->listen_fd);
+		RSS_FATAL("listen on port %d: %s", srv->port, strerror(errno));
 		return -1;
 	}
 

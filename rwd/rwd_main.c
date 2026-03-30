@@ -26,6 +26,7 @@
 #include <mbedtls/md.h>
 
 #include "rwd.h"
+#include <rss_net.h>
 
 /* ── Utility: HMAC-SHA1 via mbedTLS ── */
 
@@ -355,6 +356,10 @@ static int rwd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 {
 	rwd_server_t *srv = userdata;
 
+	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, srv->cfg, srv->config_path);
+	if (rc >= 0)
+		return rc;
+
 	if (strstr(cmd_json, "\"clients\"")) {
 		int n = snprintf(resp_buf, resp_buf_size,
 				 "{\"status\":\"ok\",\"count\":%d,\"max_clients\":%d,\"clients\":[",
@@ -365,18 +370,8 @@ static int rwd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			rwd_client_t *c = srv->clients[i];
 			if (!c)
 				continue;
-			char addr[INET6_ADDRSTRLEN] = "?";
-			if (c->addr.ss_family == AF_INET)
-				inet_ntop(AF_INET, &((struct sockaddr_in *)&c->addr)->sin_addr,
-					  addr, sizeof(addr));
-			else if (c->addr.ss_family == AF_INET6) {
-				struct sockaddr_in6 *s6 = (struct sockaddr_in6 *)&c->addr;
-				if (IN6_IS_ADDR_V4MAPPED(&s6->sin6_addr))
-					inet_ntop(AF_INET, &s6->sin6_addr.s6_addr[12], addr,
-						  sizeof(addr));
-				else
-					inet_ntop(AF_INET6, &s6->sin6_addr, addr, sizeof(addr));
-			}
+			char addr[INET6_ADDRSTRLEN];
+			rss_addr_str(&c->addr, addr, sizeof(addr));
 			n += snprintf(resp_buf + n, resp_buf_size - n,
 				      "%s{\"ip\":\"%s\",\"stream\":%d,\"sending\":%s,"
 				      "\"ice\":%s,\"dtls\":\"%s\"}",
@@ -391,21 +386,6 @@ static int rwd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		}
 		pthread_mutex_unlock(&srv->clients_lock);
 		snprintf(resp_buf + n, resp_buf_size - n, "]}");
-		return (int)strlen(resp_buf);
-	}
-
-	if (strstr(cmd_json, "\"config-get\"")) {
-		char section[64], key[64];
-		if (rss_json_get_str(cmd_json, "section", section, sizeof(section)) == 0 &&
-		    rss_json_get_str(cmd_json, "key", key, sizeof(key)) == 0) {
-			const char *v = rss_config_get_str(srv->cfg, section, key, NULL);
-			if (v)
-				snprintf(resp_buf, resp_buf_size, "%s", v);
-			else
-				resp_buf[0] = '\0';
-		} else {
-			resp_buf[0] = '\0';
-		}
 		return (int)strlen(resp_buf);
 	}
 
@@ -435,12 +415,6 @@ static int rwd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			snprintf(resp_buf, resp_buf_size,
 				 "{\"status\":\"error\",\"message\":\"webtorrent not enabled\"}");
 		}
-		return (int)strlen(resp_buf);
-	}
-
-	if (strstr(cmd_json, "\"config-save\"")) {
-		int ret = rss_config_save(srv->cfg, srv->config_path);
-		snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
 		return (int)strlen(resp_buf);
 	}
 
