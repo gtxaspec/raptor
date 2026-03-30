@@ -661,7 +661,7 @@ int main(int argc, char **argv)
 		wt.stun_port = rss_config_get_int(dctx.cfg, "webtorrent", "stun_port", 19302);
 		rss_strlcpy(wt.viewer_base_url,
 			    rss_config_get_str(dctx.cfg, "webtorrent", "viewer_url",
-					       "https://thingino.com/webrtc/share.html"),
+					       "https://viewer.thingino.com/share.html"),
 			    sizeof(wt.viewer_base_url));
 		if (rwd_webtorrent_start(&wt, &srv) == 0) {
 			wt_started = true;
