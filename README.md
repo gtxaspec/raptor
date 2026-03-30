@@ -144,9 +144,47 @@ See `config/raptor.conf` for the full reference with defaults and comments.
 Runtime configuration changes can be made without restart via raptorctl:
 
 ```sh
+raptorctl status                      # show which daemons are running
+raptorctl memory                      # per-daemon memory usage
+raptorctl cpu                         # per-daemon CPU usage (1s sample)
+
+# Encoder
 raptorctl rvd set-bitrate 0 3000000   # change main stream bitrate
+raptorctl rvd set-gop 0 50            # change GOP length
+raptorctl rvd set-fps 0 25            # change frame rate
+raptorctl rvd set-rc-mode 0 vbr       # rate control: fixqp/cbr/vbr/smart/capped_vbr/capped_quality
+raptorctl rvd set-qp-bounds 0 15 45   # QP range
+raptorctl rvd request-idr             # force keyframe
+
+# ISP
+raptorctl rvd set-brightness 128      # ISP brightness (0-255)
+raptorctl rvd set-wb daylight         # white balance: auto/manual/daylight/cloudy/incandescent/
+                                      #   flourescent/twilight/shade/warm_flourescent/custom
+raptorctl rvd set-wb manual 200 300   # manual WB with r_gain/b_gain
+raptorctl rvd get-isp                 # show all ISP settings
+raptorctl rvd get-wb                  # show white balance
+raptorctl rvd privacy on              # privacy mode
+
+# OSD
 raptorctl rod set-text "Front Door"   # change OSD text
+raptorctl rod set-font-color 0xFFFF0000    # text color (0xAARRGGBB)
+raptorctl rod set-stroke-color 0xFF000000  # stroke color
+raptorctl rod set-stroke-size 2            # stroke width (0-5)
+
+# Audio
+raptorctl rad set-volume 80           # input volume
+raptorctl rad set-gain 25             # input gain
+raptorctl rad set-alc-gain 5          # ALC PGA gain 0-7 (T21/T31 only)
+raptorctl rad set-ns 1 moderate       # noise suppression (low/moderate/high/veryhigh)
+raptorctl rad set-hpf 1               # high-pass filter
+raptorctl rad set-agc 1 10 0          # AGC (target_level, compression)
+
+# Other
 raptorctl ric mode night              # force night mode
+raptorctl rsd clients                 # list RTSP clients
+raptorctl rhd clients                 # list HTTP clients
+raptorctl rwd clients                 # list WebRTC clients
+raptorctl rwd share                   # show WebTorrent share URL
 raptorctl config save                 # persist running config to disk
 ```
 
