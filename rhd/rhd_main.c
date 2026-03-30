@@ -83,18 +83,17 @@ typedef struct {
 
 /* ── Base64 decode (RFC 4648) ── */
 
-static const uint8_t b64_table[256] = {
-	['A'] = 0,  ['B'] = 1,	['C'] = 2,  ['D'] = 3,	['E'] = 4,  ['F'] = 5,	['G'] = 6,
-	['H'] = 7,  ['I'] = 8,	['J'] = 9,  ['K'] = 10, ['L'] = 11, ['M'] = 12, ['N'] = 13,
-	['O'] = 14, ['P'] = 15, ['Q'] = 16, ['R'] = 17, ['S'] = 18, ['T'] = 19, ['U'] = 20,
-	['V'] = 21, ['W'] = 22, ['X'] = 23, ['Y'] = 24, ['Z'] = 25, ['a'] = 26, ['b'] = 27,
-	['c'] = 28, ['d'] = 29, ['e'] = 30, ['f'] = 31, ['g'] = 32, ['h'] = 33, ['i'] = 34,
-	['j'] = 35, ['k'] = 36, ['l'] = 37, ['m'] = 38, ['n'] = 39, ['o'] = 40, ['p'] = 41,
-	['q'] = 42, ['r'] = 43, ['s'] = 44, ['t'] = 45, ['u'] = 46, ['v'] = 47, ['w'] = 48,
-	['x'] = 49, ['y'] = 50, ['z'] = 51, ['0'] = 52, ['1'] = 53, ['2'] = 54, ['3'] = 55,
-	['4'] = 56, ['5'] = 57, ['6'] = 58, ['7'] = 59, ['8'] = 60, ['9'] = 61, ['+'] = 62,
-	['/'] = 63,
-};
+/* Base64 decode table — built once at startup, 0xFF = invalid */
+static uint8_t b64_table[256];
+
+static void b64_init(void)
+{
+	static const char b64_chars[] =
+		"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+	memset(b64_table, 0xFF, sizeof(b64_table));
+	for (int i = 0; b64_chars[i]; i++)
+		b64_table[(uint8_t)b64_chars[i]] = (uint8_t)i;
+}
 
 static int base64_decode(const char *in, size_t in_len, char *out, size_t out_max)
 {
@@ -104,7 +103,7 @@ static int base64_decode(const char *in, size_t in_len, char *out, size_t out_ma
 
 	for (size_t i = 0; i < in_len && in[i] != '='; i++) {
 		uint8_t v = b64_table[(uint8_t)in[i]];
-		if (!v && in[i] != 'A')
+		if (v == 0xFF)
 			continue; /* skip invalid chars */
 		buf = (buf << 6) | v;
 		bits += 6;
@@ -723,6 +722,8 @@ int main(int argc, char **argv)
 	int ret = rss_daemon_init(&ctx, "rhd", argc, argv);
 	if (ret != 0)
 		return ret < 0 ? 1 : 0;
+
+	b64_init();
 
 	if (!rss_config_get_bool(ctx.cfg, "http", "enabled", true)) {
 		RSS_INFO("HTTP disabled in config");
