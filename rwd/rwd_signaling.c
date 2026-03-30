@@ -317,14 +317,15 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 		if (qs) {
 			const char *sp = strstr(qs, "stream=");
 			if (sp)
-				stream_idx = atoi(sp + 7) == 1 ? 1 : 0;
+				stream_idx = (sp[7] == '1') ? 1 : 0;
 		}
 		/* Parse Content-Length */
 		size_t content_length = 0;
 		const char *cl = strcasestr(buf, "Content-Length:");
 		if (cl) {
-			int cl_val = atoi(cl + 15);
-			if (cl_val > 0 && cl_val < (int)sizeof(buf))
+			char *end;
+			long cl_val = strtol(cl + 15, &end, 10);
+			if (cl_val > 0 && cl_val < (long)sizeof(buf) && end != cl + 15)
 				content_length = (size_t)cl_val;
 		}
 
