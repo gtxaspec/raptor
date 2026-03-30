@@ -173,6 +173,23 @@ int rwd_sdp_parse_offer(const char *sdp, rwd_sdp_offer_t *offer)
 			}
 			continue;
 		}
+
+		/* ICE candidates: parse for NAT hole punching */
+		if (strncmp(line, "a=candidate:", 12) == 0 &&
+		    offer->candidate_count < RWD_MAX_CANDIDATES) {
+			char foundation[32], transport[8], addr[64], ctype[16];
+			int component, cport;
+			uint32_t prio;
+			if (sscanf(line + 12, "%31s %d %7s %u %63s %d typ %15s", foundation,
+				   &component, transport, &prio, addr, &cport, ctype) == 7 &&
+			    strcasecmp(transport, "UDP") == 0 && cport > 0 && cport <= 65535) {
+				rss_strlcpy(offer->candidates[offer->candidate_count].ip, addr,
+					    sizeof(offer->candidates[0].ip));
+				offer->candidates[offer->candidate_count].port = (uint16_t)cport;
+				offer->candidate_count++;
+			}
+			continue;
+		}
 	}
 
 	if (!offer->ice_ufrag[0] || !offer->ice_pwd[0]) {
@@ -252,6 +269,9 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 	APPEND("a=rtcp-fb:%d ccm fir", c->offer.video_pt);
 	APPEND("a=ssrc:%u cname:raptor", c->video_ssrc);
 	APPEND("a=candidate:1 1 UDP 2130706431 %s %d typ host", srv->local_ip, srv->udp_port);
+	if (srv->has_srflx)
+		APPEND("a=candidate:2 1 UDP 1694498815 %s %u typ srflx raddr %s rport %d",
+		       srv->srflx_ip, srv->srflx_port, srv->local_ip, srv->udp_port);
 
 	/* Audio m-line (if browser offered Opus) */
 	if (c->offer.has_audio && c->offer.audio_pt >= 0) {
@@ -273,6 +293,9 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 		APPEND("a=ssrc:%u cname:raptor", c->audio_ssrc);
 		APPEND("a=candidate:1 1 UDP 2130706431 %s %d typ host", srv->local_ip,
 		       srv->udp_port);
+		if (srv->has_srflx)
+			APPEND("a=candidate:2 1 UDP 1694498815 %s %u typ srflx raddr %s rport %d",
+			       srv->srflx_ip, srv->srflx_port, srv->local_ip, srv->udp_port);
 	}
 
 #undef APPEND

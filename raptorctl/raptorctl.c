@@ -101,13 +101,21 @@ static void usage(void)
 		"RIC commands:\n"
 		"  ric mode <auto|day|night>           Set day/night mode\n"
 		"\n"
+		"RHD commands:\n"
+		"  rhd clients                         List connected HTTP clients\n"
+		"\n"
+		"RWD commands:\n"
+		"  rwd clients                         List connected WebRTC clients\n"
+		"  rwd share                           Show WebTorrent share URL\n"
+		"  rwd share-rotate                    Generate new share key\n"
+		"\n"
 		"RMR commands:\n"
 		"  rmr status                          Show recording status\n"
 		"\n"
 		"Testing:\n"
 		"  test-motion [sec]                   Trigger clip recording (default 10s)\n"
 		"\n"
-		"Daemons: rvd, rsd, rad, rod, rhd, ric, rmr, rmd\n");
+		"Daemons: rvd, rsd, rad, rod, rhd, ric, rmr, rmd, rwd\n");
 }
 
 /* Read private and shared memory from /proc/<pid>/smaps.
@@ -395,6 +403,12 @@ int main(int argc, char **argv)
 
 	} else if (strcmp(cmd, "clients") == 0) {
 		snprintf(json, sizeof(json), "{\"cmd\":\"clients\"}");
+
+	} else if (strcmp(cmd, "share-rotate") == 0) {
+		snprintf(json, sizeof(json), "{\"cmd\":\"share-rotate\"}");
+
+	} else if (strcmp(cmd, "share") == 0) {
+		snprintf(json, sizeof(json), "{\"cmd\":\"share\"}");
 
 	} else if (strcmp(cmd, "request-idr") == 0) {
 		if (argc > 3)

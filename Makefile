@@ -62,6 +62,10 @@ CFLAGS += -DRAPTOR_OPUS
 LDFLAGS_OPUS := -lopus
 endif
 
+ifeq ($(WEBTORRENT),1)
+CFLAGS += -DRAPTOR_WEBTORRENT
+endif
+
 ifeq ($(V),1)
 Q :=
 else
@@ -185,7 +189,7 @@ rwd: $(LIB_IPC) $(LIB_COMMON) $(LIB_COMPY)
 	@echo "  BUILD   rwd"
 	$(Q)$(MAKE) -C rwd CC="$(CC)" CFLAGS="$(CFLAGS) $(COMPY_CFLAGS) -DMBEDTLS_ALLOW_PRIVATE_ACCESS" \
 		LIBS="$(LIB_IPC) $(LIB_COMMON) $(LIB_COMPY)" \
-		LDFLAGS="$(LDFLAGS) $(LDFLAGS_TLS)" Q="$(Q)"
+		LDFLAGS="$(LDFLAGS) $(LDFLAGS_TLS)" WEBTORRENT=$(WEBTORRENT) Q="$(Q)"
 
 # -- Tools --
 
