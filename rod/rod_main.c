@@ -254,6 +254,16 @@ static void render_tick(rod_state_t *st)
 		/* Logo (once) */
 		if (st->cfg.logo_enabled && st->regions[s][ROD_REGION_LOGO].needs_update)
 			render_logo(st, s);
+
+		/* Heartbeat: touch any active region so RVD knows we're alive.
+		 * Needed when time/uptime are disabled and only static regions remain. */
+		for (int r = 0; r < ROD_MAX_REGIONS; r++) {
+			rod_region_t *reg = &st->regions[s][r];
+			if (reg->enabled && reg->shm) {
+				rss_osd_heartbeat(reg->shm);
+				break; /* one per stream is enough */
+			}
+		}
 	}
 }
 

@@ -28,6 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 #include "rvd.h"
 
@@ -41,8 +42,8 @@ static const char *region_names[] = {"time", "uptime", "text", "logo", "privacy"
 #define OSD_UPTIME_W 280 /* "12345d 23h 59m 59s" ≈ 260px */
 #define OSD_TEXT_W   320 /* camera name */
 #define OSD_TEXT_H   36
-#define OSD_LOGO_W   100
-#define OSD_LOGO_H   30
+#define OSD_LOGO_W   210
+#define OSD_LOGO_H   64
 
 /* Default position names per role */
 static const char *default_pos[] = {
@@ -335,13 +336,45 @@ void rvd_osd_init(rvd_state_t *st)
 }
 
 /*
- * Try to open SHM for a region that doesn't have one yet.
+ * Check if a named SHM object has been replaced (ROD restart).
+ * Compares the inode of our open fd against the current named object.
+ * Returns true if the SHM was replaced or removed.
+ */
+static bool shm_is_stale(rss_osd_shm_t *shm, const char *name)
+{
+	char path[128];
+	snprintf(path, sizeof(path), "/dev/shm/rss_osd_%s", name);
+
+	struct stat cur;
+	if (stat(path, &cur) < 0)
+		return true; /* SHM removed */
+
+	struct stat ours;
+	if (fstat(rss_osd_get_fd(shm), &ours) < 0)
+		return true;
+
+	return cur.st_ino != ours.st_ino;
+}
+
+/*
+ * Try to open SHM for a region that doesn't have one yet,
+ * or reopen if the producer (ROD) restarted (different inode).
  */
 static void try_open_shm(rvd_state_t *st, int s, int r)
 {
 	rvd_osd_region_t *reg = &st->osd_regions[s][r];
-	if (!reg->active || reg->shm)
+	if (!reg->active)
 		return;
+
+	if (reg->shm) {
+		char name[64];
+		snprintf(name, sizeof(name), "osd_%d_%s", s, region_names[r]);
+		if (!shm_is_stale(reg->shm, name))
+			return; /* same SHM, nothing to do */
+		RSS_INFO("osd shm %s: producer restarted, reopening", name);
+		rss_osd_close(reg->shm);
+		reg->shm = NULL;
+	}
 
 	char name[64];
 	snprintf(name, sizeof(name), "osd_%d_%s", s, region_names[r]);
@@ -355,7 +388,7 @@ void rvd_osd_check(rvd_state_t *st)
 	if (!st->osd_enabled)
 		return;
 
-	/* Lazy SHM open retry */
+	/* Staleness check + lazy SHM open retry */
 	st->osd_retry_counter++;
 	if (st->osd_retry_counter >= RVD_OSD_RETRY_INTERVAL) {
 		st->osd_retry_counter = 0;
@@ -367,6 +400,92 @@ void rvd_osd_check(rvd_state_t *st)
 		}
 	}
 
+	/* Staleness check every ~1s: detect ROD death or restart.
+	 * Two checks: (1) SHM inode changed (clean restart), (2) no dirty
+	 * on ANY region for 3s (kill -9 / crash). Check 2 uses per-stream
+	 * aggregate because static regions (logo, text) don't update
+	 * continuously — only time/uptime do. */
+	if ((st->osd_retry_counter % 10) != 0)
+		goto push_updates;
+	for (int s = 0; s < st->stream_count; s++) {
+		if (st->streams[s].is_jpeg)
+			continue;
+
+		/* Check if any region on this stream got a dirty flag recently.
+		 * If no regions have SHM open yet, assume alive — we can't
+		 * declare ROD dead before we've ever connected. */
+		bool any_alive = true;
+		bool any_open = false;
+		for (int r = 0; r < RVD_OSD_REGIONS; r++) {
+			rvd_osd_region_t *reg = &st->osd_regions[s][r];
+			if (reg->active && reg->shm) {
+				any_open = true;
+				if (reg->no_update_ticks < 30)
+					break; /* at least one alive */
+			}
+		}
+		if (any_open) {
+			any_alive = false;
+			for (int r = 0; r < RVD_OSD_REGIONS; r++) {
+				rvd_osd_region_t *reg = &st->osd_regions[s][r];
+				if (reg->active && reg->shm && reg->no_update_ticks < 30) {
+					any_alive = true;
+					break;
+				}
+			}
+		}
+
+		for (int r = 0; r < RVD_OSD_REGIONS; r++) {
+			rvd_osd_region_t *reg = &st->osd_regions[s][r];
+			if (!reg->active || !reg->shm)
+				continue;
+
+			bool stale = false;
+			char name[64];
+			snprintf(name, sizeof(name), "osd_%d_%s", s, region_names[r]);
+
+			if (shm_is_stale(reg->shm, name))
+				stale = true;
+			else if (!any_alive)
+				stale = true; /* all regions dead → ROD crashed */
+
+			if (stale) {
+				RSS_INFO("osd %s: producer gone, clearing", name);
+				/* Remove orphaned SHM so we don't reopen it in a loop */
+				if (!any_alive) {
+					char path[128];
+					snprintf(path, sizeof(path), "/dev/shm/rss_osd_%s", name);
+					unlink(path);
+				}
+				rss_osd_close(reg->shm);
+				reg->shm = NULL;
+				reg->no_update_ticks = 0;
+				if (reg->local_buf) {
+					memset(reg->local_buf, 0,
+					       reg->width * reg->height * 4);
+					RSS_HAL_CALL(st->ops, osd_update_region_data,
+						     st->hal_ctx, reg->hal_handle,
+						     reg->local_buf);
+				}
+			}
+		}
+
+		/* Clean up orphaned SHM for regions RVD doesn't track
+		 * (e.g. logo not configured in RVD but created by ROD) */
+		if (!any_alive) {
+			for (int r = 0; r < RVD_OSD_REGIONS; r++) {
+				rvd_osd_region_t *reg = &st->osd_regions[s][r];
+				if (reg->active && reg->shm)
+					continue; /* handled above */
+				char path[128];
+				snprintf(path, sizeof(path), "/dev/shm/rss_osd_osd_%d_%s",
+					 s, region_names[r]);
+				unlink(path); /* no-op if doesn't exist */
+			}
+		}
+	}
+
+push_updates:
 	/* Push bitmap updates */
 	for (int s = 0; s < st->stream_count; s++) {
 		if (st->streams[s].is_jpeg)
@@ -376,8 +495,11 @@ void rvd_osd_check(rvd_state_t *st)
 			if (!reg->active || !reg->shm)
 				continue;
 
-			if (!rss_osd_check_dirty(reg->shm))
+			if (!rss_osd_check_dirty(reg->shm)) {
+				reg->no_update_ticks++;
 				continue;
+			}
+			reg->no_update_ticks = 0;
 
 			uint32_t w, h;
 			const uint8_t *bitmap = rss_osd_get_active_buffer(reg->shm, &w, &h);
