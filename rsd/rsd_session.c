@@ -328,6 +328,14 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 			     "RTP/AVP/TCP;unicast;interleaved=%" PRIu8 "-%" PRIu8, rtp_ch, rtcp_ch);
 
 		RSS_INFO("client SETUP: video TCP interleaved %u-%u", rtp_ch, rtcp_ch);
+
+		/* Track RTCP channel for incoming RR routing */
+		if (is_backchannel)
+			; /* backchannel channels handled by receiver */
+		else if (!self->video.rtp)
+			self->video_rtcp_ch = rtcp_ch;
+		else
+			self->audio_rtcp_ch = rtcp_ch;
 	} else {
 		/* UDP */
 		uint16_t cli_rtp = 0, cli_rtcp = 0;
@@ -608,7 +616,15 @@ void rsd_handle_rtsp_data(rsd_server_t *srv, rsd_client_t *client, const char *d
 		if (4 + (size_t)frame_len > len)
 			break; /* incomplete frame */
 
-		/* Feed backchannel data */
+		/* Route incoming RTCP to the correct handler for RR parsing */
+		if (channel == client->video_rtcp_ch && client->video.rtcp)
+			Compy_Rtcp_handle_incoming(client->video.rtcp, (const uint8_t *)data + 4,
+						   frame_len);
+		else if (channel == client->audio_rtcp_ch && client->audio.rtcp)
+			Compy_Rtcp_handle_incoming(client->audio.rtcp, (const uint8_t *)data + 4,
+						   frame_len);
+
+		/* Backchannel data */
 		if (client->backchannel) {
 			Compy_RtpReceiver *recv =
 				Compy_Backchannel_get_receiver(client->backchannel);

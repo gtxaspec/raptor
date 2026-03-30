@@ -73,6 +73,10 @@ typedef struct rsd_client {
 	rss_ring_t *speaker_ring; /* created on first backchannel packet */
 	void *bc_recv;		  /* rsd_bc_recv_t, kept alive for callback */
 
+	/* TCP interleaved channel numbers (for RTCP routing) */
+	uint8_t video_rtcp_ch; /* RTCP channel for video (default 1) */
+	uint8_t audio_rtcp_ch; /* RTCP channel for audio (default 3) */
+
 	/* UDP socket fds (for cleanup) */
 	int udp_rtp_fd;
 	int udp_rtcp_fd;
