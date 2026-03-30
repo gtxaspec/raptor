@@ -193,7 +193,7 @@ static int read_proc_stat(int pid, unsigned long *ticks, int *threads, unsigned 
 	int thr = 0;
 	int n = sscanf(p,
 		       "%*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u "
-		       "%lu %lu %*d %*d %*d %*d %d %*d %*lu %lu",
+		       "%lu %lu %*d %*d %*d %*d %d %*d %*u %lu",
 		       &utime, &stime, &thr, &vs);
 	if (n < 4)
 		return -1;
