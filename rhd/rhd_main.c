@@ -108,6 +108,8 @@ static int base64_decode(const char *in, size_t in_len, char *out, size_t out_ma
 
 /* ── HTTP response helpers ── */
 
+static int nb_write_all(int fd, const void *buf, size_t len);
+
 static void http_send(int fd, const char *status, const char *content_type, const void *body,
 		      int body_len)
 {
@@ -120,9 +122,10 @@ static void http_send(int fd, const char *status, const char *content_type, cons
 			    "Access-Control-Allow-Origin: *\r\n"
 			    "\r\n",
 			    status, content_type, body_len);
-	write(fd, header, hlen);
+	if (nb_write_all(fd, header, hlen) < 0)
+		return;
 	if (body && body_len > 0)
-		write(fd, body, body_len);
+		nb_write_all(fd, body, body_len);
 }
 
 static void http_error(int fd, const char *status, const char *msg)
