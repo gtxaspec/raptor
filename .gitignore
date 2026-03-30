@@ -15,6 +15,7 @@ rac/rac
 test_enc
 asan-out/
 build/
+.deps/
 test_enc
 scripts/
 rmd/rmd
