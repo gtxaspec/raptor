@@ -76,6 +76,33 @@ typedef struct {
 	char auth_pass[128];
 } rhd_server_t;
 
+/* ── Address helpers ── */
+
+static const char *client_addr_str(const struct sockaddr_storage *ss, char *buf, size_t bufsz)
+{
+	if (ss->ss_family == AF_INET) {
+		inet_ntop(AF_INET, &((const struct sockaddr_in *)ss)->sin_addr, buf, bufsz);
+	} else if (ss->ss_family == AF_INET6) {
+		const struct sockaddr_in6 *s6 = (const struct sockaddr_in6 *)ss;
+		if (IN6_IS_ADDR_V4MAPPED(&s6->sin6_addr))
+			inet_ntop(AF_INET, &s6->sin6_addr.s6_addr[12], buf, bufsz);
+		else
+			inet_ntop(AF_INET6, &s6->sin6_addr, buf, bufsz);
+	} else {
+		snprintf(buf, bufsz, "???");
+	}
+	return buf;
+}
+
+static uint16_t client_port(const struct sockaddr_storage *ss)
+{
+	if (ss->ss_family == AF_INET)
+		return ntohs(((const struct sockaddr_in *)ss)->sin_port);
+	if (ss->ss_family == AF_INET6)
+		return ntohs(((const struct sockaddr_in6 *)ss)->sin6_port);
+	return 0;
+}
+
 /* ── Base64 decode (RFC 4648) ── */
 
 static const uint8_t b64_table[256] = {
@@ -333,6 +360,11 @@ static bool handle_snapshot(rhd_client_t *c, int epoll_fd, rss_ring_t *ring,
 static void remove_client(rhd_server_t *srv, int idx)
 {
 	rhd_client_t *c = srv->clients[idx];
+	char addrstr[INET6_ADDRSTRLEN];
+	RSS_INFO("client %s:%u disconnected%s",
+		 client_addr_str(&c->addr, addrstr, sizeof(addrstr)),
+		 client_port(&c->addr),
+		 c->is_mjpeg ? " (mjpeg)" : "");
 	epoll_ctl(srv->epoll_fd, EPOLL_CTL_DEL, c->fd, NULL);
 	close(c->fd);
 	free(c->send_buf);
@@ -373,6 +405,11 @@ static void handle_request(rhd_server_t *srv, rhd_client_t *c)
 	/* Parse method and path */
 	char method[8] = {0}, path[128] = {0};
 	sscanf(c->recv_buf, "%7s %127s", method, path);
+
+	char addrstr[INET6_ADDRSTRLEN];
+	RSS_INFO("%s %s from %s:%u", method, path,
+		 client_addr_str(&c->addr, addrstr, sizeof(addrstr)),
+		 client_port(&c->addr));
 
 	if (strcmp(method, "GET") != 0) {
 		http_error(c->fd, "405 Method Not Allowed", "GET only");
@@ -635,6 +672,10 @@ static void server_run(rhd_server_t *srv)
 					continue;
 
 				if (srv->client_count >= srv->max_clients) {
+					char addrstr[INET6_ADDRSTRLEN];
+					RSS_WARN("rejected %s:%u (max clients %d)",
+						 client_addr_str(&sa, addrstr, sizeof(addrstr)),
+						 client_port(&sa), srv->max_clients);
 					http_error(cfd, "503 Service Unavailable",
 						   "Too many clients");
 					close(cfd);
@@ -651,6 +692,11 @@ static void server_run(rhd_server_t *srv)
 				c->fd = cfd;
 				memcpy(&c->addr, &sa, sizeof(c->addr));
 				srv->clients[srv->client_count++] = c;
+
+				char addrstr[INET6_ADDRSTRLEN];
+				RSS_INFO("client %s:%u connected (%d/%d)",
+					 client_addr_str(&sa, addrstr, sizeof(addrstr)),
+					 client_port(&sa), srv->client_count, srv->max_clients);
 
 				struct epoll_event cev = {.events = EPOLLIN, .data.fd = cfd};
 				epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, cfd, &cev);
