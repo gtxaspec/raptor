@@ -80,6 +80,14 @@ typedef struct {
 	int mid_ext_id; /* extmap ID for sdes:mid (-1 if not offered) */
 	bool has_video;
 	bool has_audio;
+
+	/* ICE candidates from offer (for NAT hole punching) */
+#define RWD_MAX_CANDIDATES 8
+	struct {
+		char ip[64];
+		uint16_t port;
+	} candidates[RWD_MAX_CANDIDATES];
+	int candidate_count;
 } rwd_sdp_offer_t;
 
 /* ── DTLS connection state ── */
@@ -193,6 +201,13 @@ struct rwd_server {
 	int http_port;
 	int max_clients;
 	char local_ip[64];
+
+	/* Server-reflexive address (STUN-discovered, for external candidates) */
+	char srflx_ip[64];
+	uint16_t srflx_port;
+	bool has_srflx;
+
+	void *webtorrent; /* rwd_webtorrent_t* if active, NULL otherwise */
 };
 
 /* ── rwd_dtls.c ── */
@@ -210,6 +225,8 @@ int rwd_dtls_export_srtp_keys(rwd_client_t *c, Compy_SrtpKeyMaterial *send_key,
 void rwd_crc32_init(void);
 int rwd_ice_process(rwd_server_t *srv, const uint8_t *buf, size_t len,
 		    const struct sockaddr_storage *from, socklen_t from_len);
+int rwd_ice_send_check(rwd_server_t *srv, rwd_client_t *c, const char *dest_ip,
+		        uint16_t dest_port);
 
 /* ── rwd_sdp.c ── */
 
@@ -220,6 +237,8 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 
 void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 			  const struct sockaddr_storage *local_addr);
+rwd_client_t *rwd_client_from_offer(rwd_server_t *srv, const char *sdp, int stream_idx,
+				     char *sdp_answer, size_t sdp_answer_size);
 
 /* ── rwd_media.c ── */
 
@@ -237,5 +256,32 @@ void rwd_generate_ice_credentials(char *ufrag, size_t ufrag_len, char *pwd, size
 void rwd_hmac_sha1(const uint8_t *key, size_t key_len, const uint8_t *data, size_t data_len,
 		   uint8_t out[20]);
 int rwd_random_bytes(uint8_t *buf, size_t len);
+
+/* ── rwd_webtorrent.c (optional, RAPTOR_WEBTORRENT) ── */
+
+#ifdef RAPTOR_WEBTORRENT
+
+typedef struct {
+	rwd_server_t *srv;
+	pthread_t thread;
+	volatile bool running;
+
+	char share_key[32];
+	char info_hash[48]; /* base64 SHA256, 44 chars + null */
+	char peer_id[41];   /* hex random, 40 chars + null */
+
+	char tracker_url[256];
+	char stun_server[128];
+	int stun_port;
+	char viewer_base_url[256];
+} rwd_webtorrent_t;
+
+int rwd_webtorrent_start(rwd_webtorrent_t *wt, rwd_server_t *srv);
+void rwd_webtorrent_stop(rwd_webtorrent_t *wt);
+void rwd_webtorrent_rotate_key(rwd_webtorrent_t *wt);
+int rwd_stun_discover_srflx(int udp_fd, const char *server, int port, char *ip_out, size_t ip_size,
+			     uint16_t *port_out);
+
+#endif /* RAPTOR_WEBTORRENT */
 
 #endif /* RWD_H */

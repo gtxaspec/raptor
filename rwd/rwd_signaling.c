@@ -134,34 +134,28 @@ static void generate_session_id(char *out, size_t out_size)
 		snprintf(out + i * 2, 3, "%02x", bytes[i]);
 }
 
-/* ── WHIP POST handler: SDP offer → answer ── */
+/* ── Create client from SDP offer (shared by WHIP and WebTorrent) ── */
 
-static void handle_whip_post(rwd_server_t *srv, int fd, const char *body, size_t body_len,
-			     const struct sockaddr_storage *local_addr, int stream_idx)
+rwd_client_t *rwd_client_from_offer(rwd_server_t *srv, const char *sdp, int stream_idx,
+				     char *sdp_answer, size_t sdp_answer_size)
 {
-	(void)body_len;
-	(void)local_addr;
-	/* Parse SDP offer */
-	rwd_sdp_offer_t offer;
-	if (rwd_sdp_parse_offer(body, &offer) != 0) {
-		http_error(fd, "400 Bad Request");
-		return;
-	}
+	if (stream_idx < 0 || stream_idx >= RWD_STREAM_COUNT)
+		stream_idx = 0;
 
-	/* Check client limit */
+	rwd_sdp_offer_t offer;
+	if (rwd_sdp_parse_offer(sdp, &offer) != 0)
+		return NULL;
+
 	pthread_mutex_lock(&srv->clients_lock);
 	if (srv->client_count >= srv->max_clients) {
 		pthread_mutex_unlock(&srv->clients_lock);
-		http_error(fd, "503 Service Unavailable");
-		return;
+		return NULL;
 	}
 
-	/* Allocate client */
 	rwd_client_t *c = calloc(1, sizeof(*c));
 	if (!c) {
 		pthread_mutex_unlock(&srv->clients_lock);
-		http_error(fd, "500 Internal Server Error");
-		return;
+		return NULL;
 	}
 
 	c->server = srv;
@@ -172,13 +166,11 @@ static void handle_whip_post(rwd_server_t *srv, int fd, const char *body, size_t
 	rss_strlcpy(c->remote_ufrag, offer.ice_ufrag, sizeof(c->remote_ufrag));
 	rss_strlcpy(c->remote_pwd, offer.ice_pwd, sizeof(c->remote_pwd));
 
-	/* Generate local ICE credentials and SSRCs */
 	rwd_generate_ice_credentials(c->local_ufrag, sizeof(c->local_ufrag), c->local_pwd,
 				     sizeof(c->local_pwd));
 	uint8_t ssrc_bytes[8];
 	if (rwd_random_bytes(ssrc_bytes, sizeof(ssrc_bytes)) != 0) {
-		/* Fallback: mix timestamp with a counter to avoid collisions */
-		static uint32_t ssrc_counter;
+		static uint32_t ssrc_counter; /* safe: always called under clients_lock */
 		uint64_t ts = rss_timestamp_us();
 		memcpy(ssrc_bytes, &ts, sizeof(ssrc_bytes));
 		ssrc_bytes[0] ^= (uint8_t)(ssrc_counter);
@@ -187,36 +179,25 @@ static void handle_whip_post(rwd_server_t *srv, int fd, const char *body, size_t
 	}
 	memcpy(&c->video_ssrc, ssrc_bytes, 4);
 	memcpy(&c->audio_ssrc, ssrc_bytes + 4, 4);
-	/* Ensure video and audio SSRCs differ */
 	if (c->video_ssrc == c->audio_ssrc)
 		c->audio_ssrc ^= 0x01;
 
-	/* Generate session ID */
 	generate_session_id(c->session_id, sizeof(c->session_id));
 
-	/* Initialize DTLS context for this client */
 	if (rwd_dtls_client_init(c, srv->dtls) != 0) {
 		free(c);
 		pthread_mutex_unlock(&srv->clients_lock);
-		http_error(fd, "500 Internal Server Error");
-		return;
+		return NULL;
 	}
 
-	/* local_ip is set once in main() before the event loop starts,
-	 * so no per-request IP detection is needed here. */
-
-	/* Generate SDP answer */
-	char sdp_answer[RWD_SDP_BUF_SIZE];
-	int sdp_len = rwd_sdp_generate_answer(c, srv, sdp_answer, sizeof(sdp_answer));
+	int sdp_len = rwd_sdp_generate_answer(c, srv, sdp_answer, sdp_answer_size);
 	if (sdp_len < 0) {
 		rwd_dtls_client_free(c);
 		free(c);
 		pthread_mutex_unlock(&srv->clients_lock);
-		http_error(fd, "500 Internal Server Error");
-		return;
+		return NULL;
 	}
 
-	/* Add to client list */
 	for (int i = 0; i < RWD_MAX_CLIENTS; i++) {
 		if (!srv->clients[i]) {
 			srv->clients[i] = c;
@@ -226,13 +207,32 @@ static void handle_whip_post(rwd_server_t *srv, int fd, const char *body, size_t
 	}
 	pthread_mutex_unlock(&srv->clients_lock);
 
-	/* Send 201 Created with SDP answer */
+	RSS_INFO("client created: session %s (video_pt=%d audio_pt=%d)", c->session_id,
+		 c->offer.video_pt, c->offer.audio_pt);
+	return c;
+}
+
+/* ── WHIP POST handler: SDP offer → answer ── */
+
+static void handle_whip_post(rwd_server_t *srv, int fd, const char *body, size_t body_len,
+			     const struct sockaddr_storage *local_addr, int stream_idx)
+{
+	(void)body_len;
+	(void)local_addr;
+
+	char sdp_answer[RWD_SDP_BUF_SIZE];
+	rwd_client_t *c = rwd_client_from_offer(srv, body, stream_idx, sdp_answer,
+						 sizeof(sdp_answer));
+	if (!c) {
+		http_error(fd, "400 Bad Request");
+		return;
+	}
+
 	char location[128];
 	snprintf(location, sizeof(location), "Location: /whip/%s\r\n", c->session_id);
-	http_send(fd, "201 Created", "application/sdp", sdp_answer, sdp_len, location);
+	http_send(fd, "201 Created", "application/sdp", sdp_answer, strlen(sdp_answer), location);
 
-	RSS_INFO("WHIP: session %s created (video_pt=%d audio_pt=%d)", c->session_id,
-		 c->offer.video_pt, c->offer.audio_pt);
+	RSS_INFO("WHIP: session %s created", c->session_id);
 }
 
 /* ── WHIP DELETE handler: teardown session ── */

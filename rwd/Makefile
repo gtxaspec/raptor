@@ -1,4 +1,7 @@
 SRCS := rwd_main.c rwd_dtls.c rwd_ice.c rwd_sdp.c rwd_signaling.c rwd_media.c
+ifeq ($(WEBTORRENT),1)
+SRCS += rwd_webtorrent.c
+endif
 OBJS := $(SRCS:.c=.o)
 BIN  := rwd
 

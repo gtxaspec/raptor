@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Raptor WebRTC Share</title>
+<style>
+body{margin:0;background:#111;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;min-height:100vh;
+  font-family:sans-serif;color:#fff}
+video{width:100%;max-height:85vh;object-fit:contain;background:#000}
+#status{color:#888;font-size:14px;margin:10px}
+button{margin:5px;padding:8px 20px;font-size:16px;cursor:pointer;
+  border:1px solid #555;background:#222;color:#fff;border-radius:4px}
+button:hover{background:#333}
+select{margin:5px;padding:8px;font-size:16px;background:#222;color:#fff;
+  border:1px solid #555;border-radius:4px}
+.error{color:#e55}
+</style>
+</head><body>
+<video id="v" autoplay muted playsinline></video>
+<div>
+  <select id="stream"><option value="0">Main</option><option value="1">Sub</option></select>
+  <button id="btn" onclick="toggle()">Connect</button>
+  <button id="mute" onclick="toggleMute()" style="display:none">Unmute</button>
+  <span id="status">Ready</span>
+</div>
+<script>
+const TRACKERS=['wss://tracker.openwebtorrent.com','wss://tracker.webtorrent.dev'];
+let pc=null,ws=null;
+
+const v=document.getElementById('v');
+const btn=document.getElementById('btn');
+const st=document.getElementById('status');
+
+const params=new URLSearchParams(location.hash.slice(1));
+const shareKey=params.get('key');
+if(!shareKey||shareKey.length<8){
+  st.textContent='Missing or invalid share key (#key=...)';
+  st.className='error';
+  btn.disabled=true;
+}
+
+/* Strip SDP to only H264 video + Opus audio to reduce size.
+ * Public WebTorrent trackers silently drop large messages. */
+function stripSdp(sdp){
+  const lines=sdp.split('\r\n');
+  const out=[];
+  let section='session';/* session, video, audio, skip */
+  let keepPts=new Set();
+  let h264Pt=null,opusPt=null;
+
+  /* First pass: find H264 and Opus PTs */
+  for(const l of lines){
+    const rtpmap=l.match(/^a=rtpmap:(\d+)\s+(.+)/);
+    if(rtpmap){
+      const pt=rtpmap[1],codec=rtpmap[2].toLowerCase();
+      if(codec.startsWith('h264/')&&!h264Pt)h264Pt=pt;
+      if(codec.startsWith('opus/')&&!opusPt)opusPt=pt;
+    }
+  }
+  if(!h264Pt)return sdp;/* fallback: return as-is */
+
+  /* Second pass: filter */
+  for(const l of lines){
+    if(l.startsWith('m=video')){
+      section='video';keepPts=new Set([h264Pt]);
+      const parts=l.split(' ');
+      out.push([parts[0],parts[1],parts[2],parts[3],h264Pt].join(' '));
+      continue;
+    }
+    if(l.startsWith('m=audio')){
+      if(!opusPt){section='skip';continue}
+      section='audio';keepPts=new Set([opusPt]);
+      const parts=l.split(' ');
+      out.push([parts[0],parts[1],parts[2],parts[3],opusPt].join(' '));
+      continue;
+    }
+    if(l.startsWith('m=')){section='skip';continue}
+
+    if(section==='skip')continue;
+    if(section==='session'){out.push(l);continue}
+
+    /* Filter codec-specific lines by PT */
+    const ptMatch=l.match(/^a=(?:rtpmap|fmtp|rtcp-fb):(\d+)/);
+    if(ptMatch){
+      if(keepPts.has(ptMatch[1]))out.push(l);
+      continue;
+    }
+    out.push(l);
+  }
+  return out.join('\r\n');
+}
+
+async function computeInfoHash(){
+  const data=new TextEncoder().encode('raptor:'+shareKey);
+  const hash=await crypto.subtle.digest('SHA-256',data);
+  return btoa(String.fromCharCode(...new Uint8Array(hash)));
+}
+
+function randomId(len){
+  const cs='abcdefghijklmnopqrstuvwxyz0123456789';
+  const limit=256-256%cs.length;/* reject threshold to eliminate modulo bias */
+  const a=new Uint8Array(len*2);/* over-provision for rejections */
+  crypto.getRandomValues(a);
+  let s='',j=0;
+  while(s.length<len){
+    if(j>=a.length){crypto.getRandomValues(a);j=0}
+    if(a[j]<limit)s+=cs[a[j]%cs.length];
+    j++;
+  }
+  return s;
+}
+
+async function start(){
+  st.textContent='Computing share key...';
+  const infoHash=await computeInfoHash();
+  const peerId=randomId(20);
+  const offerId=randomId(10);
+
+  pc=new RTCPeerConnection({
+    iceServers:[
+      {urls:'stun:stun.l.google.com:19302'},
+      {urls:'stun:stun1.l.google.com:19302'}
+    ]
+  });
+  pc.addTransceiver('video',{direction:'recvonly'});
+  pc.addTransceiver('audio',{direction:'recvonly'});
+
+  pc.ontrack=e=>{
+    if(!v.srcObject)v.srcObject=new MediaStream();
+    v.srcObject.addTrack(e.track);
+    v.muted=true;v.play().catch(()=>{});
+  };
+
+  pc.oniceconnectionstatechange=()=>{
+    st.textContent=pc.iceConnectionState;
+    if(pc.iceConnectionState==='connected'||pc.iceConnectionState==='completed'){
+      btn.textContent='Disconnect';
+      document.getElementById('mute').style.display='';
+      document.getElementById('stream').disabled=true;
+    }
+    if(pc.iceConnectionState==='failed'||pc.iceConnectionState==='disconnected')
+      stop();
+  };
+
+  st.textContent='Gathering ICE candidates...';
+  const offer=await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  await new Promise(r=>{
+    if(pc.iceGatheringState==='complete')r();
+    else pc.onicegatheringstatechange=()=>{
+      if(pc.iceGatheringState==='complete')r();
+    };
+  });
+
+  st.textContent='Connecting to tracker...';
+  let connected=false;
+  for(const tracker of TRACKERS){
+    try{
+      const s=new WebSocket(tracker);
+      await new Promise((ok,fail)=>{
+        let done=false;
+        s.onopen=()=>{if(!done){done=true;ok()}};
+        s.onerror=()=>{if(!done){done=true;fail()}};
+        s.onclose=()=>{if(!done){done=true;fail()}};
+        setTimeout(()=>{if(!done){done=true;s.close();fail(new Error('timeout'))}},5000);
+      });
+      ws=s;connected=true;break;
+    }catch(e){continue}
+  }
+  if(!connected){
+    st.textContent='Failed to connect to tracker';
+    st.className='error';stop();return;
+  }
+
+  st.textContent='Waiting for camera...';
+
+  ws.onmessage=async e=>{
+    let msg;
+    try{msg=JSON.parse(e.data)}catch(err){return}
+    if(msg.answer&&msg.answer.sdp&&pc){
+      await pc.setRemoteDescription({type:'answer',sdp:msg.answer.sdp});
+      st.textContent='Connecting...';
+    }
+  };
+  ws.onclose=()=>{
+    if(pc&&pc.iceConnectionState!=='connected'&&pc.iceConnectionState!=='completed'){
+      st.textContent='Tracker disconnected';stop();
+    }
+  };
+
+  const strippedSdp=stripSdp(pc.localDescription.sdp);
+  const streamIdx=document.getElementById('stream').value;
+  const fullOfferId='s'+streamIdx+'_'+offerId;
+  const announceMsg={
+    action:'announce',info_hash:infoHash,peer_id:peerId,
+    numwant:1,uploaded:0,downloaded:0,left:1,
+    offers:[{offer_id:fullOfferId,offer:{type:'offer',sdp:strippedSdp}}]
+  };
+  ws.send(JSON.stringify(announceMsg));
+}
+
+function stop(){
+  if(ws){ws.close();ws=null}
+  if(pc){pc.close();pc=null}
+  v.srcObject=null;
+  btn.textContent='Connect';
+  document.getElementById('mute').style.display='none';
+  document.getElementById('stream').disabled=false;
+  if(!st.className)st.textContent='Disconnected';
+}
+
+function toggle(){pc?stop():start()}
+function toggleMute(){v.muted=!v.muted;document.getElementById('mute').textContent=v.muted?'Unmute':'Mute'}
+</script>
+</body></html>

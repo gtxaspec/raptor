@@ -409,6 +409,35 @@ static int rwd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return (int)strlen(resp_buf);
 	}
 
+	if (strstr(cmd_json, "\"share-rotate\"")) {
+		if (srv->webtorrent) {
+			rwd_webtorrent_t *wt = srv->webtorrent;
+			rwd_webtorrent_rotate_key(wt);
+			snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"ok\",\"key\":\"%s\","
+				 "\"url\":\"%s#key=%s\"}",
+				 wt->share_key, wt->viewer_base_url, wt->share_key);
+		} else {
+			snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"error\",\"message\":\"webtorrent not enabled\"}");
+		}
+		return (int)strlen(resp_buf);
+	}
+
+	if (strstr(cmd_json, "\"share\"")) {
+		if (srv->webtorrent) {
+			rwd_webtorrent_t *wt = srv->webtorrent;
+			snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"ok\",\"key\":\"%s\","
+				 "\"url\":\"%s#key=%s\"}",
+				 wt->share_key, wt->viewer_base_url, wt->share_key);
+		} else {
+			snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"error\",\"message\":\"webtorrent not enabled\"}");
+		}
+		return (int)strlen(resp_buf);
+	}
+
 	if (strstr(cmd_json, "\"config-save\"")) {
 		int ret = rss_config_save(srv->cfg, srv->config_path);
 		snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
@@ -616,10 +645,42 @@ int main(int argc, char **argv)
 	}
 	RSS_INFO("HTTP listening on port %d (GET /webrtc, POST /whip)", srv.http_port);
 
+	/* WebTorrent external sharing (optional) */
+#ifdef RAPTOR_WEBTORRENT
+	rwd_webtorrent_t wt = {0};
+	bool wt_started = false;
+	if (rss_config_get_bool(dctx.cfg, "webtorrent", "enabled", false)) {
+		rss_strlcpy(wt.tracker_url,
+			    rss_config_get_str(dctx.cfg, "webtorrent", "tracker",
+					       "wss://tracker.openwebtorrent.com"),
+			    sizeof(wt.tracker_url));
+		rss_strlcpy(wt.stun_server,
+			    rss_config_get_str(dctx.cfg, "webtorrent", "stun_server",
+					       "stun.l.google.com"),
+			    sizeof(wt.stun_server));
+		wt.stun_port = rss_config_get_int(dctx.cfg, "webtorrent", "stun_port", 19302);
+		rss_strlcpy(wt.viewer_base_url,
+			    rss_config_get_str(dctx.cfg, "webtorrent", "viewer_url",
+					       "https://thingino.com/webrtc/share.html"),
+			    sizeof(wt.viewer_base_url));
+		if (rwd_webtorrent_start(&wt, &srv) == 0) {
+			wt_started = true;
+			srv.webtorrent = &wt;
+		} else {
+			RSS_ERROR("webtorrent: failed to start");
+		}
+	}
+#endif
+
 	/* Run */
 	rwd_run(&srv);
 
 	RSS_INFO("rwd shutting down");
+
+#ifdef RAPTOR_WEBTORRENT
+	if (wt_started)
+		rwd_webtorrent_stop(&wt);
+#endif
 
 cleanup:
 	if (srv.udp_fd >= 0)

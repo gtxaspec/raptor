@@ -240,6 +240,100 @@ static int stun_send_response(rwd_server_t *srv, const uint8_t *request,
 	return sent > 0 ? 0 : -1;
 }
 
+/* ── Send ICE connectivity check for NAT hole punching ── */
+
+int rwd_ice_send_check(rwd_server_t *srv, rwd_client_t *c, const char *dest_ip, uint16_t dest_port)
+{
+	struct sockaddr_in dest;
+	memset(&dest, 0, sizeof(dest));
+	dest.sin_family = AF_INET;
+	dest.sin_port = htons(dest_port);
+	if (inet_pton(AF_INET, dest_ip, &dest.sin_addr) != 1)
+		return -1;
+
+	uint8_t msg[256];
+	size_t off = 0;
+
+	/* STUN header */
+	wr16(msg + off, STUN_BINDING_REQUEST);
+	off += 2;
+	wr16(msg + off, 0); /* length placeholder */
+	off += 2;
+	wr32(msg + off, STUN_MAGIC_COOKIE);
+	off += 4;
+	rwd_random_bytes(msg + off, 12);
+	off += 12;
+
+	/* USERNAME: "remote_ufrag:local_ufrag" (from receiver's perspective) */
+	char username[128];
+	int ulen_i = snprintf(username, sizeof(username), "%s:%s", c->remote_ufrag, c->local_ufrag);
+	if (ulen_i < 0 || (size_t)ulen_i >= sizeof(username))
+		return -1;
+	size_t ulen = (size_t)ulen_i;
+	size_t ulen_padded = (ulen + 3) & ~3u;
+	/* 20 (hdr) + 4+ulen_padded (USERNAME) + 12 (ICE-CONTROLLED) + 8 (PRIORITY)
+	 * + 24 (MI) + 8 (FP) must fit in msg[256] */
+	if (20 + 4 + ulen_padded + 12 + 8 + 24 + 8 > sizeof(msg))
+		return -1;
+	wr16(msg + off, STUN_ATTR_USERNAME);
+	off += 2;
+	wr16(msg + off, (uint16_t)ulen);
+	off += 2;
+	memcpy(msg + off, username, ulen);
+	off += ulen;
+	while (off & 3)
+		msg[off++] = 0;
+
+	/* ICE-CONTROLLED: 0x8029, 8-byte tiebreaker */
+	wr16(msg + off, 0x8029);
+	off += 2;
+	wr16(msg + off, 8);
+	off += 2;
+	rwd_random_bytes(msg + off, 8);
+	off += 8;
+
+	/* PRIORITY: 0x0024, srflx priority */
+	wr16(msg + off, 0x0024);
+	off += 2;
+	wr16(msg + off, 4);
+	off += 2;
+	wr32(msg + off, 1694498815);
+	off += 4;
+
+	/* MESSAGE-INTEGRITY */
+	uint16_t mi_adj_len = (uint16_t)(off - STUN_HEADER_SIZE + 24);
+	wr16(msg + 2, mi_adj_len);
+
+	uint8_t hmac[20];
+	rwd_hmac_sha1((const uint8_t *)c->remote_pwd, strlen(c->remote_pwd), msg, off, hmac);
+
+	wr16(msg + off, STUN_ATTR_MESSAGE_INTEGRITY);
+	off += 2;
+	wr16(msg + off, 20);
+	off += 2;
+	memcpy(msg + off, hmac, 20);
+	off += 20;
+
+	/* FINGERPRINT */
+	uint16_t fp_adj_len = (uint16_t)(off - STUN_HEADER_SIZE + 8);
+	wr16(msg + 2, fp_adj_len);
+
+	uint32_t crc = crc32_compute(msg, off) ^ STUN_FINGERPRINT_XOR;
+	wr16(msg + off, STUN_ATTR_FINGERPRINT);
+	off += 2;
+	wr16(msg + off, 4);
+	off += 2;
+	wr32(msg + off, crc);
+	off += 4;
+
+	/* Final length */
+	wr16(msg + 2, (uint16_t)(off - STUN_HEADER_SIZE));
+
+	ssize_t sent = sendto(srv->udp_fd, msg, off, 0, (struct sockaddr *)&dest, sizeof(dest));
+	RSS_DEBUG("ICE: sent check to %s:%u (%zd bytes)", dest_ip, dest_port, sent);
+	return sent > 0 ? 0 : -1;
+}
+
 /* ── Main ICE packet handler ── */
 
 int rwd_ice_process(rwd_server_t *srv, const uint8_t *buf, size_t len,
