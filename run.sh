@@ -36,7 +36,7 @@ sub_data_mb = 0
 [audio]
 enabled = true
 sample_rate = 16000
-codec = aac
+codec = opus
 volume = 80
 gain = 25
 [rtsp]
@@ -49,11 +49,21 @@ port = 8080
 enabled = true
 font = /usr/share/fonts/default.ttf
 font_size = 24
-timestamp = true
-timestamp_fmt = %Y-%m-%d %H:%M:%S
-label = Camera
+font_color = 0xFFFFFFFF
+font_stroke = 1
+time_enabled = true
+time_format = %Y-%m-%d %H:%M:%S
+uptime_enabled = true
+text_enabled = true
+text_string = Camera
+stream0_time_pos = top_left
+stream0_uptime_pos = top_right
+stream0_text_pos = top_center
+stream1_time_pos = top_left
+stream1_uptime_pos = top_right
+stream1_text_pos = top_center
 [recording]
-enabled = true
+enabled = false
 mode = both
 stream = 0
 audio = true
@@ -63,8 +73,17 @@ max_storage_mb = 500
 prebuffer_sec = 5
 clip_length_sec = 60
 clip_max_mb = 200
-[motion]
+[webrtc]
 enabled = true
+udp_port = 8443
+http_port = 8554
+max_clients = 2
+cert = /etc/ssl/certs/uhttpd.crt
+key = /etc/ssl/private/uhttpd.key
+[webtorrent]
+enabled = false
+[motion]
+enabled = false
 algorithm = move
 sensitivity = 3
 grid = 4x4
@@ -74,12 +93,15 @@ record = true
 record_post_sec = 30
 [ircut]
 enabled = false
+[log]
+level = info
+target = syslog
 EOF
     echo "Generated default config: $CONF"
 fi
 
 # Kill any running daemons
-killall rvd rad rod rsd rhd rmr rmd ric 2>/dev/null
+killall rvd rad rod rsd rhd rmr rmd ric rwd 2>/dev/null
 sleep 1
 
 echo "Starting raptor from $DIR"
@@ -98,6 +120,7 @@ $DIR/rod/rod -c "$CONF" -f -d >> /tmp/rod.log 2>&1 &
 $DIR/rsd/rsd -c "$CONF" -f -d >> /tmp/rsd.log 2>&1 &
 $DIR/rhd/rhd -c "$CONF" -f -d >> /tmp/rhd.log 2>&1 &
 $DIR/rmr/rmr -c "$CONF" -f -d >> /tmp/rmr.log 2>&1 &
+$DIR/rwd/rwd -c "$CONF" -f -d >> /tmp/rwd.log 2>&1 &
 sleep 1
 $DIR/ric/ric -c "$CONF" -f -d >> /tmp/ric.log 2>&1 &
 $DIR/rmd/rmd -c "$CONF" -f -d >> /tmp/rmd.log 2>&1 &
@@ -107,4 +130,4 @@ echo ""
 echo "Running daemons:"
 ps | grep "$DIR" | grep -v grep | awk '{print $5}' | sed "s|$DIR/||;s|/.*||" | sort
 echo ""
-echo "Logs in /tmp/{rvd,rad,rod,rsd,rhd,rmr,ric,rmd}.log"
+echo "Logs in /tmp/{rvd,rad,rod,rsd,rhd,rmr,rwd,ric,rmd}.log"
