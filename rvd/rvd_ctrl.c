@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <limits.h>
 #include <inttypes.h>
 #include <stdatomic.h>
@@ -55,6 +56,17 @@ static rss_wb_mode_t wb_mode_from_str(const char *s)
  * The IPC layer uses it as the number of bytes to send back.
  */
 #define CTRL_RETURN(buf) return (int)strlen(buf)
+
+/* Format HAL return code into JSON error response */
+static void fmt_hal_result(char *buf, int bufsz, int ret)
+{
+	if (ret == 0)
+		snprintf(buf, bufsz, "{\"status\":\"ok\"}");
+	else if (ret == RSS_ERR_NOTSUP)
+		snprintf(buf, bufsz, "{\"status\":\"error\",\"reason\":\"not supported on this SoC\"}");
+	else
+		snprintf(buf, bufsz, "{\"status\":\"error\",\"reason\":\"failed (%d)\"}", ret);
+}
 
 static const char *stream_section(int idx)
 {
@@ -128,7 +140,7 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 				st->streams[chn].enc_cfg.bitrate = val;
 				rss_config_set_int(st->cfg, stream_section(chn), "bitrate", val);
 			}
-			snprintf(resp, resp_size, "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
+			fmt_hal_result(resp, resp_size, ret);
 		} else {
 			snprintf(resp, resp_size,
 				 "{\"status\":\"error\",\"reason\":\"need channel and value\"}");
@@ -146,7 +158,7 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 				st->streams[chn].enc_cfg.gop_length = val;
 				rss_config_set_int(st->cfg, stream_section(chn), "gop", val);
 			}
-			snprintf(resp, resp_size, "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
+			fmt_hal_result(resp, resp_size, ret);
 		} else {
 			snprintf(resp, resp_size,
 				 "{\"status\":\"error\",\"reason\":\"need channel and value\"}");
@@ -164,7 +176,7 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 				st->streams[chn].enc_cfg.fps_num = val;
 				rss_config_set_int(st->cfg, stream_section(chn), "fps", val);
 			}
-			snprintf(resp, resp_size, "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
+			fmt_hal_result(resp, resp_size, ret);
 		} else {
 			snprintf(resp, resp_size,
 				 "{\"status\":\"error\",\"reason\":\"need channel and value\"}");
@@ -185,7 +197,7 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 				rss_config_set_int(st->cfg, stream_section(chn), "min_qp", val);
 				rss_config_set_int(st->cfg, stream_section(chn), "max_qp", val2);
 			}
-			snprintf(resp, resp_size, "{\"status\":\"%s\"}", ret == 0 ? "ok" : "error");
+			fmt_hal_result(resp, resp_size, ret);
 		} else {
 			snprintf(resp, resp_size,
 				 "{\"status\":\"error\",\"reason\":\"need channel, min, max\"}");
@@ -206,8 +218,14 @@ static int handle_isp_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 	if (strstr(cmd_json, "\"" name "\"")) {                                                    \
 		if (rss_json_get_int(cmd_json, "value", &val) == 0) {                              \
 			int ret = RSS_HAL_CALL(st->ops, fn, st->hal_ctx, val);                     \
-			snprintf(resp, resp_size, "{\"status\":\"%s\"}",                           \
-				 ret == 0 ? "ok" : "error");                                       \
+			if (ret == 0)                                                              \
+				snprintf(resp, resp_size, "{\"status\":\"ok\"}");                  \
+			else if (ret == RSS_ERR_NOTSUP)                                            \
+				snprintf(resp, resp_size, "{\"status\":\"error\","                 \
+					 "\"reason\":\"not supported on this SoC\"}");             \
+			else                                                                       \
+				snprintf(resp, resp_size, "{\"status\":\"error\","                 \
+					 "\"reason\":\"failed (%d)\"}", ret);                      \
 		} else {                                                                           \
 			snprintf(resp, resp_size,                                                  \
 				 "{\"status\":\"error\",\"reason\":\"need value\"}");              \

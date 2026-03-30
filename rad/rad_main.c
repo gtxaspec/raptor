@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
 #include <arpa/inet.h>
 
 #include <pthread.h>
@@ -123,6 +124,16 @@ typedef struct {
 #endif
 } rad_ctrl_ctx_t;
 
+static void rad_fmt_result(char *buf, int bufsz, int ret)
+{
+	if (ret == 0)
+		snprintf(buf, bufsz, "{\"status\":\"ok\"}");
+	else if (ret == RSS_ERR_NOTSUP)
+		snprintf(buf, bufsz, "{\"status\":\"error\",\"reason\":\"not supported on this SoC\"}");
+	else
+		snprintf(buf, bufsz, "{\"status\":\"error\",\"reason\":\"failed (%d)\"}", ret);
+}
+
 #define CTRL_RESP(buf) return (int)strlen(buf)
 
 static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, void *userdata)
@@ -136,10 +147,12 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 
 	if (strstr(cmd_json, "\"set-volume\"")) {
 		if (rss_json_get_int(cmd_json, "value", &val) == 0) {
-			RSS_HAL_CALL(ctx->ops, audio_set_volume, ctx->hal_ctx, ctx->ai_dev, 0, val);
-			ctx->volume = val;
-			rss_config_set_int(ctx->cfg, "audio", "volume", val);
-			snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
+			int ret = RSS_HAL_CALL(ctx->ops, audio_set_volume, ctx->hal_ctx, ctx->ai_dev, 0, val);
+			if (ret == 0) {
+				ctx->volume = val;
+				rss_config_set_int(ctx->cfg, "audio", "volume", val);
+			}
+			rad_fmt_result(resp_buf, resp_buf_size, ret);
 		} else {
 			snprintf(resp_buf, resp_buf_size,
 				 "{\"status\":\"error\",\"reason\":\"need value\"}");
@@ -149,10 +162,12 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 
 	if (strstr(cmd_json, "\"set-gain\"")) {
 		if (rss_json_get_int(cmd_json, "value", &val) == 0) {
-			RSS_HAL_CALL(ctx->ops, audio_set_gain, ctx->hal_ctx, ctx->ai_dev, 0, val);
-			ctx->gain = val;
-			rss_config_set_int(ctx->cfg, "audio", "gain", val);
-			snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
+			int ret = RSS_HAL_CALL(ctx->ops, audio_set_gain, ctx->hal_ctx, ctx->ai_dev, 0, val);
+			if (ret == 0) {
+				ctx->gain = val;
+				rss_config_set_int(ctx->cfg, "audio", "gain", val);
+			}
+			rad_fmt_result(resp_buf, resp_buf_size, ret);
 		} else {
 			snprintf(resp_buf, resp_buf_size,
 				 "{\"status\":\"error\",\"reason\":\"need value\"}");
@@ -200,9 +215,13 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			}
 			if (ret == RSS_OK)
 				ctx->ns_enabled = !!val;
-			snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\",\"ns\":%s}",
-				 ret == RSS_OK ? "ok" : "error",
-				 ctx->ns_enabled ? "true" : "false");
+			if (ret == RSS_ERR_NOTSUP)
+				snprintf(resp_buf, resp_buf_size,
+					 "{\"status\":\"error\",\"reason\":\"not supported on this SoC\"}");
+			else
+				snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\",\"ns\":%s}",
+					 ret == RSS_OK ? "ok" : "error",
+					 ctx->ns_enabled ? "true" : "false");
 		} else {
 			snprintf(resp_buf, resp_buf_size,
 				 "{\"status\":\"error\",\"reason\":\"need value (0/1)\"}");
@@ -219,9 +238,13 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				ret = RSS_HAL_CALL(ctx->ops, audio_disable_hpf, ctx->hal_ctx);
 			if (ret == RSS_OK)
 				ctx->hpf_enabled = !!val;
-			snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\",\"hpf\":%s}",
-				 ret == RSS_OK ? "ok" : "error",
-				 ctx->hpf_enabled ? "true" : "false");
+			if (ret == RSS_ERR_NOTSUP)
+				snprintf(resp_buf, resp_buf_size,
+					 "{\"status\":\"error\",\"reason\":\"not supported on this SoC\"}");
+			else
+				snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\",\"hpf\":%s}",
+					 ret == RSS_OK ? "ok" : "error",
+					 ctx->hpf_enabled ? "true" : "false");
 		} else {
 			snprintf(resp_buf, resp_buf_size,
 				 "{\"status\":\"error\",\"reason\":\"need value (0/1)\"}");
@@ -247,9 +270,13 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			}
 			if (ret == RSS_OK)
 				ctx->agc_enabled = !!val;
-			snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\",\"agc\":%s}",
-				 ret == RSS_OK ? "ok" : "error",
-				 ctx->agc_enabled ? "true" : "false");
+			if (ret == RSS_ERR_NOTSUP)
+				snprintf(resp_buf, resp_buf_size,
+					 "{\"status\":\"error\",\"reason\":\"not supported on this SoC\"}");
+			else
+				snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\",\"agc\":%s}",
+					 ret == RSS_OK ? "ok" : "error",
+					 ctx->agc_enabled ? "true" : "false");
 		} else {
 			snprintf(resp_buf, resp_buf_size,
 				 "{\"status\":\"error\",\"reason\":\"need value (0/1)\"}");
