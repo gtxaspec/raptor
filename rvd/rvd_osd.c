@@ -42,8 +42,8 @@ static const char *region_names[] = {"time", "uptime", "text", "logo", "privacy"
 #define OSD_UPTIME_W 280 /* "12345d 23h 59m 59s" ≈ 260px */
 #define OSD_TEXT_W   320 /* camera name */
 #define OSD_TEXT_H   36
-#define OSD_LOGO_W   210
-#define OSD_LOGO_H   64
+#define OSD_LOGO_W   100
+#define OSD_LOGO_H   30
 
 /* Default position names per role */
 static const char *default_pos[] = {

@@ -54,10 +54,10 @@ static void load_config(rod_state_t *st)
 	c->logo_enabled = rss_config_get_bool(cfg, "osd", "logo_enabled", true);
 	rss_strlcpy(c->logo_path,
 		    rss_config_get_str(cfg, "osd", "logo_path",
-				       "/usr/share/images/thingino_210x64.bgra"),
+				       "/usr/share/images/thingino_100x30.bgra"),
 		    sizeof(c->logo_path));
-	c->logo_width = rss_config_get_int(cfg, "osd", "logo_width", 210);
-	c->logo_height = rss_config_get_int(cfg, "osd", "logo_height", 64);
+	c->logo_width = rss_config_get_int(cfg, "osd", "logo_width", 100);
+	c->logo_height = rss_config_get_int(cfg, "osd", "logo_height", 30);
 
 	/* Stream dimensions */
 	st->stream_w[0] = rss_config_get_int(cfg, "stream0", "width", 1920);

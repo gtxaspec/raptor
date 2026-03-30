@@ -7,6 +7,8 @@
 DIR="$(cd "$(dirname "$0")" && pwd)"
 CONF="${1:-/etc/raptor.conf}"
 
+log() { echo "[raptor] $*"; }
+
 if [ ! -f "$CONF" ]; then
     CONF="/tmp/raptor.conf"
     cat > "$CONF" << 'EOF'
@@ -97,37 +99,72 @@ enabled = false
 level = info
 target = syslog
 EOF
-    echo "Generated default config: $CONF"
+    log "generated default config: $CONF"
 fi
 
 # Kill any running daemons
-killall rvd rad rod rsd rhd rmr rmd ric rwd 2>/dev/null
+log "stopping running daemons..."
+for d in rvd rad rod rsd rhd rmr rmd ric rwd; do
+    pid=$(pidof $d 2>/dev/null)
+    if [ -n "$pid" ]; then
+        log "  killing $d (pid $pid)"
+        kill $pid 2>/dev/null
+    fi
+done
 sleep 1
 
-echo "Starting raptor from $DIR"
-echo "Config: $CONF"
+# Clean stale SHM
+rm -f /dev/shm/rss_ring_* /dev/shm/rss_osd_* 2>/dev/null
 
-# RVD must start first
+log "config: $CONF"
+log "binaries: $DIR"
+echo ""
+
+# RVD must start first (creates rings, encoder, ISP)
+log "starting rvd (video pipeline)..."
 $DIR/rvd/rvd -c "$CONF" -f -d >> /tmp/rvd.log 2>&1 &
 sleep 4
 
-# Producers
+# Audio producer
+log "starting rad (audio)..."
 $DIR/rad/rad -c "$CONF" -f -d >> /tmp/rad.log 2>&1 &
 sleep 2
+
+# OSD renderer
+log "starting rod (OSD)..."
 $DIR/rod/rod -c "$CONF" -f -d >> /tmp/rod.log 2>&1 &
 
-# Consumers
+# Stream consumers
+log "starting rsd (RTSP)..."
 $DIR/rsd/rsd -c "$CONF" -f -d >> /tmp/rsd.log 2>&1 &
+
+log "starting rhd (HTTP/MJPEG)..."
 $DIR/rhd/rhd -c "$CONF" -f -d >> /tmp/rhd.log 2>&1 &
+
+log "starting rmr (recording)..."
 $DIR/rmr/rmr -c "$CONF" -f -d >> /tmp/rmr.log 2>&1 &
+
+log "starting rwd (WebRTC)..."
 $DIR/rwd/rwd -c "$CONF" -f -d >> /tmp/rwd.log 2>&1 &
 sleep 1
+
+# Aux daemons
+log "starting ric (IR-cut)..."
 $DIR/ric/ric -c "$CONF" -f -d >> /tmp/ric.log 2>&1 &
+
+log "starting rmd (motion)..."
 $DIR/rmd/rmd -c "$CONF" -f -d >> /tmp/rmd.log 2>&1 &
 sleep 2
 
 echo ""
-echo "Running daemons:"
-ps | grep "$DIR" | grep -v grep | awk '{print $5}' | sed "s|$DIR/||;s|/.*||" | sort
+log "all daemons started:"
+for d in rvd rad rod rsd rhd rmr rwd ric rmd; do
+    pid=$(pidof $d 2>/dev/null)
+    if [ -n "$pid" ]; then
+        printf "  %-6s pid %-6s OK\n" "$d" "$pid"
+    else
+        printf "  %-6s %-13s FAILED\n" "$d" ""
+    fi
+done
 echo ""
-echo "Logs in /tmp/{rvd,rad,rod,rsd,rhd,rmr,rwd,ric,rmd}.log"
+log "logs: /tmp/{rvd,rad,rod,rsd,rhd,rmr,rwd,ric,rmd}.log"
