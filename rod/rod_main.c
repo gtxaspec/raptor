@@ -38,6 +38,7 @@ static void load_config(rod_state_t *st)
 		    sizeof(c->font_path));
 	c->font_size = rss_config_get_int(cfg, "osd", "font_size", 24);
 	c->font_color = parse_color(rss_config_get_str(cfg, "osd", "font_color", "0xFFFFFFFF"));
+	c->stroke_color = parse_color(rss_config_get_str(cfg, "osd", "stroke_color", "0xFF000000"));
 	c->font_stroke = rss_config_get_int(cfg, "osd", "font_stroke", 1);
 
 	c->time_enabled = rss_config_get_bool(cfg, "osd", "time_enabled", true);
@@ -297,16 +298,72 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return (int)strlen(resp_buf);
 	}
 
+	if (strstr(cmd_json, "\"set-font-color\"")) {
+		char val[16];
+		if (rss_json_get_str(cmd_json, "value", val, sizeof(val)) == 0) {
+			st->cfg.font_color = parse_color(val);
+			rss_config_set_str(st->config, "osd", "font_color", val);
+			for (int s = 0; s < st->stream_count; s++)
+				for (int r = 0; r < ROD_MAX_REGIONS; r++)
+					if (st->regions[s][r].enabled)
+						st->regions[s][r].needs_update = true;
+			snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
+		} else {
+			snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"error\",\"msg\":\"missing value\"}");
+		}
+		return (int)strlen(resp_buf);
+	}
+
+	if (strstr(cmd_json, "\"set-stroke-color\"")) {
+		char val[16];
+		if (rss_json_get_str(cmd_json, "value", val, sizeof(val)) == 0) {
+			st->cfg.stroke_color = parse_color(val);
+			rss_config_set_str(st->config, "osd", "stroke_color", val);
+			for (int s = 0; s < st->stream_count; s++)
+				for (int r = 0; r < ROD_MAX_REGIONS; r++)
+					if (st->regions[s][r].enabled)
+						st->regions[s][r].needs_update = true;
+			snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
+		} else {
+			snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"error\",\"msg\":\"missing value\"}");
+		}
+		return (int)strlen(resp_buf);
+	}
+
+	if (strstr(cmd_json, "\"set-stroke-size\"")) {
+		int val;
+		if (rss_json_get_int(cmd_json, "value", &val) == 0 && val >= 0 && val <= 5) {
+			st->cfg.font_stroke = val;
+			rss_config_set_int(st->config, "osd", "font_stroke", val);
+			for (int s = 0; s < st->stream_count; s++)
+				for (int r = 0; r < ROD_MAX_REGIONS; r++)
+					if (st->regions[s][r].enabled)
+						st->regions[s][r].needs_update = true;
+			snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
+		} else {
+			snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"error\",\"msg\":\"need value 0-5\"}");
+		}
+		return (int)strlen(resp_buf);
+	}
+
 	if (strstr(cmd_json, "\"config-show\"")) {
 		snprintf(resp_buf, resp_buf_size,
 			 "{\"status\":\"ok\",\"config\":{"
 			 "\"font_size\":%d,"
+			 "\"font_color\":\"0x%08X\","
+			 "\"stroke_color\":\"0x%08X\","
+			 "\"font_stroke\":%d,"
 			 "\"time_enabled\":%s,"
 			 "\"uptime_enabled\":%s,"
 			 "\"text_enabled\":%s,"
 			 "\"text_string\":\"%s\","
 			 "\"logo_enabled\":%s}}",
-			 st->cfg.font_size, st->cfg.time_enabled ? "true" : "false",
+			 st->cfg.font_size, st->cfg.font_color, st->cfg.stroke_color,
+			 st->cfg.font_stroke,
+			 st->cfg.time_enabled ? "true" : "false",
 			 st->cfg.uptime_enabled ? "true" : "false",
 			 st->cfg.text_enabled ? "true" : "false", st->cfg.text_string,
 			 st->cfg.logo_enabled ? "true" : "false");

@@ -238,7 +238,11 @@ void rod_draw_text(rod_state_t *st, int stream_idx, uint8_t *buf, uint32_t buf_w
 		pen_x = pad;
 
 	if (stroke > 0) {
-		/* Stroke: render text at 4 offsets in black */
+		/* Stroke: render text at offsets in stroke color */
+		uint32_t sc = st->cfg.stroke_color;
+		uint8_t s_b = (uint8_t)(sc & 0xFF);
+		uint8_t s_g = (uint8_t)((sc >> 8) & 0xFF);
+		uint8_t s_r = (uint8_t)((sc >> 16) & 0xFF);
 		for (int sy = -stroke; sy <= stroke; sy++) {
 			for (int sx = -stroke; sx <= stroke; sx++) {
 				if (sx == 0 && sy == 0)
@@ -247,7 +251,7 @@ void rod_draw_text(rod_state_t *st, int stream_idx, uint8_t *buf, uint32_t buf_w
 				if (abs(sx) + abs(sy) > stroke)
 					continue;
 				draw_string(f, buf, buf_w, buf_h, pen_x + sx, baseline + sy, text,
-					    0, 0, 0);
+					    s_b, s_g, s_r);
 			}
 		}
 	}

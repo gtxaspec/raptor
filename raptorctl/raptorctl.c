@@ -63,6 +63,8 @@ static void usage(void)
 		"  <daemon> <cmd> [args...]            Send command\n"
 		"\n"
 		"RVD commands:\n"
+		"  rvd set-rc-mode <ch> <mode> [bps]   Change rate control mode\n"
+		"      modes: fixqp cbr vbr smart capped_vbr capped_quality\n"
 		"  rvd set-bitrate <ch> <bps>          Change bitrate\n"
 		"  rvd set-gop <ch> <length>           Change GOP length\n"
 		"  rvd set-fps <ch> <fps>              Change frame rate\n"
@@ -83,6 +85,10 @@ static void usage(void)
 		"  rvd set-max-again <val>             Max analog gain\n"
 		"  rvd set-max-dgain <val>             Max digital gain\n"
 		"  rvd set-defog <0|1>                 Defog enable\n"
+		"  rvd set-wb <mode> [r_gain] [b_gain] White balance mode + gains\n"
+		"      modes: auto manual daylight cloudy incandescent\n"
+		"             flourescent twilight shade warm_flourescent custom\n"
+		"  rvd get-wb                          Show white balance settings\n"
 		"  rvd get-isp                         Show all ISP settings\n"
 		"\n"
 		"RSD commands:\n"
@@ -98,6 +104,9 @@ static void usage(void)
 		"\n"
 		"ROD commands:\n"
 		"  rod set-text <text>                 Change OSD text string\n"
+		"  rod set-font-color <hex>            Text color (0xAARRGGBB)\n"
+		"  rod set-stroke-color <hex>          Stroke color (0xAARRGGBB)\n"
+		"  rod set-stroke-size <0-5>           Stroke width in pixels\n"
 		"\n"
 		"RIC commands:\n"
 		"  ric mode <auto|day|night>           Set day/night mode\n"
@@ -523,6 +532,40 @@ int main(int argc, char **argv)
 			return 1;
 		}
 		snprintf(json, sizeof(json), "{\"cmd\":\"mode\",\"value\":\"%s\"}", argv[3]);
+
+	} else if (strcmp(cmd, "set-rc-mode") == 0) {
+		if (argc < 5) {
+			fprintf(stderr, "Usage: raptorctl %s set-rc-mode <ch> <mode> [bitrate]\n"
+					"  modes: fixqp cbr vbr smart capped_vbr capped_quality\n",
+				daemon);
+			return 1;
+		}
+		int n = snprintf(json, sizeof(json),
+				 "{\"cmd\":\"set-rc-mode\",\"channel\":%s,\"mode\":\"%s\"",
+				 argv[3], argv[4]);
+		if (argc >= 6)
+			n += snprintf(json + n, sizeof(json) - n, ",\"bitrate\":%s", argv[5]);
+		snprintf(json + n, sizeof(json) - n, "}");
+
+	} else if (strcmp(cmd, "set-wb") == 0) {
+		if (argc < 4) {
+			fprintf(stderr, "Usage: raptorctl %s set-wb <auto|manual> [r_gain] [b_gain]\n",
+				daemon);
+			return 1;
+		}
+		int n = snprintf(json, sizeof(json), "{\"cmd\":\"set-wb\",\"mode\":\"%s\"", argv[3]);
+		if (argc >= 5)
+			n += snprintf(json + n, sizeof(json) - n, ",\"r_gain\":%s", argv[4]);
+		if (argc >= 6)
+			n += snprintf(json + n, sizeof(json) - n, ",\"b_gain\":%s", argv[5]);
+		snprintf(json + n, sizeof(json) - n, "}");
+
+	} else if (strcmp(cmd, "set-font-color") == 0 || strcmp(cmd, "set-stroke-color") == 0) {
+		if (argc < 4) {
+			fprintf(stderr, "Usage: raptorctl %s %s <0xAARRGGBB>\n", daemon, cmd);
+			return 1;
+		}
+		snprintf(json, sizeof(json), "{\"cmd\":\"%s\",\"value\":\"%s\"}", cmd, argv[3]);
 
 	} else if (strncmp(cmd, "set-", 4) == 0 && argc >= 4) {
 		/* Generic set-X <value> pass-through */

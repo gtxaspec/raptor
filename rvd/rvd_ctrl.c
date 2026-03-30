@@ -14,6 +14,40 @@
 
 #include "rvd.h"
 
+/* White balance mode name lookup */
+static const struct {
+	const char *name;
+	rss_wb_mode_t mode;
+} wb_mode_table[] = {
+	{"auto",             RSS_WB_AUTO},
+	{"manual",           RSS_WB_MANUAL},
+	{"daylight",         RSS_WB_DAYLIGHT},
+	{"cloudy",           RSS_WB_CLOUDY},
+	{"incandescent",     RSS_WB_INCANDESCENT},
+	{"flourescent",      RSS_WB_FLOURESCENT},
+	{"twilight",         RSS_WB_TWILIGHT},
+	{"shade",            RSS_WB_SHADE},
+	{"warm_flourescent", RSS_WB_WARM_FLOURESCENT},
+	{"custom",           RSS_WB_CUSTOM},
+};
+#define WB_MODE_COUNT (sizeof(wb_mode_table) / sizeof(wb_mode_table[0]))
+
+static const char *wb_mode_str(rss_wb_mode_t m)
+{
+	for (unsigned i = 0; i < WB_MODE_COUNT; i++)
+		if (wb_mode_table[i].mode == m)
+			return wb_mode_table[i].name;
+	return "unknown";
+}
+
+static rss_wb_mode_t wb_mode_from_str(const char *s)
+{
+	for (unsigned i = 0; i < WB_MODE_COUNT; i++)
+		if (strcasecmp(wb_mode_table[i].name, s) == 0)
+			return wb_mode_table[i].mode;
+	return RSS_WB_AUTO;
+}
+
 /* ── Helpers ── */
 
 /*
@@ -42,6 +76,45 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 			RSS_HAL_CALL(st->ops, enc_request_idr, st->hal_ctx, st->streams[i].chn);
 		}
 		snprintf(resp, resp_size, "{\"status\":\"ok\"}");
+		return 1;
+	}
+
+	if (strstr(cmd_json, "\"set-rc-mode\"")) {
+		char mode_str[20] = "";
+		rss_json_get_str(cmd_json, "mode", mode_str, sizeof(mode_str));
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
+		    chn < st->stream_count && mode_str[0]) {
+			static const struct { const char *name; rss_rc_mode_t mode; } rc_map[] = {
+				{"fixqp",          RSS_RC_FIXQP},
+				{"cbr",            RSS_RC_CBR},
+				{"vbr",            RSS_RC_VBR},
+				{"smart",          RSS_RC_SMART},
+				{"capped_vbr",     RSS_RC_CAPPED_VBR},
+				{"capped_quality", RSS_RC_CAPPED_QUALITY},
+			};
+			rss_rc_mode_t mode = RSS_RC_CBR;
+			for (unsigned i = 0; i < sizeof(rc_map) / sizeof(rc_map[0]); i++) {
+				if (strcasecmp(rc_map[i].name, mode_str) == 0) {
+					mode = rc_map[i].mode;
+					break;
+				}
+			}
+			uint32_t bitrate = st->streams[chn].enc_cfg.bitrate;
+			int br;
+			if (rss_json_get_int(cmd_json, "bitrate", &br) == 0 && br > 0)
+				bitrate = (uint32_t)br;
+			int ret = RSS_HAL_CALL(st->ops, enc_set_rc_mode, st->hal_ctx,
+					       st->streams[chn].chn, mode, bitrate);
+			if (ret == 0) {
+				st->streams[chn].enc_cfg.rc_mode = mode;
+				rss_config_set_str(st->cfg, stream_section(chn), "rc_mode", mode_str);
+			}
+			snprintf(resp, resp_size, "{\"status\":\"%s\",\"rc_mode\":\"%s\"}",
+				 ret == 0 ? "ok" : "error", mode_str);
+		} else {
+			snprintf(resp, resp_size,
+				 "{\"status\":\"error\",\"reason\":\"need channel and mode\"}");
+		}
 		return 1;
 	}
 
@@ -162,6 +235,35 @@ static int handle_isp_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 
 #undef ISP_SET
 
+	if (strstr(cmd_json, "\"set-wb\"")) {
+		rss_wb_config_t wb = {0};
+		RSS_HAL_CALL(st->ops, isp_get_wb, st->hal_ctx, &wb);
+		char mode_str[20] = "";
+		rss_json_get_str(cmd_json, "mode", mode_str, sizeof(mode_str));
+		if (mode_str[0])
+			wb.mode = wb_mode_from_str(mode_str);
+		int r_gain, b_gain;
+		if (rss_json_get_int(cmd_json, "r_gain", &r_gain) == 0)
+			wb.r_gain = (uint16_t)r_gain;
+		if (rss_json_get_int(cmd_json, "b_gain", &b_gain) == 0)
+			wb.b_gain = (uint16_t)b_gain;
+		int ret = RSS_HAL_CALL(st->ops, isp_set_wb, st->hal_ctx, &wb);
+		snprintf(resp, resp_size,
+			 "{\"status\":\"%s\",\"mode\":\"%s\",\"r_gain\":%u,\"b_gain\":%u}",
+			 ret == 0 ? "ok" : "error", wb_mode_str(wb.mode),
+			 wb.r_gain, wb.b_gain);
+		return 1;
+	}
+
+	if (strstr(cmd_json, "\"get-wb\"")) {
+		rss_wb_config_t wb = {0};
+		RSS_HAL_CALL(st->ops, isp_get_wb, st->hal_ctx, &wb);
+		snprintf(resp, resp_size,
+			 "{\"status\":\"ok\",\"mode\":\"%s\",\"r_gain\":%u,\"g_gain\":%u,\"b_gain\":%u}",
+			 wb_mode_str(wb.mode), wb.r_gain, wb.g_gain, wb.b_gain);
+		return 1;
+	}
+
 	if (strstr(cmd_json, "\"get-isp\"")) {
 		uint8_t bri = 0, con = 0, sat = 0, shp = 0, hue = 0, sin = 0, tem = 0;
 		int hf = 0, vf = 0, ae = 0;
@@ -177,13 +279,18 @@ static int handle_isp_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 		RSS_HAL_CALL(st->ops, isp_get_ae_comp, st->hal_ctx, &ae);
 		RSS_HAL_CALL(st->ops, isp_get_max_again, st->hal_ctx, &again);
 		RSS_HAL_CALL(st->ops, isp_get_max_dgain, st->hal_ctx, &dgain);
+		rss_wb_config_t wb = {0};
+		RSS_HAL_CALL(st->ops, isp_get_wb, st->hal_ctx, &wb);
 		snprintf(resp, resp_size,
 			 "{\"status\":\"ok\","
 			 "\"brightness\":%u,\"contrast\":%u,\"saturation\":%u,"
 			 "\"sharpness\":%u,\"hue\":%u,\"sinter\":%u,\"temper\":%u,"
 			 "\"hflip\":%d,\"vflip\":%d,\"ae_comp\":%d,"
-			 "\"max_again\":%u,\"max_dgain\":%u}",
-			 bri, con, sat, shp, hue, sin, tem, hf, vf, ae, again, dgain);
+			 "\"max_again\":%u,\"max_dgain\":%u,"
+			 "\"wb_mode\":\"%s\",\"wb_r\":%u,\"wb_g\":%u,\"wb_b\":%u}",
+			 bri, con, sat, shp, hue, sin, tem, hf, vf, ae, again, dgain,
+			 wb.mode == RSS_WB_MANUAL ? "manual" : "auto",
+			 wb.r_gain, wb.g_gain, wb.b_gain);
 		return 1;
 	}
 

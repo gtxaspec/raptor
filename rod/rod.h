@@ -62,7 +62,8 @@ typedef struct {
 	bool enabled;
 	char font_path[128];
 	int font_size;
-	uint32_t font_color; /* BGRA packed */
+	uint32_t font_color;   /* BGRA packed */
+	uint32_t stroke_color; /* BGRA packed (default: black) */
 	int font_stroke;
 
 	bool time_enabled;
