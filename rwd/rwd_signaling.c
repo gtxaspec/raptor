@@ -14,6 +14,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -262,9 +263,16 @@ static void handle_whip_delete(rwd_server_t *srv, int fd, const char *session_id
 void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 			  const struct sockaddr_storage *local_addr)
 {
-	/* Read the full HTTP request (simple: single read, small requests) */
+	/* Non-blocking read — accept already set O_NONBLOCK.
+	 * WHIP clients send the full request in one TCP segment.
+	 * If nothing is ready yet, poll briefly (100ms) then give up. */
 	char buf[RWD_HTTP_BUF_SIZE];
 	ssize_t n = read(client_fd, buf, sizeof(buf) - 1);
+	if (n <= 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+		struct pollfd pfd = {.fd = client_fd, .events = POLLIN};
+		if (poll(&pfd, 1, 100) > 0)
+			n = read(client_fd, buf, sizeof(buf) - 1);
+	}
 	if (n <= 0) {
 		close(client_fd);
 		return;
@@ -332,11 +340,13 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 		size_t body_len = n - (body - buf);
 
 		/* Read remaining body if we didn't get it all.
-		 * NOTE: 'body' points into 'buf', so it remains valid as we
-		 * append more data. With very slow clients the initial read
-		 * may not contain the full body, but SO_RCVTIMEO guards us. */
+		 * Poll with a tight timeout — legitimate clients deliver
+		 * the body within milliseconds of the header. */
 		size_t need = content_length > 0 ? content_length : 0;
 		while (body_len < need && (size_t)n < sizeof(buf) - 1) {
+			struct pollfd pfd = {.fd = client_fd, .events = POLLIN};
+			if (poll(&pfd, 1, 500) <= 0)
+				break;
 			ssize_t more = read(client_fd, buf + n, sizeof(buf) - 1 - n);
 			if (more <= 0)
 				break;

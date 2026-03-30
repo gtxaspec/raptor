@@ -525,9 +525,11 @@ static void rwd_run(rwd_server_t *srv)
 				if (client_fd < 0)
 					continue;
 
-				/* Guard against slow/malicious clients */
-				struct timeval tv = {.tv_sec = 5};
-				setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+				/* Non-blocking to prevent slow-loris: if a
+				 * complete request isn't available immediately,
+				 * we close. WHIP clients send in one burst. */
+				fcntl(client_fd, F_SETFL,
+				      fcntl(client_fd, F_GETFL) | O_NONBLOCK);
 
 				/* Get local address for IP detection */
 				struct sockaddr_storage local_addr;
