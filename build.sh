@@ -39,9 +39,10 @@ fi
 
 TOOLCHAIN="$br_output/host/bin"
 
-# Auto-detect sysroot tuple
+# Auto-detect sysroot tuple (uclibc or musl)
 SYSROOT=""
-for tuple in mipsel-buildroot-linux-uclibc mipsel-thingino-linux-uclibc; do
+for tuple in mipsel-buildroot-linux-uclibc mipsel-thingino-linux-uclibc \
+             mipsel-buildroot-linux-musl mipsel-thingino-linux-musl; do
     if [ -d "$br_output/host/$tuple/sysroot" ]; then
         SYSROOT="$br_output/host/$tuple/sysroot"
         break
@@ -60,11 +61,11 @@ fi
 
 export PATH="$TOOLCHAIN:$PATH"
 
-MAKE_ARGS="PLATFORM=$PLATFORM CROSS_COMPILE=mipsel-linux- SYSROOT=$SYSROOT AAC=1 OPUS=1"
+MAKE_ARGS="PLATFORM=$PLATFORM CROSS_COMPILE=mipsel-linux- SYSROOT=$SYSROOT AAC=1 OPUS=1 MP3=1"
 
 # Auto-detect TLS support
 if [ -f "$SYSROOT/usr/lib/libmbedtls.so" ] || [ -f "$SYSROOT/lib/libmbedtls.so" ]; then
-    MAKE_ARGS="$MAKE_ARGS TLS=1"
+    MAKE_ARGS="$MAKE_ARGS TLS=1 WEBTORRENT=1"
 fi
 
 echo "Building for $PLATFORM"
