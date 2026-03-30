@@ -41,11 +41,11 @@ int main(void)
 		rss_ring_set_stream_info(sub_ring, 1, 0, 640, 360, 25, 1, 66, 30);
 
 	/* Create JPEG rings */
-	rss_ring_t *jpeg0 = rss_ring_create("jpeg0", 16, 2 * 1024 * 1024);
+	rss_ring_t *jpeg0 = rss_ring_create("jpeg0", 4, 512 * 1024);
 	if (jpeg0)
 		rss_ring_set_stream_info(jpeg0, 32, 2, 1920, 1080, 1, 1, 0, 0);
 
-	rss_ring_t *jpeg1 = rss_ring_create("jpeg1", 16, 512 * 1024);
+	rss_ring_t *jpeg1 = rss_ring_create("jpeg1", 4, 64 * 1024);
 	if (jpeg1)
 		rss_ring_set_stream_info(jpeg1, 33, 2, 640, 360, 1, 1, 0, 0);
 

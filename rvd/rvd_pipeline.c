@@ -660,18 +660,27 @@ int rvd_pipeline_init(rvd_state_t *st)
 			continue;
 		char ring_name[16];
 		snprintf(ring_name, sizeof(ring_name), "jpeg%d", j);
-		/* JPEG max ≈ w*h*3/quality_divisor, 16 slots */
+		/* Estimate per-frame JPEG size with quality scaling:
+		 *   Measured: 1440p q75 ≈ 76KB, 360p q75 ≈ 6KB
+		 *   Conservative estimate with ~3x headroom over measured.
+		 *   Slots scale with fps (must be power-of-2):
+		 *     1-2 fps → 4, 3-8 fps → 8, 9+ fps → 16 */
 		uint32_t w = st->streams[ji].enc_cfg.width;
 		uint32_t h = st->streams[ji].enc_cfg.height;
-		uint32_t jpeg_max = w * h / 4; /* ~25% of uncompressed */
-		if (jpeg_max < 65536)
-			jpeg_max = 65536;
-		uint32_t jpeg_data = jpeg_max * 16;
+		uint32_t q = (uint32_t)st->jpeg_quality;
+		uint32_t fps = st->streams[ji].enc_cfg.fps_num;
+		uint32_t divisor = (q >= 90) ? 6 : (q >= 70) ? 16 : 24;
+		uint32_t slots = (fps >= 9) ? 16 : (fps >= 3) ? 8 : 4;
+		uint32_t jpeg_max = w * h / divisor;
+		if (jpeg_max < 16384)
+			jpeg_max = 16384;
+		uint32_t jpeg_data = jpeg_max * slots;
 		if (jpeg_data > 4 * 1024 * 1024)
 			jpeg_data = 4 * 1024 * 1024;
-		RSS_INFO("%s ring: 16 slots, %u KB data", ring_name, jpeg_data / 1024);
+		RSS_INFO("%s ring: %u slots, %u KB data (q%u, /%u, %u fps)",
+			 ring_name, slots, jpeg_data / 1024, q, divisor, fps);
 
-		st->streams[ji].ring = rss_ring_create(ring_name, 16, jpeg_data);
+		st->streams[ji].ring = rss_ring_create(ring_name, slots, jpeg_data);
 		if (!st->streams[ji].ring) {
 			RSS_FATAL("failed to create %s ring", ring_name);
 			return RSS_ERR;
