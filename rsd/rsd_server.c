@@ -196,6 +196,8 @@ static void accept_client(rsd_server_t *srv)
 	}
 	client->udp_rtp_fd = -1;
 	client->udp_rtcp_fd = -1;
+	client->video_rtcp_ch = 0xFF; /* invalid until SETUP sets it */
+	client->audio_rtcp_ch = 0xFF;
 
 	client->fd = fd;
 	client->addr = addr;
