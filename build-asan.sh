@@ -56,7 +56,8 @@ $CC $CFLAGS -c "$COMMON_DIR/src/rss_log.c" -o "$OUT/rss_log.o"
 $CC $CFLAGS -c "$COMMON_DIR/src/rss_config.c" -o "$OUT/rss_config.o"
 $CC $CFLAGS -c "$COMMON_DIR/src/rss_daemon.c" -o "$OUT/rss_daemon.o"
 $CC $CFLAGS -c "$COMMON_DIR/src/rss_util.c" -o "$OUT/rss_util.o"
-ar rcs "$OUT/librss_common.a" "$OUT"/rss_log.o "$OUT"/rss_config.o "$OUT"/rss_daemon.o "$OUT"/rss_util.o
+$CC $CFLAGS -c "$COMMON_DIR/src/rss_ctrl.c" -o "$OUT/rss_ctrl_common.o"
+ar rcs "$OUT/librss_common.a" "$OUT"/rss_log.o "$OUT"/rss_config.o "$OUT"/rss_daemon.o "$OUT"/rss_util.o "$OUT"/rss_ctrl_common.o
 
 echo "=== raptor-ipc ==="
 $CC $CFLAGS -c "$IPC_DIR/src/rss_ring.c" -o "$OUT/rss_ring.o"
