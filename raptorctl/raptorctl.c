@@ -55,6 +55,7 @@ static void usage(void)
 		"Commands:\n"
 		"  status                              Show daemon status\n"
 		"  memory                              Show memory usage (private/shared)\n"
+		"  cpu                                 Show CPU usage (1s sample)\n"
 		"  get <section> <key>                 Read config value\n"
 		"  set <section> <key> <value>         Set config value\n"
 		"  config save                         Save running config to disk\n"
@@ -156,6 +157,130 @@ static int read_smaps(int pid, long *priv_kb, long *shared_kb)
 	*priv_kb = priv;
 	*shared_kb = shared;
 	return 0;
+}
+
+/* Read utime + stime (in clock ticks) from /proc/<pid>/stat.
+ * Fields 14 and 15 (1-indexed) in the stat line. Also reads
+ * num_threads (field 20) and vsize (field 23, in bytes). */
+static int read_proc_stat(int pid, unsigned long *ticks, int *threads, unsigned long *vsize)
+{
+	char path[64];
+	snprintf(path, sizeof(path), "/proc/%d/stat", pid);
+	FILE *f = fopen(path, "r");
+	if (!f)
+		return -1;
+
+	char line[1024];
+	if (!fgets(line, sizeof(line), f)) {
+		fclose(f);
+		return -1;
+	}
+	fclose(f);
+
+	/* Skip past comm field "(name)" which may contain spaces */
+	char *p = strrchr(line, ')');
+	if (!p)
+		return -1;
+	p += 2; /* skip ") " */
+
+	/* Fields after comm (1-indexed):
+	 * 3:state 4:ppid 5:pgrp 6:session 7:tty 8:tpgid 9:flags
+	 * 10:minflt 11:cminflt 12:majflt 13:cmajflt
+	 * 14:utime 15:stime 16:cutime 17:cstime
+	 * 18:priority 19:nice 20:num_threads 21:itrealvalue
+	 * 22:starttime 23:vsize 24:rss */
+	unsigned long utime = 0, stime = 0, vs = 0;
+	int thr = 0;
+	int n = sscanf(p,
+		       "%*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u "
+		       "%lu %lu %*d %*d %*d %*d %d %*d %*lu %lu",
+		       &utime, &stime, &thr, &vs);
+	if (n < 4)
+		return -1;
+
+	*ticks = utime + stime;
+	*threads = thr;
+	*vsize = vs;
+	return 0;
+}
+
+/* Read total CPU ticks from /proc/stat (all cores combined) */
+static unsigned long read_total_cpu_ticks(void)
+{
+	FILE *f = fopen("/proc/stat", "r");
+	if (!f)
+		return 0;
+	char line[256];
+	unsigned long user = 0, nice = 0, sys = 0, idle = 0, iow = 0, irq = 0, sirq = 0;
+	if (fgets(line, sizeof(line), f))
+		sscanf(line, "cpu %lu %lu %lu %lu %lu %lu %lu",
+		       &user, &nice, &sys, &idle, &iow, &irq, &sirq);
+	fclose(f);
+	return user + nice + sys + idle + iow + irq + sirq;
+}
+
+static void cmd_cpu(void)
+{
+	/* First sample */
+	struct {
+		int pid;
+		unsigned long ticks;
+		int threads;
+		unsigned long vsize;
+	} s1[16] = {0}, s2[16] = {0};
+	int count = 0;
+
+	unsigned long total1 = read_total_cpu_ticks();
+	for (int i = 0; daemons[i] && count < 16; i++) {
+		int pid = rss_daemon_check(daemons[i]);
+		if (pid <= 0)
+			continue;
+		s1[count].pid = pid;
+		read_proc_stat(pid, &s1[count].ticks, &s1[count].threads, &s1[count].vsize);
+		count++;
+	}
+
+	if (count == 0) {
+		printf("No daemons running.\n");
+		return;
+	}
+
+	/* Wait 1 second */
+	usleep(1000000);
+
+	/* Second sample */
+	unsigned long total2 = read_total_cpu_ticks();
+	unsigned long total_delta = total2 - total1;
+	if (total_delta == 0)
+		total_delta = 1;
+
+	int idx = 0;
+	for (int i = 0; daemons[i] && idx < count; i++) {
+		int pid = rss_daemon_check(daemons[i]);
+		if (pid <= 0 || pid != s1[idx].pid)
+			continue;
+		read_proc_stat(pid, &s2[idx].ticks, &s2[idx].threads, &s2[idx].vsize);
+		idx++;
+	}
+
+	printf("%-6s  %6s  %7s  %6s\n", "DAEMON", "CPU %", "THREADS", "VSIZE");
+	printf("%-6s  %6s  %7s  %6s\n", "------", "-----", "-------", "-----");
+
+	double total_cpu = 0;
+	idx = 0;
+	for (int i = 0; daemons[i] && idx < count; i++) {
+		int pid = rss_daemon_check(daemons[i]);
+		if (pid <= 0 || pid != s1[idx].pid)
+			continue;
+		unsigned long delta = s2[idx].ticks - s1[idx].ticks;
+		double pct = 100.0 * (double)delta / (double)total_delta;
+		total_cpu += pct;
+		printf("%-6s  %5.1f%%  %7d  %4lu KB\n", daemons[i], pct,
+		       s2[idx].threads, s2[idx].vsize / 1024);
+		idx++;
+	}
+	printf("%-6s  %6s  %7s  %6s\n", "------", "-----", "-------", "-----");
+	printf("%-6s  %5.1f%%\n", "TOTAL", total_cpu);
 }
 
 static void cmd_status(void)
@@ -262,6 +387,11 @@ int main(int argc, char **argv)
 
 	if (strcmp(argv[1], "memory") == 0) {
 		cmd_memory();
+		return 0;
+	}
+
+	if (strcmp(argv[1], "cpu") == 0) {
+		cmd_cpu();
 		return 0;
 	}
 
