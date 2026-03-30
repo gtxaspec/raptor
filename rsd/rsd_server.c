@@ -60,6 +60,15 @@ static rsd_client_t *find_client_by_fd(rsd_server_t *srv, int fd)
 	return NULL;
 }
 
+static rsd_client_t *find_client_by_rtcp_fd(rsd_server_t *srv, int fd)
+{
+	for (int i = 0; i < srv->client_count; i++) {
+		if (srv->clients[i] && srv->clients[i]->udp_rtcp_fd == fd)
+			return srv->clients[i];
+	}
+	return NULL;
+}
+
 static void remove_client(rsd_server_t *srv, rsd_client_t *client)
 {
 	if (!client)
@@ -130,8 +139,11 @@ static void remove_client(rsd_server_t *srv, rsd_client_t *client)
 	/* Close UDP sockets if used */
 	if (client->udp_rtp_fd >= 0)
 		close(client->udp_rtp_fd);
-	if (client->udp_rtcp_fd >= 0)
+	if (client->udp_rtcp_fd >= 0) {
+		if (client->rtcp_in_epoll)
+			epoll_ctl(srv->epoll_fd, EPOLL_CTL_DEL, client->udp_rtcp_fd, NULL);
 		close(client->udp_rtcp_fd);
+	}
 
 	/* TLS shutdown and cleanup */
 #ifdef COMPY_HAS_TLS
@@ -428,15 +440,26 @@ static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			rsd_client_t *c = srv->clients[i];
 			char addr[INET6_ADDRSTRLEN];
 			client_addr_str(&c->addr, addr, sizeof(addr));
+			/* Include RTCP RR stats if available */
+			const Compy_RtcpReportBlock *rr = NULL;
+			if (c->video.rtcp)
+				rr = Compy_Rtcp_get_last_rr(c->video.rtcp);
 			n += snprintf(resp_buf + n, resp_buf_size - n,
 				      "%s{\"ip\":\"%s\",\"port\":%u,"
 				      "\"stream\":%d,\"transport\":\"%s\","
-				      "\"video\":%s,\"audio\":%s,\"backchannel\":%s}",
+				      "\"video\":%s,\"audio\":%s,\"backchannel\":%s",
 				      i > 0 ? "," : "", addr, client_port(&c->addr), c->stream_idx,
 				      c->is_tcp ? "tcp" : "udp",
 				      c->video.playing ? "true" : "false",
 				      c->audio.playing ? "true" : "false",
 				      c->backchannel ? "true" : "false");
+			if (rr)
+				n += snprintf(resp_buf + n, resp_buf_size - n,
+					      ",\"loss_pct\":%.1f,\"jitter\":%u,"
+					      "\"cum_lost\":%u",
+					      rr->fraction_lost * 100.0 / 256.0,
+					      rr->interarrival_jitter, rr->cumulative_lost);
+			n += snprintf(resp_buf + n, resp_buf_size - n, "}");
 		}
 		pthread_mutex_unlock(&srv->clients_lock);
 		snprintf(resp_buf + n, resp_buf_size - n, "]}");
@@ -482,7 +505,31 @@ void rsd_server_run(rsd_server_t *srv)
 			} else if (fd == ctrl_fd) {
 				rss_ctrl_accept_and_handle(srv->ctrl, rsd_ctrl_handler, srv);
 			} else {
-				handle_client_data(srv, fd);
+				/* Check if this is a UDP RTCP fd */
+				rsd_client_t *rc = find_client_by_rtcp_fd(srv, fd);
+				if (rc) {
+					uint8_t rtcp_buf[512];
+					ssize_t rn = recv(fd, rtcp_buf, sizeof(rtcp_buf), 0);
+					if (rn > 0 && rc->video.rtcp)
+						Compy_Rtcp_handle_incoming(rc->video.rtcp, rtcp_buf,
+									   rn);
+				} else {
+					handle_client_data(srv, fd);
+				}
+			}
+		}
+
+		/* Register any new UDP RTCP fds with epoll (created by SETUP) */
+		for (int i = 0; i < srv->client_count; i++) {
+			rsd_client_t *c = srv->clients[i];
+			if (c && c->udp_rtcp_fd >= 0 && !c->rtcp_in_epoll) {
+				fcntl(c->udp_rtcp_fd, F_SETFL,
+				      fcntl(c->udp_rtcp_fd, F_GETFL) | O_NONBLOCK);
+				struct epoll_event rtcp_ev = {.events = EPOLLIN,
+							      .data.fd = c->udp_rtcp_fd};
+				if (epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, c->udp_rtcp_fd,
+					      &rtcp_ev) == 0)
+					c->rtcp_in_epoll = true;
 			}
 		}
 
