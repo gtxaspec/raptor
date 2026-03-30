@@ -76,6 +76,7 @@ typedef struct rsd_client {
 	/* UDP socket fds (for cleanup) */
 	int udp_rtp_fd;
 	int udp_rtcp_fd;
+	bool rtcp_in_epoll; /* true once udp_rtcp_fd is added to epoll */
 
 	/* RTSP parse buffer */
 	char recv_buf[RSD_BUF_SIZE];
