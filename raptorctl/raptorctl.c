@@ -97,6 +97,7 @@ static void usage(void)
 		"RAD commands:\n"
 		"  rad set-volume <val>                Change input volume\n"
 		"  rad set-gain <val>                  Change input gain\n"
+		"  rad set-alc-gain <0-7>              ALC gain (T21/T31 only)\n"
 		"  rad set-ns <0|1> [level]            Noise suppression "
 		"(low/moderate/high/veryhigh)\n"
 		"  rad set-hpf <0|1>                   High-pass filter\n"

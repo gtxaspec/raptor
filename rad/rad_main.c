@@ -160,6 +160,26 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		CTRL_RESP(resp_buf);
 	}
 
+	if (strstr(cmd_json, "\"set-alc-gain\"")) {
+		if (rss_json_get_int(cmd_json, "value", &val) == 0) {
+			int ret = RSS_HAL_CALL(ctx->ops, audio_set_alc_gain, ctx->hal_ctx,
+					       ctx->ai_dev, 0, val);
+			if (ret == 0) {
+				rss_config_set_int(ctx->cfg, "audio", "alc_gain", val);
+				snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
+			} else {
+				snprintf(resp_buf, resp_buf_size,
+					 "{\"status\":\"error\",\"reason\":\"%s\"}",
+					 ret == RSS_ERR_NOTSUP ? "not supported on this platform"
+								: "failed");
+			}
+		} else {
+			snprintf(resp_buf, resp_buf_size,
+				 "{\"status\":\"error\",\"reason\":\"need value 0-7\"}");
+		}
+		CTRL_RESP(resp_buf);
+	}
+
 #ifdef RAPTOR_AUDIO_EFFECTS
 	if (strstr(cmd_json, "\"set-ns\"")) {
 		char level[16] = "";
