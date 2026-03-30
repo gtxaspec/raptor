@@ -138,7 +138,7 @@ static void generate_session_id(char *out, size_t out_size)
 /* ── Create client from SDP offer (shared by WHIP and WebTorrent) ── */
 
 rwd_client_t *rwd_client_from_offer(rwd_server_t *srv, const char *sdp, int stream_idx,
-				     char *sdp_answer, size_t sdp_answer_size)
+				    char *sdp_answer, size_t sdp_answer_size)
 {
 	if (stream_idx < 0 || stream_idx >= RWD_STREAM_COUNT)
 		stream_idx = 0;
@@ -222,8 +222,8 @@ static void handle_whip_post(rwd_server_t *srv, int fd, const char *body, size_t
 	(void)local_addr;
 
 	char sdp_answer[RWD_SDP_BUF_SIZE];
-	rwd_client_t *c = rwd_client_from_offer(srv, body, stream_idx, sdp_answer,
-						 sizeof(sdp_answer));
+	rwd_client_t *c =
+		rwd_client_from_offer(srv, body, stream_idx, sdp_answer, sizeof(sdp_answer));
 	if (!c) {
 		http_error(fd, "400 Bad Request");
 		return;

@@ -225,8 +225,7 @@ int rwd_dtls_export_srtp_keys(rwd_client_t *c, Compy_SrtpKeyMaterial *send_key,
 void rwd_crc32_init(void);
 int rwd_ice_process(rwd_server_t *srv, const uint8_t *buf, size_t len,
 		    const struct sockaddr_storage *from, socklen_t from_len);
-int rwd_ice_send_check(rwd_server_t *srv, rwd_client_t *c, const char *dest_ip,
-		        uint16_t dest_port);
+int rwd_ice_send_check(rwd_server_t *srv, rwd_client_t *c, const char *dest_ip, uint16_t dest_port);
 
 /* ── rwd_sdp.c ── */
 
@@ -238,7 +237,7 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 			  const struct sockaddr_storage *local_addr);
 rwd_client_t *rwd_client_from_offer(rwd_server_t *srv, const char *sdp, int stream_idx,
-				     char *sdp_answer, size_t sdp_answer_size);
+				    char *sdp_answer, size_t sdp_answer_size);
 
 /* ── rwd_media.c ── */
 
@@ -280,7 +279,7 @@ int rwd_webtorrent_start(rwd_webtorrent_t *wt, rwd_server_t *srv);
 void rwd_webtorrent_stop(rwd_webtorrent_t *wt);
 void rwd_webtorrent_rotate_key(rwd_webtorrent_t *wt);
 int rwd_stun_discover_srflx(int udp_fd, const char *server, int port, char *ip_out, size_t ip_size,
-			     uint16_t *port_out);
+			    uint16_t *port_out);
 
 #endif /* RAPTOR_WEBTORRENT */
 
