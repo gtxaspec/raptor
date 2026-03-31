@@ -341,8 +341,7 @@ static const char *ring_names[RWD_STREAM_COUNT] = {"main", "sub"};
 void *rwd_video_reader_thread(void *arg)
 {
 	rwd_server_t *srv = arg;
-	uint32_t video_ts_inc[RWD_STREAM_COUNT] = {0};
-	uint32_t video_rtp_ts[RWD_STREAM_COUNT] = {0};
+	int64_t video_ts_epoch[RWD_STREAM_COUNT] = {0};
 
 	/* Wait for at least the main ring */
 	while (*srv->running && !srv->video_rings[0]) {
@@ -361,9 +360,6 @@ void *rwd_video_reader_thread(void *arg)
 		if (!srv->video_rings[s])
 			continue;
 		const rss_ring_header_t *vhdr = rss_ring_get_header(srv->video_rings[s]);
-		uint32_t fps = vhdr->fps_num ? vhdr->fps_num : 25;
-		video_ts_inc[s] = RWD_VIDEO_CLOCK / fps;
-
 		srv->video_buf_sizes[s] =
 			vhdr->data_size / (vhdr->slot_count ? vhdr->slot_count : 1);
 		if (srv->video_buf_sizes[s] < 256 * 1024)
@@ -374,8 +370,7 @@ void *rwd_video_reader_thread(void *arg)
 			continue;
 		}
 		srv->video_read_seq[s] = vhdr->write_seq;
-		RSS_INFO("media: video reader[%d] started (fps=%u ts_inc=%u)", s, fps,
-			 video_ts_inc[s]);
+		RSS_INFO("media: video reader[%d] started", s);
 	}
 
 	while (*srv->running) {
@@ -404,8 +399,10 @@ void *rwd_video_reader_thread(void *arg)
 
 			srv->video_read_seq[s] = read_seq;
 
-			uint32_t rtp_ts = video_rtp_ts[s];
-			video_rtp_ts[s] += video_ts_inc[s];
+			if (video_ts_epoch[s] == 0)
+				video_ts_epoch[s] = meta.timestamp;
+			uint32_t rtp_ts = (uint32_t)((uint64_t)(meta.timestamp - video_ts_epoch[s])
+						     * RWD_VIDEO_CLOCK / 1000000);
 
 			pthread_mutex_lock(&srv->clients_lock);
 			for (int i = 0; i < RWD_MAX_CLIENTS; i++) {
@@ -461,8 +458,8 @@ void *rwd_audio_reader_thread(void *arg)
 
 	const rss_ring_header_t *ahdr = rss_ring_get_header(srv->audio_ring);
 	uint32_t audio_codec = ahdr->codec;
-	uint32_t samples_per_frame = 960; /* Opus: 20ms at 48kHz = 960 */
-	uint32_t audio_rtp_ts = 0;
+	uint32_t rtp_clock = 48000; /* Opus: 48kHz per RFC 7587 */
+	int64_t audio_ts_epoch = 0;
 
 	uint8_t audio_buf[4096];
 
@@ -491,8 +488,11 @@ void *rwd_audio_reader_thread(void *arg)
 				break;
 
 			srv->audio_read_seq = read_seq;
-			uint32_t rtp_ts = audio_rtp_ts;
-			audio_rtp_ts += samples_per_frame;
+
+			if (audio_ts_epoch == 0)
+				audio_ts_epoch = meta.timestamp;
+			uint32_t rtp_ts = (uint32_t)((uint64_t)(meta.timestamp - audio_ts_epoch)
+						     * rtp_clock / 1000000);
 
 			pthread_mutex_lock(&srv->clients_lock);
 			for (int i = 0; i < RWD_MAX_CLIENTS; i++) {
