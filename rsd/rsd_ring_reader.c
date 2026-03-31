@@ -98,12 +98,12 @@ void *rsd_video_reader_thread(void *arg)
 	rsd_server_t *srv = g_srv_for_readers;
 	int stream_idx = rctx->idx;
 
-	/* Get FPS from ring header for counter-based timestamps */
-	const rss_ring_header_t *vhdr = rss_ring_get_header(rctx->ring);
-	uint32_t video_ts_inc = 90000 / (vhdr->fps_num ? vhdr->fps_num : 25);
-	uint32_t video_rtp_ts = 0;
+	/* Wall-clock video timestamps: derive from IMP's CLOCK_MONOTONIC_RAW
+	 * timestamp, same clock source as audio. Both streams share the same
+	 * timebase so inter-stream drift is zero by construction. */
+	int64_t video_ts_epoch = 0;
 
-	RSS_INFO("video reader[%d] started (ts_inc=%u)", stream_idx, video_ts_inc);
+	RSS_INFO("video reader[%d] started", stream_idx);
 	while (*srv->running) {
 		int ret = rss_ring_wait(rctx->ring, 100);
 		if (ret != 0)
@@ -128,9 +128,10 @@ void *rsd_video_reader_thread(void *arg)
 
 		rctx->read_seq = read_seq;
 
-		/* Counter-based RTP timestamp for perfect monotonicity */
-		uint32_t rtp_ts = video_rtp_ts;
-		video_rtp_ts += video_ts_inc;
+		if (video_ts_epoch == 0)
+			video_ts_epoch = meta.timestamp;
+		uint32_t rtp_ts = (uint32_t)((uint64_t)(meta.timestamp - video_ts_epoch)
+					     * 90000 / 1000000);
 
 		pthread_mutex_lock(&srv->clients_lock);
 		for (int i = 0; i < srv->client_count; i++) {
@@ -226,11 +227,22 @@ void *rsd_audio_reader_thread(void *arg)
 		break;
 	}
 
-	RSS_INFO("audio codec=%u clock=%u spf=%u", audio_codec, audio_clock, samples_per_frame);
+	/* RTP clock for timestamp conversion — Opus uses 48kHz per RFC 7587 */
+	uint32_t rtp_clock = (audio_codec == RSD_CODEC_OPUS) ? 48000 : audio_clock;
+
+	RSS_INFO("audio codec=%u clock=%u rtp_clock=%u spf=%u", audio_codec, audio_clock,
+		 rtp_clock, samples_per_frame);
 
 	/* Buffer for audio frames */
 	uint8_t audio_buf[4096];
-	uint32_t audio_rtp_ts = 0;
+
+	/* Wall-clock audio timestamps: derive RTP ts directly from IMP's
+	 * CLOCK_MONOTONIC_RAW timestamp (same clock source as video ISP).
+	 * This eliminates ADC crystal drift — the audio ADC runs on its
+	 * own crystal (~16000.5 Hz vs nominal 16000), so counter-based
+	 * timestamps diverge ~0.12ms/s (~10s/day). Wall-clock timestamps
+	 * track real time, matching the video timeline exactly. */
+	int64_t audio_ts_epoch = 0;
 
 	/* Start from the latest ring position — don't replay stale audio */
 	const rss_ring_header_t *rhdr = rss_ring_get_header(srv->ring_audio);
@@ -257,13 +269,23 @@ void *rsd_audio_reader_thread(void *arg)
 
 			srv->audio_read_seq = read_seq;
 
-			uint32_t rtp_ts = audio_rtp_ts;
-			audio_rtp_ts += samples_per_frame;
+			/* Derive RTP timestamp from wall-clock (µs since
+			 * IMP_System_Init, CLOCK_MONOTONIC_RAW). */
+			if (audio_ts_epoch == 0)
+				audio_ts_epoch = meta.timestamp;
+			uint32_t rtp_ts = (uint32_t)((uint64_t)(meta.timestamp - audio_ts_epoch)
+						     * rtp_clock / 1000000);
 
 			pthread_mutex_lock(&srv->clients_lock);
 			for (int i = 0; i < srv->client_count; i++) {
 				rsd_client_t *c = srv->clients[i];
 				if (!c || !c->audio.playing)
+					continue;
+
+				/* Gate audio on video keyframe — don't send audio
+				 * until the client has received its first video
+				 * keyframe, so both RTP timelines start together. */
+				if (c->video.playing && !c->video_ts_base_set)
 					continue;
 
 				if (!c->audio_ts_base_set) {
