@@ -37,11 +37,11 @@ for ISP exposure queries via RVD's control socket).
 | RSD  | `rsd`  | RTSP Streaming Daemon. Reads video/audio rings and serves RTSP/RTP streams using the compy library. Supports Digest authentication and RTSPS (TLS via mbedTLS, compile with `TLS=1`). |
 | RAD  | `rad`  | Raw Audio Daemon. Captures PCM from the ISP audio input, optionally encodes (G.711 mu-law/A-law, L16, AAC, Opus), and publishes to the `audio` ring. Also handles speaker output via a `speaker` ring. Supports noise suppression, HPF, and AGC when libaudioProcess is available. |
 | ROD  | `rod`  | OSD Rendering Daemon. Renders timestamp, uptime, user text, and logo bitmaps into BGRA SHM double-buffers using libschrift. No HAL dependency -- RVD handles the hardware OSD regions. |
-| RHD  | `rhd`  | HTTP Streaming Daemon. Serves JPEG snapshots (`/snap.jpg`) and MJPEG streams (`/mjpeg`) from JPEG rings. Dual-stack IPv4/IPv6, Basic auth. |
+| RHD  | `rhd`  | HTTP Streaming Daemon. Serves JPEG snapshots (`/snap.jpg`) and MJPEG streams (`/mjpeg`) from JPEG rings. Dual-stack IPv4/IPv6, Basic auth. Optional HTTPS via mbedTLS (`[http] https = true`). |
 | RIC  | `ric`  | IR-Cut Controller. Polls ISP exposure via RVD's control socket and switches between day/night modes with configurable hysteresis. Controls IR-cut filter and IR LED GPIOs. |
 | RMR  | `rmr`  | Recording/Muxing Daemon. Reads H.264/H.265 + audio from rings and writes crash-safe fragmented MP4 segments to SD card. Own fMP4 muxer with zero external dependencies. |
 | RMD  | `rmd`  | Motion Detection Daemon. Queries RVD for IVS hardware motion results (configurable grid ROI), manages idle/active/cooldown state machine, triggers recording via RMR and GPIO output on motion events. |
-| RWD  | `rwd`  | WebRTC Daemon. Sends live H.264 + Opus to browsers and go2rtc via WHIP signaling with sub-second latency. ICE-lite, DTLS-SRTP (mbedTLS), SRTP (compy). Embedded player at `/webrtc`. Optional WebTorrent sharing (`WEBTORRENT=1`) enables external viewing without port forwarding via public tracker signaling + STUN NAT traversal. Requires `TLS=1` and `MBEDTLS_SSL_DTLS_SRTP`. |
+| RWD  | `rwd`  | WebRTC Daemon. Sends live H.264 + Opus to browsers and go2rtc via WHIP signaling with sub-second latency. ICE-lite, DTLS-SRTP (mbedTLS), SRTP (compy). Two-way audio backchannel (browser mic → camera speaker via Opus decode). HTTPS by default for signaling (enables `getUserMedia` Talk button). Embedded player at `/webrtc`. Optional WebTorrent sharing (`WEBTORRENT=1`) enables external viewing without port forwarding via public tracker signaling + STUN NAT traversal. Requires `TLS=1` and `MBEDTLS_SSL_DTLS_SRTP`. |
 
 ### Tools
 
@@ -178,6 +178,8 @@ raptorctl rad set-alc-gain 5          # ALC PGA gain 0-7 (T21/T31 only)
 raptorctl rad set-ns 1 moderate       # noise suppression (low/moderate/high/veryhigh)
 raptorctl rad set-hpf 1               # high-pass filter
 raptorctl rad set-agc 1 10 0          # AGC (target_level, compression)
+raptorctl rad ao-set-volume 80        # output (speaker) volume
+raptorctl rad ao-set-gain 25          # output (speaker) gain
 
 # Other
 raptorctl ric mode night              # force night mode
