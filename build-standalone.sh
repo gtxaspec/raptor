@@ -324,29 +324,31 @@ build_ingenic_lib() {
 }
 
 build_libc_shim() {
-    # The shim MUST be a .so even for static builds — its mmap override
-    # uses off >> 12 which is only correct for Ingenic SDK calls.
-    # Linking it statically would override mmap globally (including libc
-    # internals like malloc), causing bus errors on MIPS.
+    # The shim MUST be a .so (DT_NEEDED), even for --static builds.
+    # musl's dynamic linker does not interpose symbols from the executable
+    # into shared libraries — only .so → .so interposition works.
+    # The shim .so must be deployed to /usr/lib/ on the device.
+    local shimname="" shimsrc=""
     case "$LIBC" in
         uclibc)
-            [ -f "$SYSROOT_DIR/usr/lib/libuclibcshim.so" ] && return
+            shimname=uclibcshim
             clone_repo ingenic-uclibc https://github.com/gtxaspec/ingenic-uclibc "$UCLIBC_SHIM_VERSION"
-            echo "Building uclibc shim..."
-            ${CROSS_COMPILE}gcc -fPIC -shared -o "$SYSROOT_DIR/usr/lib/libuclibcshim.so" \
-                "$DEPS_DIR/ingenic-uclibc/uclibc_shim.c"
+            shimsrc="$DEPS_DIR/ingenic-uclibc/uclibc_shim.c"
             ;;
         musl)
-            [ -f "$SYSROOT_DIR/usr/lib/libmuslshim.so" ] && return
+            shimname=muslshim
             clone_repo ingenic-musl https://github.com/gtxaspec/ingenic-musl "$MUSL_SHIM_VERSION"
-            echo "Building musl shim..."
-            ${CROSS_COMPILE}gcc -fPIC -shared -o "$SYSROOT_DIR/usr/lib/libmuslshim.so" \
-                "$DEPS_DIR/ingenic-musl/musl_shim.c"
+            shimsrc="$DEPS_DIR/ingenic-musl/musl_shim.c"
             ;;
-        glibc)
-            # glibc doesn't need a shim — SDK libs are glibc-native
-            ;;
+        glibc) return ;;
     esac
+
+    [ -f "$SYSROOT_DIR/usr/lib/lib${shimname}.so" ] && return
+    echo "Building $LIBC shim..."
+    ${CROSS_COMPILE}gcc -fPIC -shared -o "$SYSROOT_DIR/usr/lib/lib${shimname}.so" "$shimsrc"
+    # Copy to build output so user knows to deploy it
+    mkdir -p "$SCRIPT_DIR/build"
+    cp -f "$SYSROOT_DIR/usr/lib/lib${shimname}.so" "$SCRIPT_DIR/build/"
 }
 
 build_mbedtls() {

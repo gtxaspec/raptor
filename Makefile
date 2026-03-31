@@ -104,8 +104,15 @@ SHIM_LIB := $(if $(wildcard $(SYSROOT)/usr/lib/libmuslshim.so $(SYSROOT)/lib/lib
              $(if $(wildcard $(SYSROOT)/usr/lib/libuclibcshim.so $(SYSROOT)/lib/libuclibcshim.so),-luclibcshim,))
 
 # System libs for HAL-linked daemons
-LDFLAGS_HAL := $(LDFLAGS_SYSROOT) -limp -lalog -lsysutils $(SHIM_LIB) -lpthread -lrt -lm -ldl -latomic
+# SHIM_LIB must come BEFORE Ingenic SDK libs — the dynamic linker resolves
+# symbols in DT_NEEDED order, so the shim's mmap must be loaded first.
+LDFLAGS_HAL := $(LDFLAGS_SYSROOT) $(SHIM_LIB) -limp -lalog -lsysutils -lpthread -lrt -lm -ldl -latomic
 LDFLAGS     := $(LDFLAGS_SYSROOT) $(SHIM_LIB) -lpthread -lrt -latomic
+
+# MIPS page size: Ingenic SoCs use 4KB pages but the toolchain defaults to
+# 64KB max-page-size. Mismatched alignment causes SIGBUS on musl/uclibc.
+LDFLAGS_HAL += -Wl,-z,max-page-size=0x1000
+LDFLAGS     += -Wl,-z,max-page-size=0x1000
 
 # Targets
 DAEMONS := rvd rsd rad rhd rod ric rmr rmd rwd

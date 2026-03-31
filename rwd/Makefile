@@ -16,7 +16,7 @@ $(BIN): $(OBJS)
 	$(Q)$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
 clean:
-	rm -f $(OBJS) $(OBJS:.o=.d) $(BIN)
+	rm -f $(OBJS) $(OBJS:.o=.d) $(BIN) rwd_webtorrent.o rwd_webtorrent.d
 
 -include $(OBJS:.o=.d)
 
