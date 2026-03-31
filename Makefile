@@ -36,10 +36,16 @@ CFLAGS += -I$(CURDIR)/$(IPC_DIR)/include
 CFLAGS += -I$(CURDIR)/$(COMMON_DIR)/include
 CFLAGS += $(EXTRA_CFLAGS)
 
-# Build info — generate header for rss_daemon_init() banner
+# Build info — generate header for rss_daemon_init() banner.
+# Write to raptor-common/include if available (standalone), else local dir.
 RSS_BUILD_HASH := $(shell git -C $(CURDIR) rev-parse --short HEAD 2>/dev/null || echo unknown)
 RSS_BUILD_TIME := $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
-RSS_BUILD_HDR  := $(CURDIR)/$(COMMON_DIR)/include/rss_build.h
+ifneq ($(wildcard $(CURDIR)/$(COMMON_DIR)/include),)
+RSS_BUILD_HDR := $(CURDIR)/$(COMMON_DIR)/include/rss_build.h
+else
+RSS_BUILD_HDR := $(CURDIR)/rss_build.h
+CFLAGS += -I$(CURDIR)
+endif
 $(shell printf '%s\n' \
 	'#define RSS_BUILD_HASH "$(RSS_BUILD_HASH)"' \
 	'#define RSS_BUILD_TIME "$(RSS_BUILD_TIME)"' > $(RSS_BUILD_HDR))
@@ -99,11 +105,16 @@ LIB_IPC    := $(CURDIR)/$(IPC_DIR)/librss_ipc.a
 LIB_COMMON := $(CURDIR)/$(COMMON_DIR)/librss_common.a
 LIB_COMPY  := $(COMPY_BUILD)/libcompy.a
 
-# TLS helper (compiled separately, only linked by daemons that need it)
-RSS_TLS_OBJ := $(CURDIR)/$(COMMON_DIR)/src/rss_tls.o
-$(RSS_TLS_OBJ): $(COMMON_DIR)/src/rss_tls.c $(COMMON_DIR)/include/rss_tls.h
+# TLS helper (compiled separately, only linked by daemons that need it).
+# Source is in raptor-common (standalone) or sysroot (buildroot).
+RSS_TLS_SRC := $(firstword $(wildcard $(CURDIR)/$(COMMON_DIR)/src/rss_tls.c) \
+                           $(wildcard $(SYSROOT)/usr/share/raptor-common/rss_tls.c))
+RSS_TLS_OBJ := $(CURDIR)/rss_tls.o
+ifneq ($(RSS_TLS_SRC),)
+$(RSS_TLS_OBJ): $(RSS_TLS_SRC)
 	@echo "  CC      rss_tls.c"
 	$(Q)$(CC) $(CFLAGS) -c $< -o $@
+endif
 
 # Sysroot for finding shared libs (set by Buildroot or manually)
 SYSROOT ?=
