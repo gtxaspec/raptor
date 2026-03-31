@@ -104,13 +104,18 @@ static void rwd_bc_recv_t_on_audio(VSelf, uint8_t payload_type, uint32_t timesta
 
 	rss_ring_t **ring_ptr = self->speaker_ring_ptr;
 	if (!*ring_ptr) {
-		*ring_ptr = rss_ring_create("speaker", 16, 64 * 1024);
+		/* Open existing ring if RAD already has it mapped, only
+		 * create new if none exists — avoids stale mmap issue
+		 * where RAD holds an old deleted SHM inode. */
+		*ring_ptr = rss_ring_open("speaker");
+		if (!*ring_ptr)
+			*ring_ptr = rss_ring_create("speaker", 16, 64 * 1024);
 		if (!*ring_ptr) {
-			RSS_WARN("backchannel: failed to create speaker ring");
+			RSS_WARN("backchannel: failed to open/create speaker ring");
 			return;
 		}
 		rss_ring_set_stream_info(*ring_ptr, 0x11, 0, 0, 0, 16000, 1, 0, 0);
-		RSS_INFO("backchannel: speaker ring created");
+		RSS_INFO("backchannel: speaker ring ready");
 	}
 
 	int16_t pcm48[960]; /* 20ms at 48kHz */
