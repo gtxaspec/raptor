@@ -103,6 +103,8 @@ static void usage(void)
 		"(low/moderate/high/veryhigh)\n"
 		"  rad set-hpf <0|1>                   High-pass filter\n"
 		"  rad set-agc <0|1> [target] [comp]   Automatic gain control\n"
+		"  rad ao-set-volume <val>             Change output (speaker) volume\n"
+		"  rad ao-set-gain <val>               Change output (speaker) gain\n"
 		"\n"
 		"ROD commands:\n"
 		"  rod set-text <text>                 Change OSD text string\n"
@@ -606,6 +608,20 @@ int main(int argc, char **argv)
 			return 1;
 		}
 		snprintf(json, sizeof(json), "{\"cmd\":\"set-gain\",\"value\":%s}", argv[3]);
+
+	} else if (strcmp(cmd, "ao-set-volume") == 0) {
+		if (argc < 4) {
+			fprintf(stderr, "Usage: raptorctl %s ao-set-volume <value>\n", daemon);
+			return 1;
+		}
+		snprintf(json, sizeof(json), "{\"cmd\":\"ao-set-volume\",\"value\":%s}", argv[3]);
+
+	} else if (strcmp(cmd, "ao-set-gain") == 0) {
+		if (argc < 4) {
+			fprintf(stderr, "Usage: raptorctl %s ao-set-gain <value>\n", daemon);
+			return 1;
+		}
+		snprintf(json, sizeof(json), "{\"cmd\":\"ao-set-gain\",\"value\":%s}", argv[3]);
 
 	} else if (strcmp(cmd, "set-ns") == 0) {
 		if (argc < 4) {
