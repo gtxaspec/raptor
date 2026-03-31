@@ -16,6 +16,10 @@
 #include <errno.h>
 #include <poll.h>
 #include <sys/socket.h>
+
+#ifdef RSS_HAS_TLS
+#include <rss_tls.h>
+#endif
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
@@ -111,12 +115,30 @@ static const char webrtc_html[] =
 	"}\n"
 	"</script></body></html>\n";
 
-/* ── HTTP response helpers ── */
+/* ── HTTP I/O helpers (plain or TLS) ── */
 
-/* NOTE: write() may do short writes but these are small HTTP responses
- * (< 1KB headers + SDP body) on a fresh TCP socket, so short writes
- * are not a practical concern here. SIGPIPE is ignored globally by
- * rss_signal_init() in the raptor-common daemon init. */
+#ifdef RSS_HAS_TLS
+static __thread rss_tls_conn_t *tls_conn; /* set per-request */
+#endif
+
+static ssize_t http_write(int fd, const void *buf, size_t len)
+{
+#ifdef RSS_HAS_TLS
+	if (tls_conn)
+		return rss_tls_write(tls_conn, buf, len);
+#endif
+	return write(fd, buf, len);
+}
+
+static ssize_t http_read(int fd, void *buf, size_t len)
+{
+#ifdef RSS_HAS_TLS
+	if (tls_conn)
+		return rss_tls_read(tls_conn, buf, len);
+#endif
+	return read(fd, buf, len);
+}
+
 static void http_send(int fd, const char *status, const char *content_type, const char *body,
 		      size_t body_len, const char *extra_headers)
 {
@@ -138,14 +160,23 @@ static void http_send(int fd, const char *status, const char *content_type, cons
 	if ((size_t)hdr_len > sizeof(hdr))
 		hdr_len = sizeof(hdr);
 
-	(void)!write(fd, hdr, hdr_len);
+	(void)!http_write(fd, hdr, hdr_len);
 	if (body && body_len > 0)
-		(void)!write(fd, body, body_len);
+		(void)!http_write(fd, body, body_len);
 }
 
 static void http_error(int fd, const char *status)
 {
 	http_send(fd, status, "text/plain", status, strlen(status), NULL);
+}
+
+static void http_close(int fd)
+{
+#ifdef RSS_HAS_TLS
+	rss_tls_close(tls_conn);
+	tls_conn = NULL;
+#endif
+	close(fd);
 }
 
 /* ── Generate session ID ── */
@@ -289,18 +320,49 @@ static void handle_whip_delete(rwd_server_t *srv, int fd, const char *session_id
 void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 			  const struct sockaddr_storage *local_addr)
 {
-	/* Non-blocking read — accept already set O_NONBLOCK.
-	 * WHIP clients send the full request in one TCP segment.
-	 * If nothing is ready yet, poll briefly (100ms) then give up. */
+#ifdef RSS_HAS_TLS
+	/* TLS handshake if HTTPS context available */
+	tls_conn = NULL;
+	if (srv->tls) {
+		tls_conn = rss_tls_accept(srv->tls, client_fd, 5000);
+		if (!tls_conn) {
+			http_close(client_fd);
+			return;
+		}
+	}
+#endif
+
+	/* Read HTTP request — may need multiple reads over TLS since
+	 * headers and body can arrive in separate TLS records. */
 	char buf[RWD_HTTP_BUF_SIZE];
-	ssize_t n = read(client_fd, buf, sizeof(buf) - 1);
-	if (n <= 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-		struct pollfd pfd = {.fd = client_fd, .events = POLLIN};
-		if (poll(&pfd, 1, 100) > 0)
-			n = read(client_fd, buf, sizeof(buf) - 1);
+	ssize_t n = 0;
+	for (int i = 0; i < 50 && n < (ssize_t)(sizeof(buf) - 1); i++) {
+		ssize_t r = http_read(client_fd, buf + n, sizeof(buf) - 1 - n);
+		if (r > 0) {
+			n += r;
+			buf[n] = '\0';
+			const char *hdr_end = strstr(buf, "\r\n\r\n");
+			if (hdr_end) {
+				const char *cl = strcasestr(buf, "Content-Length:");
+				if (!cl)
+					break; /* no body expected */
+				size_t clen = strtoul(cl + 15, NULL, 10);
+				if ((size_t)n >= (size_t)(hdr_end + 4 - buf) + clen)
+					break; /* full body received */
+			}
+		} else if (r == 0) {
+			break;
+		} else if (i == 0) {
+			/* First read failed — poll briefly for plain HTTP */
+			struct pollfd pfd = {.fd = client_fd, .events = POLLIN};
+			if (poll(&pfd, 1, 100) <= 0)
+				break;
+		} else {
+			usleep(5000);
+		}
 	}
 	if (n <= 0) {
-		close(client_fd);
+		http_close(client_fd);
 		return;
 	}
 	buf[n] = '\0';
@@ -309,21 +371,21 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 	char method[16], path[256];
 	if (sscanf(buf, "%15s %255s", method, path) != 2) {
 		http_error(client_fd, "400 Bad Request");
-		close(client_fd);
+		http_close(client_fd);
 		return;
 	}
 
 	/* Reject oversized requests */
 	if (n >= (ssize_t)(sizeof(buf) - 1)) {
 		http_error(client_fd, "414 URI Too Long");
-		close(client_fd);
+		http_close(client_fd);
 		return;
 	}
 
 	/* CORS preflight */
 	if (strcmp(method, "OPTIONS") == 0) {
 		http_send(client_fd, "204 No Content", "text/plain", NULL, 0, NULL);
-		close(client_fd);
+		http_close(client_fd);
 		return;
 	}
 
@@ -331,7 +393,7 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 	if (strcmp(method, "GET") == 0 && strcmp(path, "/webrtc") == 0) {
 		http_send(client_fd, "200 OK", "text/html; charset=utf-8", webrtc_html,
 			  sizeof(webrtc_html) - 1, "Cache-Control: no-cache\r\n");
-		close(client_fd);
+		http_close(client_fd);
 		return;
 	}
 
@@ -360,7 +422,7 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 		if (!body) {
 			RSS_WARN("WHIP: no body separator in request");
 			http_error(client_fd, "400 Bad Request");
-			close(client_fd);
+			http_close(client_fd);
 			return;
 		}
 		body += 4;
@@ -383,7 +445,7 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 		}
 
 		handle_whip_post(srv, client_fd, body, body_len, local_addr, stream_idx);
-		close(client_fd);
+		http_close(client_fd);
 		return;
 	}
 
@@ -392,11 +454,11 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 		const char *session_id = path + 6;
 		if (strlen(session_id) > 0) {
 			handle_whip_delete(srv, client_fd, session_id);
-			close(client_fd);
+			http_close(client_fd);
 			return;
 		}
 	}
 
 	http_error(client_fd, "404 Not Found");
-	close(client_fd);
+	http_close(client_fd);
 }

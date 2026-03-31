@@ -91,6 +91,12 @@ LIB_IPC    := $(CURDIR)/$(IPC_DIR)/librss_ipc.a
 LIB_COMMON := $(CURDIR)/$(COMMON_DIR)/librss_common.a
 LIB_COMPY  := $(COMPY_BUILD)/libcompy.a
 
+# TLS helper (compiled separately, only linked by daemons that need it)
+RSS_TLS_OBJ := $(CURDIR)/$(COMMON_DIR)/src/rss_tls.o
+$(RSS_TLS_OBJ): $(COMMON_DIR)/src/rss_tls.c $(COMMON_DIR)/include/rss_tls.h
+	@echo "  CC      rss_tls.c"
+	$(Q)$(CC) $(CFLAGS) -c $< -o $@
+
 # Sysroot for finding shared libs (set by Buildroot or manually)
 SYSROOT ?=
 ifneq ($(SYSROOT),)
@@ -162,11 +168,11 @@ rad: $(LIB_HAL) $(LIB_IPC) $(LIB_COMMON)
 		LIBS="$(LIB_HAL) $(LIB_IPC) $(LIB_COMMON)" \
 		LDFLAGS="$(LDFLAGS_HAL) $(LDFLAGS_AAC_ENC) $(LDFLAGS_OPUS)" Q="$(Q)"
 
-rhd: $(LIB_IPC) $(LIB_COMMON)
+rhd: $(LIB_IPC) $(LIB_COMMON) $(RSS_TLS_OBJ)
 	@echo "  BUILD   rhd"
-	$(Q)$(MAKE) -C rhd CC="$(CC)" CFLAGS="$(CFLAGS)" \
-		LIBS="$(LIB_IPC) $(LIB_COMMON)" \
-		LDFLAGS="$(LDFLAGS)" Q="$(Q)"
+	$(Q)$(MAKE) -C rhd CC="$(CC)" CFLAGS="$(CFLAGS) -DRSS_HAS_TLS" \
+		LIBS="$(LIB_IPC) $(LIB_COMMON) $(RSS_TLS_OBJ)" \
+		LDFLAGS="$(LDFLAGS) $(LDFLAGS_TLS)" Q="$(Q)"
 
 rod: $(LIB_IPC) $(LIB_COMMON)
 	@echo "  BUILD   rod"
@@ -192,10 +198,10 @@ rmd: $(LIB_IPC) $(LIB_COMMON)
 		LIBS="$(LIB_IPC) $(LIB_COMMON)" \
 		LDFLAGS="$(LDFLAGS)" Q="$(Q)"
 
-rwd: $(LIB_IPC) $(LIB_COMMON) $(LIB_COMPY)
+rwd: $(LIB_IPC) $(LIB_COMMON) $(LIB_COMPY) $(RSS_TLS_OBJ)
 	@echo "  BUILD   rwd"
-	$(Q)$(MAKE) -C rwd CC="$(CC)" CFLAGS="$(CFLAGS) $(COMPY_CFLAGS) -DMBEDTLS_ALLOW_PRIVATE_ACCESS" \
-		LIBS="$(LIB_IPC) $(LIB_COMMON) $(LIB_COMPY)" \
+	$(Q)$(MAKE) -C rwd CC="$(CC)" CFLAGS="$(CFLAGS) $(COMPY_CFLAGS) -DMBEDTLS_ALLOW_PRIVATE_ACCESS -DRSS_HAS_TLS" \
+		LIBS="$(LIB_IPC) $(LIB_COMMON) $(LIB_COMPY) $(RSS_TLS_OBJ)" \
 		LDFLAGS="$(LDFLAGS) $(LDFLAGS_TLS) -lopus" WEBTORRENT=$(WEBTORRENT) Q="$(Q)"
 
 # -- Tools --

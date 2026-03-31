@@ -19,6 +19,10 @@
 #include <stdint.h>
 #include <netinet/in.h>
 
+#ifdef RSS_HAS_TLS
+#include <rss_tls.h>
+#endif
+
 #include <mbedtls/ssl.h>
 #include <mbedtls/entropy.h>
 #include <mbedtls/ctr_drbg.h>
@@ -30,7 +34,7 @@
 
 #define RWD_MAX_CLIENTS	   4
 #define RWD_UDP_BUF_SIZE   2048
-#define RWD_HTTP_BUF_SIZE  8192
+#define RWD_HTTP_BUF_SIZE  16384
 #define RWD_SDP_BUF_SIZE   4096
 #define RWD_SESSION_ID_LEN 16
 
@@ -214,6 +218,10 @@ struct rwd_server {
 	bool has_srflx;
 
 	void *webtorrent; /* rwd_webtorrent_t* if active, NULL otherwise */
+
+#ifdef RSS_HAS_TLS
+	rss_tls_ctx_t *tls; /* HTTPS for signaling (NULL = plain HTTP) */
+#endif
 };
 
 /* ── rwd_dtls.c ── */

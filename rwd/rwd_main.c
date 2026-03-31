@@ -624,6 +624,19 @@ int main(int argc, char **argv)
 		goto cleanup;
 	}
 
+#ifdef RSS_HAS_TLS
+	/* HTTPS for signaling — reuses the same cert/key as DTLS.
+	 * Enabled by default; disable with https = false in [webrtc]. */
+	bool https_enabled = rss_config_get_bool(dctx.cfg, "webrtc", "https", true);
+	if (https_enabled) {
+		srv.tls = rss_tls_init(cert_path, key_path);
+		if (srv.tls)
+			RSS_INFO("HTTPS enabled for signaling");
+		else
+			RSS_WARN("HTTPS init failed, falling back to HTTP");
+	}
+#endif
+
 	/* Create sockets */
 	srv.udp_fd = create_udp_socket(srv.udp_port);
 	if (srv.udp_fd < 0) {
@@ -692,6 +705,9 @@ cleanup:
 		rwd_dtls_free(srv.dtls);
 		free(srv.dtls);
 	}
+#ifdef RSS_HAS_TLS
+	rss_tls_free(srv.tls);
+#endif
 	pthread_mutex_destroy(&srv.clients_lock);
 	rss_config_free(dctx.cfg);
 	rss_daemon_cleanup("rwd");
