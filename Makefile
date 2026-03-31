@@ -36,6 +36,14 @@ CFLAGS += -I$(CURDIR)/$(IPC_DIR)/include
 CFLAGS += -I$(CURDIR)/$(COMMON_DIR)/include
 CFLAGS += $(EXTRA_CFLAGS)
 
+# Build info — generate header for rss_daemon_init() banner
+RSS_BUILD_HASH := $(shell git -C $(CURDIR) rev-parse --short HEAD 2>/dev/null || echo unknown)
+RSS_BUILD_TIME := $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
+RSS_BUILD_HDR  := $(CURDIR)/$(COMMON_DIR)/include/rss_build.h
+$(shell printf '%s\n' \
+	'#define RSS_BUILD_HASH "$(RSS_BUILD_HASH)"' \
+	'#define RSS_BUILD_TIME "$(RSS_BUILD_TIME)"' > $(RSS_BUILD_HDR))
+
 ifeq ($(DEBUG),1)
 CFLAGS += -O0 -g
 else
