@@ -293,7 +293,10 @@ AR="${CROSS_COMPILE}ar"
 
 build_ingenic_lib() {
     local src="$DEPS_DIR/ingenic-lib"
-    local libdir="$src/$PLATFORM_UPPER/lib/$SDK_VERSION/$LIBC/$GCC_VER"
+    # SDK libs are built for glibc or uclibc only — musl uses the uclibc builds
+    local sdk_libc="$LIBC"
+    [ "$sdk_libc" = "musl" ] && sdk_libc=uclibc
+    local libdir="$src/$PLATFORM_UPPER/lib/$SDK_VERSION/$sdk_libc/$GCC_VER"
 
     if [ ! -d "$libdir" ]; then
         echo "ERROR: Ingenic SDK libs not found at $libdir"
@@ -302,7 +305,7 @@ build_ingenic_lib() {
         exit 1
     fi
 
-    echo "Installing Ingenic SDK libs from $SDK_VERSION/$LIBC/$GCC_VER"
+    echo "Installing Ingenic SDK libs from $SDK_VERSION/$sdk_libc/$GCC_VER"
     cp -f "$libdir"/*.so "$SYSROOT_DIR/usr/lib/"
 
     # libalog: T40/T41 use their own, others use T31 1.1.6 uclibc
@@ -310,8 +313,8 @@ build_ingenic_lib() {
         t40|t41)
             cp -f "$libdir/libalog.so" "$SYSROOT_DIR/usr/lib/" ;;
         *)
-            if [ "$LIBC" = "uclibc" ]; then
-                local alog="$src/T31/lib/1.1.6/$LIBC/$GCC_VER/libalog.so"
+            if [ "$sdk_libc" = "uclibc" ]; then
+                local alog="$src/T31/lib/1.1.6/uclibc/$GCC_VER/libalog.so"
             else
                 local alog="$libdir/libalog.so"
             fi
