@@ -283,24 +283,38 @@ static void handle_udp_packet(rwd_server_t *srv, const uint8_t *buf, size_t len,
 
 	/* RTP/RTCP: 0x80-0xBF */
 	if (first >= 0x80 && first <= 0xBF) {
+		if (len < 12)
+			return;
+
 		/* Check for RTCP feedback (PLI/FIR) — the first 8 bytes of
 		 * SRTCP are unencrypted, so we can read PT and FMT directly.
 		 * PT=206 (PSFB): FMT=1=PLI, FMT=4=FIR → request IDR */
-		if (len >= 12) {
-			uint8_t pt = buf[1] & 0x7F;
-			uint8_t fmt = buf[0] & 0x1F;
-			if (pt == 206 && (fmt == 1 || fmt == 4)) {
-				pthread_mutex_lock(&srv->clients_lock);
-				rwd_client_t *c = find_client_by_addr(srv, from, from_len);
-				if (c && c->sending) {
-					int si = c->stream_idx;
-					if (si >= 0 && si < RWD_STREAM_COUNT &&
-					    srv->video_rings[si])
-						rss_ring_request_idr(srv->video_rings[si]);
-				}
-				pthread_mutex_unlock(&srv->clients_lock);
+		uint8_t pt = buf[1] & 0x7F;
+		uint8_t fmt = buf[0] & 0x1F;
+		if (pt == 206 && (fmt == 1 || fmt == 4)) {
+			pthread_mutex_lock(&srv->clients_lock);
+			rwd_client_t *c = find_client_by_addr(srv, from, from_len);
+			if (c && c->sending) {
+				int si = c->stream_idx;
+				if (si >= 0 && si < RWD_STREAM_COUNT &&
+				    srv->video_rings[si])
+					rss_ring_request_idr(srv->video_rings[si]);
+			}
+			pthread_mutex_unlock(&srv->clients_lock);
+		}
+
+		/* Feed all incoming RTP/RTCP to backchannel receiver.
+		 * Copy to mutable buffer — SRTP decrypt is in-place. */
+		pthread_mutex_lock(&srv->clients_lock);
+		rwd_client_t *c = find_client_by_addr(srv, from, from_len);
+		if (c && c->srtp_recv) {
+			uint8_t rtp_buf[RWD_UDP_BUF_SIZE];
+			if (len <= sizeof(rtp_buf)) {
+				memcpy(rtp_buf, buf, len);
+				rwd_media_feed_rtp(c, rtp_buf, len);
 			}
 		}
+		pthread_mutex_unlock(&srv->clients_lock);
 		return;
 	}
 }

@@ -275,7 +275,7 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 
 	/* Audio m-line (if browser offered Opus) */
 	if (c->offer.has_audio && c->offer.audio_pt >= 0) {
-		APPEND("m=audio %d UDP/TLS/RTP/SAVPF %d", srv->udp_port, c->offer.audio_pt);
+		APPEND("m=audio %d UDP/TLS/RTP/SAVPF %d 0", srv->udp_port, c->offer.audio_pt);
 		APPEND("c=IN IP4 %s", srv->local_ip);
 		APPEND("a=rtcp-mux");
 		APPEND("a=rtcp-rsize");
@@ -284,12 +284,13 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 		APPEND("a=fingerprint:%s", srv->dtls->fingerprint);
 		APPEND("a=setup:passive");
 		APPEND("a=mid:%s", c->offer.mid_audio[0] ? c->offer.mid_audio : "1");
-		APPEND("a=sendonly");
+		APPEND("a=sendrecv");
 		/* NOTE: sdes:mid extmap intentionally omitted — pion requires
 		 * HandleUndeclaredSSRCWithoutAnswer for PT-based track matching.
 		 * go2rtc sets this internally for webrtc: sources. */
 		APPEND("a=rtpmap:%d opus/48000/2", c->offer.audio_pt);
 		APPEND("a=fmtp:%d minptime=10;useinbandfec=1", c->offer.audio_pt);
+		APPEND("a=rtpmap:0 PCMU/8000");
 		APPEND("a=ssrc:%u cname:raptor", c->audio_ssrc);
 		APPEND("a=candidate:1 1 UDP 2130706431 %s %d typ host", srv->local_ip,
 		       srv->udp_port);

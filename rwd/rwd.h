@@ -147,6 +147,12 @@ struct rwd_client {
 	uint32_t video_ssrc;
 	uint32_t audio_ssrc;
 
+	/* Backchannel (browser → camera audio) */
+	Compy_SrtpRecvCtx *srtp_recv;	  /* decrypt incoming SRTP */
+	Compy_Backchannel *backchannel;	  /* RTP receiver + audio callback */
+	rss_ring_t *speaker_ring;	  /* output ring for RAD playback */
+	void *bc_recv;			  /* rwd_bc_recv_t, kept alive for callback */
+
 	/* Media state */
 	int stream_idx; /* 0=main, 1=sub */
 	bool sending;
@@ -245,6 +251,7 @@ Compy_Transport rwd_transport_sendto(int fd, const struct sockaddr_storage *addr
 				     socklen_t addr_len);
 int rwd_media_setup(rwd_client_t *c);
 void rwd_media_teardown(rwd_client_t *c);
+void rwd_media_feed_rtp(rwd_client_t *c, uint8_t *data, size_t len);
 void *rwd_video_reader_thread(void *arg);
 void *rwd_audio_reader_thread(void *arg);
 

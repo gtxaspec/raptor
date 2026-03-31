@@ -12,6 +12,7 @@ video{width:100%;max-height:85vh;object-fit:contain;background:#000}
 button{margin:5px;padding:8px 20px;font-size:16px;cursor:pointer;
   border:1px solid #555;background:#222;color:#fff;border-radius:4px}
 button:hover{background:#333}
+button.active{background:#600;border-color:#a00}
 select{margin:5px;padding:8px;font-size:16px;background:#222;color:#fff;
   border:1px solid #555;border-radius:4px}
 .error{color:#e55}
@@ -22,11 +23,12 @@ select{margin:5px;padding:8px;font-size:16px;background:#222;color:#fff;
   <select id="stream"><option value="0">Main</option><option value="1">Sub</option></select>
   <button id="btn" onclick="toggle()">Connect</button>
   <button id="mute" onclick="toggleMute()" style="display:none">Unmute</button>
+  <button id="talk" onclick="toggleTalk()" style="display:none">Talk</button>
   <span id="status">Ready</span>
 </div>
 <script>
 const TRACKERS=['wss://tracker.openwebtorrent.com','wss://tracker.webtorrent.dev'];
-let pc=null,ws=null;
+let pc=null,ws=null,micStream=null,micSender=null;
 
 const v=document.getElementById('v');
 const btn=document.getElementById('btn');
@@ -124,7 +126,12 @@ async function start(){
     ]
   });
   pc.addTransceiver('video',{direction:'recvonly'});
-  pc.addTransceiver('audio',{direction:'recvonly'});
+  const at=pc.addTransceiver('audio',{direction:'sendrecv'});
+  try{const caps=RTCRtpSender.getCapabilities('audio').codecs;
+    const pcmu=caps.filter(c=>c.mimeType==='audio/PCMU');
+    const opus=caps.filter(c=>c.mimeType==='audio/opus');
+    if(pcmu.length)at.setCodecPreferences([...pcmu,...opus]);
+  }catch(e){}
 
   pc.ontrack=e=>{
     if(!v.srcObject)v.srcObject=new MediaStream();
@@ -180,6 +187,8 @@ async function start(){
     try{msg=JSON.parse(e.data)}catch(err){return}
     if(msg.answer&&msg.answer.sdp&&pc){
       await pc.setRemoteDescription({type:'answer',sdp:msg.answer.sdp});
+      if(msg.answer.sdp.includes('a=sendrecv'))
+        document.getElementById('talk').style.display='';
       st.textContent='Connecting...';
     }
   };
@@ -201,16 +210,37 @@ async function start(){
 }
 
 function stop(){
+  stopTalk();
   if(ws){ws.close();ws=null}
   if(pc){pc.close();pc=null}
   v.srcObject=null;
   btn.textContent='Connect';
   document.getElementById('mute').style.display='none';
+  document.getElementById('talk').style.display='none';
   document.getElementById('stream').disabled=false;
   if(!st.className)st.textContent='Disconnected';
 }
 
 function toggle(){pc?stop():start()}
 function toggleMute(){v.muted=!v.muted;document.getElementById('mute').textContent=v.muted?'Unmute':'Mute'}
+async function toggleTalk(){
+  if(micStream){stopTalk();return}
+  try{
+    micStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
+    const track=micStream.getAudioTracks()[0];
+    const txcv=pc.getTransceivers().find(t=>t.receiver.track&&t.receiver.track.kind==='audio');
+    if(txcv){txcv.sender.replaceTrack(track);micSender=txcv.sender}
+    else{micSender=pc.addTrack(track,micStream)}
+    document.getElementById('talk').textContent='Stop Talk';
+    document.getElementById('talk').classList.add('active');
+  }catch(e){st.textContent='Mic: '+e.message}
+}
+function stopTalk(){
+  if(micStream){micStream.getTracks().forEach(t=>t.stop());micStream=null}
+  if(micSender&&pc){try{micSender.replaceTrack(null)}catch(e){}}
+  micSender=null;
+  document.getElementById('talk').textContent='Talk';
+  document.getElementById('talk').classList.remove('active');
+}
 </script>
 </body></html>

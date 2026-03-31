@@ -14,6 +14,7 @@
 #include <inttypes.h>
 #include <pthread.h>
 #include <sys/socket.h>
+#include <opus/opus.h>
 
 #include "rwd.h"
 
@@ -75,6 +76,85 @@ Compy_Transport rwd_transport_sendto(int fd, const struct sockaddr_storage *addr
 	s->addr_len = addr_len;
 	return DYN(RwdUdpSender, Compy_Transport, s);
 }
+
+/* ── Backchannel audio receiver (browser mic → speaker ring) ── */
+
+typedef struct {
+	rss_ring_t **speaker_ring_ptr;
+	OpusDecoder *opus_dec;
+} rwd_bc_recv_t;
+
+static int16_t ulaw_decode(uint8_t ulaw)
+{
+	ulaw = ~ulaw;
+	int sign = (ulaw & 0x80);
+	int exponent = (ulaw >> 4) & 0x07;
+	int mantissa = ulaw & 0x0f;
+	int magnitude = ((mantissa << 3) + 0x84) << exponent;
+	magnitude -= 0x84;
+	return (int16_t)(sign ? -magnitude : magnitude);
+}
+
+static void rwd_bc_recv_t_on_audio(VSelf, uint8_t payload_type, uint32_t timestamp, uint32_t ssrc,
+				   U8Slice99 payload)
+{
+	VSELF(rwd_bc_recv_t);
+	(void)timestamp;
+	(void)ssrc;
+
+	rss_ring_t **ring_ptr = self->speaker_ring_ptr;
+	if (!*ring_ptr) {
+		*ring_ptr = rss_ring_create("speaker", 16, 64 * 1024);
+		if (!*ring_ptr) {
+			RSS_WARN("backchannel: failed to create speaker ring");
+			return;
+		}
+		rss_ring_set_stream_info(*ring_ptr, 0x11, 0, 0, 0, 16000, 1, 0, 0);
+		RSS_INFO("backchannel: speaker ring created");
+	}
+
+	int16_t pcm48[960]; /* 20ms at 48kHz */
+	int16_t pcm16[320]; /* 20ms at 16kHz */
+
+	if (payload_type == 0) {
+		/* PCMU/8000 → PCM16, upsample 8kHz→16kHz (duplicate samples) */
+		int16_t pcm_up[1920];
+		int n = (int)payload.len;
+		if (n > 960)
+			n = 960;
+		for (int i = 0; i < n; i++) {
+			int16_t s = ulaw_decode(payload.ptr[i]);
+			pcm_up[i * 2] = s;
+			pcm_up[i * 2 + 1] = s;
+		}
+		rss_ring_publish(*ring_ptr, (const uint8_t *)pcm_up, n * 4,
+				 rss_timestamp_us(), 0, 0);
+	} else if (self->opus_dec && payload.len > 0) {
+		/* Opus → PCM16 at 48kHz, downsample 3:1 to 16kHz */
+		int samples = opus_decode(self->opus_dec, payload.ptr, (opus_int32)payload.len,
+					  pcm48, 960, 0);
+		if (samples > 0) {
+			int out_samples = samples / 3;
+			for (int i = 0; i < out_samples; i++)
+				pcm16[i] = pcm48[i * 3];
+			rss_ring_publish(*ring_ptr, (const uint8_t *)pcm16, out_samples * 2,
+					 rss_timestamp_us(), 0, 0);
+		}
+	}
+}
+
+static void rwd_bc_recv_t_drop(VSelf)
+{
+	VSELF(rwd_bc_recv_t);
+	if (self->opus_dec)
+		opus_decoder_destroy(self->opus_dec);
+}
+
+impl(Compy_AudioReceiver, rwd_bc_recv_t);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-const-variable"
+impl(Compy_Droppable, rwd_bc_recv_t);
+#pragma GCC diagnostic pop
 
 /* ── Set up per-client SRTP/RTP/NAL stack ── */
 
@@ -144,6 +224,35 @@ int rwd_media_setup(rwd_client_t *c)
 		}
 	}
 
+	/* Backchannel: SRTP recv context + Compy_Backchannel for incoming audio.
+	 * Accept Opus (PT from offer) — browsers send Opus over WebRTC.
+	 * Also accept PCMU (PT 0) as fallback. */
+	rwd_bc_recv_t *bc = calloc(1, sizeof(rwd_bc_recv_t));
+	if (bc) {
+		bc->speaker_ring_ptr = &c->speaker_ring;
+
+		int err;
+		bc->opus_dec = opus_decoder_create(48000, 1, &err);
+		if (err != OPUS_OK) {
+			RSS_WARN("media: opus decoder init failed: %d", err);
+			bc->opus_dec = NULL;
+		}
+		c->bc_recv = bc;
+
+		int bc_pt = c->offer.audio_pt > 0 ? c->offer.audio_pt : RWD_AUDIO_PT;
+		Compy_BackchannelConfig bc_cfg = {
+			.payload_type = (uint8_t)bc_pt,
+			.clock_rate = RWD_AUDIO_CLOCK,
+		};
+		c->backchannel =
+			Compy_Backchannel_new(bc_cfg, DYN(rwd_bc_recv_t, Compy_AudioReceiver, bc));
+
+		c->srtp_recv = compy_srtp_recv_new(suite, &recv_key);
+		if (c->srtp_recv)
+			RSS_INFO("media: backchannel ready (pt=%d, opus decoder %s)",
+				 bc_pt, bc->opus_dec ? "ok" : "failed");
+	}
+
 	c->media_ready = true;
 	c->sending = true;
 	c->waiting_keyframe = true;
@@ -184,6 +293,46 @@ void rwd_media_teardown(rwd_client_t *c)
 	c->rtcp_audio = NULL;
 	memset(&c->srtp_video, 0, sizeof(c->srtp_video));
 	memset(&c->srtp_audio, 0, sizeof(c->srtp_audio));
+
+	/* Backchannel cleanup */
+	if (c->backchannel) {
+		VCALL(DYN(Compy_Backchannel, Compy_Droppable, c->backchannel), drop);
+		c->backchannel = NULL;
+	}
+	free(c->bc_recv);
+	c->bc_recv = NULL;
+	if (c->srtp_recv) {
+		compy_srtp_recv_free(c->srtp_recv);
+		c->srtp_recv = NULL;
+	}
+	if (c->speaker_ring) {
+		rss_ring_destroy(c->speaker_ring);
+		c->speaker_ring = NULL;
+	}
+}
+
+/* ── Feed incoming SRTP/SRTCP to backchannel receiver ── */
+
+void rwd_media_feed_rtp(rwd_client_t *c, uint8_t *data, size_t len)
+{
+	if (!c->srtp_recv || !c->backchannel)
+		return;
+
+	Compy_RtpReceiver *recv = Compy_Backchannel_get_receiver(c->backchannel);
+	if (!recv)
+		return;
+
+	/* Determine RTP vs RTCP by raw byte[1] (RFC 5761):
+	 * RTCP types 200-209 don't overlap with RTP dynamic PTs (96-127
+	 * without marker, 224-255 with marker). */
+	uint8_t ptype = data[1];
+	if (ptype >= 200 && ptype <= 209) {
+		if (compy_srtcp_recv_unprotect(c->srtp_recv, data, &len) == 0)
+			Compy_RtpReceiver_feed(recv, COMPY_CHANNEL_RTCP, data, len);
+	} else {
+		if (compy_srtp_recv_unprotect(c->srtp_recv, data, &len) == 0)
+			Compy_RtpReceiver_feed(recv, COMPY_CHANNEL_RTP, data, len);
+	}
 }
 
 /* ── Annex B start code scanner (handles both 3-byte and 4-byte) ── */
