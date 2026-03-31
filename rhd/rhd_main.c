@@ -27,6 +27,7 @@
 #include <rss_ipc.h>
 #include <rss_common.h>
 #include <rss_net.h>
+#include <rss_http.h>
 #ifdef RSS_HAS_TLS
 #include <rss_tls.h>
 #endif
@@ -93,43 +94,7 @@ typedef struct {
 #define client_addr_str rss_addr_str
 #define client_port     rss_addr_port
 
-/* ── Base64 decode (RFC 4648) ── */
-
-/* Base64 decode table — built once at startup, 0xFF = invalid */
-static uint8_t b64_table[256];
-
-static void b64_init(void)
-{
-	static const char b64_chars[] =
-		"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-	memset(b64_table, 0xFF, sizeof(b64_table));
-	for (int i = 0; b64_chars[i]; i++)
-		b64_table[(uint8_t)b64_chars[i]] = (uint8_t)i;
-}
-
-static int base64_decode(const char *in, size_t in_len, char *out, size_t out_max)
-{
-	size_t out_len = 0;
-	uint32_t buf = 0;
-	int bits = 0;
-
-	for (size_t i = 0; i < in_len && in[i] != '='; i++) {
-		uint8_t v = b64_table[(uint8_t)in[i]];
-		if (v == 0xFF)
-			continue; /* skip invalid chars */
-		buf = (buf << 6) | v;
-		bits += 6;
-		if (bits >= 8) {
-			bits -= 8;
-			if (out_len >= out_max)
-				return -1;
-			out[out_len++] = (char)(buf >> bits);
-		}
-	}
-	if (out_len < out_max)
-		out[out_len] = '\0';
-	return (int)out_len;
-}
+/* Base64 and HTTP auth moved to raptor-common (rss_http.h) */
 
 /* ── TLS-aware I/O wrappers ── */
 
@@ -254,46 +219,10 @@ static void http_401(rhd_client_t *c)
 	rhd_write(c, body, strlen(body));
 }
 
-/* Check HTTP Basic auth. Returns true if authorized. */
+/* Auth wrapper using shared rss_http helper */
 static bool http_check_auth(const rhd_server_t *srv, const char *request)
 {
-	/* No auth configured — allow all */
-	if (!srv->auth_user[0])
-		return true;
-
-	/* Search for header on a line boundary (after \n or at request start) */
-	const char *needle = "Authorization: Basic ";
-	const char *auth = NULL;
-	const char *p = request;
-	while ((p = strstr(p, needle)) != NULL) {
-		if (p == request || *(p - 1) == '\n') {
-			auth = p + strlen(needle);
-			break;
-		}
-		p++;
-	}
-	if (!auth)
-		return false;
-
-	/* Find end of base64 value */
-	const char *end = auth;
-	while (*end && *end != '\r' && *end != '\n' && *end != ' ')
-		end++;
-
-	char decoded[256];
-	int dlen = base64_decode(auth, (size_t)(end - auth), decoded, sizeof(decoded) - 1);
-	if (dlen <= 0)
-		return false;
-	decoded[dlen] = '\0';
-
-	/* decoded is "username:password" */
-	char *colon = strchr(decoded, ':');
-	if (!colon)
-		return false;
-	*colon = '\0';
-
-	return rss_secure_compare(decoded, srv->auth_user) &&
-	       rss_secure_compare(colon + 1, srv->auth_pass);
+	return rss_http_check_basic_auth(request, srv->auth_user, srv->auth_pass);
 }
 
 static void http_send_mjpeg_header(rhd_client_t *c)
@@ -813,7 +742,7 @@ int main(int argc, char **argv)
 	if (ret != 0)
 		return ret < 0 ? 1 : 0;
 
-	b64_init();
+	rss_base64_init();
 
 	if (!rss_config_get_bool(ctx.cfg, "http", "enabled", true)) {
 		RSS_INFO("HTTP disabled in config");
