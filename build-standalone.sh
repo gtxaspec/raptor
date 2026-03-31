@@ -324,32 +324,24 @@ build_ingenic_lib() {
 }
 
 build_libc_shim() {
+    # The shim MUST be a .so even for static builds — its mmap override
+    # uses off >> 12 which is only correct for Ingenic SDK calls.
+    # Linking it statically would override mmap globally (including libc
+    # internals like malloc), causing bus errors on MIPS.
     case "$LIBC" in
         uclibc)
+            [ -f "$SYSROOT_DIR/usr/lib/libuclibcshim.so" ] && return
             clone_repo ingenic-uclibc https://github.com/gtxaspec/ingenic-uclibc "$UCLIBC_SHIM_VERSION"
-            local src="$DEPS_DIR/ingenic-uclibc/uclibc_shim.c"
-            if [ "$OPT_STATIC" = 1 ]; then
-                [ -f "$DEPS_DIR/uclibc_shim.o" ] && return
-                echo "Building uclibc shim (object)..."
-                ${CROSS_COMPILE}gcc -Os -c -o "$DEPS_DIR/uclibc_shim.o" "$src"
-            else
-                [ -f "$SYSROOT_DIR/usr/lib/libuclibcshim.so" ] && return
-                echo "Building uclibc shim..."
-                ${CROSS_COMPILE}gcc -fPIC -shared -o "$SYSROOT_DIR/usr/lib/libuclibcshim.so" "$src"
-            fi
+            echo "Building uclibc shim..."
+            ${CROSS_COMPILE}gcc -fPIC -shared -o "$SYSROOT_DIR/usr/lib/libuclibcshim.so" \
+                "$DEPS_DIR/ingenic-uclibc/uclibc_shim.c"
             ;;
         musl)
+            [ -f "$SYSROOT_DIR/usr/lib/libmuslshim.so" ] && return
             clone_repo ingenic-musl https://github.com/gtxaspec/ingenic-musl "$MUSL_SHIM_VERSION"
-            local src="$DEPS_DIR/ingenic-musl/musl_shim.c"
-            if [ "$OPT_STATIC" = 1 ]; then
-                [ -f "$DEPS_DIR/musl_shim.o" ] && return
-                echo "Building musl shim (object)..."
-                ${CROSS_COMPILE}gcc -Os -c -o "$DEPS_DIR/musl_shim.o" "$src"
-            else
-                [ -f "$SYSROOT_DIR/usr/lib/libmuslshim.so" ] && return
-                echo "Building musl shim..."
-                ${CROSS_COMPILE}gcc -fPIC -shared -o "$SYSROOT_DIR/usr/lib/libmuslshim.so" "$src"
-            fi
+            echo "Building musl shim..."
+            ${CROSS_COMPILE}gcc -fPIC -shared -o "$SYSROOT_DIR/usr/lib/libmuslshim.so" \
+                "$DEPS_DIR/ingenic-musl/musl_shim.c"
             ;;
         glibc)
             # glibc doesn't need a shim — SDK libs are glibc-native
@@ -679,17 +671,6 @@ COMPY_CFLAGS="-I$SYSROOT_DIR/usr/include"
 TARGETS="rvd rsd rad rhd rod ric rmr rmd raptorctl ringdump rac"
 [ "$OPT_TLS" = 1 ] && TARGETS="$TARGETS rwd"
 
-# For static builds, override SHIM_LIB to link the shim .o directly
-# into each binary with -rdynamic (exports symbols for libimp.so).
-# No .so files needed on the device.
-SHIM_ARG=""
-if [ "$OPT_STATIC" = 1 ] && [ "$LIBC" != "glibc" ]; then
-    case "$LIBC" in
-        uclibc) [ -f "$DEPS_DIR/uclibc_shim.o" ] && SHIM_ARG="$DEPS_DIR/uclibc_shim.o -rdynamic" ;;
-        musl)   [ -f "$DEPS_DIR/musl_shim.o" ]   && SHIM_ARG="$DEPS_DIR/musl_shim.o -rdynamic" ;;
-    esac
-fi
-
 make -j"$JOBS" \
     PLATFORM="$PLATFORM_UPPER" \
     CROSS_COMPILE="$CROSS_COMPILE" \
@@ -700,7 +681,6 @@ make -j"$JOBS" \
     LIB_COMPY="$SYSROOT_DIR/usr/lib/libcompy.a" \
     COMPY_CFLAGS="$COMPY_CFLAGS" \
     EXTRA_CFLAGS="-I$SYSROOT_DIR/usr/include" \
-    ${SHIM_ARG:+SHIM_LIB="$SHIM_ARG"} \
     ${OPT_TLS:+TLS=1 WEBTORRENT=1} \
     ${OPT_AAC:+AAC=1} \
     ${OPT_OPUS:+OPUS=1} \
