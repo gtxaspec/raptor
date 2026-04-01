@@ -48,7 +48,7 @@ for ISP exposure queries via RVD's control socket).
 | Name | Binary | Description |
 |------|--------|-------------|
 | raptorctl  | `raptorctl`  | Management CLI. Query daemon status, read/write config values, and send runtime commands (bitrate, GOP, ISP parameters, OSD text, day/night mode, etc.) over control sockets. |
-| ringdump   | `ringdump`   | Ring buffer debugger. Print ring header, follow per-frame metadata, or dump raw Annex B to stdout for piping to ffprobe. |
+| ringdump   | `ringdump`   | Ring buffer debugger. Print ring header, follow per-frame metadata, dump raw Annex B to stdout, or measure pipeline latency (`-l`). |
 | rac        | `rac`        | Audio client. Record mic input to file/stdout (PCM16 LE) or play back audio (PCM, MP3, AAC, Opus) to the speaker ring. |
 
 ## Related Repositories
@@ -201,6 +201,56 @@ manages startup order:
    Each daemon checks its own `enabled` flag in the config and exits cleanly
    if disabled, so all can be started unconditionally.
 4. Shutdown reverses the order: consumers stop first, then RVD.
+
+## Latency
+
+Server-side pipeline latency (sensor capture → ring availability) is ~2ms
+average, measured with `ringdump main -l`. The full end-to-end breakdown:
+
+| Stage | Latency |
+|-------|---------|
+| Sensor → ISP → Encoder → Ring | ~2ms (measured) |
+| Ring → RTP packetization | <1ms |
+| Network (wired LAN) | ~2ms |
+| **Server total** | **~5ms** |
+| WebRTC client (browser) | ~50ms |
+| RTSP client jitter buffer | 100-500ms (client-dependent) |
+
+### Low-latency mode
+
+Enable in config for encoder immediate frame output:
+
+```ini
+[stream0]
+low_latency = true
+```
+
+### RTSP client tuning
+
+Most RTSP latency comes from the client's jitter buffer. Recommended
+player settings for lowest latency (use UDP transport):
+
+```sh
+# ffplay
+ffplay -fflags nobuffer -flags low_delay -rtsp_transport udp rtsp://camera/stream0
+
+# mpv
+mpv --no-cache --untimed --profile=low-latency rtsp://camera/stream0
+
+# VLC
+vlc --network-caching=0 rtsp://camera/stream0
+```
+
+WebRTC (via RWD) has inherently low latency (~50ms total) since browsers
+use minimal jitter buffering.
+
+### Measuring latency
+
+```sh
+ringdump main -l           # pipeline latency (per-frame)
+ringdump main -l -n 100    # measure 100 frames, show min/avg/max
+ringdump audio -l           # audio pipeline latency
+```
 
 ## Supported Platforms
 
