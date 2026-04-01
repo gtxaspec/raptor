@@ -89,26 +89,25 @@ static int wt_bio_recv_timeout(void *ctx, unsigned char *buf, size_t len, uint32
 
 static int tcp_connect(const char *host, const char *port)
 {
-	struct addrinfo hints = {.ai_family = AF_INET, .ai_socktype = SOCK_STREAM};
-	struct addrinfo *res;
+	struct addrinfo hints = {.ai_family = AF_UNSPEC, .ai_socktype = SOCK_STREAM};
+	struct addrinfo *res, *rp;
 
 	if (getaddrinfo(host, port, &hints, &res) != 0)
 		return -1;
 
-	int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-	if (fd < 0) {
-		freeaddrinfo(res);
-		return -1;
-	}
+	int fd = -1;
+	for (rp = res; rp; rp = rp->ai_next) {
+		fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+		if (fd < 0)
+			continue;
 
-	/* 10-second connect timeout */
-	struct timeval tv = {.tv_sec = 10};
-	setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+		struct timeval tv = {.tv_sec = 10};
+		setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
-	if (connect(fd, res->ai_addr, res->ai_addrlen) < 0) {
+		if (connect(fd, rp->ai_addr, rp->ai_addrlen) == 0)
+			break;
 		close(fd);
-		freeaddrinfo(res);
-		return -1;
+		fd = -1;
 	}
 	freeaddrinfo(res);
 	return fd;
