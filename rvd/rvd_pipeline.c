@@ -168,11 +168,22 @@ int rvd_pipeline_init(rvd_state_t *st)
 
 	sensor.i2c_adapter = rss_config_get_int(cfg, "sensor", "i2c_adapter", -1);
 	if (sensor.i2c_adapter < 0) {
-		char *s = rss_read_file("/proc/jz/sensor/i2c_bus", NULL);
+		char *s = rss_read_file("/proc/jz/sensor/i2c_adapter", NULL);
+		if (!s)
+			s = rss_read_file("/proc/jz/sensor/i2c_bus", NULL); /* xb1 fallback */
 		sensor.i2c_adapter = s ? (int)strtol(s, NULL, 10) : 0;
 		free(s);
 	}
 	sensor.pwdn_gpio = rss_config_get_int(cfg, "sensor", "pwdn_gpio", -1);
+	if (sensor.pwdn_gpio == -1) {
+		char *s = rss_read_file("/proc/jz/sensor/pwdn_gpio", NULL);
+		if (s) {
+			sensor.pwdn_gpio = (int)strtol(s, NULL, 10);
+			free(s);
+			if (sensor.pwdn_gpio >= 0)
+				RSS_INFO("sensor pwdn_gpio from procfs: %d", sensor.pwdn_gpio);
+		}
+	}
 	sensor.power_gpio = rss_config_get_int(cfg, "sensor", "power_gpio", -1);
 
 	/* Read rst_gpio from config, fall back to /proc/jz/sensor/rst_gpio */
@@ -187,19 +198,26 @@ int rvd_pipeline_init(rvd_state_t *st)
 		}
 	}
 
-	/* T40/T41 sensor fields — read from config, fall back to procfs */
+	/* T40/T41 sensor fields — read from config, fall back to procfs.
+	 * Procfs may return -1 if the ISP framework didn't populate the
+	 * field, so clamp to safe defaults. */
 	sensor.default_boot = rss_config_get_int(cfg, "sensor", "boot", -1);
 	if (sensor.default_boot < 0) {
 		char *s = rss_read_file("/proc/jz/sensor/boot", NULL);
 		sensor.default_boot = s ? (int)strtol(s, NULL, 10) : 0;
 		free(s);
+		if (sensor.default_boot < 0)
+			sensor.default_boot = 0;
 	}
 
 	sensor.mclk = rss_config_get_int(cfg, "sensor", "mclk", -1);
 	if (sensor.mclk < 0) {
 		char *s = rss_read_file("/proc/jz/sensor/mclk", NULL);
-		sensor.mclk = s ? (int)strtol(s, NULL, 10) : 1; /* default MCLK1 */
+		sensor.mclk = s ? (int)strtol(s, NULL, 10) : 0;
+		RSS_DEBUG("sensor mclk from procfs: raw='%s' val=%d", s ? s : "(null)", sensor.mclk);
 		free(s);
+		if (sensor.mclk < 0)
+			sensor.mclk = 0;
 	}
 
 	sensor.vin_type = rss_config_get_int(cfg, "sensor", "video_interface", -1);
@@ -207,7 +225,13 @@ int rvd_pipeline_init(rvd_state_t *st)
 		char *s = rss_read_file("/proc/jz/sensor/video_interface", NULL);
 		sensor.vin_type = s ? (int)strtol(s, NULL, 10) : 0;
 		free(s);
+		if (sensor.vin_type < 0)
+			sensor.vin_type = 0;
 	}
+
+	RSS_DEBUG("sensor config: mclk=%d boot=%d vi=%d rst=%d pwdn=%d",
+		 sensor.mclk, sensor.default_boot, sensor.vin_type,
+		 sensor.rst_gpio, sensor.pwdn_gpio);
 
 	/* ── 3. Init HAL (brings up ISP + sensor) ── */
 	ret = RSS_HAL_CALL(st->ops, init, st->hal_ctx, &sensor);
