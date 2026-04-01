@@ -293,6 +293,11 @@ int rvd_pipeline_init(rvd_state_t *st)
 		}
 	}
 
+	/* Low latency: encoder releases frames immediately (saves 40-120ms) */
+	st->low_latency = rss_config_get_bool(cfg, "stream0", "low_latency", false);
+	if (st->low_latency)
+		RSS_INFO("low latency mode enabled");
+
 	/* ── 4. Load stream configs ── */
 	/* Stream0 defaults to sensor resolution; sub stream defaults to sensor/2 */
 	int def_w = sensor_w > 0 ? sensor_w : 1920;
@@ -484,6 +489,11 @@ int rvd_pipeline_init(rvd_state_t *st)
 				RSS_FATAL("enc_create_channel(%d) failed: %d", chn, ret);
 				return ret;
 			}
+
+			/* Low latency: encoder releases each frame immediately
+			 * instead of batching (saves 1-3 frame periods = 40-120ms) */
+			if (st->low_latency)
+				RSS_HAL_CALL(st->ops, enc_set_max_stream_cnt, st->hal_ctx, chn, 1);
 
 			ret = RSS_HAL_CALL(st->ops, enc_register_channel, st->hal_ctx, chn, chn);
 			if (ret != RSS_OK) {

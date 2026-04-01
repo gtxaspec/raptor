@@ -51,6 +51,9 @@ typedef struct {
 	rvd_stream_t streams[RVD_MAX_STREAMS];
 	int stream_count;
 
+	/* Low latency mode */
+	bool low_latency;
+
 	/* OSD */
 	bool osd_enabled;
 	rvd_osd_region_t osd_regions[RVD_MAX_STREAMS][RVD_OSD_REGIONS];
