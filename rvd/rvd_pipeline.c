@@ -259,7 +259,8 @@ int rvd_pipeline_init(rvd_state_t *st)
 	RSS_HAL_CALL(st->ops, isp_set_running_mode, st->hal_ctx, RSS_ISP_DAY);
 	ret = RSS_HAL_CALL(st->ops, isp_set_bypass, st->hal_ctx, 1);
 	RSS_DEBUG("isp_set_bypass returned %d", ret);
-	RSS_HAL_CALL(st->ops, isp_set_antiflicker, st->hal_ctx, RSS_ANTIFLICKER_60HZ);
+	int antiflicker = rss_config_get_int(cfg, "sensor", "antiflicker", 2);
+	RSS_HAL_CALL(st->ops, isp_set_antiflicker, st->hal_ctx, antiflicker);
 	RSS_HAL_CALL(st->ops, isp_set_hflip, st->hal_ctx, 0);
 	RSS_HAL_CALL(st->ops, isp_set_vflip, st->hal_ctx, 0);
 
