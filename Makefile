@@ -141,7 +141,7 @@ LDFLAGS     += -Wl,-z,max-page-size=0x1000
 
 # Targets
 DAEMONS := rvd rsd rad rhd rod ric rmr rmd rwd
-TOOLS   := raptorctl ringdump rac
+TOOLS   := raptorctl ringdump rac rlatency
 
 .PHONY: all clean libs $(DAEMONS) $(TOOLS) install
 
@@ -242,6 +242,11 @@ rac: $(LIB_IPC) $(LIB_COMMON)
 	$(Q)$(MAKE) -C rac CC="$(CC)" CFLAGS="$(CFLAGS)" \
 		LIBS="$(LIB_IPC) $(LIB_COMMON)" \
 		LDFLAGS="$(LDFLAGS) $(LDFLAGS_MP3) $(LDFLAGS_AAC_DEC) $(LDFLAGS_OPUS)" Q="$(Q)"
+
+rlatency:
+	@echo "  BUILD   rlatency"
+	$(Q)$(MAKE) -C rlatency CC="$(CC)" CFLAGS="$(CFLAGS)" \
+		LDFLAGS="$(LDFLAGS)" Q="$(Q)"
 
 # -- Collect binaries --
 
