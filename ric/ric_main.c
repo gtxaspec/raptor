@@ -10,6 +10,7 @@
 
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/epoll.h>
@@ -41,13 +42,82 @@ static void load_config(ric_state_t *st)
 	c->poll_interval_ms = rss_config_get_int(cfg, "ircut", "poll_interval_ms", 1000);
 }
 
+/*
+ * Auto-discover GPIO pins from /etc/thingino.json when raptor.conf
+ * leaves them at -1.  Format:
+ *   "ircut": "57 58"   (one or two GPIOs, space-separated string)
+ *   "ircut": 57         (single GPIO as integer)
+ *   "ir850": 8          (IR LED GPIO)
+ *   "ir940": 9          (IR LED GPIO, used if ir850 absent)
+ */
+#define THINGINO_JSON "/etc/thingino.json"
+
+static void load_gpio_from_thingino_json(ric_config_t *c)
+{
+	if (c->gpio_ircut >= 0 && c->gpio_irled >= 0)
+		return; /* already configured */
+
+	FILE *f = fopen(THINGINO_JSON, "r");
+	if (!f)
+		return;
+
+	char buf[2048];
+	size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+	fclose(f);
+	if (n == 0)
+		return;
+	buf[n] = '\0';
+
+	/* Find the "gpio" object — scan for keys within it.
+	 * This is a simple substring search, not a full JSON parser,
+	 * but sufficient for the flat key layout in thingino.json. */
+
+	/* Parse ircut: can be string "57 58" or integer 57 */
+	if (c->gpio_ircut < 0) {
+		const char *p = strstr(buf, "\"ircut\"");
+		if (p) {
+			p += 7; /* skip "ircut" */
+			/* skip whitespace and colon */
+			while (*p == ' ' || *p == ':')
+				p++;
+			if (*p == '"') {
+				/* String value: "57 58" or "57" */
+				p++;
+				c->gpio_ircut = (int)strtol(p, (char **)&p, 10);
+				while (*p == ' ')
+					p++;
+				if (*p >= '0' && *p <= '9')
+					c->gpio_ircut2 = (int)strtol(p, NULL, 10);
+			} else if (*p >= '0' && *p <= '9') {
+				/* Integer value */
+				c->gpio_ircut = (int)strtol(p, NULL, 10);
+			}
+		}
+	}
+
+	/* Parse ir850 or ir940 for IR LED */
+	if (c->gpio_irled < 0) {
+		int val;
+		if (rss_json_get_int(buf, "ir850", &val) == 0 && val >= 0) {
+			c->gpio_irled = val;
+		} else if (rss_json_get_int(buf, "ir940", &val) == 0 && val >= 0) {
+			c->gpio_irled = val;
+		}
+	}
+
+	if (c->gpio_ircut >= 0 || c->gpio_irled >= 0)
+		RSS_INFO("GPIOs from %s: ircut=%d ircut2=%d irled=%d", THINGINO_JSON, c->gpio_ircut,
+			 c->gpio_ircut2, c->gpio_irled);
+}
+
 /* ── Control socket ── */
 
 static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, void *userdata)
 {
 	ric_state_t *st = userdata;
 
-	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, st->config, st->config_path);
+	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, st->config,
+					st->config_path);
 	if (rc >= 0)
 		return rc;
 
@@ -127,6 +197,7 @@ int main(int argc, char **argv)
 	st.running = ctx.running;
 	st.current_mode = RIC_MODE_DAY;
 	load_config(&st);
+	load_gpio_from_thingino_json(&st.cfg);
 
 	/* Wait for RVD control socket to be available */
 	RSS_INFO("waiting for RVD...");
