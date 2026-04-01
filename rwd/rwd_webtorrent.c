@@ -588,7 +588,7 @@ static int json_get_object(const char *json, const char *key, char *out, size_t 
 int rwd_stun_discover_srflx(int udp_fd, const char *server, int port, char *ip_out, size_t ip_size,
 			    uint16_t *port_out)
 {
-	struct addrinfo hints = {.ai_family = AF_INET, .ai_socktype = SOCK_DGRAM};
+	struct addrinfo hints = {.ai_family = AF_UNSPEC, .ai_socktype = SOCK_DGRAM};
 	struct addrinfo *res;
 	char port_str[16];
 	snprintf(port_str, sizeof(port_str), "%d", port);
@@ -610,50 +610,76 @@ int rwd_stun_discover_srflx(int udp_fd, const char *server, int port, char *ip_o
 	req[7] = 0x42; /* Magic Cookie */
 	rwd_random_bytes(req + 8, 12);
 
-	for (int attempt = 0; attempt < 3; attempt++) {
-		sendto(udp_fd, req, sizeof(req), 0, res->ai_addr, res->ai_addrlen);
+	/* Try each resolved address (IPv6 first if available) */
+	for (struct addrinfo *rp = res; rp; rp = rp->ai_next) {
+		for (int attempt = 0; attempt < 3; attempt++) {
+			sendto(udp_fd, req, sizeof(req), 0, rp->ai_addr, rp->ai_addrlen);
 
-		struct pollfd pfd = {.fd = udp_fd, .events = POLLIN};
-		if (poll(&pfd, 1, 1500) <= 0)
-			continue;
+			struct pollfd pfd = {.fd = udp_fd, .events = POLLIN};
+			if (poll(&pfd, 1, 1500) <= 0)
+				continue;
 
-		uint8_t buf[256];
-		struct sockaddr_storage from;
-		socklen_t from_len = sizeof(from);
-		ssize_t n =
-			recvfrom(udp_fd, buf, sizeof(buf), 0, (struct sockaddr *)&from, &from_len);
-		if (n < 20)
-			continue;
-		if (buf[0] != 0x01 || buf[1] != 0x01) /* Not Binding Response */
-			continue;
-		if (memcmp(buf + 8, req + 8, 12) != 0) /* Wrong txn ID */
-			continue;
+			uint8_t buf[256];
+			struct sockaddr_storage from;
+			socklen_t from_len = sizeof(from);
+			ssize_t n = recvfrom(udp_fd, buf, sizeof(buf), 0,
+					     (struct sockaddr *)&from, &from_len);
+			if (n < 20)
+				continue;
+			if (buf[0] != 0x01 || buf[1] != 0x01)
+				continue;
+			if (memcmp(buf + 8, req + 8, 12) != 0)
+				continue;
 
-		uint16_t msg_len = ((uint16_t)buf[2] << 8) | buf[3];
-		const uint8_t *p = buf + 20;
-		const uint8_t *end = buf + 20 + msg_len;
-		if (end > buf + n)
-			end = buf + n;
+			uint16_t msg_len = ((uint16_t)buf[2] << 8) | buf[3];
+			const uint8_t *p = buf + 20;
+			const uint8_t *end = buf + 20 + msg_len;
+			if (end > buf + n)
+				end = buf + n;
 
-		while (p + 4 <= end) {
-			uint16_t attr_type = ((uint16_t)p[0] << 8) | p[1];
-			uint16_t attr_len = ((uint16_t)p[2] << 8) | p[3];
-			if (p + 4 + attr_len > end)
-				break;
+			while (p + 4 <= end) {
+				uint16_t attr_type = ((uint16_t)p[0] << 8) | p[1];
+				uint16_t attr_len = ((uint16_t)p[2] << 8) | p[3];
+				if (p + 4 + attr_len > end)
+					break;
 
-			if (attr_type == 0x0020 && attr_len >= 8) { /* XOR-MAPPED-ADDRESS */
-				uint16_t xport = (((uint16_t)p[6] << 8) | p[7]) ^ 0x2112;
-				uint32_t xaddr = (((uint32_t)p[8] << 24) | ((uint32_t)p[9] << 16) |
-						  ((uint32_t)p[10] << 8) | p[11]) ^
-						 0x2112A442;
-				struct in_addr addr;
-				addr.s_addr = htonl(xaddr);
-				inet_ntop(AF_INET, &addr, ip_out, ip_size);
-				*port_out = xport;
-				freeaddrinfo(res);
-				return 0;
+				/* XOR-MAPPED-ADDRESS (RFC 5389 §15.2) */
+				if (attr_type == 0x0020 && attr_len >= 8) {
+					uint8_t family = p[5];
+					uint16_t xport = (((uint16_t)p[6] << 8) | p[7]) ^ 0x2112;
+
+					if (family == 0x01 && attr_len >= 8) {
+						/* IPv4: 4-byte address XOR'd with magic cookie */
+						uint32_t xaddr =
+							(((uint32_t)p[8] << 24) |
+							 ((uint32_t)p[9] << 16) |
+							 ((uint32_t)p[10] << 8) | p[11]) ^
+							0x2112A442;
+						struct in_addr addr;
+						addr.s_addr = htonl(xaddr);
+						inet_ntop(AF_INET, &addr, ip_out, ip_size);
+						*port_out = xport;
+						freeaddrinfo(res);
+						return 0;
+					}
+
+					if (family == 0x02 && attr_len >= 20) {
+						/* IPv6: 16-byte address XOR'd with
+						 * magic cookie (4) + txn ID (12) */
+						uint8_t xor_key[16];
+						memcpy(xor_key, req + 4, 4);  /* magic */
+						memcpy(xor_key + 4, req + 8, 12); /* txn ID */
+						struct in6_addr addr6;
+						for (int i = 0; i < 16; i++)
+							addr6.s6_addr[i] = p[8 + i] ^ xor_key[i];
+						inet_ntop(AF_INET6, &addr6, ip_out, ip_size);
+						*port_out = xport;
+						freeaddrinfo(res);
+						return 0;
+					}
+				}
+				p += 4 + ((attr_len + 3) & ~3u);
 			}
-			p += 4 + ((attr_len + 3) & ~3u);
 		}
 	}
 
