@@ -19,7 +19,7 @@
 #include <rss_net.h>
 
 #define client_addr_str rss_addr_str
-#define client_port     rss_addr_port
+#define client_port	rss_addr_port
 
 static rsd_client_t *find_client_by_fd(rsd_server_t *srv, int fd)
 {
@@ -139,16 +139,6 @@ static void accept_client(rsd_server_t *srv)
 	if (fd < 0)
 		return;
 
-	/* Check under lock to prevent race with concurrent accepts */
-	pthread_mutex_lock(&srv->clients_lock);
-	if (srv->client_count >= srv->max_clients) {
-		pthread_mutex_unlock(&srv->clients_lock);
-		RSS_WARN("max clients reached (%d), rejecting", srv->max_clients);
-		close(fd);
-		return;
-	}
-	pthread_mutex_unlock(&srv->clients_lock);
-
 	/* Keep fd blocking for writes — non-blocking would drop RTP packets
 	 * when the send buffer fills (78KB keyframes need multiple writes).
 	 * Reads are handled by epoll with EPOLLIN. */
@@ -207,7 +197,20 @@ static void accept_client(rsd_server_t *srv)
 		return;
 	}
 
+	/* Atomic check+insert under a single lock hold to prevent TOCTOU */
 	pthread_mutex_lock(&srv->clients_lock);
+	if (srv->client_count >= srv->max_clients) {
+		pthread_mutex_unlock(&srv->clients_lock);
+		RSS_WARN("max clients reached (%d), rejecting", srv->max_clients);
+		epoll_ctl(srv->epoll_fd, EPOLL_CTL_DEL, fd, NULL);
+#ifdef COMPY_HAS_TLS
+		if (client->tls)
+			Compy_TlsConn_free(client->tls);
+#endif
+		close(fd);
+		free(client);
+		return;
+	}
 	srv->clients[srv->client_count++] = client;
 	pthread_mutex_unlock(&srv->clients_lock);
 
@@ -383,7 +386,8 @@ static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 {
 	rsd_server_t *srv = userdata;
 
-	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, srv->cfg, srv->config_path);
+	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, srv->cfg,
+					srv->config_path);
 	if (rc >= 0)
 		return rc;
 
