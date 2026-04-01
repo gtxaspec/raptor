@@ -63,27 +63,8 @@ int rwd_random_bytes(uint8_t *buf, size_t len)
 
 int rwd_get_local_ip(char *buf, size_t buflen)
 {
-	/* Try IPv4 first (connect to 8.8.8.8 to discover local address) */
-	int fd = socket(AF_INET, SOCK_DGRAM, 0);
-	if (fd >= 0) {
-		struct sockaddr_in addr = {
-			.sin_family = AF_INET,
-			.sin_port = htons(53),
-		};
-		inet_pton(AF_INET, "8.8.8.8", &addr.sin_addr);
-		if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
-			struct sockaddr_in local;
-			socklen_t len = sizeof(local);
-			getsockname(fd, (struct sockaddr *)&local, &len);
-			close(fd);
-			inet_ntop(AF_INET, &local.sin_addr, buf, buflen);
-			return 0;
-		}
-		close(fd);
-	}
-
-	/* Fallback: IPv6 (connect to 2001:4860:4860::8888 / Google DNS) */
-	fd = socket(AF_INET6, SOCK_DGRAM, 0);
+	/* Try IPv6 first (connect to Google DNS to discover local address) */
+	int fd = socket(AF_INET6, SOCK_DGRAM, 0);
 	if (fd >= 0) {
 		struct sockaddr_in6 addr6 = {
 			.sin6_family = AF_INET6,
@@ -96,6 +77,25 @@ int rwd_get_local_ip(char *buf, size_t buflen)
 			getsockname(fd, (struct sockaddr *)&local, &len);
 			close(fd);
 			inet_ntop(AF_INET6, &local.sin6_addr, buf, buflen);
+			return 0;
+		}
+		close(fd);
+	}
+
+	/* Fallback: IPv4 */
+	fd = socket(AF_INET, SOCK_DGRAM, 0);
+	if (fd >= 0) {
+		struct sockaddr_in addr = {
+			.sin_family = AF_INET,
+			.sin_port = htons(53),
+		};
+		inet_pton(AF_INET, "8.8.8.8", &addr.sin_addr);
+		if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
+			struct sockaddr_in local;
+			socklen_t len = sizeof(local);
+			getsockname(fd, (struct sockaddr *)&local, &len);
+			close(fd);
+			inet_ntop(AF_INET, &local.sin_addr, buf, buflen);
 			return 0;
 		}
 		close(fd);
