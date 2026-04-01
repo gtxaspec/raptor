@@ -127,6 +127,7 @@ typedef struct rsd_server {
 	int port;
 	int max_clients;      /* runtime limit (≤ RSD_MAX_CLIENTS) */
 	int session_timeout;  /* RTSP session timeout in seconds */
+	int tcp_sndbuf;       /* TCP send buffer size (bytes) */
 
 	/* Digest auth (NULL = no auth required) */
 	Compy_Auth *auth;

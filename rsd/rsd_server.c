@@ -155,8 +155,9 @@ static void accept_client(rsd_server_t *srv)
 	int one = 1;
 	setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
 
-	/* Increase send buffer for large keyframes */
-	int sndbuf = 256 * 1024;
+	/* TCP send buffer: smaller = lower latency (less queuing), but must
+	 * fit at least one keyframe. 64KB is ~250ms at 2Mbps. */
+	int sndbuf = srv->tcp_sndbuf;
 	setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
 
 	rsd_client_t *client = calloc(1, sizeof(*client));
