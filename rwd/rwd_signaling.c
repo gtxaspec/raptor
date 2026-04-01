@@ -100,7 +100,8 @@ static const char webrtc_html[] =
 	"  try{\n"
 	"    micStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});\n"
 	"    const track=micStream.getAudioTracks()[0];\n"
-	"    const txcv=pc.getTransceivers().find(t=>t.receiver.track&&t.receiver.track.kind==='audio');\n"
+	"    const "
+	"txcv=pc.getTransceivers().find(t=>t.receiver.track&&t.receiver.track.kind==='audio');\n"
 	"    if(txcv){txcv.sender.replaceTrack(track);micSender=txcv.sender}"
 	"    else{micSender=pc.addTrack(track,micStream)}\n"
 	"    document.getElementById('talk').textContent='Stop Talk';"
@@ -436,7 +437,7 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 			struct pollfd pfd = {.fd = client_fd, .events = POLLIN};
 			if (poll(&pfd, 1, 500) <= 0)
 				break;
-			ssize_t more = read(client_fd, buf + n, sizeof(buf) - 1 - n);
+			ssize_t more = http_read(client_fd, buf + n, sizeof(buf) - 1 - n);
 			if (more <= 0)
 				break;
 			n += more;
