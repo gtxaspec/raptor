@@ -230,8 +230,9 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 	} while (0)
 
 	/* Session description */
+	const char *ip_ver = strchr(srv->local_ip, ':') ? "IP6" : "IP4";
 	APPEND("v=0");
-	APPEND("o=- %u 1 IN IP4 %s", session_id, srv->local_ip);
+	APPEND("o=- %u 1 IN %s %s", session_id, ip_ver, srv->local_ip);
 	APPEND("s=Raptor");
 	APPEND("t=0 0");
 
@@ -245,7 +246,7 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 
 	/* Video m-line */
 	APPEND("m=video %d UDP/TLS/RTP/SAVPF %d", srv->udp_port, c->offer.video_pt);
-	APPEND("c=IN IP4 %s", srv->local_ip);
+	APPEND("c=IN %s %s", ip_ver, srv->local_ip);
 	APPEND("a=rtcp-mux");
 	APPEND("a=rtcp-rsize");
 	APPEND("a=ice-ufrag:%s", c->local_ufrag);
@@ -276,7 +277,7 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 	/* Audio m-line (if browser offered Opus) */
 	if (c->offer.has_audio && c->offer.audio_pt >= 0) {
 		APPEND("m=audio %d UDP/TLS/RTP/SAVPF %d 0", srv->udp_port, c->offer.audio_pt);
-		APPEND("c=IN IP4 %s", srv->local_ip);
+		APPEND("c=IN %s %s", ip_ver, srv->local_ip);
 		APPEND("a=rtcp-mux");
 		APPEND("a=rtcp-rsize");
 		APPEND("a=ice-ufrag:%s", c->local_ufrag);
