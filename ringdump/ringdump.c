@@ -189,7 +189,9 @@ int main(int argc, char **argv)
 	int64_t last_ts = 0;
 	uint64_t total_bytes = 0;
 
-	/* Latency stats */
+	/* Latency stats — calibrate against first frame to remove
+	 * IMP epoch offset (IMP_System_Init vs CLOCK_MONOTONIC_RAW boot) */
+	int64_t lat_epoch = 0; /* clock_now - meta.timestamp of first frame */
 	int64_t lat_min = INT64_MAX, lat_max = 0, lat_sum = 0;
 	uint64_t lat_count = 0;
 
@@ -228,7 +230,10 @@ int main(int argc, char **argv)
 
 		if (latency_mode) {
 			int64_t now = clock_monotonic_raw_us();
-			int64_t lat = now - meta.timestamp;
+			int64_t raw_delta = now - meta.timestamp;
+			if (lat_count == 0)
+				lat_epoch = raw_delta; /* calibrate on first frame */
+			int64_t lat = raw_delta - lat_epoch;
 			if (lat < lat_min)
 				lat_min = lat;
 			if (lat > lat_max)
@@ -236,7 +241,7 @@ int main(int argc, char **argv)
 			lat_sum += lat;
 			lat_count++;
 			fprintf(stderr,
-				"#%-6" PRIu64 " lat=%-6" PRId64 "us (%.1fms) len=%-8u key=%u\n",
+				"#%-6" PRIu64 " lat=%+" PRId64 "us (%+.1fms) len=%-8u key=%u\n",
 				frame_count, lat, (double)lat / 1000.0, length, meta.is_key);
 		} else if (dump_raw) {
 			fwrite(frame_buf, 1, length, stdout);
