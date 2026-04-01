@@ -40,9 +40,9 @@ static void load_config(ric_state_t *st)
 	const char *trigger = rss_config_get_str(cfg, "ircut", "trigger", "luma");
 	c->trigger = (strcmp(trigger, "gain") == 0) ? RIC_TRIGGER_GAIN : RIC_TRIGGER_LUMA;
 
-	/* Luma thresholds (ae_luma 0-255) */
+	/* Luma trigger thresholds */
 	c->night_luma = rss_config_get_int(cfg, "ircut", "night_luma", 20);
-	c->day_luma = rss_config_get_int(cfg, "ircut", "day_luma", 40);
+	c->day_gain_pct = rss_config_get_int(cfg, "ircut", "day_gain_pct", 25);
 
 	/* Gain thresholds (legacy, only used when trigger=gain) */
 	c->night_threshold = rss_config_get_int(cfg, "ircut", "night_threshold", 40000);

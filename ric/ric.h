@@ -43,11 +43,11 @@ typedef struct {
 	/* Trigger mode */
 	ric_trigger_t trigger;
 
-	/* Luma thresholds (ae_luma 0-255, used when trigger=luma) */
-	int night_luma; /* luma below this → night (default 20) */
-	int day_luma;	/* luma above this → day (default 40) */
+	/* Luma trigger thresholds */
+	int night_luma;	  /* ae_luma below this → night (default 20, 0-255) */
+	int day_gain_pct; /* night→day: gain below this % of baseline → day (default 25) */
 
-	/* Gain thresholds (total_gain, used when trigger=gain) */
+	/* Gain trigger thresholds (legacy, trigger=gain only) */
 	int night_threshold; /* gain above this → night */
 	int day_threshold;   /* gain below this → day */
 
@@ -65,6 +65,10 @@ typedef struct {
 	ric_mode_t current_mode;
 	int day_count;	 /* consecutive samples below day_threshold */
 	int night_count; /* consecutive samples above night_threshold */
+
+	/* Anti-flap: cooldown after mode switch + gain baseline */
+	int cooldown_remaining;	      /* polls remaining before evaluating transitions */
+	uint32_t night_gain_baseline; /* total_gain sampled after IR LEDs stabilize */
 
 	/* Control */
 	rss_ctrl_t *ctrl;

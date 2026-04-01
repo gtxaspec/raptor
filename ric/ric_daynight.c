@@ -117,6 +117,13 @@ void ric_set_mode(ric_state_t *st, ric_mode_t mode)
 	st->current_mode = mode;
 	st->day_count = 0;
 	st->night_count = 0;
+
+	/* Cooldown: wait 3 polls for IR LEDs / ISP to stabilize before
+	 * evaluating transitions. After cooldown in night mode, the gain
+	 * baseline is sampled for the night→day transition algorithm. */
+	st->cooldown_remaining = 3;
+	if (mode == RIC_MODE_DAY)
+		st->night_gain_baseline = 0;
 }
 
 /*
@@ -152,17 +159,48 @@ void ric_poll_exposure(ric_state_t *st)
 	json_parse_uint(resp, "total_gain", &total_gain);
 	json_parse_uint(resp, "ae_luma", &ae_luma);
 
+	/* Cooldown after mode switch: wait for IR LEDs / ISP to stabilize.
+	 * After cooldown in night mode, sample total_gain as baseline for
+	 * the auto-calibrating night→day transition. */
+	if (st->cooldown_remaining > 0) {
+		st->cooldown_remaining--;
+		if (st->cooldown_remaining == 0 && st->current_mode == RIC_MODE_NIGHT) {
+			st->night_gain_baseline = total_gain;
+			RSS_INFO("night baseline: gain=%u (day trigger < %u)", total_gain,
+				 total_gain * (uint32_t)st->cfg.day_gain_pct / 100);
+		}
+		return;
+	}
+
 	bool want_night, want_day;
 
 	if (st->cfg.trigger == RIC_TRIGGER_LUMA) {
-		/* Luma mode: low ae_luma = dark scene (sensor-independent).
-		 * ae_luma is 0-255, represents actual scene brightness after
-		 * AE convergence. Works consistently across all sensors. */
+		/*
+		 * Hybrid luma+gain algorithm (sensor-independent):
+		 *
+		 * Day → Night: ae_luma < night_luma.
+		 *   No IR LEDs on in day mode, so ae_luma directly reflects
+		 *   ambient light. Works identically across all sensors.
+		 *
+		 * Night → Day: total_gain < day_gain_pct% of night baseline.
+		 *   When ambient light returns (dawn, lights on), the ISP
+		 *   drops gain because the scene is bright — even with IR
+		 *   LEDs still on. This ratio is sensor-independent because
+		 *   we compare against the same sensor's own night baseline.
+		 *   ae_luma is NOT used here because IR illumination inflates
+		 *   it regardless of ambient light level.
+		 */
 		want_night = (ae_luma < (uint32_t)st->cfg.night_luma);
-		want_day = (ae_luma > (uint32_t)st->cfg.day_luma);
+
+		if (st->night_gain_baseline > 0) {
+			uint32_t day_thr =
+				st->night_gain_baseline * (uint32_t)st->cfg.day_gain_pct / 100;
+			want_day = (total_gain < day_thr);
+		} else {
+			want_day = false;
+		}
 	} else {
-		/* Gain mode (legacy): high total_gain = ISP working hard.
-		 * Sensor-dependent — max gain varies per sensor. */
+		/* Gain mode (legacy): fixed thresholds, sensor-dependent. */
 		want_night = (total_gain > (uint32_t)st->cfg.night_threshold);
 		want_day = (total_gain < (uint32_t)st->cfg.day_threshold);
 	}
@@ -172,13 +210,8 @@ void ric_poll_exposure(ric_state_t *st)
 			st->night_count++;
 			st->day_count = 0;
 			if (st->night_count >= st->cfg.hysteresis_sec) {
-				if (st->cfg.trigger == RIC_TRIGGER_LUMA)
-					RSS_INFO("night detected (luma=%u < %d for %ds)", ae_luma,
-						 st->cfg.night_luma, st->cfg.hysteresis_sec);
-				else
-					RSS_INFO("night detected (gain=%u > %d for %ds)",
-						 total_gain, st->cfg.night_threshold,
-						 st->cfg.hysteresis_sec);
+				RSS_INFO("night detected (luma=%u < %d for %ds)", ae_luma,
+					 st->cfg.night_luma, st->cfg.hysteresis_sec);
 				ric_set_mode(st, RIC_MODE_NIGHT);
 			}
 		} else {
@@ -189,12 +222,11 @@ void ric_poll_exposure(ric_state_t *st)
 			st->day_count++;
 			st->night_count = 0;
 			if (st->day_count >= st->cfg.hysteresis_sec) {
-				if (st->cfg.trigger == RIC_TRIGGER_LUMA)
-					RSS_INFO("day detected (luma=%u > %d for %ds)", ae_luma,
-						 st->cfg.day_luma, st->cfg.hysteresis_sec);
-				else
-					RSS_INFO("day detected (gain=%u < %d for %ds)", total_gain,
-						 st->cfg.day_threshold, st->cfg.hysteresis_sec);
+				uint32_t day_thr = st->night_gain_baseline *
+						   (uint32_t)st->cfg.day_gain_pct / 100;
+				RSS_INFO("day detected (gain=%u < %u [%d%% of %u] for %ds)",
+					 total_gain, day_thr, st->cfg.day_gain_pct,
+					 st->night_gain_baseline, st->cfg.hysteresis_sec);
 				ric_set_mode(st, RIC_MODE_DAY);
 			}
 		} else {
