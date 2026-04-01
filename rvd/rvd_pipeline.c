@@ -294,7 +294,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 	}
 
 	/* Low latency: encoder releases frames immediately (saves 40-120ms) */
-	st->low_latency = rss_config_get_bool(cfg, "stream0", "low_latency", false);
+	st->low_latency = rss_config_get_bool(cfg, "sensor", "low_latency", false);
 	if (st->low_latency)
 		RSS_INFO("low latency mode enabled");
 
