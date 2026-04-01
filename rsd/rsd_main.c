@@ -45,6 +45,7 @@ int main(int argc, char **argv)
 	int ret = rss_daemon_init(&dctx, "rsd", argc, argv);
 	if (ret != 0)
 		return ret < 0 ? 1 : 0;
+	RSS_BANNER("rsd");
 
 	if (!rss_config_get_bool(dctx.cfg, "rtsp", "enabled", true)) {
 		RSS_INFO("RTSP disabled in config");

@@ -21,6 +21,7 @@ int main(int argc, char **argv)
 	int ret = rss_daemon_init(&ctx, "rvd", argc, argv);
 	if (ret != 0)
 		return ret < 0 ? 1 : 0;
+	RSS_BANNER("rvd");
 
 	/* Initialize state */
 	rvd_state_t st = {0};

@@ -456,6 +456,7 @@ int main(int argc, char **argv)
 	int ret = rss_daemon_init(&dctx, "rad", argc, argv);
 	if (ret != 0)
 		return ret < 0 ? 1 : 0;
+	RSS_BANNER("rad");
 
 	if (!rss_config_get_bool(dctx.cfg, "audio", "enabled", true)) {
 		RSS_INFO("audio disabled in config");

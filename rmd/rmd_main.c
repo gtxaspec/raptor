@@ -136,6 +136,7 @@ int main(int argc, char **argv)
 	int ret = rss_daemon_init(&dctx, "rmd", argc, argv);
 	if (ret != 0)
 		return ret < 0 ? 1 : 0;
+	RSS_BANNER("rmd");
 
 	if (!rss_config_get_bool(dctx.cfg, "motion", "enabled", false)) {
 		RSS_INFO("motion detection disabled in config");

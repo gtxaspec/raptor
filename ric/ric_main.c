@@ -112,6 +112,7 @@ int main(int argc, char **argv)
 	int ret = rss_daemon_init(&ctx, "ric", argc, argv);
 	if (ret != 0)
 		return ret < 0 ? 1 : 0;
+	RSS_BANNER("ric");
 
 	if (!rss_config_get_bool(ctx.cfg, "ircut", "enabled", true)) {
 		RSS_INFO("IR-cut control disabled in config, exiting");

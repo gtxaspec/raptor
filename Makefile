@@ -36,24 +36,19 @@ CFLAGS += -I$(CURDIR)/$(IPC_DIR)/include
 CFLAGS += -I$(CURDIR)/$(COMMON_DIR)/include
 CFLAGS += $(EXTRA_CFLAGS)
 
-# Build info — generate header for rss_daemon_init() banner.
-# Buildroot .mk may pre-generate rss_build.h; skip if it already has valid content.
-# Write to raptor-common/include if available (standalone), else local dir.
-ifneq ($(wildcard $(CURDIR)/$(COMMON_DIR)/include),)
-RSS_BUILD_HDR := $(CURDIR)/$(COMMON_DIR)/include/rss_build.h
-else
-RSS_BUILD_HDR := $(CURDIR)/rss_build.h
-CFLAGS += -I$(CURDIR)
-endif
-ifeq ($(shell grep -q 'unknown' $(RSS_BUILD_HDR) 2>/dev/null && echo stale || test -f $(RSS_BUILD_HDR) && echo ok || echo missing),ok)
-# rss_build.h exists with valid content (e.g., from buildroot .mk) — keep it
-else
-RSS_BUILD_HASH := $(shell git -C $(CURDIR) rev-parse --short HEAD 2>/dev/null || echo unknown)
-RSS_BUILD_TIME := $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
-$(shell printf '%s\n' \
-	'#define RSS_BUILD_HASH "$(RSS_BUILD_HASH)"' \
-	'#define RSS_BUILD_TIME "$(RSS_BUILD_TIME)"' > $(RSS_BUILD_HDR))
-endif
+# Build info — generate a tiny .o with string constants that each daemon links.
+# Uses $(shell) so it runs at Makefile parse time, before any targets.
+RSS_BUILD_HASH ?= $(shell git -C $(CURDIR) rev-parse --short HEAD 2>/dev/null || echo unknown)
+RSS_BUILD_TIME ?= $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
+RSS_BUILD_OBJ := $(CURDIR)/rss_build_info.o
+$(shell printf 'const char *rss_build_hash = "%s";\nconst char *rss_build_time = "%s";\n' \
+	'$(RSS_BUILD_HASH)' '$(RSS_BUILD_TIME)' > $(CURDIR)/rss_build_info.c)
+$(RSS_BUILD_OBJ): $(CURDIR)/rss_build_info.c
+	@echo "  CC      rss_build_info.c"
+	$(Q)$(CC) $(CFLAGS) -c $< -o $@
+
+# Every daemon links this object for the build banner
+RSS_BUILD_LIBS := $(RSS_BUILD_OBJ)
 
 ifeq ($(DEBUG),1)
 CFLAGS += -O0 -g
@@ -174,78 +169,78 @@ $(LIB_COMMON):
 
 # -- Daemons --
 
-rvd: $(LIB_HAL) $(LIB_IPC) $(LIB_COMMON)
+rvd: $(LIB_HAL) $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   rvd"
 	$(Q)$(MAKE) -C rvd CC="$(CC)" CFLAGS="$(CFLAGS)" \
-		LIBS="$(LIB_HAL) $(LIB_IPC) $(LIB_COMMON)" \
+		LIBS="$(LIB_HAL) $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS_HAL)" Q="$(Q)"
 
-rsd: $(LIB_IPC) $(LIB_COMMON) $(LIB_COMPY)
+rsd: $(LIB_IPC) $(LIB_COMMON) $(LIB_COMPY) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   rsd"
 	$(Q)$(MAKE) -C rsd CC="$(CC)" CFLAGS="$(CFLAGS) $(COMPY_CFLAGS)" \
-		LIBS="$(LIB_IPC) $(LIB_COMMON) $(LIB_COMPY)" \
+		LIBS="$(LIB_IPC) $(LIB_COMMON) $(LIB_COMPY) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS) $(LDFLAGS_TLS)" Q="$(Q)"
 
-rad: $(LIB_HAL) $(LIB_IPC) $(LIB_COMMON)
+rad: $(LIB_HAL) $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   rad"
 	$(Q)$(MAKE) -C rad CC="$(CC)" CFLAGS="$(CFLAGS)" \
-		LIBS="$(LIB_HAL) $(LIB_IPC) $(LIB_COMMON)" \
+		LIBS="$(LIB_HAL) $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS_HAL) $(LDFLAGS_AAC_ENC) $(LDFLAGS_OPUS)" Q="$(Q)"
 
-rhd: $(LIB_IPC) $(LIB_COMMON) $(RSS_TLS_OBJ)
+rhd: $(LIB_IPC) $(LIB_COMMON) $(RSS_TLS_OBJ) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   rhd"
 	$(Q)$(MAKE) -C rhd CC="$(CC)" CFLAGS="$(CFLAGS) -DRSS_HAS_TLS" \
-		LIBS="$(LIB_IPC) $(LIB_COMMON) $(RSS_TLS_OBJ)" \
+		LIBS="$(LIB_IPC) $(LIB_COMMON) $(RSS_TLS_OBJ) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS) $(LDFLAGS_TLS)" Q="$(Q)"
 
-rod: $(LIB_IPC) $(LIB_COMMON)
+rod: $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   rod"
 	$(Q)$(MAKE) -C rod CC="$(CC)" CFLAGS="$(CFLAGS)" \
-		LIBS="$(LIB_IPC) $(LIB_COMMON) -lschrift" \
+		LIBS="$(LIB_IPC) $(LIB_COMMON) -lschrift $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS)" Q="$(Q)"
 
-ric: $(LIB_IPC) $(LIB_COMMON)
+ric: $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   ric"
 	$(Q)$(MAKE) -C ric CC="$(CC)" CFLAGS="$(CFLAGS)" \
-		LIBS="$(LIB_IPC) $(LIB_COMMON)" \
+		LIBS="$(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS)" Q="$(Q)"
 
-rmr: $(LIB_IPC) $(LIB_COMMON)
+rmr: $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   rmr"
 	$(Q)$(MAKE) -C rmr CC="$(CC)" CFLAGS="$(CFLAGS)" \
-		LIBS="$(LIB_IPC) $(LIB_COMMON)" \
+		LIBS="$(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS)" Q="$(Q)"
 
-rmd: $(LIB_IPC) $(LIB_COMMON)
+rmd: $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   rmd"
 	$(Q)$(MAKE) -C rmd CC="$(CC)" CFLAGS="$(CFLAGS)" \
-		LIBS="$(LIB_IPC) $(LIB_COMMON)" \
+		LIBS="$(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS)" Q="$(Q)"
 
-rwd: $(LIB_IPC) $(LIB_COMMON) $(LIB_COMPY) $(RSS_TLS_OBJ)
+rwd: $(LIB_IPC) $(LIB_COMMON) $(LIB_COMPY) $(RSS_TLS_OBJ) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   rwd"
 	$(Q)$(MAKE) -C rwd CC="$(CC)" CFLAGS="$(CFLAGS) $(COMPY_CFLAGS) -DMBEDTLS_ALLOW_PRIVATE_ACCESS -DRSS_HAS_TLS" \
-		LIBS="$(LIB_IPC) $(LIB_COMMON) $(LIB_COMPY) $(RSS_TLS_OBJ)" \
+		LIBS="$(LIB_IPC) $(LIB_COMMON) $(LIB_COMPY) $(RSS_TLS_OBJ) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS) $(LDFLAGS_TLS) -lopus" WEBTORRENT=$(WEBTORRENT) Q="$(Q)"
 
 # -- Tools --
 
-raptorctl: $(LIB_IPC) $(LIB_COMMON)
+raptorctl: $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   raptorctl"
 	$(Q)$(MAKE) -C raptorctl CC="$(CC)" CFLAGS="$(CFLAGS)" \
-		LIBS="$(LIB_IPC) $(LIB_COMMON)" \
+		LIBS="$(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS)" Q="$(Q)"
 
-ringdump: $(LIB_IPC) $(LIB_COMMON)
+ringdump: $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   ringdump"
 	$(Q)$(MAKE) -C ringdump CC="$(CC)" CFLAGS="$(CFLAGS)" \
-		LIBS="$(LIB_IPC) $(LIB_COMMON)" \
+		LIBS="$(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS)" Q="$(Q)"
 
-rac: $(LIB_IPC) $(LIB_COMMON)
+rac: $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   rac"
 	$(Q)$(MAKE) -C rac CC="$(CC)" CFLAGS="$(CFLAGS)" \
-		LIBS="$(LIB_IPC) $(LIB_COMMON)" \
+		LIBS="$(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS) $(LDFLAGS_MP3) $(LDFLAGS_AAC_DEC) $(LDFLAGS_OPUS)" Q="$(Q)"
 
 rlatency:
