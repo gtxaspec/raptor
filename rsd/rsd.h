@@ -136,6 +136,9 @@ typedef struct rsd_server {
 	char endpoint_main[64];
 	char endpoint_sub[64];
 
+	/* SDP session name */
+	char session_name[64];
+
 #ifdef COMPY_HAS_TLS
 	/* TLS context for RTSPS (NULL = plain RTSP) */
 	Compy_TlsContext *tls_ctx;

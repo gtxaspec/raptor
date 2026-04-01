@@ -180,7 +180,7 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 
 	COMPY_SDP_DESCRIBE(ret, sdp_w, (COMPY_SDP_VERSION, "0"),
 			   (COMPY_SDP_ORIGIN, "Raptor 1 1 IN IP4 0.0.0.0"),
-			   (COMPY_SDP_SESSION_NAME, "Raptor Live"),
+			   (COMPY_SDP_SESSION_NAME, "%s", self->srv->session_name),
 			   (COMPY_SDP_CONNECTION, "IN IP4 0.0.0.0"), (COMPY_SDP_TIME, "0 0"),
 			   (COMPY_SDP_ATTR, "tool:Raptor RSS"), (COMPY_SDP_ATTR, "range:npt=now-"));
 
