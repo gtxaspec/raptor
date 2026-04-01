@@ -36,8 +36,18 @@ static void load_config(ric_state_t *st)
 	c->gpio_ircut2 = rss_config_get_int(cfg, "ircut", "gpio_ircut2", -1);
 	c->gpio_irled = rss_config_get_int(cfg, "ircut", "gpio_irled", -1);
 
+	/* Trigger mode: "luma" (default, sensor-independent) or "gain" (legacy) */
+	const char *trigger = rss_config_get_str(cfg, "ircut", "trigger", "luma");
+	c->trigger = (strcmp(trigger, "gain") == 0) ? RIC_TRIGGER_GAIN : RIC_TRIGGER_LUMA;
+
+	/* Luma thresholds (ae_luma 0-255) */
+	c->night_luma = rss_config_get_int(cfg, "ircut", "night_luma", 20);
+	c->day_luma = rss_config_get_int(cfg, "ircut", "day_luma", 40);
+
+	/* Gain thresholds (legacy, only used when trigger=gain) */
 	c->night_threshold = rss_config_get_int(cfg, "ircut", "night_threshold", 40000);
 	c->day_threshold = rss_config_get_int(cfg, "ircut", "day_threshold", 25000);
+
 	c->hysteresis_sec = rss_config_get_int(cfg, "ircut", "hysteresis_sec", 5);
 	c->poll_interval_ms = rss_config_get_int(cfg, "ircut", "poll_interval_ms", 1000);
 }
@@ -237,10 +247,11 @@ int main(int argc, char **argv)
 		}
 	}
 
-	RSS_INFO("ric running (mode=%s, gpio_ircut=%d, gpio_ircut2=%d, gpio_irled=%d)",
+	RSS_INFO("ric running (mode=%s, trigger=%s, gpio_ircut=%d, gpio_ircut2=%d, gpio_irled=%d)",
 		 st.cfg.opmode == RIC_AUTO ? "auto"
 					   : (st.cfg.opmode == RIC_FORCE_DAY ? "day" : "night"),
-		 st.cfg.gpio_ircut, st.cfg.gpio_ircut2, st.cfg.gpio_irled);
+		 st.cfg.trigger == RIC_TRIGGER_LUMA ? "luma" : "gain", st.cfg.gpio_ircut,
+		 st.cfg.gpio_ircut2, st.cfg.gpio_irled);
 
 	/* Main loop: poll exposure + handle control socket */
 	while (*st.running) {

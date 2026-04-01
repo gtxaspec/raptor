@@ -148,31 +148,53 @@ void ric_poll_exposure(ric_state_t *st)
 	if (ret < 0)
 		return;
 
-	uint32_t total_gain = 0;
+	uint32_t total_gain = 0, ae_luma = 0;
 	json_parse_uint(resp, "total_gain", &total_gain);
-	uint32_t gain = total_gain;
+	json_parse_uint(resp, "ae_luma", &ae_luma);
+
+	bool want_night, want_day;
+
+	if (st->cfg.trigger == RIC_TRIGGER_LUMA) {
+		/* Luma mode: low ae_luma = dark scene (sensor-independent).
+		 * ae_luma is 0-255, represents actual scene brightness after
+		 * AE convergence. Works consistently across all sensors. */
+		want_night = (ae_luma < (uint32_t)st->cfg.night_luma);
+		want_day = (ae_luma > (uint32_t)st->cfg.day_luma);
+	} else {
+		/* Gain mode (legacy): high total_gain = ISP working hard.
+		 * Sensor-dependent — max gain varies per sensor. */
+		want_night = (total_gain > (uint32_t)st->cfg.night_threshold);
+		want_day = (total_gain < (uint32_t)st->cfg.day_threshold);
+	}
 
 	if (st->current_mode == RIC_MODE_DAY) {
-		/* Check for night transition */
-		if (gain > (uint32_t)st->cfg.night_threshold) {
+		if (want_night) {
 			st->night_count++;
 			st->day_count = 0;
 			if (st->night_count >= st->cfg.hysteresis_sec) {
-				RSS_INFO("night detected (gain=%u > %d for %ds)", gain,
-					 st->cfg.night_threshold, st->cfg.hysteresis_sec);
+				if (st->cfg.trigger == RIC_TRIGGER_LUMA)
+					RSS_INFO("night detected (luma=%u < %d for %ds)", ae_luma,
+						 st->cfg.night_luma, st->cfg.hysteresis_sec);
+				else
+					RSS_INFO("night detected (gain=%u > %d for %ds)",
+						 total_gain, st->cfg.night_threshold,
+						 st->cfg.hysteresis_sec);
 				ric_set_mode(st, RIC_MODE_NIGHT);
 			}
 		} else {
 			st->night_count = 0;
 		}
 	} else {
-		/* Check for day transition */
-		if (gain < (uint32_t)st->cfg.day_threshold) {
+		if (want_day) {
 			st->day_count++;
 			st->night_count = 0;
 			if (st->day_count >= st->cfg.hysteresis_sec) {
-				RSS_INFO("day detected (gain=%u < %d for %ds)", gain,
-					 st->cfg.day_threshold, st->cfg.hysteresis_sec);
+				if (st->cfg.trigger == RIC_TRIGGER_LUMA)
+					RSS_INFO("day detected (luma=%u > %d for %ds)", ae_luma,
+						 st->cfg.day_luma, st->cfg.hysteresis_sec);
+				else
+					RSS_INFO("day detected (gain=%u < %d for %ds)", total_gain,
+						 st->cfg.day_threshold, st->cfg.hysteresis_sec);
 				ric_set_mode(st, RIC_MODE_DAY);
 			}
 		} else {

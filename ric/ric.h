@@ -24,6 +24,12 @@ typedef enum {
 	RIC_FORCE_NIGHT = 2,
 } ric_opmode_t;
 
+/* Trigger mode for day/night detection */
+typedef enum {
+	RIC_TRIGGER_LUMA = 0, /* ae_luma (0-255, sensor-independent, default) */
+	RIC_TRIGGER_GAIN = 1, /* total_gain (sensor-dependent, legacy) */
+} ric_trigger_t;
+
 /* Config from [ircut] section */
 typedef struct {
 	bool enabled;
@@ -34,10 +40,18 @@ typedef struct {
 	int gpio_ircut2; /* second pin for dual GPIO mode, -1 = single */
 	int gpio_irled;	 /* IR LED enable pin */
 
-	/* Thresholds (total_gain from ISP) */
+	/* Trigger mode */
+	ric_trigger_t trigger;
+
+	/* Luma thresholds (ae_luma 0-255, used when trigger=luma) */
+	int night_luma; /* luma below this → night (default 20) */
+	int day_luma;	/* luma above this → day (default 40) */
+
+	/* Gain thresholds (total_gain, used when trigger=gain) */
 	int night_threshold; /* gain above this → night */
 	int day_threshold;   /* gain below this → day */
-	int hysteresis_sec;  /* consecutive seconds before switching */
+
+	int hysteresis_sec; /* consecutive seconds before switching */
 
 	/* Sample interval */
 	int poll_interval_ms;
