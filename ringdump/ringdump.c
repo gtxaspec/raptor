@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <inttypes.h>
 #include <getopt.h>
+#include <time.h>
 #include <stdatomic.h>
 
 #include <rss_ipc.h>
@@ -97,12 +98,20 @@ static void print_header(const rss_ring_header_t *hdr, const char *name)
 		(double)hdr->data_size / (1024.0 * 1024.0), atomic_load(&hdr->write_seq));
 }
 
+static int64_t clock_monotonic_raw_us(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
+	return (int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
+}
+
 static void usage(const char *prog)
 {
 	fprintf(stderr,
 		"Usage: %s <ring_name> [options]\n"
 		"  -f          Follow mode (print each frame)\n"
 		"  -d          Dump raw frame data to stdout\n"
+		"  -l          Latency mode (measure pipeline latency)\n"
 		"  -n <count>  Stop after <count> frames\n"
 		"  -h          Show this help\n"
 		"\n"
@@ -111,8 +120,9 @@ static void usage(const char *prog)
 		"Examples:\n"
 		"  %s main              Show ring header\n"
 		"  %s main -f           Follow frames\n"
+		"  %s main -l           Measure latency\n"
 		"  %s main -d | ffprobe -i -   Analyze stream\n",
-		prog, prog, prog, prog);
+		prog, prog, prog, prog, prog);
 }
 
 int main(int argc, char **argv)
@@ -125,17 +135,22 @@ int main(int argc, char **argv)
 	const char *ring_name = argv[1];
 	bool follow = false;
 	bool dump_raw = false;
+	bool latency_mode = false;
 	int max_frames = 0;
 
 	int opt;
 	optind = 2; /* skip ring name */
-	while ((opt = getopt(argc, argv, "fdn:h")) != -1) {
+	while ((opt = getopt(argc, argv, "fdln:h")) != -1) {
 		switch (opt) {
 		case 'f':
 			follow = true;
 			break;
 		case 'd':
 			dump_raw = true;
+			break;
+		case 'l':
+			latency_mode = true;
+			follow = true;
 			break;
 		case 'n':
 			max_frames = (int)strtol(optarg, NULL, 10);
@@ -161,7 +176,7 @@ int main(int argc, char **argv)
 	const rss_ring_header_t *hdr = rss_ring_get_header(ring);
 	print_header(hdr, ring_name);
 
-	if (!follow && !dump_raw) {
+	if (!follow && !dump_raw && !latency_mode) {
 		rss_ring_close(ring);
 		return 0;
 	}
@@ -173,6 +188,10 @@ int main(int argc, char **argv)
 	int64_t first_ts = 0;
 	int64_t last_ts = 0;
 	uint64_t total_bytes = 0;
+
+	/* Latency stats */
+	int64_t lat_min = INT64_MAX, lat_max = 0, lat_sum = 0;
+	uint64_t lat_count = 0;
 
 	/* Allocate read buffer based on ring slot capacity */
 	const rss_ring_header_t *rhdr = rss_ring_get_header(ring);
@@ -207,7 +226,19 @@ int main(int argc, char **argv)
 		last_ts = meta.timestamp;
 		total_bytes += length;
 
-		if (dump_raw) {
+		if (latency_mode) {
+			int64_t now = clock_monotonic_raw_us();
+			int64_t lat = now - meta.timestamp;
+			if (lat < lat_min)
+				lat_min = lat;
+			if (lat > lat_max)
+				lat_max = lat;
+			lat_sum += lat;
+			lat_count++;
+			fprintf(stderr,
+				"#%-6" PRIu64 " lat=%-6" PRId64 "us (%.1fms) len=%-8u key=%u\n",
+				frame_count, lat, (double)lat / 1000.0, length, meta.is_key);
+		} else if (dump_raw) {
 			fwrite(frame_buf, 1, length, stdout);
 			fflush(stdout);
 		} else {
@@ -238,6 +269,16 @@ int main(int argc, char **argv)
 		"Total:    %" PRIu64 " bytes (%.1f MB)\n",
 		frame_count, dur_sec, avg_fps, avg_bps, avg_bps / 1000.0, total_bytes,
 		(double)total_bytes / (1024.0 * 1024.0));
+
+	if (lat_count > 0)
+		fprintf(stderr,
+			"\n--- latency ---\n"
+			"Min:  %.1f ms\n"
+			"Avg:  %.1f ms\n"
+			"Max:  %.1f ms\n"
+			"Samples: %" PRIu64 "\n",
+			(double)lat_min / 1000.0, (double)(lat_sum / (int64_t)lat_count) / 1000.0,
+			(double)lat_max / 1000.0, lat_count);
 
 	free(frame_buf);
 	rss_ring_close(ring);
