@@ -3,6 +3,9 @@
  *
  * Supports single GPIO (one pin toggles) and dual GPIO (two pins
  * pulsed for motor-driven IR-cut filters).
+ *
+ * ADC support uses dlopen for libsysutils.so — graceful fallback
+ * to luma mode if the library or hardware is unavailable.
  */
 
 #include <stdio.h>
@@ -10,8 +13,88 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <dlfcn.h>
 
 #include "ric.h"
+
+/* ── ADC via libsysutils (runtime-loaded) ── */
+
+static void *adc_lib;
+static int (*adc_init)(void);
+static int (*adc_exit)(void);
+static int (*adc_enable)(uint32_t chn);
+static int (*adc_disable)(uint32_t chn);
+static int (*adc_get_value)(uint32_t chn, int *value);
+
+static bool adc_load(void)
+{
+	if (adc_lib)
+		return true;
+
+	adc_lib = dlopen("libsysutils.so", RTLD_LAZY);
+	if (!adc_lib) {
+		RSS_WARN("ADC: libsysutils.so not available (%s)", dlerror());
+		return false;
+	}
+
+	adc_init = dlsym(adc_lib, "SU_ADC_Init");
+	adc_exit = dlsym(adc_lib, "SU_ADC_Exit");
+	adc_enable = dlsym(adc_lib, "SU_ADC_EnableChn");
+	adc_disable = dlsym(adc_lib, "SU_ADC_DisableChn");
+	adc_get_value = dlsym(adc_lib, "SU_ADC_GetChnValue");
+
+	if (!adc_init || !adc_get_value || !adc_enable) {
+		RSS_WARN("ADC: missing symbols in libsysutils.so");
+		dlclose(adc_lib);
+		adc_lib = NULL;
+		return false;
+	}
+	return true;
+}
+
+bool ric_adc_start(ric_state_t *st)
+{
+	if (!adc_load())
+		return false;
+
+	int channel = st->cfg.adc_channel;
+	if (adc_init() != 0) {
+		RSS_WARN("ADC: SU_ADC_Init failed");
+		return false;
+	}
+	if (adc_enable((uint32_t)channel) != 0) {
+		RSS_WARN("ADC: SU_ADC_EnableChn(%d) failed", channel);
+		if (adc_exit)
+			adc_exit();
+		return false;
+	}
+
+	RSS_INFO("ADC: channel %d initialized", channel);
+	return true;
+}
+
+static int adc_read(int channel)
+{
+	int value = -1;
+	if (adc_get_value && adc_get_value((uint32_t)channel, &value) != 0)
+		return -1;
+	return value;
+}
+
+void ric_adc_cleanup(ric_state_t *st)
+{
+	if (st->adc_initialized) {
+		if (adc_disable)
+			adc_disable((uint32_t)st->cfg.adc_channel);
+		if (adc_exit)
+			adc_exit();
+		st->adc_initialized = false;
+	}
+	if (adc_lib) {
+		dlclose(adc_lib);
+		adc_lib = NULL;
+	}
+}
 
 /* Export a GPIO pin via sysfs (ignore errors if already exported) */
 static void gpio_export(int pin)
@@ -199,6 +282,20 @@ void ric_poll_exposure(ric_state_t *st)
 		} else {
 			want_day = false;
 		}
+	} else if (st->cfg.trigger == RIC_TRIGGER_ADC) {
+		/*
+		 * ADC mode: read photoresistor via SU_ADC.
+		 * Direct ambient light measurement — unaffected by IR LEDs
+		 * or camera sensor. No flip-flop, no calibration needed.
+		 * High ADC value = bright, low = dark.
+		 */
+		int adc_val = adc_read(st->cfg.adc_channel);
+		if (adc_val < 0) {
+			/* ADC read failed — skip this poll */
+			return;
+		}
+		want_night = (adc_val < st->cfg.adc_night);
+		want_day = (adc_val > st->cfg.adc_day);
 	} else {
 		/* Gain mode (legacy): fixed thresholds, sensor-dependent. */
 		want_night = (total_gain > (uint32_t)st->cfg.night_threshold);

@@ -203,7 +203,7 @@ ric: $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   ric"
 	$(Q)$(MAKE) -C ric CC="$(CC)" CFLAGS="$(CFLAGS)" \
 		LIBS="$(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_LIBS)" \
-		LDFLAGS="$(LDFLAGS)" Q="$(Q)"
+		LDFLAGS="$(LDFLAGS) -ldl" Q="$(Q)"
 
 rmr: $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   rmr"

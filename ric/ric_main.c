@@ -36,13 +36,23 @@ static void load_config(ric_state_t *st)
 	c->gpio_ircut2 = rss_config_get_int(cfg, "ircut", "gpio_ircut2", -1);
 	c->gpio_irled = rss_config_get_int(cfg, "ircut", "gpio_irled", -1);
 
-	/* Trigger mode: "luma" (default, sensor-independent) or "gain" (legacy) */
+	/* Trigger mode: "luma" (default), "gain" (legacy), "adc" (photoresistor) */
 	const char *trigger = rss_config_get_str(cfg, "ircut", "trigger", "luma");
-	c->trigger = (strcmp(trigger, "gain") == 0) ? RIC_TRIGGER_GAIN : RIC_TRIGGER_LUMA;
+	if (strcmp(trigger, "gain") == 0)
+		c->trigger = RIC_TRIGGER_GAIN;
+	else if (strcmp(trigger, "adc") == 0)
+		c->trigger = RIC_TRIGGER_ADC;
+	else
+		c->trigger = RIC_TRIGGER_LUMA;
 
 	/* Luma trigger thresholds */
 	c->night_luma = rss_config_get_int(cfg, "ircut", "night_luma", 20);
 	c->day_gain_pct = rss_config_get_int(cfg, "ircut", "day_gain_pct", 25);
+
+	/* ADC thresholds (trigger=adc) */
+	c->adc_channel = rss_config_get_int(cfg, "ircut", "adc_channel", 0);
+	c->adc_night = rss_config_get_int(cfg, "ircut", "adc_night", 200);
+	c->adc_day = rss_config_get_int(cfg, "ircut", "adc_day", 600);
 
 	/* Gain thresholds (legacy, only used when trigger=gain) */
 	c->night_threshold = rss_config_get_int(cfg, "ircut", "night_threshold", 40000);
@@ -224,6 +234,16 @@ int main(int argc, char **argv)
 	/* Init GPIOs */
 	ric_gpio_init(&st);
 
+	/* Init ADC if trigger=adc; fall back to luma on failure */
+	if (st.cfg.trigger == RIC_TRIGGER_ADC) {
+		if (ric_adc_start(&st)) {
+			st.adc_initialized = true;
+		} else {
+			RSS_WARN("ADC unavailable, falling back to luma trigger");
+			st.cfg.trigger = RIC_TRIGGER_LUMA;
+		}
+	}
+
 	/* Apply initial mode */
 	if (st.cfg.opmode == RIC_FORCE_DAY)
 		ric_set_mode(&st, RIC_MODE_DAY);
@@ -268,6 +288,8 @@ int main(int argc, char **argv)
 	}
 
 	RSS_INFO("ric shutting down");
+
+	ric_adc_cleanup(&st);
 
 	if (epoll_fd >= 0)
 		close(epoll_fd);

@@ -26,8 +26,9 @@ typedef enum {
 
 /* Trigger mode for day/night detection */
 typedef enum {
-	RIC_TRIGGER_LUMA = 0, /* ae_luma (0-255, sensor-independent, default) */
-	RIC_TRIGGER_GAIN = 1, /* total_gain (sensor-dependent, legacy) */
+	RIC_TRIGGER_LUMA = 0, /* ae_luma + gain ratio (sensor-independent, default) */
+	RIC_TRIGGER_GAIN = 1, /* total_gain fixed thresholds (sensor-dependent, legacy) */
+	RIC_TRIGGER_ADC = 2,  /* SU_ADC photoresistor (hardware LDR, most reliable) */
 } ric_trigger_t;
 
 /* Config from [ircut] section */
@@ -51,6 +52,11 @@ typedef struct {
 	int night_threshold; /* gain above this → night */
 	int day_threshold;   /* gain below this → day */
 
+	/* ADC trigger (trigger=adc only) */
+	int adc_channel; /* SU_ADC channel number (default 0) */
+	int adc_night;	 /* ADC value below this → night (default 200) */
+	int adc_day;	 /* ADC value above this → day (default 600) */
+
 	int hysteresis_sec; /* consecutive seconds before switching */
 
 	/* Sample interval */
@@ -70,6 +76,9 @@ typedef struct {
 	int cooldown_remaining;	      /* polls remaining before evaluating transitions */
 	uint32_t night_gain_baseline; /* total_gain sampled after IR LEDs stabilize */
 
+	/* ADC state */
+	bool adc_initialized;
+
 	/* Control */
 	rss_ctrl_t *ctrl;
 	rss_config_t *config;
@@ -82,5 +91,7 @@ typedef struct {
 void ric_gpio_init(ric_state_t *st);
 void ric_set_mode(ric_state_t *st, ric_mode_t mode);
 void ric_poll_exposure(ric_state_t *st);
+bool ric_adc_start(ric_state_t *st);
+void ric_adc_cleanup(ric_state_t *st);
 
 #endif /* RIC_H */
