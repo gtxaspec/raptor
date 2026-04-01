@@ -74,6 +74,8 @@ int main(int argc, char **argv)
 		    sizeof(srv.endpoint_sub));
 	rss_strlcpy(srv.session_name, rss_config_get_str(dctx.cfg, "rtsp", "session_name", "Raptor Live"),
 		    sizeof(srv.session_name));
+	rss_strlcpy(srv.session_info, rss_config_get_str(dctx.cfg, "rtsp", "session_info", ""),
+		    sizeof(srv.session_info));
 	pthread_mutex_init(&srv.clients_lock, NULL);
 
 	/* Digest auth — enabled when both username and password are set */

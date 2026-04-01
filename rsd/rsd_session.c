@@ -184,6 +184,9 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 			   (COMPY_SDP_CONNECTION, "IN IP4 0.0.0.0"), (COMPY_SDP_TIME, "0 0"),
 			   (COMPY_SDP_ATTR, "tool:Raptor RSS"), (COMPY_SDP_ATTR, "range:npt=now-"));
 
+	if (self->srv->session_info[0])
+		COMPY_SDP_DESCRIBE(ret, sdp_w, (COMPY_SDP_INFO, "%s", self->srv->session_info));
+
 	/* Store codec for NAL framing in ring reader */
 	self->video_codec = hdr->codec;
 
