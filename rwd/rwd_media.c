@@ -541,6 +541,14 @@ void *rwd_video_reader_thread(void *arg)
 			rss_ring_slot_t meta;
 			uint64_t read_seq = srv->video_read_seq[s];
 
+			/* Skip stale frames to minimize latency */
+			const rss_ring_header_t *vhdr = rss_ring_get_header(srv->video_rings[s]);
+			uint64_t ws = vhdr->write_seq;
+			if (ws > read_seq + 1 && read_seq > 0) {
+				read_seq = ws - 1;
+				rss_ring_request_idr(srv->video_rings[s]);
+			}
+
 			ret = rss_ring_read(srv->video_rings[s], &read_seq, srv->video_bufs[s],
 					    srv->video_buf_sizes[s], &length, &meta);
 			if (ret == RSS_EOVERFLOW) {

@@ -116,6 +116,16 @@ void *rsd_video_reader_thread(void *arg)
 		if (!rctx->frame_buf)
 			continue;
 
+		/* Skip stale frames: if consumer is more than 1 frame behind,
+		 * jump to latest to minimize latency. Request IDR since we
+		 * skipped reference frames. */
+		const rss_ring_header_t *hdr = rss_ring_get_header(rctx->ring);
+		uint64_t write_seq = hdr->write_seq;
+		if (write_seq > read_seq + 1 && read_seq > 0) {
+			read_seq = write_seq - 1;
+			rss_ring_request_idr(rctx->ring);
+		}
+
 		ret = rss_ring_read(rctx->ring, &read_seq, rctx->frame_buf, rctx->frame_buf_size,
 				    &length, &meta);
 		if (ret == RSS_EOVERFLOW) {
