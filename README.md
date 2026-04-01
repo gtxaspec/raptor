@@ -50,6 +50,7 @@ for ISP exposure queries via RVD's control socket).
 | raptorctl  | `raptorctl`  | Management CLI. Query daemon status, read/write config values, and send runtime commands (bitrate, GOP, ISP parameters, OSD text, day/night mode, etc.) over control sockets. |
 | ringdump   | `ringdump`   | Ring buffer debugger. Print ring header, follow per-frame metadata, dump raw Annex B to stdout, or measure pipeline latency (`-l`). |
 | rac        | `rac`        | Audio client. Record mic input to file/stdout (PCM16 LE) or play back audio (PCM, MP3, AAC, Opus) to the speaker ring. |
+| rlatency   | `rlatency`   | RTSP end-to-end latency measurement. Uses RTCP Sender Report NTP/RTP correlation (RFC 3550) to compute per-frame latency with percentile stats. Runs on host, not camera. |
 
 ## Related Repositories
 
@@ -246,11 +247,24 @@ use minimal jitter buffering.
 
 ### Measuring latency
 
+**On-device** (pipeline only — sensor to ring):
 ```sh
 ringdump main -l           # pipeline latency (per-frame)
 ringdump main -l -n 100    # measure 100 frames, show min/avg/max
 ringdump audio -l           # audio pipeline latency
 ```
+
+**End-to-end** (sensor to network client, includes network):
+```sh
+# Run from any host on the network (requires NTP-synced clocks)
+rlatency rtsp://camera/stream0              # continuous measurement
+rlatency rtsp://camera/stream0 -n 500       # 500 frames with summary
+rlatency rtsp://camera/stream0 -n 200 -v    # verbose per-frame output
+```
+
+`rlatency` uses RTCP Sender Report NTP/RTP timestamp correlation
+(RFC 3550 §6.4.1) to map each received frame to the camera's wall
+clock. Reports min/avg/max/stddev/P50/P95/P99.
 
 ## Supported Platforms
 

@@ -729,7 +729,7 @@ int main(int argc, char **argv)
 
 			if (verbose)
 				fprintf(stderr,
-					"#%-6"PRIu64" lat=%7.2f ms  rtp_ts=%-10u  size=%-6zu  key=%d\n",
+					"#%-6"PRIu64" lat=%7.2f ms  rtp_ts=%-10u  size=%-6zu  M=%d\n",
 					frame_count, (double)latency_us / 1000.0,
 					rtp.ts, (size_t)n, rtp.marker ? 1 : 0);
 			else if (!quiet && frame_count % 25 == 0)
