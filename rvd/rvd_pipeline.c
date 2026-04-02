@@ -111,8 +111,8 @@ static void load_stream_config(rss_config_t *cfg, const char *section, rvd_strea
 		.fps_den = 1,
 		.gop_length = rss_config_get_int(cfg, section, "gop", fps * 2),
 		.init_qp = -1,
-		.min_qp = rss_config_get_int(cfg, section, "min_qp", 15),
-		.max_qp = rss_config_get_int(cfg, section, "max_qp", 45),
+		.min_qp = rss_config_get_int(cfg, section, "min_qp", 20),
+		.max_qp = rss_config_get_int(cfg, section, "max_qp", 42),
 	};
 }
 
@@ -329,14 +329,14 @@ int rvd_pipeline_init(rvd_state_t *st)
 	int def_h = sensor_h > 0 ? sensor_h : 1080;
 	int sub_w = def_w > 640 ? 640 : def_w / 2;
 	int sub_h = def_h > 360 ? 360 : def_h / 2;
-	load_stream_config(cfg, "stream0", &st->streams[0], def_w, def_h, 25, 2000000);
+	load_stream_config(cfg, "stream0", &st->streams[0], def_w, def_h, 25, 2500000);
 	st->streams[0].enc_cfg.ivdc = rss_config_get_bool(cfg, "stream0", "ivdc", false);
 	st->streams[0].chn = 0;
 	st->stream_count = 1;
 
 	/* Sub stream (optional) */
 	if (rss_config_get_bool(cfg, "stream1", "enabled", true)) {
-		load_stream_config(cfg, "stream1", &st->streams[1], sub_w, sub_h, 25, 500000);
+		load_stream_config(cfg, "stream1", &st->streams[1], sub_w, sub_h, 25, 1000000);
 		st->streams[1].chn = 1;
 		st->stream_count = 2;
 	}
