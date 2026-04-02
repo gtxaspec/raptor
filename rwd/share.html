@@ -1,91 +1,148 @@
 <!DOCTYPE html>
-<html><head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Raptor WebRTC Share</title>
-<style>
-body{margin:0;background:#111;display:flex;flex-direction:column;
-  align-items:center;justify-content:center;min-height:100vh;
-  font-family:sans-serif;color:#fff}
-video{width:100%;max-height:85vh;object-fit:contain;background:#000}
-#status{color:#888;font-size:14px;margin:10px}
-button{margin:5px;padding:8px 20px;font-size:16px;cursor:pointer;
-  border:1px solid #555;background:#222;color:#fff;border-radius:4px}
-button:hover{background:#333}
-button.active{background:#600;border-color:#a00}
-select{margin:5px;padding:8px;font-size:16px;background:#222;color:#fff;
-  border:1px solid #555;border-radius:4px}
-.error{color:#e55}
-</style>
-</head><body>
-<video id="v" autoplay muted playsinline></video>
-<div>
-  <select id="stream"><option value="0">Main</option><option value="1">Sub</option></select>
-  <button id="btn" onclick="toggle()">Connect</button>
-  <button id="mute" onclick="toggleMute()" style="display:none">Unmute</button>
-  <button id="talk" onclick="toggleTalk()" style="display:none">Talk</button>
-  <span id="status">Ready</span>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>thingino · Live Share</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css"
+    integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.min.css">
+  <style>
+    :root { --bs-font-sans-serif: "Montserrat", sans-serif; }
+    body { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #0d1117; }
+    .share-card { width: 100%; max-width: 960px; }
+    .card-title { color: darkorange; }
+    video { width: 100%; aspect-ratio: 16/9; object-fit: contain; background: #000; display: block; }
+  </style>
+</head>
+
+<body class="p-3">
+
+<div class="share-card">
+  <div class="card">
+    <div class="card-header d-flex align-items-center gap-2">
+      <h2 class="card-title mb-0 fs-5">
+        <i class="bi bi-camera-video me-1"></i> Live Share
+      </h2>
+      <span id="status" class="badge bg-secondary ms-auto">Ready</span>
+    </div>
+    <div class="card-body p-0">
+      <video id="v" autoplay muted playsinline></video>
+    </div>
+    <div class="card-footer d-flex flex-wrap align-items-center gap-2">
+      <div id="key-row" class="input-group input-group-sm w-100 d-none">
+        <span class="input-group-text text-warning"><i class="bi bi-key-fill me-1"></i> Share key</span>
+        <input id="key-input" type="text" class="form-control font-monospace"
+          placeholder="Paste or type share key…" autocomplete="off" spellcheck="false">
+        <span id="key-hint" class="input-group-text text-secondary">Enter a key to connect</span>
+      </div>
+      <select id="stream" class="form-select form-select-sm w-auto">
+        <option value="0">Main stream</option>
+        <option value="1">Sub stream</option>
+      </select>
+      <button id="btn" type="button" class="btn btn-outline-primary btn-sm" onclick="toggle()">
+        <i class="bi bi-play-fill"></i> Connect
+      </button>
+      <button id="mute" type="button" class="btn btn-outline-secondary btn-sm d-none" onclick="toggleMute()">
+        <i class="bi bi-volume-mute-fill"></i> Unmute
+      </button>
+      <button id="talk" type="button" class="btn btn-outline-secondary btn-sm d-none" onclick="toggleTalk()">
+        <i class="bi bi-mic-fill"></i> Talk
+      </button>
+    </div>
+  </div>
 </div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"
+  integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
 <script>
-const TRACKERS=['wss://tracker.openwebtorrent.com','wss://tracker.webtorrent.dev'];
-let pc=null,ws=null,micStream=null,micSender=null;
+const TRACKERS = [
+  'wss://tracker.openwebtorrent.com',
+  'wss://tracker.webtorrent.dev'
+];
 
-const v=document.getElementById('v');
-const btn=document.getElementById('btn');
-const st=document.getElementById('status');
+let pc = null, ws = null, micStream = null, micSender = null;
 
-const params=new URLSearchParams(location.hash.slice(1));
-const shareKey=params.get('key');
-if(!shareKey||shareKey.length<8){
-  st.textContent='Missing or invalid share key (#key=...)';
-  st.className='error';
-  btn.disabled=true;
+const v        = document.getElementById('v');
+const btn      = document.getElementById('btn');
+const st       = document.getElementById('status');
+const muteBtn  = document.getElementById('mute');
+const talkBtn  = document.getElementById('talk');
+const keyRow   = document.getElementById('key-row');
+const keyInput = document.getElementById('key-input');
+
+const keyHint  = document.getElementById('key-hint');
+
+const params = new URLSearchParams(location.hash.slice(1));
+let shareKey = params.get('key') ?? '';
+
+if (!shareKey || shareKey.length < 8) {
+  keyRow.classList.remove('d-none');
+  btn.disabled = true;
+}
+
+keyInput.addEventListener('input', () => {
+  shareKey = keyInput.value.trim();
+  const valid = shareKey.length >= 8;
+  btn.disabled = !valid;
+  keyHint.textContent = valid ? '' : shareKey.length ? 'Key too short (min 8 characters)' : 'Enter a key to connect';
+  if (valid) {
+    location.replace('#key=' + encodeURIComponent(shareKey));
+    setStatus('Ready');
+  }
+});
+
+function setStatus(text, variant = 'secondary') {
+  st.textContent = text;
+  st.className = `badge bg-${variant} ms-auto`;
 }
 
 /* Strip SDP to only H264 video + Opus audio to reduce size.
  * Public WebTorrent trackers silently drop large messages. */
-function stripSdp(sdp){
-  const lines=sdp.split('\r\n');
-  const out=[];
-  let section='session';/* session, video, audio, skip */
-  let keepPts=new Set();
-  let h264Pt=null,opusPt=null;
+function stripSdp(sdp) {
+  const lines = sdp.split('\r\n');
+  const out = [];
+  let section = 'session'; // session | video | audio | skip
+  let keepPts = new Set();
+  let h264Pt = null, opusPt = null;
 
-  /* First pass: find H264 and Opus PTs */
-  for(const l of lines){
-    const rtpmap=l.match(/^a=rtpmap:(\d+)\s+(.+)/);
-    if(rtpmap){
-      const pt=rtpmap[1],codec=rtpmap[2].toLowerCase();
-      if(codec.startsWith('h264/')&&!h264Pt)h264Pt=pt;
-      if(codec.startsWith('opus/')&&!opusPt)opusPt=pt;
+  // First pass: find H264 and Opus payload types
+  for (const l of lines) {
+    const m = l.match(/^a=rtpmap:(\d+)\s+(.+)/);
+    if (m) {
+      const [, pt, codec] = m;
+      if (codec.toLowerCase().startsWith('h264/') && !h264Pt) h264Pt = pt;
+      if (codec.toLowerCase().startsWith('opus/')  && !opusPt) opusPt = pt;
     }
   }
-  if(!h264Pt)return sdp;/* fallback: return as-is */
+  if (!h264Pt) return sdp; // fallback: return as-is
 
-  /* Second pass: filter */
-  for(const l of lines){
-    if(l.startsWith('m=video')){
-      section='video';keepPts=new Set([h264Pt]);
-      const parts=l.split(' ');
-      out.push([parts[0],parts[1],parts[2],parts[3],h264Pt].join(' '));
+  // Second pass: filter
+  for (const l of lines) {
+    if (l.startsWith('m=video')) {
+      section = 'video'; keepPts = new Set([h264Pt]);
+      const p = l.split(' ');
+      out.push([p[0], p[1], p[2], p[3], h264Pt].join(' '));
       continue;
     }
-    if(l.startsWith('m=audio')){
-      if(!opusPt){section='skip';continue}
-      section='audio';keepPts=new Set([opusPt]);
-      const parts=l.split(' ');
-      out.push([parts[0],parts[1],parts[2],parts[3],opusPt].join(' '));
+    if (l.startsWith('m=audio')) {
+      if (!opusPt) { section = 'skip'; continue; }
+      section = 'audio'; keepPts = new Set([opusPt]);
+      const p = l.split(' ');
+      out.push([p[0], p[1], p[2], p[3], opusPt].join(' '));
       continue;
     }
-    if(l.startsWith('m=')){section='skip';continue}
+    if (l.startsWith('m=')) { section = 'skip'; continue; }
+    if (section === 'skip') continue;
+    if (section === 'session') { out.push(l); continue; }
 
-    if(section==='skip')continue;
-    if(section==='session'){out.push(l);continue}
-
-    /* Filter codec-specific lines by PT */
-    const ptMatch=l.match(/^a=(?:rtpmap|fmtp|rtcp-fb):(\d+)/);
-    if(ptMatch){
-      if(keepPts.has(ptMatch[1]))out.push(l);
+    // Filter codec-specific lines by payload type
+    const ptMatch = l.match(/^a=(?:rtpmap|fmtp|rtcp-fb):(\d+)/);
+    if (ptMatch) {
+      if (keepPts.has(ptMatch[1])) out.push(l);
       continue;
     }
     out.push(l);
@@ -93,154 +150,168 @@ function stripSdp(sdp){
   return out.join('\r\n');
 }
 
-async function computeInfoHash(){
-  const data=new TextEncoder().encode('raptor:'+shareKey);
-  const hash=await crypto.subtle.digest('SHA-256',data);
+async function computeInfoHash() {
+  const data = new TextEncoder().encode('raptor:' + shareKey);
+  const hash = await crypto.subtle.digest('SHA-256', data);
   return btoa(String.fromCharCode(...new Uint8Array(hash)));
 }
 
-function randomId(len){
-  const cs='abcdefghijklmnopqrstuvwxyz0123456789';
-  const limit=256-256%cs.length;/* reject threshold to eliminate modulo bias */
-  const a=new Uint8Array(len*2);/* over-provision for rejections */
+function randomId(len) {
+  const cs    = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  const limit = 256 - 256 % cs.length; // reject threshold to eliminate modulo bias
+  const a     = new Uint8Array(len * 2); // over-provision for rejections
   crypto.getRandomValues(a);
-  let s='',j=0;
-  while(s.length<len){
-    if(j>=a.length){crypto.getRandomValues(a);j=0}
-    if(a[j]<limit)s+=cs[a[j]%cs.length];
+  let s = '', j = 0;
+  while (s.length < len) {
+    if (j >= a.length) { crypto.getRandomValues(a); j = 0; }
+    if (a[j] < limit) s += cs[a[j] % cs.length];
     j++;
   }
   return s;
 }
 
-async function start(){
-  st.textContent='Computing share key...';
-  const infoHash=await computeInfoHash();
-  const peerId=randomId(20);
-  const offerId=randomId(10);
+async function start() {
+  setStatus('Computing share key…');
+  const infoHash = await computeInfoHash();
+  const peerId   = randomId(20);
+  const offerId  = randomId(10);
 
-  pc=new RTCPeerConnection({
-    iceServers:[
-      {urls:'stun:stun.l.google.com:19302'},
-      {urls:'stun:stun1.l.google.com:19302'}
+  pc = new RTCPeerConnection({
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' }
     ]
   });
-  pc.addTransceiver('video',{direction:'recvonly'});
-  const at=pc.addTransceiver('audio',{direction:'sendrecv'});
-  try{const caps=RTCRtpSender.getCapabilities('audio').codecs;
-    const pcmu=caps.filter(c=>c.mimeType==='audio/PCMU');
-    const opus=caps.filter(c=>c.mimeType==='audio/opus');
-    if(pcmu.length)at.setCodecPreferences([...pcmu,...opus]);
-  }catch(e){}
+  pc.addTransceiver('video', { direction: 'recvonly' });
+  const at = pc.addTransceiver('audio', { direction: 'sendrecv' });
 
-  pc.ontrack=e=>{
-    if(!v.srcObject)v.srcObject=new MediaStream();
+  try {
+    const caps = RTCRtpSender.getCapabilities('audio').codecs;
+    const pcmu = caps.filter(c => c.mimeType === 'audio/PCMU');
+    const opus = caps.filter(c => c.mimeType === 'audio/opus');
+    if (pcmu.length) at.setCodecPreferences([...pcmu, ...opus]);
+  } catch (e) {}
+
+  pc.ontrack = e => {
+    if (!v.srcObject) v.srcObject = new MediaStream();
     v.srcObject.addTrack(e.track);
-    v.muted=true;v.play().catch(()=>{});
+    v.muted = true;
+    v.play().catch(() => {});
   };
 
-  pc.oniceconnectionstatechange=()=>{
-    st.textContent=pc.iceConnectionState;
-    if(pc.iceConnectionState==='connected'||pc.iceConnectionState==='completed'){
-      btn.textContent='Disconnect';
-      document.getElementById('mute').style.display='';
-      document.getElementById('stream').disabled=true;
+  pc.oniceconnectionstatechange = () => {
+    const state = pc.iceConnectionState;
+    setStatus(state, state === 'connected' || state === 'completed' ? 'success' : 'secondary');
+    if (state === 'connected' || state === 'completed') {
+      btn.innerHTML = '<i class="bi bi-stop-fill"></i> Disconnect';
+      btn.classList.replace('btn-outline-primary', 'btn-outline-danger');
+      muteBtn.classList.remove('d-none');
+      document.getElementById('stream').disabled = true;
     }
-    if(pc.iceConnectionState==='failed'||pc.iceConnectionState==='disconnected')
-      stop();
+    if (state === 'failed' || state === 'disconnected') stop();
   };
 
-  st.textContent='Gathering ICE candidates...';
-  const offer=await pc.createOffer();
+  setStatus('Gathering ICE candidates…');
+  const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
-  await new Promise(r=>{
-    if(pc.iceGatheringState==='complete')r();
-    else pc.onicegatheringstatechange=()=>{
-      if(pc.iceGatheringState==='complete')r();
-    };
+  await new Promise(r => {
+    if (pc.iceGatheringState === 'complete') r();
+    else pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === 'complete') r(); };
   });
 
-  st.textContent='Connecting to tracker...';
-  let connected=false;
-  for(const tracker of TRACKERS){
-    try{
-      const s=new WebSocket(tracker);
-      await new Promise((ok,fail)=>{
-        let done=false;
-        s.onopen=()=>{if(!done){done=true;ok()}};
-        s.onerror=()=>{if(!done){done=true;fail()}};
-        s.onclose=()=>{if(!done){done=true;fail()}};
-        setTimeout(()=>{if(!done){done=true;s.close();fail(new Error('timeout'))}},5000);
+  setStatus('Connecting to tracker…');
+  let connected = false;
+  for (const tracker of TRACKERS) {
+    try {
+      const s = new WebSocket(tracker);
+      await new Promise((ok, fail) => {
+        let done = false;
+        const settle = fn => () => { if (!done) { done = true; fn(); } };
+        s.onopen  = settle(ok);
+        s.onerror = settle(fail);
+        s.onclose = settle(fail);
+        setTimeout(settle(() => { s.close(); fail(new Error('timeout')); }), 5000);
       });
-      ws=s;connected=true;break;
-    }catch(e){continue}
+      ws = s; connected = true; break;
+    } catch (e) { continue; }
   }
-  if(!connected){
-    st.textContent='Failed to connect to tracker';
-    st.className='error';stop();return;
+  if (!connected) {
+    setStatus('Failed to connect to tracker', 'danger');
+    stop(); return;
   }
 
-  st.textContent='Waiting for camera...';
+  setStatus('Waiting for camera…', 'warning');
 
-  ws.onmessage=async e=>{
+  ws.onmessage = async e => {
     let msg;
-    try{msg=JSON.parse(e.data)}catch(err){return}
-    if(msg.answer&&msg.answer.sdp&&pc){
-      await pc.setRemoteDescription({type:'answer',sdp:msg.answer.sdp});
-      if(msg.answer.sdp.includes('a=sendrecv'))
-        document.getElementById('talk').style.display='';
-      st.textContent='Connecting...';
+    try { msg = JSON.parse(e.data); } catch { return; }
+    if (msg.answer?.sdp && pc) {
+      await pc.setRemoteDescription({ type: 'answer', sdp: msg.answer.sdp });
+      if (msg.answer.sdp.includes('a=sendrecv')) talkBtn.classList.remove('d-none');
+      setStatus('Connecting…');
     }
   };
-  ws.onclose=()=>{
-    if(pc&&pc.iceConnectionState!=='connected'&&pc.iceConnectionState!=='completed'){
-      st.textContent='Tracker disconnected';stop();
+  ws.onclose = () => {
+    if (pc && pc.iceConnectionState !== 'connected' && pc.iceConnectionState !== 'completed') {
+      setStatus('Tracker disconnected', 'warning');
+      stop();
     }
   };
 
-  const strippedSdp=stripSdp(pc.localDescription.sdp);
-  const streamIdx=document.getElementById('stream').value;
-  const fullOfferId='s'+streamIdx+'_'+offerId;
-  const announceMsg={
-    action:'announce',info_hash:infoHash,peer_id:peerId,
-    numwant:1,uploaded:0,downloaded:0,left:1,
-    offers:[{offer_id:fullOfferId,offer:{type:'offer',sdp:strippedSdp}}]
-  };
-  ws.send(JSON.stringify(announceMsg));
+  const strippedSdp = stripSdp(pc.localDescription.sdp);
+  const streamIdx   = document.getElementById('stream').value;
+  ws.send(JSON.stringify({
+    action: 'announce', info_hash: infoHash, peer_id: peerId,
+    numwant: 1, uploaded: 0, downloaded: 0, left: 1,
+    offers: [{ offer_id: 's' + streamIdx + '_' + offerId, offer: { type: 'offer', sdp: strippedSdp } }]
+  }));
 }
 
-function stop(){
+function stop() {
   stopTalk();
-  if(ws){ws.close();ws=null}
-  if(pc){pc.close();pc=null}
-  v.srcObject=null;
-  btn.textContent='Connect';
-  document.getElementById('mute').style.display='none';
-  document.getElementById('talk').style.display='none';
-  document.getElementById('stream').disabled=false;
-  if(!st.className)st.textContent='Disconnected';
+  ws?.close(); ws = null;
+  pc?.close(); pc = null;
+  v.srcObject = null;
+  btn.innerHTML = '<i class="bi bi-play-fill"></i> Connect';
+  btn.classList.replace('btn-outline-danger', 'btn-outline-primary');
+  muteBtn.classList.add('d-none');
+  talkBtn.classList.add('d-none');
+  document.getElementById('stream').disabled = false;
+  if (!st.className.includes('danger')) setStatus('Disconnected');
 }
 
-function toggle(){pc?stop():start()}
-function toggleMute(){v.muted=!v.muted;document.getElementById('mute').textContent=v.muted?'Unmute':'Mute'}
-async function toggleTalk(){
-  if(micStream){stopTalk();return}
-  try{
-    micStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
-    const track=micStream.getAudioTracks()[0];
-    const txcv=pc.getTransceivers().find(t=>t.receiver.track&&t.receiver.track.kind==='audio');
-    if(txcv){txcv.sender.replaceTrack(track);micSender=txcv.sender}
-    else{micSender=pc.addTrack(track,micStream)}
-    document.getElementById('talk').textContent='Stop Talk';
-    document.getElementById('talk').classList.add('active');
-  }catch(e){st.textContent='Mic: '+e.message}
+function toggle() { pc ? stop() : start(); }
+
+function toggleMute() {
+  v.muted = !v.muted;
+  muteBtn.innerHTML = v.muted
+    ? '<i class="bi bi-volume-mute-fill"></i> Unmute'
+    : '<i class="bi bi-volume-up-fill"></i> Mute';
 }
-function stopTalk(){
-  if(micStream){micStream.getTracks().forEach(t=>t.stop());micStream=null}
-  if(micSender&&pc){try{micSender.replaceTrack(null)}catch(e){}}
-  micSender=null;
-  document.getElementById('talk').textContent='Talk';
-  document.getElementById('talk').classList.remove('active');
+
+async function toggleTalk() {
+  if (micStream) { stopTalk(); return; }
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    const track = micStream.getAudioTracks()[0];
+    const txcv  = pc.getTransceivers().find(t => t.receiver.track?.kind === 'audio');
+    if (txcv) { txcv.sender.replaceTrack(track); micSender = txcv.sender; }
+    else micSender = pc.addTrack(track, micStream);
+    talkBtn.innerHTML = '<i class="bi bi-mic-mute-fill"></i> Stop Talk';
+    talkBtn.classList.replace('btn-outline-secondary', 'btn-danger');
+  } catch (e) {
+    setStatus('Mic: ' + e.message, 'danger');
+  }
+}
+
+function stopTalk() {
+  micStream?.getTracks().forEach(t => t.stop());
+  micStream = null;
+  if (micSender && pc) { try { micSender.replaceTrack(null); } catch (e) {} }
+  micSender = null;
+  talkBtn.innerHTML = '<i class="bi bi-mic-fill"></i> Talk';
+  talkBtn.classList.replace('btn-danger', 'btn-outline-secondary');
 }
 </script>
-</body></html>
+</body>
+</html>
