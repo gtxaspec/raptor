@@ -273,7 +273,8 @@ void ric_poll_exposure(ric_state_t *st)
 		 *   ae_luma is NOT used here because IR illumination inflates
 		 *   it regardless of ambient light level.
 		 */
-		want_night = (ae_luma < (uint32_t)st->cfg.night_luma);
+		want_night = (ae_luma < (uint32_t)st->cfg.night_luma) ||
+			     (total_gain > (uint32_t)st->cfg.night_gain);
 
 		if (st->night_gain_baseline > 0) {
 			uint32_t day_thr =
@@ -307,8 +308,8 @@ void ric_poll_exposure(ric_state_t *st)
 			st->night_count++;
 			st->day_count = 0;
 			if (st->night_count >= st->cfg.hysteresis_sec) {
-				RSS_INFO("night detected (luma=%u < %d for %ds)", ae_luma,
-					 st->cfg.night_luma, st->cfg.hysteresis_sec);
+				RSS_INFO("night detected (luma=%u gain=%u for %ds)", ae_luma,
+					 total_gain, st->cfg.hysteresis_sec);
 				ric_set_mode(st, RIC_MODE_NIGHT);
 			}
 		} else {

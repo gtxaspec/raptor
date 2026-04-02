@@ -46,6 +46,7 @@ typedef struct {
 
 	/* Luma trigger thresholds */
 	int night_luma;	  /* ae_luma below this → night (default 20, 0-255) */
+	int night_gain;	  /* gain above this → night regardless of luma (default 80000) */
 	int day_gain_pct; /* night→day: gain below this % of baseline → day (default 25) */
 
 	/* Gain trigger thresholds (legacy, trigger=gain only) */

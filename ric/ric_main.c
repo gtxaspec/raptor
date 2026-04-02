@@ -47,6 +47,7 @@ static void load_config(ric_state_t *st)
 
 	/* Luma trigger thresholds */
 	c->night_luma = rss_config_get_int(cfg, "ircut", "night_luma", 20);
+	c->night_gain = rss_config_get_int(cfg, "ircut", "night_gain", 80000);
 	c->day_gain_pct = rss_config_get_int(cfg, "ircut", "day_gain_pct", 25);
 
 	/* ADC thresholds (trigger=adc) */
