@@ -12,6 +12,12 @@ encoded frames to SHM rings; all other daemons are pure consumers or support
 services with no direct HAL dependency (except RAD for audio capture and RIC
 for ISP exposure queries via RVD's control socket).
 
+Raptor is fully modular -- run only the daemons your application requires.
+A headless recorder might run just RVD and RMR. A cloud-connected doorbell
+might run RVD, RSD, RAD, RIC, and ROD. A minimal RTSP-only camera needs
+just RVD and RSD. Each daemon starts independently and discovers available
+ring buffers at runtime, gracefully skipping any that don't exist.
+
 ```
  sensor
    |
