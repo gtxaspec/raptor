@@ -473,10 +473,12 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 		FILE *f = fopen("/dev/urandom", "r");
 		if (f) {
 			if (fread(&self->session_id, sizeof(self->session_id), 1, f) != 1)
-				self->session_id = (uint64_t)rand();
+				self->session_id = 0;
 			fclose(f);
-		} else {
-			self->session_id = (uint64_t)rand();
+		}
+		if (!self->session_id) {
+			compy_respond(ctx, COMPY_STATUS_INTERNAL_SERVER_ERROR, "RNG unavailable");
+			return;
 		}
 	}
 
