@@ -116,6 +116,97 @@ static void load_stream_config(rss_config_t *cfg, const char *section, rvd_strea
 	};
 }
 
+/* Load sensor config from an INI section, with procfs fallback for sensor 0 */
+static void load_sensor_from_section(rss_config_t *cfg, const char *section,
+				     rss_sensor_config_t *sensor, bool use_procfs)
+{
+	memset(sensor, 0, sizeof(*sensor));
+
+	const char *cfg_name = rss_config_get_str(cfg, section, "name", "");
+	if (cfg_name[0]) {
+		rss_strlcpy(sensor->name, cfg_name, sizeof(sensor->name));
+	} else if (use_procfs) {
+		char *s = rss_read_file("/proc/jz/sensor/name", NULL);
+		if (s) {
+			char *nl = strchr(s, '\n');
+			if (nl) *nl = '\0';
+			rss_strlcpy(sensor->name, s, sizeof(sensor->name));
+			free(s);
+		}
+	}
+
+	sensor->i2c_addr = rss_config_get_int(cfg, section, "i2c_addr", 0);
+	if (sensor->i2c_addr == 0 && use_procfs) {
+		char *s = rss_read_file("/proc/jz/sensor/i2c_addr", NULL);
+		if (s) { sensor->i2c_addr = (uint16_t)strtol(s, NULL, 0); free(s); }
+	}
+
+	sensor->i2c_adapter = rss_config_get_int(cfg, section, "i2c_adapter", -1);
+	if (sensor->i2c_adapter < 0 && use_procfs) {
+		char *s = rss_read_file("/proc/jz/sensor/i2c_adapter", NULL);
+		if (!s) s = rss_read_file("/proc/jz/sensor/i2c_bus", NULL);
+		sensor->i2c_adapter = s ? (int)strtol(s, NULL, 10) : 0;
+		free(s);
+	}
+	if (sensor->i2c_adapter < 0)
+		sensor->i2c_adapter = 0;
+
+	sensor->sensor_id = rss_config_get_int(cfg, section, "sensor_id", 0);
+	sensor->pwdn_gpio = rss_config_get_int(cfg, section, "pwdn_gpio", -1);
+	if (sensor->pwdn_gpio == -1 && use_procfs) {
+		char *s = rss_read_file("/proc/jz/sensor/pwdn_gpio", NULL);
+		if (s) { sensor->pwdn_gpio = (int)strtol(s, NULL, 10); free(s); }
+	}
+	sensor->power_gpio = rss_config_get_int(cfg, section, "power_gpio", -1);
+	sensor->rst_gpio = rss_config_get_int(cfg, section, "rst_gpio", -1);
+	if (sensor->rst_gpio == -1 && use_procfs) {
+		char *s = rss_read_file("/proc/jz/sensor/rst_gpio", NULL);
+		if (s) { sensor->rst_gpio = (int)strtol(s, NULL, 10); free(s); }
+	}
+
+	sensor->default_boot = rss_config_get_int(cfg, section, "boot", -1);
+	if (sensor->default_boot < 0 && use_procfs) {
+		char *s = rss_read_file("/proc/jz/sensor/boot", NULL);
+		sensor->default_boot = s ? (int)strtol(s, NULL, 10) : 0;
+		free(s);
+	}
+	if (sensor->default_boot < 0)
+		sensor->default_boot = 0;
+
+	sensor->mclk = rss_config_get_int(cfg, section, "mclk", -1);
+	if (sensor->mclk < 0 && use_procfs) {
+		char *s = rss_read_file("/proc/jz/sensor/mclk", NULL);
+		sensor->mclk = s ? (int)strtol(s, NULL, 10) : 0;
+		free(s);
+	}
+	if (sensor->mclk < 0)
+		sensor->mclk = 0;
+
+	sensor->vin_type = rss_config_get_int(cfg, section, "video_interface", -1);
+	if (sensor->vin_type < 0 && use_procfs) {
+		char *s = rss_read_file("/proc/jz/sensor/video_interface", NULL);
+		sensor->vin_type = s ? (int)strtol(s, NULL, 10) : 0;
+		free(s);
+	}
+	if (sensor->vin_type < 0)
+		sensor->vin_type = 0;
+}
+
+/* FS channel base for a given sensor index (hardware mapping) */
+static int fs_base_channel(int sensor_idx)
+{
+	return sensor_idx * 3; /* sensor 0→0, sensor 1→3, sensor 2→6 */
+}
+
+/* Ring name for a sensor/stream combination */
+static void get_ring_name(int sensor_idx, const char *type, char *buf, size_t len)
+{
+	if (sensor_idx == 0)
+		snprintf(buf, len, "%s", type);
+	else
+		snprintf(buf, len, "s%d_%s", sensor_idx, type);
+}
+
 int rvd_pipeline_init(rvd_state_t *st)
 {
 	rss_config_t *cfg = st->cfg;
@@ -129,112 +220,70 @@ int rvd_pipeline_init(rvd_state_t *st)
 	}
 	st->ops = rss_hal_get_ops(st->hal_ctx);
 
-	/* ── 2. Sensor config (auto-detect from /proc/jz/sensor if not set) ── */
-	rss_sensor_config_t sensor = {0};
+	/* ── 2. Sensor config ── */
+	rss_multi_sensor_config_t multi_cfg = {0};
 
-	const char *cfg_name = rss_config_get_str(cfg, "sensor", "name", "");
-	if (cfg_name[0]) {
-		rss_strlcpy(sensor.name, cfg_name, sizeof(sensor.name));
+	/* Detect multi-sensor: if [sensor1] has a name, use [sensor0]+[sensor1]+... */
+	bool multi = (rss_config_get_str(cfg, "sensor1", "name", "")[0] != '\0');
+	if (multi) {
+		load_sensor_from_section(cfg, "sensor0", &multi_cfg.sensors[0], true);
+		load_sensor_from_section(cfg, "sensor1", &multi_cfg.sensors[1], false);
+		multi_cfg.sensor_count = 2;
+		/* Set sensor_id for secondary sensor */
+		if (multi_cfg.sensors[1].sensor_id == 0)
+			multi_cfg.sensors[1].sensor_id = 1;
+
+		if (rss_config_get_str(cfg, "sensor2", "name", "")[0] != '\0') {
+			load_sensor_from_section(cfg, "sensor2", &multi_cfg.sensors[2], false);
+			if (multi_cfg.sensors[2].sensor_id == 0)
+				multi_cfg.sensors[2].sensor_id = 2;
+			multi_cfg.sensor_count = 3;
+		}
+
+		/* MIPI switch config (T23 dual/triple camera) */
+		if (rss_config_get_bool(cfg, "mipi_switch", "enabled", false)) {
+			multi_cfg.mipi_switch.enable = true;
+			multi_cfg.mipi_switch.switch_gpio =
+				rss_config_get_int(cfg, "mipi_switch", "switch_gpio", 0);
+			multi_cfg.mipi_switch.main_gstate =
+				rss_config_get_int(cfg, "mipi_switch", "main_gstate", 0);
+			multi_cfg.mipi_switch.sec_gstate =
+				rss_config_get_int(cfg, "mipi_switch", "sec_gstate", 1);
+			multi_cfg.mipi_switch.switch_gpio2 =
+				rss_config_get_int(cfg, "mipi_switch", "switch_gpio2", 0);
+		}
+
+		RSS_INFO("multi-sensor mode: %d sensors", multi_cfg.sensor_count);
 	} else {
-		char *s = rss_read_file("/proc/jz/sensor/name", NULL);
-		if (s) {
-			/* strip trailing newline */
-			char *nl = strchr(s, '\n');
-			if (nl)
-				*nl = '\0';
-			rss_strlcpy(sensor.name, s, sizeof(sensor.name));
-			free(s);
-		}
-		if (!sensor.name[0]) {
-			RSS_FATAL("sensor name not in config and not in /proc/jz/sensor/name");
-			return RSS_ERR;
-		}
-		RSS_INFO("sensor name from procfs: %s", sensor.name);
+		/* Legacy single-sensor: load from [sensor] section */
+		load_sensor_from_section(cfg, "sensor", &multi_cfg.sensors[0], true);
+		multi_cfg.sensor_count = 1;
+	}
+	st->sensor_count = multi_cfg.sensor_count;
+	if (st->sensor_count > RVD_MAX_SENSORS) {
+		RSS_FATAL("sensor_count %d exceeds RVD_MAX_SENSORS %d", st->sensor_count, RVD_MAX_SENSORS);
+		return RSS_ERR;
 	}
 
-	sensor.i2c_addr = rss_config_get_int(cfg, "sensor", "i2c_addr", 0);
-	if (sensor.i2c_addr == 0) {
-		char *s = rss_read_file("/proc/jz/sensor/i2c_addr", NULL);
-		if (s) {
-			sensor.i2c_addr = (uint16_t)strtol(s, NULL, 0);
-			free(s);
-		}
-		if (sensor.i2c_addr == 0) {
-			RSS_FATAL("i2c_addr not in config and not in /proc/jz/sensor/i2c_addr");
-			return RSS_ERR;
-		}
-		RSS_INFO("sensor i2c_addr from procfs: 0x%02x", sensor.i2c_addr);
+	/* Validate primary sensor */
+	if (!multi_cfg.sensors[0].name[0]) {
+		RSS_FATAL("sensor name not in config and not in /proc/jz/sensor/name");
+		return RSS_ERR;
 	}
 
-	sensor.i2c_adapter = rss_config_get_int(cfg, "sensor", "i2c_adapter", -1);
-	if (sensor.i2c_adapter < 0) {
-		char *s = rss_read_file("/proc/jz/sensor/i2c_adapter", NULL);
-		if (!s)
-			s = rss_read_file("/proc/jz/sensor/i2c_bus", NULL); /* xb1 fallback */
-		sensor.i2c_adapter = s ? (int)strtol(s, NULL, 10) : 0;
-		free(s);
-	}
-	sensor.pwdn_gpio = rss_config_get_int(cfg, "sensor", "pwdn_gpio", -1);
-	if (sensor.pwdn_gpio == -1) {
-		char *s = rss_read_file("/proc/jz/sensor/pwdn_gpio", NULL);
-		if (s) {
-			sensor.pwdn_gpio = (int)strtol(s, NULL, 10);
-			free(s);
-			if (sensor.pwdn_gpio >= 0)
-				RSS_INFO("sensor pwdn_gpio from procfs: %d", sensor.pwdn_gpio);
-		}
-	}
-	sensor.power_gpio = rss_config_get_int(cfg, "sensor", "power_gpio", -1);
-
-	/* Read rst_gpio from config, fall back to /proc/jz/sensor/rst_gpio */
-	sensor.rst_gpio = rss_config_get_int(cfg, "sensor", "rst_gpio", -1);
-	if (sensor.rst_gpio == -1) {
-		char *s = rss_read_file("/proc/jz/sensor/rst_gpio", NULL);
-		if (s) {
-			sensor.rst_gpio = (int)strtol(s, NULL, 10);
-			free(s);
-			if (sensor.rst_gpio > 0)
-				RSS_INFO("sensor rst_gpio from procfs: %d", sensor.rst_gpio);
-		}
+	if (multi_cfg.sensors[0].i2c_addr == 0) {
+		RSS_FATAL("i2c_addr not in config and not in /proc/jz/sensor/i2c_addr");
+		return RSS_ERR;
 	}
 
-	/* T40/T41 sensor fields — read from config, fall back to procfs.
-	 * Procfs may return -1 if the ISP framework didn't populate the
-	 * field, so clamp to safe defaults. */
-	sensor.default_boot = rss_config_get_int(cfg, "sensor", "boot", -1);
-	if (sensor.default_boot < 0) {
-		char *s = rss_read_file("/proc/jz/sensor/boot", NULL);
-		sensor.default_boot = s ? (int)strtol(s, NULL, 10) : 0;
-		free(s);
-		if (sensor.default_boot < 0)
-			sensor.default_boot = 0;
+	for (int s = 0; s < multi_cfg.sensor_count; s++) {
+		RSS_INFO("sensor%d: %s i2c=0x%02x bus=%d id=%d", s,
+			 multi_cfg.sensors[s].name, multi_cfg.sensors[s].i2c_addr,
+			 multi_cfg.sensors[s].i2c_adapter, multi_cfg.sensors[s].sensor_id);
 	}
 
-	sensor.mclk = rss_config_get_int(cfg, "sensor", "mclk", -1);
-	if (sensor.mclk < 0) {
-		char *s = rss_read_file("/proc/jz/sensor/mclk", NULL);
-		sensor.mclk = s ? (int)strtol(s, NULL, 10) : 0;
-		RSS_DEBUG("sensor mclk from procfs: raw='%s' val=%d", s ? s : "(null)", sensor.mclk);
-		free(s);
-		if (sensor.mclk < 0)
-			sensor.mclk = 0;
-	}
-
-	sensor.vin_type = rss_config_get_int(cfg, "sensor", "video_interface", -1);
-	if (sensor.vin_type < 0) {
-		char *s = rss_read_file("/proc/jz/sensor/video_interface", NULL);
-		sensor.vin_type = s ? (int)strtol(s, NULL, 10) : 0;
-		free(s);
-		if (sensor.vin_type < 0)
-			sensor.vin_type = 0;
-	}
-
-	RSS_DEBUG("sensor config: mclk=%d boot=%d vi=%d rst=%d pwdn=%d",
-		 sensor.mclk, sensor.default_boot, sensor.vin_type,
-		 sensor.rst_gpio, sensor.pwdn_gpio);
-
-	/* ── 3. Init HAL (brings up ISP + sensor) ── */
-	ret = RSS_HAL_CALL(st->ops, init, st->hal_ctx, &sensor);
+	/* ── 3. Init HAL (brings up ISP + sensor(s)) ── */
+	ret = RSS_HAL_CALL(st->ops, init, st->hal_ctx, &multi_cfg);
 	if (ret != RSS_OK) {
 		RSS_FATAL("HAL init failed: %d", ret);
 		return ret;
@@ -255,25 +304,33 @@ int rvd_pipeline_init(rvd_state_t *st)
 	/* Check caps for codec fallback */
 	const rss_hal_caps_t *caps = st->ops->get_caps ? st->ops->get_caps(st->hal_ctx) : NULL;
 
-	/* ── 3b. Set sensor FPS ── */
-	int sensor_fps = rss_config_get_int(cfg, "sensor", "fps", 0);
-	if (sensor_fps <= 0) {
-		/* Auto-detect from procfs (like prudynt) */
-		char *s = rss_read_file("/proc/jz/sensor/max_fps", NULL);
-		if (s) {
-			sensor_fps = (int)strtol(s, NULL, 10);
-			free(s);
+	/* ── 3b. Set sensor FPS (per sensor for multi-sensor) ── */
+	{
+		const char *fps_section = multi ? "sensor0" : "sensor";
+		int sensor_fps = rss_config_get_int(cfg, fps_section, "fps", 0);
+		if (sensor_fps <= 0) {
+			char *s = rss_read_file("/proc/jz/sensor/max_fps", NULL);
+			if (s) { sensor_fps = (int)strtol(s, NULL, 10); free(s); }
+			if (sensor_fps <= 0) sensor_fps = 25;
 		}
-		if (sensor_fps <= 0)
-			sensor_fps = 25; /* fallback */
-	}
-	ret = RSS_HAL_CALL(st->ops, isp_set_sensor_fps, st->hal_ctx, sensor_fps, 1);
-	if (ret != RSS_OK)
-		RSS_WARN("isp_set_sensor_fps failed: %d (non-fatal)", ret);
-	else
-		RSS_INFO("sensor fps: %d", sensor_fps);
+		/* Sensor 0 FPS via legacy ops */
+		ret = RSS_HAL_CALL(st->ops, isp_set_sensor_fps, st->hal_ctx, sensor_fps, 1);
+		if (ret != RSS_OK)
+			RSS_WARN("isp_set_sensor_fps failed: %d (non-fatal)", ret);
+		else
+			RSS_INFO("sensor0 fps: %d", sensor_fps);
 
-	/* ── 3c. ISP tuning defaults (match prudynt init sequence) ── */
+		/* Additional sensors via _n ops */
+		for (int s = 1; s < st->sensor_count; s++) {
+			char sect[20];
+			snprintf(sect, sizeof(sect), "sensor%d", s);
+			int fps = rss_config_get_int(cfg, sect, "fps", sensor_fps);
+			RSS_HAL_CALL(st->ops, isp_set_sensor_fps_n, st->hal_ctx, s, fps, 1);
+			RSS_INFO("sensor%d fps: %d", s, fps);
+		}
+	}
+
+	/* ── 3c. ISP tuning defaults (apply to all sensors) ── */
 	RSS_HAL_CALL(st->ops, isp_set_brightness, st->hal_ctx, 128);
 	RSS_HAL_CALL(st->ops, isp_set_contrast, st->hal_ctx, 128);
 	RSS_HAL_CALL(st->ops, isp_set_saturation, st->hal_ctx, 128);
@@ -283,10 +340,36 @@ int rvd_pipeline_init(rvd_state_t *st)
 	RSS_HAL_CALL(st->ops, isp_set_running_mode, st->hal_ctx, RSS_ISP_DAY);
 	ret = RSS_HAL_CALL(st->ops, isp_set_bypass, st->hal_ctx, 1);
 	RSS_DEBUG("isp_set_bypass returned %d", ret);
-	int antiflicker = rss_config_get_int(cfg, "sensor", "antiflicker", 2);
+	int antiflicker = rss_config_get_int(cfg, multi ? "sensor0" : "sensor", "antiflicker", 2);
 	RSS_HAL_CALL(st->ops, isp_set_antiflicker, st->hal_ctx, antiflicker);
 	RSS_HAL_CALL(st->ops, isp_set_hflip, st->hal_ctx, 0);
 	RSS_HAL_CALL(st->ops, isp_set_vflip, st->hal_ctx, 0);
+
+	/* Dual-sensor: read sensor attrs + disable AeFreeze + set CustomMode (prudynt pattern).
+	 * GetSensorAttr may trigger ISP to initialize the sensor pipeline. */
+	if (st->sensor_count > 1) {
+		rss_exposure_t dummy;
+		RSS_HAL_CALL(st->ops, isp_get_exposure_n, st->hal_ctx, 0, &dummy);
+		for (int s = 1; s < st->sensor_count; s++)
+			RSS_HAL_CALL(st->ops, isp_get_exposure_n, st->hal_ctx, s, &dummy);
+		RSS_HAL_CALL(st->ops, isp_set_ae_freeze_n, st->hal_ctx, 0, 0);
+		RSS_HAL_CALL(st->ops, isp_set_custom_mode_n, st->hal_ctx, 0, 0);
+	}
+
+	/* Apply defaults to additional sensors */
+	for (int s = 1; s < st->sensor_count; s++) {
+		RSS_HAL_CALL(st->ops, isp_set_brightness_n, st->hal_ctx, s, 128);
+		RSS_HAL_CALL(st->ops, isp_set_contrast_n, st->hal_ctx, s, 128);
+		RSS_HAL_CALL(st->ops, isp_set_saturation_n, st->hal_ctx, s, 128);
+		RSS_HAL_CALL(st->ops, isp_set_sharpness_n, st->hal_ctx, s, 128);
+		RSS_HAL_CALL(st->ops, isp_set_sinter_strength_n, st->hal_ctx, s, 128);
+		RSS_HAL_CALL(st->ops, isp_set_temper_strength_n, st->hal_ctx, s, 128);
+		RSS_HAL_CALL(st->ops, isp_set_running_mode_n, st->hal_ctx, s, RSS_ISP_DAY);
+		RSS_HAL_CALL(st->ops, isp_set_hflip_n, st->hal_ctx, s, 0);
+		RSS_HAL_CALL(st->ops, isp_set_vflip_n, st->hal_ctx, s, 0);
+		RSS_HAL_CALL(st->ops, isp_set_ae_freeze_n, st->hal_ctx, s, 0);
+		RSS_HAL_CALL(st->ops, isp_set_custom_mode_n, st->hal_ctx, s, 0);
+	}
 
 	/* ── 3d. Read actual sensor resolution from /proc ── */
 	int sensor_w = 0, sensor_h = 0;
@@ -314,7 +397,18 @@ int rvd_pipeline_init(rvd_state_t *st)
 			sensor_h = cfg_h;
 			RSS_INFO("sensor resolution from config: %dx%d", sensor_w, sensor_h);
 		} else {
-			RSS_WARN("could not determine sensor resolution");
+			/* Multi-sensor: procfs may not report resolution with s0/s1 drivers.
+			 * Read from sensor0 config section. */
+			const char *res_sect = multi ? "sensor0" : "sensor";
+			int cfg_sw = rss_config_get_int(cfg, res_sect, "width", 0);
+			int cfg_sh = rss_config_get_int(cfg, res_sect, "height", 0);
+			if (cfg_sw > 0 && cfg_sh > 0) {
+				sensor_w = cfg_sw;
+				sensor_h = cfg_sh;
+				RSS_INFO("sensor resolution from config: %dx%d", sensor_w, sensor_h);
+			} else {
+				RSS_WARN("could not determine sensor resolution");
+			}
 		}
 	}
 
@@ -323,27 +417,59 @@ int rvd_pipeline_init(rvd_state_t *st)
 	if (st->low_latency)
 		RSS_INFO("low latency mode enabled");
 
-	/* ── 4. Load stream configs ── */
-	/* Stream0 defaults to sensor resolution; sub stream defaults to sensor/2 */
+	/* ── 4. Load stream configs (per sensor) ── */
 	int def_w = sensor_w > 0 ? sensor_w : 1920;
 	int def_h = sensor_h > 0 ? sensor_h : 1080;
 	int sub_w = def_w > 640 ? 640 : def_w / 2;
 	int sub_h = def_h > 360 ? 360 : def_h / 2;
-	load_stream_config(cfg, "stream0", &st->streams[0], def_w, def_h, 25, 2500000);
-	st->streams[0].enc_cfg.ivdc = rss_config_get_bool(cfg, "stream0", "ivdc", false);
-	st->streams[0].chn = 0;
-	st->stream_count = 1;
+	st->stream_count = 0;
+	int enc_grp_counter = 0; /* sequential encoder group assignment */
 
-	/* Sub stream (optional) */
-	if (rss_config_get_bool(cfg, "stream1", "enabled", true)) {
-		load_stream_config(cfg, "stream1", &st->streams[1], sub_w, sub_h, 25, 1000000);
-		st->streams[1].chn = 1;
-		st->stream_count = 2;
+	for (int s = 0; s < st->sensor_count; s++) {
+		int fs_base = fs_base_channel(s);
+		char main_sect[32], sub_sect[32];
+
+		if (s == 0) {
+			/* Sensor 0: backward-compatible section names */
+			strcpy(main_sect, "stream0");
+			strcpy(sub_sect, "stream1");
+		} else {
+			snprintf(main_sect, sizeof(main_sect), "sensor%d_stream0", s);
+			snprintf(sub_sect, sizeof(sub_sect), "sensor%d_stream1", s);
+		}
+
+		/* Main stream */
+		int si = st->stream_count;
+		load_stream_config(cfg, main_sect, &st->streams[si], def_w, def_h, 25, 2500000);
+		st->streams[si].enc_cfg.ivdc = rss_config_get_bool(cfg, main_sect, "ivdc", false);
+		st->streams[si].fs_chn = fs_base;
+		st->streams[si].chn = enc_grp_counter++;
+		st->streams[si].sensor_idx = s;
+		st->stream_count++;
+
+		RSS_INFO("sensor%d main: fs_chn=%d enc_grp=%d %ux%u", s,
+			 st->streams[si].fs_chn, st->streams[si].chn,
+			 st->streams[si].enc_cfg.width, st->streams[si].enc_cfg.height);
+
+		/* Sub stream (optional) */
+		bool sub_enabled = (s == 0) ? rss_config_get_bool(cfg, "stream1", "enabled", true)
+					    : rss_config_get_bool(cfg, sub_sect, "enabled", true);
+		if (sub_enabled) {
+			si = st->stream_count;
+			load_stream_config(cfg, sub_sect, &st->streams[si], sub_w, sub_h, 25, 1000000);
+			st->streams[si].fs_chn = fs_base + 1;
+			st->streams[si].chn = enc_grp_counter++;
+			st->streams[si].sensor_idx = s;
+			st->stream_count++;
+
+			RSS_INFO("sensor%d sub: fs_chn=%d enc_grp=%d %ux%u", s,
+				 st->streams[si].fs_chn, st->streams[si].chn,
+				 st->streams[si].enc_cfg.width, st->streams[si].enc_cfg.height);
+		}
 	}
 
-	/* JPEG snapshot channels (one per video stream).
-	 * Vendor SDK uses encoder channels 4+ for JPEG, registers into
-	 * the corresponding video group. */
+	/* JPEG snapshot channels (one per video stream) */
+	int jpeg_chn_base = enc_grp_counter; /* pack JPEG channels right after video */
 	st->jpeg_count = 0;
 	for (int j = 0; j < RVD_MAX_JPEG; j++)
 		st->jpeg_streams[j] = -1;
@@ -351,18 +477,17 @@ int rvd_pipeline_init(rvd_state_t *st)
 	if (rss_config_get_bool(cfg, "jpeg", "enabled", true)) {
 		st->jpeg_quality = rss_config_get_int(cfg, "jpeg", "quality", 75);
 		int jpeg_fps = rss_config_get_int(cfg, "jpeg", "fps", 1);
-		int video_count = st->stream_count; /* only video streams */
+		int video_count = st->stream_count;
 
-		/* Per-stream JPEG enable: jpeg0_enabled, jpeg1_enabled (default true) */
-		for (int v = 0; v < video_count && v < RVD_MAX_JPEG; v++) {
-			const char *key = v == 0 ? "jpeg0_enabled" : "jpeg1_enabled";
-			if (!rss_config_get_bool(cfg, "jpeg", key, true)) {
-				RSS_INFO("jpeg%d: disabled by config", v);
+		for (int v = 0; v < video_count && st->jpeg_count < RVD_MAX_JPEG; v++) {
+			/* Only create JPEG for main streams (first stream per sensor) */
+			char key[32];
+			snprintf(key, sizeof(key), "jpeg%d_enabled", v);
+			if (!rss_config_get_bool(cfg, "jpeg", key, true))
 				continue;
-			}
 
 			int ji = st->stream_count;
-			int jpeg_chn = 4 + v; /* SDK: JPEG at chn 4+ */
+			int jpeg_chn = jpeg_chn_base + st->jpeg_count;
 
 			st->streams[ji].enc_cfg = (rss_video_config_t){
 				.codec = RSS_CODEC_JPEG,
@@ -373,13 +498,16 @@ int rvd_pipeline_init(rvd_state_t *st)
 				.bitrate = 0,
 			};
 			st->streams[ji].fs_cfg = st->streams[v].fs_cfg;
+			st->streams[ji].fs_chn = st->streams[v].fs_chn;
 			st->streams[ji].chn = jpeg_chn;
+			st->streams[ji].sensor_idx = st->streams[v].sensor_idx;
 			st->streams[ji].is_jpeg = true;
-			st->jpeg_streams[v] = ji;
+			st->jpeg_streams[st->jpeg_count] = ji;
 			st->stream_count = ji + 1;
 			st->jpeg_count++;
 
-			RSS_INFO("jpeg%d: %ux%u @ %d fps, quality %d (enc chn %d)", v,
+			RSS_INFO("jpeg%d: sensor%d %ux%u @ %d fps, quality %d (enc chn %d)",
+				 st->jpeg_count - 1, st->streams[ji].sensor_idx,
 				 st->streams[ji].enc_cfg.width, st->streams[ji].enc_cfg.height,
 				 jpeg_fps, st->jpeg_quality, jpeg_chn);
 		}
@@ -395,12 +523,26 @@ int rvd_pipeline_init(rvd_state_t *st)
 		}
 	}
 
-	/* ── 4b. Enable scaler for streams at lower resolution than sensor ── */
+	/* ── 4b. Enable crop + scaler for streams ── */
 	if (sensor_w > 0 && sensor_h > 0) {
 		for (int i = 0; i < st->stream_count; i++) {
 			if (st->streams[i].is_jpeg)
-				continue; /* shares stream0's FS */
+				continue;
 			rss_fs_config_t *fs = &st->streams[i].fs_cfg;
+
+			/* In multi-sensor mode, ISP reports sensor resolution as 0x0 at
+			 * framesource creation time. Enable crop on main streams (full res)
+			 * to explicitly set the input resolution. Skip on sub streams
+			 * since crop dimensions can't exceed scaler output. */
+			if (st->sensor_count > 1 &&
+			    fs->width == sensor_w && fs->height == sensor_h) {
+				fs->crop.enable = true;
+				fs->crop.x = 0;
+				fs->crop.y = 0;
+				fs->crop.w = sensor_w;
+				fs->crop.h = sensor_h;
+			}
+
 			if (fs->width != sensor_w || fs->height != sensor_h) {
 				fs->scaler.enable = true;
 				fs->scaler.out_width = fs->width;
@@ -412,19 +554,19 @@ int rvd_pipeline_init(rvd_state_t *st)
 	}
 
 	/* ── 5. Create framesource channels ── */
-	/* JPEG shares framesource with stream0 — skip FS creation for it */
+	/* JPEG shares framesource with its video stream — skip FS creation for it */
 	for (int i = 0; i < st->stream_count; i++) {
 		if (st->streams[i].is_jpeg)
 			continue;
-		ret = RSS_HAL_CALL(st->ops, fs_create_channel, st->hal_ctx, i,
+		int fsc = st->streams[i].fs_chn;
+		ret = RSS_HAL_CALL(st->ops, fs_create_channel, st->hal_ctx, fsc,
 				   &st->streams[i].fs_cfg);
 		if (ret != RSS_OK) {
-			RSS_FATAL("fs_create_channel(%d) failed: %d", i, ret);
+			RSS_FATAL("fs_create_channel(%d) failed: %d", fsc, ret);
 			return ret;
 		}
-		/* Set fifo and frame depth to 0 (prudynt pattern — required for frames to flow) */
-		RSS_HAL_CALL(st->ops, fs_set_fifo, st->hal_ctx, i, 0);
-		RSS_HAL_CALL(st->ops, fs_set_frame_depth, st->hal_ctx, i, 0);
+		RSS_HAL_CALL(st->ops, fs_set_fifo, st->hal_ctx, fsc, 0);
+		RSS_HAL_CALL(st->ops, fs_set_frame_depth, st->hal_ctx, fsc, 0);
 	}
 
 	/* ── 6. OSD pipeline (if enabled) ── */
@@ -472,7 +614,15 @@ int rvd_pipeline_init(rvd_state_t *st)
 		int chn = st->streams[i].chn;
 
 		if (st->streams[i].is_jpeg) {
-			int video_grp = chn - 4; /* chn 4→grp 0, chn 5→grp 1 */
+			/* Find parent video stream's encoder group */
+			int video_grp = 0;
+			for (int v = 0; v < st->stream_count; v++) {
+				if (!st->streams[v].is_jpeg &&
+				    st->streams[v].fs_chn == st->streams[i].fs_chn) {
+					video_grp = st->streams[v].chn;
+					break;
+				}
+			}
 
 			/* Optional buffer sharing (before CreateChn) */
 			if (rss_config_get_bool(cfg, "jpeg", "bufshare", true)) {
@@ -545,23 +695,24 @@ int rvd_pipeline_init(rvd_state_t *st)
 	for (int i = 0; i < st->stream_count; i++) {
 		if (st->streams[i].is_jpeg)
 			continue;
-		int chn = st->streams[i].chn;
-		bool insert_ivs = (chn == 1 && st->ivs_active);
+		int fsc = st->streams[i].fs_chn;
+		int grp = st->streams[i].chn;
+		bool insert_ivs = (fsc == 1 && st->ivs_active);
 
 		rss_cell_t chain[RVD_MAX_BIND_STAGES];
 		int chain_len = 0;
 
-		chain[chain_len++] = (rss_cell_t){RSS_DEV_FS, chn, 0};
+		chain[chain_len++] = (rss_cell_t){RSS_DEV_FS, fsc, 0};
 		if (insert_ivs)
 			chain[chain_len++] = (rss_cell_t){RSS_DEV_IVS, 0, 0};
 		if (st->osd_enabled)
-			chain[chain_len++] = (rss_cell_t){RSS_DEV_OSD, chn, 0};
-		chain[chain_len++] = (rss_cell_t){RSS_DEV_ENC, chn, 0};
+			chain[chain_len++] = (rss_cell_t){RSS_DEV_OSD, grp, 0};
+		chain[chain_len++] = (rss_cell_t){RSS_DEV_ENC, grp, 0};
 
 		for (int j = 0; j < chain_len - 1; j++) {
 			ret = RSS_HAL_CALL(st->ops, bind, st->hal_ctx, &chain[j], &chain[j + 1]);
 			if (ret != RSS_OK) {
-				RSS_FATAL("bind failed at step %d for chn %d: %d", j, chn, ret);
+				RSS_FATAL("bind failed at step %d for stream %d: %d", j, i, ret);
 				return ret;
 			}
 		}
@@ -584,13 +735,14 @@ int rvd_pipeline_init(rvd_state_t *st)
 
 	/* ── 9. Enable framesource, start encoder ── */
 	for (int i = 0; i < st->stream_count; i++) {
+		int fsc = st->streams[i].fs_chn;
 		int chn = st->streams[i].chn;
 
-		/* JPEG shares framesource with stream0 — don't enable twice */
+		/* JPEG shares framesource — don't enable twice */
 		if (!st->streams[i].is_jpeg) {
-			ret = RSS_HAL_CALL(st->ops, fs_enable_channel, st->hal_ctx, chn);
+			ret = RSS_HAL_CALL(st->ops, fs_enable_channel, st->hal_ctx, fsc);
 			if (ret != RSS_OK) {
-				RSS_FATAL("fs_enable_channel(%d) failed: %d", chn, ret);
+				RSS_FATAL("fs_enable_channel(%d) failed: %d", fsc, ret);
 				return ret;
 			}
 		}
@@ -644,57 +796,62 @@ int rvd_pipeline_init(rvd_state_t *st)
 	}
 	RSS_INFO("main ring: %u slots, %u KB data", ring_main_slots, main_data / 1024);
 
-	st->streams[0].ring = rss_ring_create("main", ring_main_slots, main_data);
-	if (!st->streams[0].ring) {
-		RSS_FATAL("failed to create main ring");
-		return RSS_ERR;
-	}
-	rss_ring_set_stream_info(
-		st->streams[0].ring, 0, st->streams[0].enc_cfg.codec, st->streams[0].enc_cfg.width,
-		st->streams[0].enc_cfg.height, st->streams[0].enc_cfg.fps_num,
-		st->streams[0].enc_cfg.fps_den, rvd_profile_idc(st->streams[0].enc_cfg.profile),
-		rvd_level_idc(st->streams[0].enc_cfg.width, st->streams[0].enc_cfg.height));
+	/* Create video rings for all non-JPEG streams */
+	for (int i = 0; i < st->stream_count; i++) {
+		if (st->streams[i].is_jpeg)
+			continue;
 
-	if (st->stream_count > 1 && !st->streams[1].is_jpeg) {
-		uint32_t sub_data;
-		if (ring_sub_cfg_mb > 0) {
-			sub_data = (uint32_t)ring_sub_cfg_mb * 1024 * 1024;
+		/* Determine ring name based on sensor and local stream index */
+		int local = st->streams[i].fs_chn - fs_base_channel(st->streams[i].sensor_idx);
+		const char *type = (local == 0) ? "main" : "sub";
+		char ring_name[24];
+		get_ring_name(st->streams[i].sensor_idx, type, ring_name, sizeof(ring_name));
+
+		/* Auto-size ring from bitrate */
+		bool is_main = (local == 0);
+		int slots_cfg = is_main ? ring_main_slots : ring_sub_slots;
+		int mb_cfg = is_main ? ring_main_cfg_mb : ring_sub_cfg_mb;
+		uint32_t min_data = is_main ? (256 * 1024) : (128 * 1024);
+		uint32_t max_data = is_main ? (8 * 1024 * 1024) : (4 * 1024 * 1024);
+		uint32_t min_frame = is_main ? 8192 : 4096;
+
+		uint32_t data;
+		if (mb_cfg > 0) {
+			data = (uint32_t)mb_cfg * 1024 * 1024;
 		} else {
-			uint32_t bps = st->streams[1].enc_cfg.bitrate;
-			uint32_t fps = st->streams[1].enc_cfg.fps_num;
-			if (fps == 0)
-				fps = 25;
+			uint32_t bps = st->streams[i].enc_cfg.bitrate;
+			uint32_t fps = st->streams[i].enc_cfg.fps_num;
+			if (fps == 0) fps = 25;
 			uint32_t max_frame = (uint32_t)((uint64_t)bps * 4 / 8 / fps);
-			if (max_frame < 4096)
-				max_frame = 4096;
-			sub_data = max_frame * (uint32_t)ring_sub_slots;
-			if (sub_data < 128 * 1024)
-				sub_data = 128 * 1024;
-			if (sub_data > 4 * 1024 * 1024)
-				sub_data = 4 * 1024 * 1024;
+			if (max_frame < min_frame) max_frame = min_frame;
+			data = max_frame * (uint32_t)slots_cfg;
+			if (data < min_data) data = min_data;
+			if (data > max_data) data = max_data;
 		}
-		RSS_INFO("sub ring: %u slots, %u KB data", ring_sub_slots, sub_data / 1024);
+		RSS_INFO("%s ring: %u slots, %u KB data", ring_name, slots_cfg, data / 1024);
 
-		st->streams[1].ring = rss_ring_create("sub", ring_sub_slots, sub_data);
-		if (!st->streams[1].ring) {
-			RSS_FATAL("failed to create sub ring");
+		st->streams[i].ring = rss_ring_create(ring_name, slots_cfg, data);
+		if (!st->streams[i].ring) {
+			RSS_FATAL("failed to create %s ring", ring_name);
 			return RSS_ERR;
 		}
 		rss_ring_set_stream_info(
-			st->streams[1].ring, 1, st->streams[1].enc_cfg.codec,
-			st->streams[1].enc_cfg.width, st->streams[1].enc_cfg.height,
-			st->streams[1].enc_cfg.fps_num, st->streams[1].enc_cfg.fps_den,
-			rvd_profile_idc(st->streams[1].enc_cfg.profile),
-			rvd_level_idc(st->streams[1].enc_cfg.width, st->streams[1].enc_cfg.height));
+			st->streams[i].ring, i, st->streams[i].enc_cfg.codec,
+			st->streams[i].enc_cfg.width, st->streams[i].enc_cfg.height,
+			st->streams[i].enc_cfg.fps_num, st->streams[i].enc_cfg.fps_den,
+			rvd_profile_idc(st->streams[i].enc_cfg.profile),
+			rvd_level_idc(st->streams[i].enc_cfg.width, st->streams[i].enc_cfg.height));
 	}
 
-	/* JPEG rings — auto-sized from resolution (uncompressed × quality estimate) */
+	/* JPEG rings — auto-sized from resolution */
 	for (int j = 0; j < st->jpeg_count; j++) {
 		int ji = st->jpeg_streams[j];
 		if (ji < 0)
 			continue;
-		char ring_name[16];
-		snprintf(ring_name, sizeof(ring_name), "jpeg%d", j);
+		char ring_name[24];
+		char base_name[16];
+		snprintf(base_name, sizeof(base_name), "jpeg%d", j);
+		get_ring_name(st->streams[ji].sensor_idx, base_name, ring_name, sizeof(ring_name));
 		/* Estimate per-frame JPEG size with quality scaling:
 		 *   Measured: 1440p q75 ≈ 76KB, 360p q75 ≈ 6KB
 		 *   Conservative estimate with ~3x headroom over measured.
@@ -745,11 +902,12 @@ void rvd_pipeline_deinit(rvd_state_t *st)
 		if (!st->streams[i].enabled)
 			continue;
 		int chn = st->streams[i].chn;
+		int fsc = st->streams[i].fs_chn;
 
 		RSS_HAL_CALL(st->ops, enc_stop, st->hal_ctx, chn);
 
 		if (!st->streams[i].is_jpeg) {
-			RSS_HAL_CALL(st->ops, fs_disable_channel, st->hal_ctx, chn);
+			RSS_HAL_CALL(st->ops, fs_disable_channel, st->hal_ctx, fsc);
 
 			/* Unbind: walk the stored chain in reverse */
 			int len = st->bind_chain_len[i];
@@ -764,7 +922,7 @@ void rvd_pipeline_deinit(rvd_state_t *st)
 			RSS_HAL_CALL(st->ops, enc_destroy_group, st->hal_ctx, chn);
 			if (st->osd_enabled)
 				RSS_HAL_CALL(st->ops, osd_destroy_group, st->hal_ctx, chn);
-			RSS_HAL_CALL(st->ops, fs_destroy_channel, st->hal_ctx, chn);
+			RSS_HAL_CALL(st->ops, fs_destroy_channel, st->hal_ctx, fsc);
 		}
 
 		if (st->streams[i].ring) {

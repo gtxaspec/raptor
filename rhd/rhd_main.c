@@ -57,7 +57,7 @@ typedef struct {
 
 #define RHD_SEND_TIMEOUT_MS 3000 /* max time to drain a one-shot response */
 
-#define RHD_MAX_JPEG 2
+#define RHD_MAX_JPEG 6 /* up to 2 per sensor, 3 sensors */
 
 typedef struct {
 	int listen_fd;
@@ -520,13 +520,17 @@ static void server_run(rhd_server_t *srv)
 	uint8_t *frame_buf = NULL;
 	uint32_t frame_buf_size = 0;
 
+	/* JPEG ring names: sensor 0 = jpeg0/jpeg1, sensor N = sN_jpeg0/sN_jpeg1 */
+	static const char *jpeg_ring_names[RHD_MAX_JPEG] = {
+		"jpeg0", "jpeg1", "s1_jpeg0", "s1_jpeg1", "s2_jpeg0", "s2_jpeg1"
+	};
+
 	/* Try to open JPEG rings */
 	for (int attempt = 0; attempt < 30 && *srv->running; attempt++) {
 		for (int j = 0; j < RHD_MAX_JPEG; j++) {
 			if (srv->jpeg_rings[j])
 				continue;
-			char name[16];
-			snprintf(name, sizeof(name), "jpeg%d", j);
+			const char *name = jpeg_ring_names[j];
 			srv->jpeg_rings[j] = rss_ring_open(name);
 			if (srv->jpeg_rings[j]) {
 				const rss_ring_header_t *hdr =

@@ -37,7 +37,7 @@
 /* Stream index for per-ring state */
 #define RSD_STREAM_MAIN	 0
 #define RSD_STREAM_SUB	 1
-#define RSD_STREAM_COUNT 2
+#define RSD_STREAM_COUNT 6 /* main+sub per sensor, up to 3 sensors */
 
 /* Per-client stream state */
 typedef struct {

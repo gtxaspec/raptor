@@ -140,12 +140,17 @@ static int detect_stream_idx(const rsd_server_t *srv, CharSlice99 uri)
 		if (srv->endpoint_main[0] && uri_ends_with(base, srv->endpoint_main))
 			return RSD_STREAM_MAIN;
 	} else {
-		/* Default endpoints */
-		if (CharSlice99_primitive_ends_with(base, CharSlice99_from_str("/stream1")) ||
-		    CharSlice99_primitive_ends_with(base, CharSlice99_from_str("/sub")))
+		/* Default endpoints — /stream0 through /stream5 for multi-sensor */
+		for (int s = 0; s < RSD_STREAM_COUNT; s++) {
+			char path[16];
+			snprintf(path, sizeof(path), "/stream%d", s);
+			if (CharSlice99_primitive_ends_with(base, CharSlice99_from_str(path)))
+				return s;
+		}
+		/* Legacy aliases */
+		if (CharSlice99_primitive_ends_with(base, CharSlice99_from_str("/sub")))
 			return RSD_STREAM_SUB;
-		if (CharSlice99_primitive_ends_with(base, CharSlice99_from_str("/stream0")) ||
-		    CharSlice99_primitive_ends_with(base, CharSlice99_from_str("/main")) ||
+		if (CharSlice99_primitive_ends_with(base, CharSlice99_from_str("/main")) ||
 		    CharSlice99_primitive_ends_with(base, CharSlice99_from_str("/")))
 			return RSD_STREAM_MAIN;
 		/* Sub-resources of default main stream */

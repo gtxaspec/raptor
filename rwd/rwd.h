@@ -195,8 +195,8 @@ struct rwd_server {
 	int client_count;
 	pthread_mutex_t clients_lock;
 
-	/* Video ring readers (0=main, 1=sub) */
-#define RWD_STREAM_COUNT 2
+	/* Video ring readers (0=main, 1=sub, 2+=multi-sensor) */
+#define RWD_STREAM_COUNT 6
 	rss_ring_t *video_rings[RWD_STREAM_COUNT];
 	uint64_t video_read_seq[RWD_STREAM_COUNT];
 	uint8_t *video_bufs[RWD_STREAM_COUNT];

@@ -9,8 +9,9 @@
 #include <rss_ipc.h>
 #include <rss_common.h>
 
-#define RVD_MAX_STREAMS	       4 /* main, sub, jpeg0, jpeg1 */
-#define RVD_MAX_JPEG	       2
+#define RVD_MAX_SENSORS	       3
+#define RVD_MAX_STREAMS	       (RVD_MAX_SENSORS * 4) /* main+sub+jpeg0+jpeg1 per sensor */
+#define RVD_MAX_JPEG	       (RVD_MAX_SENSORS * 2)
 #define RVD_OSD_REGIONS	       5
 #define RVD_OSD_RETRY_INTERVAL 50 /* check ticks (~5s at 10Hz) */
 
@@ -25,7 +26,9 @@ typedef struct {
 	rss_video_config_t enc_cfg;
 	rss_fs_config_t fs_cfg;
 	rss_ring_t *ring;
-	int chn; /* encoder channel index */
+	int chn;	  /* encoder group/channel index */
+	int fs_chn;	  /* framesource channel (sensor*3 + local) */
+	int sensor_idx;	  /* which sensor (0, 1, 2) */
 	bool enabled;
 	bool is_jpeg; /* true for snapshot channel */
 } rvd_stream_t;
@@ -46,6 +49,9 @@ typedef struct {
 	/* HAL */
 	rss_hal_ctx_t *hal_ctx;
 	const rss_hal_ops_t *ops;
+
+	/* Sensors */
+	int sensor_count;
 
 	/* Streams */
 	rvd_stream_t streams[RVD_MAX_STREAMS];

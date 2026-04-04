@@ -258,6 +258,11 @@ static void handle_client_data(rsd_server_t *srv, int fd)
 
 int rsd_server_init(rsd_server_t *srv)
 {
+	/* Ring names for multi-sensor: sensor 0 = main/sub, sensor N = sN_main/sN_sub */
+	static const char *ring_names[RSD_STREAM_COUNT] = {
+		"main", "sub", "s1_main", "s1_sub", "s2_main", "s2_sub"
+	};
+
 	/* Wait for main ring to appear */
 	RSS_INFO("waiting for video ring...");
 	for (int i = 0; i < 100; i++) {
@@ -272,11 +277,13 @@ int rsd_server_init(rsd_server_t *srv)
 	}
 	srv->video[RSD_STREAM_MAIN].idx = RSD_STREAM_MAIN;
 
-	/* Try to open sub ring (optional) */
-	srv->video[RSD_STREAM_SUB].ring = rss_ring_open("sub");
-	srv->video[RSD_STREAM_SUB].idx = RSD_STREAM_SUB;
-	if (srv->video[RSD_STREAM_SUB].ring)
-		RSS_INFO("sub stream ring available");
+	/* Try to open remaining rings (all optional except main) */
+	for (int s = 1; s < RSD_STREAM_COUNT; s++) {
+		srv->video[s].ring = rss_ring_open(ring_names[s]);
+		srv->video[s].idx = s;
+		if (srv->video[s].ring)
+			RSS_INFO("stream %d (%s) ring available", s, ring_names[s]);
+	}
 
 	/* Log and allocate frame buffers for each ring */
 	for (int s = 0; s < RSD_STREAM_COUNT; s++) {

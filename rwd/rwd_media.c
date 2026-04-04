@@ -490,7 +490,9 @@ static void rwd_send_audio_frame(rwd_client_t *c, uint32_t codec, const uint8_t 
  * Reads from both main (stream 0) and sub (stream 1) rings,
  * dispatching frames to clients based on their stream_idx. */
 
-static const char *ring_names[RWD_STREAM_COUNT] = {"main", "sub"};
+static const char *ring_names[RWD_STREAM_COUNT] = {
+	"main", "sub", "s1_main", "s1_sub", "s2_main", "s2_sub"
+};
 
 void *rwd_video_reader_thread(void *arg)
 {

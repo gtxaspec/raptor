@@ -716,9 +716,14 @@ int main(int argc, char **argv)
 
 	st.clip_length_sec = rss_config_get_int(dctx.cfg, "recording", "clip_length_sec", 60);
 
-	/* Open video ring */
-	const char *ring_names[] = {"main", "sub"};
-	const char *ring_name = ring_names[st.stream_idx < 2 ? st.stream_idx : 0];
+	/* Open video ring (stream 0-5 for multi-sensor) */
+	static const char *ring_names[] = {
+		"main", "sub", "s1_main", "s1_sub", "s2_main", "s2_sub"
+	};
+	int ri = st.stream_idx;
+	if (ri < 0 || ri >= (int)(sizeof(ring_names) / sizeof(ring_names[0])))
+		ri = 0;
+	const char *ring_name = ring_names[ri];
 
 	for (int attempt = 0; attempt < 30 && *st.running; attempt++) {
 		st.video_ring = rss_ring_open(ring_name);
