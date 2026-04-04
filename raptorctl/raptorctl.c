@@ -86,6 +86,7 @@ static void usage(void)
 		"  rvd set-max-again <val>             Max analog gain\n"
 		"  rvd set-max-dgain <val>             Max digital gain\n"
 		"  rvd set-defog <0|1>                 Defog enable\n"
+		"    ISP commands accept --sensor N for multi-sensor (e.g. set-brightness 128 --sensor 1)\n"
 		"  rvd set-wb <mode> [r_gain] [b_gain] White balance mode + gains\n"
 		"      modes: auto manual daylight cloudy incandescent\n"
 		"             flourescent twilight shade warm_flourescent custom\n"
@@ -715,8 +716,23 @@ int main(int argc, char **argv)
 		snprintf(json, sizeof(json), "{\"cmd\":\"%s\",\"value\":\"%s\"}", cmd, argv[3]);
 
 	} else if (strncmp(cmd, "set-", 4) == 0 && argc >= 4) {
-		/* Generic set-X <value> pass-through */
-		snprintf(json, sizeof(json), "{\"cmd\":\"%s\",\"value\":%s}", cmd, argv[3]);
+		/* Generic set-X <value> pass-through.
+		 * Optional --sensor N flag for multi-sensor ISP tuning. */
+		int sensor_idx = -1;
+		const char *val_arg = argv[3];
+		if (argc >= 6 && strcmp(argv[4], "--sensor") == 0)
+			sensor_idx = atoi(argv[5]);
+		else if (argc >= 5 && strcmp(argv[3], "--sensor") == 0) {
+			sensor_idx = atoi(argv[4]);
+			val_arg = argc >= 6 ? argv[5] : "0";
+		}
+		if (sensor_idx >= 0)
+			snprintf(json, sizeof(json),
+				 "{\"cmd\":\"%s\",\"value\":%s,\"sensor\":%d}",
+				 cmd, val_arg, sensor_idx);
+		else
+			snprintf(json, sizeof(json), "{\"cmd\":\"%s\",\"value\":%s}",
+				 cmd, val_arg);
 
 	} else if (strncmp(cmd, "get-", 4) == 0) {
 		/* Generic get-X pass-through */

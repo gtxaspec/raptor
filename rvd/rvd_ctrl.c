@@ -213,19 +213,19 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 static int handle_isp_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int resp_size)
 {
 	int val;
+	int sensor_idx = -1;
+	rss_json_get_int(cmd_json, "sensor", &sensor_idx);
 
-#define ISP_SET(name, fn)                                                                          \
+/* ISP_SET_N: supports --sensor N via _n variant */
+#define ISP_SET_N(name, fn)                                                                        \
 	if (strstr(cmd_json, "\"" name "\"")) {                                                    \
 		if (rss_json_get_int(cmd_json, "value", &val) == 0) {                              \
-			int ret = RSS_HAL_CALL(st->ops, fn, st->hal_ctx, val);                     \
-			if (ret == 0)                                                              \
-				snprintf(resp, resp_size, "{\"status\":\"ok\"}");                  \
-			else if (ret == RSS_ERR_NOTSUP)                                            \
-				snprintf(resp, resp_size, "{\"status\":\"error\","                 \
-					 "\"reason\":\"not supported on this SoC\"}");             \
+			int ret;                                                                   \
+			if (sensor_idx >= 0)                                                       \
+				ret = RSS_HAL_CALL(st->ops, fn##_n, st->hal_ctx, sensor_idx, val); \
 			else                                                                       \
-				snprintf(resp, resp_size, "{\"status\":\"error\","                 \
-					 "\"reason\":\"failed (%d)\"}", ret);                      \
+				ret = RSS_HAL_CALL(st->ops, fn, st->hal_ctx, val);                 \
+			fmt_hal_result(resp, resp_size, ret);                                      \
 		} else {                                                                           \
 			snprintf(resp, resp_size,                                                  \
 				 "{\"status\":\"error\",\"reason\":\"need value\"}");              \
@@ -233,24 +233,38 @@ static int handle_isp_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 		return 1;                                                                          \
 	}
 
-	ISP_SET("set-brightness", isp_set_brightness)
-	ISP_SET("set-contrast", isp_set_contrast)
-	ISP_SET("set-saturation", isp_set_saturation)
-	ISP_SET("set-sharpness", isp_set_sharpness)
-	ISP_SET("set-hue", isp_set_hue)
-	ISP_SET("set-sinter", isp_set_sinter_strength)
-	ISP_SET("set-temper", isp_set_temper_strength)
+/* ISP_SET: single-sensor only (no _n variant) */
+#define ISP_SET(name, fn)                                                                          \
+	if (strstr(cmd_json, "\"" name "\"")) {                                                    \
+		if (rss_json_get_int(cmd_json, "value", &val) == 0) {                              \
+			int ret = RSS_HAL_CALL(st->ops, fn, st->hal_ctx, val);                     \
+			fmt_hal_result(resp, resp_size, ret);                                      \
+		} else {                                                                           \
+			snprintf(resp, resp_size,                                                  \
+				 "{\"status\":\"error\",\"reason\":\"need value\"}");              \
+		}                                                                                  \
+		return 1;                                                                          \
+	}
+
+	ISP_SET_N("set-brightness", isp_set_brightness)
+	ISP_SET_N("set-contrast", isp_set_contrast)
+	ISP_SET_N("set-saturation", isp_set_saturation)
+	ISP_SET_N("set-sharpness", isp_set_sharpness)
+	ISP_SET_N("set-hue", isp_set_hue)
+	ISP_SET_N("set-sinter", isp_set_sinter_strength)
+	ISP_SET_N("set-temper", isp_set_temper_strength)
 	ISP_SET("set-dpc", isp_set_dpc_strength)
 	ISP_SET("set-drc", isp_set_drc_strength)
 	ISP_SET("set-highlight-depress", isp_set_highlight_depress)
-	ISP_SET("set-ae-comp", isp_set_ae_comp)
-	ISP_SET("set-max-again", isp_set_max_again)
-	ISP_SET("set-max-dgain", isp_set_max_dgain)
-	ISP_SET("set-hflip", isp_set_hflip)
-	ISP_SET("set-vflip", isp_set_vflip)
+	ISP_SET_N("set-ae-comp", isp_set_ae_comp)
+	ISP_SET_N("set-max-again", isp_set_max_again)
+	ISP_SET_N("set-max-dgain", isp_set_max_dgain)
+	ISP_SET_N("set-hflip", isp_set_hflip)
+	ISP_SET_N("set-vflip", isp_set_vflip)
 	ISP_SET("set-defog", isp_set_defog)
-	ISP_SET("set-antiflicker", isp_set_antiflicker)
+	ISP_SET_N("set-antiflicker", isp_set_antiflicker)
 
+#undef ISP_SET_N
 #undef ISP_SET
 
 	if (strstr(cmd_json, "\"set-wb\"")) {
