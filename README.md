@@ -41,7 +41,7 @@ ring buffers at runtime, gracefully skipping any that don't exist.
 |------|--------|-------------|
 | RVD  | `rvd`  | Raw Video Daemon. Initializes HAL, configures sensor and encoder channels, creates SHM ring buffers (`main`, `sub`, `jpeg0`, `jpeg1`), and runs the frame acquisition loop. Exposes ISP controls and encoder tuning via its control socket. |
 | RSD  | `rsd`  | RTSP Streaming Daemon. Reads video/audio rings and serves RTSP/RTP streams using the compy library. Supports Digest authentication and RTSPS (TLS via mbedTLS, compile with `TLS=1`). |
-| RAD  | `rad`  | Raw Audio Daemon. Captures PCM from the ISP audio input, optionally encodes (G.711 mu-law/A-law, L16, AAC, Opus), and publishes to the `audio` ring. Also handles speaker output via a `speaker` ring. Supports noise suppression, HPF, and AGC when libaudioProcess is available. |
+| RAD  | `rad`  | Raw Audio Daemon. Captures PCM from the ISP audio input, encodes via pluggable codec (G.711 mu-law/A-law, L16, AAC, Opus), and publishes to the `audio` ring. Also handles speaker output via a `speaker` ring. Supports noise suppression, HPF, and AGC when libaudioProcess is available. Codec plugins are modular — adding a new codec requires one source file. |
 | ROD  | `rod`  | OSD Rendering Daemon. Renders timestamp, uptime, user text, and logo bitmaps into BGRA SHM double-buffers using libschrift. No HAL dependency -- RVD handles the hardware OSD regions. |
 | RHD  | `rhd`  | HTTP Streaming Daemon. Serves JPEG snapshots (`/snap.jpg`) and MJPEG streams (`/mjpeg`) from JPEG rings. Dual-stack IPv4/IPv6, Basic auth. Optional HTTPS via mbedTLS (`[http] https = true`). |
 | RIC  | `ric`  | IR-Cut Controller. Hybrid luma+gain day/night detection: ae_luma for day→night (sensor-independent), gain-ratio for night→day (auto-calibrating, prevents IR flip-flop). Auto-discovers GPIOs from `/etc/thingino.json`. Supports single and dual-GPIO IR-cut filters. |
@@ -154,6 +154,7 @@ Runtime configuration changes can be made without restart via raptorctl:
 raptorctl status                      # show which daemons are running
 raptorctl memory                      # per-daemon memory usage
 raptorctl cpu                         # per-daemon CPU usage (1s sample)
+raptorctl rvd                         # show RVD commands (works for any daemon)
 
 # Encoder
 raptorctl rvd set-bitrate 0 3000000   # change main stream bitrate
@@ -170,9 +171,10 @@ raptorctl rvd set-wb daylight         # white balance: auto/manual/daylight/clou
 raptorctl rvd set-wb manual 200 300   # manual WB with r_gain/b_gain
 raptorctl rvd get-isp                 # show all ISP settings
 raptorctl rvd get-wb                  # show white balance
-raptorctl rvd privacy on              # privacy mode
 
 # OSD
+raptorctl rod privacy on              # privacy mode (all streams)
+raptorctl rod privacy on 0            # privacy mode (stream 0 only)
 raptorctl rod set-text "Front Door"   # change OSD text
 raptorctl rod set-font-color 0xFFFF0000    # text color (0xAARRGGBB)
 raptorctl rod set-stroke-color 0xFF000000  # stroke color
@@ -220,6 +222,24 @@ osd_enabled = false
 IPU OSD remains the default and works on all platforms including
 T20/T21/T30/T31 which do not have ISP OSD.
 
+### Per-Stream JPEG
+
+JPEG snapshots are enabled per-stream with per-stream quality and fps
+overrides. Global defaults are in `[jpeg]`, per-stream settings in `[streamN]`:
+
+```ini
+[jpeg]
+quality = 75
+fps = 1
+
+[stream0]
+jpeg = true
+jpeg_quality = 90         # higher quality for main
+
+[stream1]
+jpeg = false              # no JPEG for sub stream
+```
+
 ### IVDC + JPEG
 
 On T23 with IVDC enabled, full-resolution JPEG snapshots are not available
@@ -229,10 +249,10 @@ normally for lower-resolution snapshots. JPEG indices are preserved so
 
 ## Ring Reconnection
 
-All consumer daemons (RSD, RWD, RMR, RHD) automatically reconnect to ring
-buffers after RVD restarts. If the ring producer stops writing for ~2 seconds,
-consumers close the stale ring and retry until the new ring appears. No
-manual daemon restart required.
+All consumer daemons (RSD, RWD, RMR, RHD) automatically reconnect to both
+video and audio ring buffers after RVD or RAD restarts. If a ring producer
+stops writing for ~2 seconds, consumers close the stale ring and retry until
+the new ring appears. No manual daemon restart required.
 
 ## Init Script
 
