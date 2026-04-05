@@ -18,6 +18,9 @@
 
 #include "rwd.h"
 
+/* Audio codec IDs (RTP payload types, shared with RAD/RSD) */
+#define RWD_CODEC_OPUS 111
+
 /* ── sendto-based UDP transport (Compy_Transport interface) ──
  *
  * Unlike compy's connected UDP transport, this uses sendto() with
@@ -673,7 +676,7 @@ void *rwd_audio_reader_thread(void *arg)
 			}
 			const rss_ring_header_t *ahdr = rss_ring_get_header(srv->audio_ring);
 			audio_codec = ahdr->codec;
-			rtp_clock = (audio_codec == 111) ? 48000 : ahdr->fps_num; /* 111=Opus */
+			rtp_clock = (audio_codec == RWD_CODEC_OPUS) ? 48000 : ahdr->fps_num;
 			srv->audio_read_seq = ahdr->write_seq;
 			audio_ts_epoch = 0;
 			last_write_seq = 0;
