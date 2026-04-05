@@ -2,6 +2,7 @@
  * rmd_actions.c -- Motion event actions (GPIO, recording trigger)
  */
 
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <fcntl.h>
@@ -18,7 +19,8 @@ static int gpio_export(int pin)
 		return -1;
 	char buf[16];
 	int len = snprintf(buf, sizeof(buf), "%d", pin);
-	write(fd, buf, len);
+	if (write(fd, buf, len) < 0)
+		RSS_WARN("gpio export %d: write failed: %s", pin, strerror(errno));
 	close(fd);
 
 	/* Set direction to output */
@@ -27,7 +29,8 @@ static int gpio_export(int pin)
 	fd = open(path, O_WRONLY);
 	if (fd < 0)
 		return -1;
-	write(fd, "out", 3);
+	if (write(fd, "out", 3) < 0)
+		RSS_WARN("gpio %d direction: write failed: %s", pin, strerror(errno));
 	close(fd);
 	return 0;
 }
@@ -39,7 +42,8 @@ static int gpio_set_value(int pin, int value)
 	int fd = open(path, O_WRONLY);
 	if (fd < 0)
 		return -1;
-	write(fd, value ? "1" : "0", 1);
+	if (write(fd, value ? "1" : "0", 1) < 0)
+		RSS_WARN("gpio %d set: write failed: %s", pin, strerror(errno));
 	close(fd);
 	return 0;
 }

@@ -64,8 +64,10 @@ static void *encoder_thread(void *arg)
 
 		rss_frame_t frame;
 		ret = RSS_HAL_CALL(st->ops, enc_get_frame, st->hal_ctx, s->chn, &frame);
-		if (ret != RSS_OK)
+		if (ret != RSS_OK) {
+			RSS_DEBUG("enc_get_frame(chn %d) failed: %d", s->chn, ret);
 			continue;
+		}
 
 		/* Publish NALs directly to ring via scatter-gather */
 		rss_iov_t iov[16];

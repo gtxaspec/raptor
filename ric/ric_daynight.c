@@ -8,6 +8,7 @@
  * to luma mode if the library or hardware is unavailable.
  */
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -105,7 +106,8 @@ static void gpio_export(int pin)
 	int len = snprintf(buf, sizeof(buf), "%d", pin);
 	int fd = open("/sys/class/gpio/export", O_WRONLY);
 	if (fd >= 0) {
-		write(fd, buf, len);
+		if (write(fd, buf, len) < 0)
+			RSS_WARN("gpio export %d: write failed: %s", pin, strerror(errno));
 		close(fd);
 	}
 	/* Set direction to output */
@@ -113,7 +115,8 @@ static void gpio_export(int pin)
 	snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/direction", pin);
 	fd = open(path, O_WRONLY);
 	if (fd >= 0) {
-		write(fd, "out", 3);
+		if (write(fd, "out", 3) < 0)
+			RSS_WARN("gpio %d direction: write failed: %s", pin, strerror(errno));
 		close(fd);
 	}
 }
@@ -126,7 +129,8 @@ static void gpio_set(int pin, int value)
 	snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/value", pin);
 	int fd = open(path, O_WRONLY);
 	if (fd >= 0) {
-		write(fd, value ? "1" : "0", 1);
+		if (write(fd, value ? "1" : "0", 1) < 0)
+			RSS_WARN("gpio %d set: write failed: %s", pin, strerror(errno));
 		close(fd);
 	}
 }
