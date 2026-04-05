@@ -345,6 +345,98 @@ static void cmd_memory(void)
 	printf("Actual memory:   %ld KB (private + SHM)\n", total_priv + shm_total);
 }
 
+static void daemon_help(const char *name)
+{
+	if (strcmp(name, "rvd") == 0) {
+		printf("\nCommands:\n"
+		       "  status                              Show encoder channel stats\n"
+		       "  config                              Show running config\n"
+		       "  set-rc-mode <ch> <mode> [bps]       Change rate control mode\n"
+		       "      modes: fixqp cbr vbr smart capped_vbr capped_quality\n"
+		       "  set-bitrate <ch> <bps>              Change bitrate\n"
+		       "  set-gop <ch> <length>               Change GOP length\n"
+		       "  set-fps <ch> <fps>                  Change frame rate\n"
+		       "  set-qp-bounds <ch> <min> <max>      Change QP range\n"
+		       "  request-idr [channel]               Request keyframe\n"
+		       "  privacy [on|off]                    Toggle privacy mode\n"
+		       "  set-brightness <val>                ISP brightness (0-255)\n"
+		       "  set-contrast <val>                  ISP contrast (0-255)\n"
+		       "  set-saturation <val>                ISP saturation (0-255)\n"
+		       "  set-sharpness <val>                 ISP sharpness (0-255)\n"
+		       "  set-hue <val>                       ISP hue (0-255)\n"
+		       "  set-sinter <val>                    Spatial NR (0-255)\n"
+		       "  set-temper <val>                    Temporal NR (0-255)\n"
+		       "  set-hflip <0|1>                     Horizontal flip\n"
+		       "  set-vflip <0|1>                     Vertical flip\n"
+		       "  set-antiflicker <0|1|2>             Off/50Hz/60Hz\n"
+		       "  set-ae-comp <val>                   AE compensation\n"
+		       "  set-max-again <val>                 Max analog gain\n"
+		       "  set-max-dgain <val>                 Max digital gain\n"
+		       "  set-defog <0|1>                     Defog enable\n"
+		       "  set-wb <mode> [r_gain] [b_gain]     White balance\n"
+		       "      modes: auto manual daylight cloudy incandescent\n"
+		       "             flourescent twilight shade warm_flourescent custom\n"
+		       "  get-wb                              Show white balance settings\n"
+		       "  get-isp                             Show all ISP settings\n"
+		       "\n  ISP commands accept --sensor N for multi-sensor\n");
+	} else if (strcmp(name, "rsd") == 0) {
+		printf("\nCommands:\n"
+		       "  status                              Show RTSP status\n"
+		       "  config                              Show running config\n"
+		       "  clients                             List connected clients\n");
+	} else if (strcmp(name, "rad") == 0) {
+		printf("\nCommands:\n"
+		       "  status                              Show audio status\n"
+		       "  config                              Show running config\n"
+		       "  set-volume <val>                    Input volume\n"
+		       "  set-gain <val>                      Input gain\n"
+		       "  set-alc-gain <0-7>                  ALC gain (T21/T31 only)\n"
+		       "  set-ns <0|1> [level]                Noise suppression\n"
+		       "      levels: low moderate high veryhigh\n"
+		       "  set-hpf <0|1>                       High-pass filter\n"
+		       "  set-agc <0|1> [target] [comp]       Automatic gain control\n"
+		       "  ao-set-volume <val>                 Speaker volume\n"
+		       "  ao-set-gain <val>                   Speaker gain\n");
+	} else if (strcmp(name, "rod") == 0) {
+		printf("\nCommands:\n"
+		       "  status                              Show OSD region status\n"
+		       "  config                              Show running config\n"
+		       "  set-text <text>                     Change OSD text\n"
+		       "  set-font-color <0xAARRGGBB>         Text color\n"
+		       "  set-stroke-color <0xAARRGGBB>       Stroke color\n"
+		       "  set-stroke-size <0-5>               Stroke width\n");
+	} else if (strcmp(name, "ric") == 0) {
+		printf("\nCommands:\n"
+		       "  status                              Show day/night status\n"
+		       "  config                              Show running config\n"
+		       "  mode <auto|day|night>               Set day/night mode\n");
+	} else if (strcmp(name, "rhd") == 0) {
+		printf("\nCommands:\n"
+		       "  status                              Show HTTP status\n"
+		       "  config                              Show running config\n"
+		       "  clients                             List connected clients\n");
+	} else if (strcmp(name, "rwd") == 0) {
+		printf("\nCommands:\n"
+		       "  status                              Show WebRTC status\n"
+		       "  config                              Show running config\n"
+		       "  clients                             List connected clients\n"
+		       "  share                               Show WebTorrent share URL\n"
+		       "  share-rotate                        Generate new share key\n");
+	} else if (strcmp(name, "rmr") == 0) {
+		printf("\nCommands:\n"
+		       "  status                              Show recording status\n"
+		       "  config                              Show running config\n");
+	} else if (strcmp(name, "rmd") == 0) {
+		printf("\nCommands:\n"
+		       "  status                              Show motion status\n"
+		       "  config                              Show running config\n");
+	} else {
+		printf("\nCommands:\n"
+		       "  status                              Show status\n"
+		       "  config                              Show running config\n");
+	}
+}
+
 static int is_daemon(const char *name)
 {
 	for (int i = 0; daemons[i]; i++) {
@@ -531,8 +623,15 @@ int main(int argc, char **argv)
 	}
 
 	if (argc < 3) {
-		fprintf(stderr, "Missing command for %s\n", argv[1]);
-		return 1;
+		/* raptorctl <daemon> — show status + available commands */
+		int pid = rss_daemon_check(argv[1]);
+		if (pid > 0)
+			printf("%s: running (pid %d)\n", argv[1], pid);
+		else
+			printf("%s: stopped\n", argv[1]);
+
+		daemon_help(argv[1]);
+		return 0;
 	}
 
 	const char *daemon = argv[1];
