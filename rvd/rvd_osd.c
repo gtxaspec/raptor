@@ -256,6 +256,21 @@ void rvd_osd_init(rvd_state_t *st)
 		    st->streams[s].sensor_idx == st->streams[s - 1].sensor_idx)
 			continue;
 
+		/* Per-stream OSD enable/disable from config */
+		{
+			int si = st->streams[s].sensor_idx;
+			int local_chn = st->streams[s].fs_chn % 3; /* 0=main, 1=sub */
+			char sect[32];
+			if (si == 0)
+				snprintf(sect, sizeof(sect), "stream%d", local_chn);
+			else
+				snprintf(sect, sizeof(sect), "sensor%d_stream%d", si, local_chn);
+			if (!rss_config_get_bool(cfg, sect, "osd_enabled", true)) {
+				RSS_INFO("osd stream%d: disabled by [%s] osd_enabled", s, sect);
+				continue;
+			}
+		}
+
 		for (int r = 0; r < RVD_OSD_REGIONS; r++) {
 			st->osd_regions[s][r].shm = NULL;
 			st->osd_regions[s][r].hal_handle = -1;
