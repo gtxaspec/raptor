@@ -445,9 +445,26 @@ static void record_loop(rmr_state_t *st)
 		if (!st->video_ring) {
 			st->video_ring = rss_ring_open(st->video_ring_name);
 			if (st->video_ring) {
+				const rss_ring_header_t *vhdr =
+					rss_ring_get_header(st->video_ring);
+				if (vhdr->data_size > st->frame_buf_size) {
+					free(st->frame_buf);
+					st->frame_buf = malloc(vhdr->data_size);
+					free(st->avcc_buf);
+					st->avcc_buf = malloc(vhdr->data_size);
+					if (!st->frame_buf || !st->avcc_buf) {
+						rss_ring_close(st->video_ring);
+						st->video_ring = NULL;
+						continue;
+					}
+					st->frame_buf_size = vhdr->data_size;
+					st->avcc_buf_size = vhdr->data_size;
+				}
+				st->video_codec = vhdr->codec;
 				st->video_read_seq = 0;
 				st->params.ready = false;
 				video_idle = 0;
+				last_video_ws = 0;
 				RSS_INFO("video ring reconnected (%s)", st->video_ring_name);
 			} else {
 				usleep(200000);

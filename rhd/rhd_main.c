@@ -737,6 +737,8 @@ static void server_run(rhd_server_t *srv)
 							free(frame_buf);
 							frame_buf_size = hdr->data_size;
 							frame_buf = malloc(frame_buf_size);
+							if (!frame_buf)
+								frame_buf_size = 0;
 						}
 						RSS_INFO("jpeg ring reconnected (%s)",
 							 jpeg_ring_names[j]);
@@ -751,7 +753,7 @@ static void server_run(rhd_server_t *srv)
 				else
 					jpeg_idle[j] = 0;
 				jpeg_last_ws[j] = ws;
-				if (jpeg_idle[j] >= 10) { /* ~2s */
+				if (jpeg_idle[j] >= 10) { /* ~20s (10 ticks * 2s/tick) */
 					RSS_INFO("jpeg ring idle, closing (%s)",
 						 jpeg_ring_names[j]);
 					rss_ring_close(srv->jpeg_rings[j]);

@@ -118,6 +118,12 @@ void *rsd_video_reader_thread(void *arg)
 			if (rctx->frame_buf_size < h->data_size) {
 				free(rctx->frame_buf);
 				rctx->frame_buf = malloc(h->data_size);
+				if (!rctx->frame_buf) {
+					rss_ring_close(rctx->ring);
+					rctx->ring = NULL;
+					rctx->frame_buf_size = 0;
+					continue;
+				}
 				rctx->frame_buf_size = h->data_size;
 			}
 			rctx->read_seq = 0;

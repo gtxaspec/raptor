@@ -539,7 +539,24 @@ void *rwd_video_reader_thread(void *arg)
 			if (!srv->video_rings[s] && srv->video_bufs[s]) {
 				srv->video_rings[s] = rss_ring_open(ring_names[s]);
 				if (srv->video_rings[s]) {
-					srv->video_read_seq[s] = 0;
+					const rss_ring_header_t *h =
+						rss_ring_get_header(srv->video_rings[s]);
+					uint32_t ds = h->data_size /
+						(h->slot_count ? h->slot_count : 1);
+					if (ds < 256 * 1024)
+						ds = 256 * 1024;
+					if (ds > srv->video_buf_sizes[s]) {
+						free(srv->video_bufs[s]);
+						srv->video_bufs[s] = malloc(ds);
+						if (!srv->video_bufs[s]) {
+							rss_ring_close(srv->video_rings[s]);
+							srv->video_rings[s] = NULL;
+							srv->video_buf_sizes[s] = 0;
+							continue;
+						}
+						srv->video_buf_sizes[s] = ds;
+					}
+					srv->video_read_seq[s] = h->write_seq;
 					last_ws[s] = 0;
 					idle[s] = 0;
 					video_ts_epoch[s] = 0;

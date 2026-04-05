@@ -456,15 +456,18 @@ void rsd_server_run(rsd_server_t *srv)
 	/* Start ring reader threads */
 	rsd_set_server_for_readers(srv);
 	pthread_t video_tid[RSD_STREAM_COUNT], audio_tid;
+	bool video_started[RSD_STREAM_COUNT] = {false};
 
 	pthread_attr_t attr;
 	pthread_attr_init(&attr);
 	pthread_attr_setstacksize(&attr, 128 * 1024);
 
 	for (int s = 0; s < RSD_STREAM_COUNT; s++) {
-		if (srv->video[s].ring)
+		if (srv->video[s].ring) {
 			pthread_create(&video_tid[s], &attr, rsd_video_reader_thread,
 				       &srv->video[s]);
+			video_started[s] = true;
+		}
 	}
 	if (srv->has_audio)
 		pthread_create(&audio_tid, &attr, rsd_audio_reader_thread, srv);
@@ -544,7 +547,7 @@ void rsd_server_run(rsd_server_t *srv)
 	}
 
 	for (int s = 0; s < RSD_STREAM_COUNT; s++) {
-		if (srv->video[s].ring)
+		if (video_started[s])
 			pthread_join(video_tid[s], NULL);
 	}
 	if (srv->has_audio)
