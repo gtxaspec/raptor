@@ -197,6 +197,43 @@ raptorctl rwd share                   # show WebTorrent share URL
 raptorctl config save                 # persist running config to disk
 ```
 
+## ISP OSD
+
+On T23/T32/T40/T41, OSD can optionally use the ISP hardware overlay instead
+of the IPU bind chain. ISP OSD works with IVDC (`direct_mode=2`) and has
+zero DDR bandwidth overhead. Enable in config:
+
+```ini
+[osd]
+isp_osd = true
+```
+
+ISP OSD applies to main streams only (T23 hardware limitation per Ingenic
+docs). Sub streams do not receive ISP OSD. Each sensor supports up to 8
+picture regions. Per-stream OSD can be disabled:
+
+```ini
+[stream1]
+osd_enabled = false
+```
+
+IPU OSD remains the default and works on all platforms including
+T20/T21/T30/T31 which do not have ISP OSD.
+
+### IVDC + JPEG
+
+On T23 with IVDC enabled, full-resolution JPEG snapshots are not available
+(SDK rejects JPEG+IVDC in the same encoder group). Sub-stream JPEG works
+normally for lower-resolution snapshots. JPEG indices are preserved so
+`jpeg0` (main) is simply absent while `jpeg1` (sub) remains accessible.
+
+## Ring Reconnection
+
+All consumer daemons (RSD, RWD, RMR, RHD) automatically reconnect to ring
+buffers after RVD restarts. If the ring producer stops writing for ~2 seconds,
+consumers close the stale ring and retry until the new ring appears. No
+manual daemon restart required.
+
 ## Init Script
 
 The init script `config/S31raptor` (installed as `/etc/init.d/S31raptor`)
