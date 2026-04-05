@@ -480,7 +480,13 @@ int rvd_pipeline_init(rvd_state_t *st)
 		int video_count = st->stream_count;
 
 		for (int v = 0; v < video_count && st->jpeg_count < RVD_MAX_JPEG; v++) {
-			/* Only create JPEG for main streams (first stream per sensor) */
+			/* IVDC streams: JPEG+IVDC registration fails on T23 dual-sensor
+			 * (SDK rejects second IVDC channel in same group). Skip JPEG
+			 * but keep index for consistent ring naming. */
+			if (st->streams[v].enc_cfg.ivdc) {
+				st->jpeg_count++;
+				continue;
+			}
 			char key[32];
 			snprintf(key, sizeof(key), "jpeg%d_enabled", v);
 			if (!rss_config_get_bool(cfg, "jpeg", key, true))
