@@ -655,37 +655,52 @@ void *rwd_audio_reader_thread(void *arg)
 {
 	rwd_server_t *srv = arg;
 
-	/* Wait for audio ring.
-	 * NOTE: srv->audio_ring and srv->has_audio are set once here at
-	 * thread start and never changed afterward. The word-aligned pointer
-	 * write is atomic on MIPS, and has_audio is set before any client
-	 * can exist to read it, so no additional synchronization is needed. */
-	while (*srv->running && !srv->audio_ring) {
-		srv->audio_ring = rss_ring_open("audio");
-		if (!srv->audio_ring)
-			usleep(2000000); /* retry every 2s */
-	}
-	if (!srv->audio_ring)
-		return NULL;
+	RSS_DEBUG("media: audio reader started");
 
-	srv->has_audio = true;
-
-	const rss_ring_header_t *ahdr = rss_ring_get_header(srv->audio_ring);
-	uint32_t audio_codec = ahdr->codec;
-	uint32_t rtp_clock = 48000; /* Opus: 48kHz per RFC 7587 */
+	uint32_t audio_codec = 0;
+	uint32_t rtp_clock = 48000;
 	int64_t audio_ts_epoch = 0;
-
 	uint8_t audio_buf[4096];
-
-	/* Start from latest */
-	srv->audio_read_seq = ahdr->write_seq;
-
-	RSS_DEBUG("media: audio reader started (codec=%u)", audio_codec);
+	uint64_t last_write_seq = 0;
+	int idle_count = 0;
 
 	while (*srv->running) {
+		if (!srv->audio_ring) {
+			srv->audio_ring = rss_ring_open("audio");
+			if (!srv->audio_ring) {
+				usleep(200000);
+				continue;
+			}
+			const rss_ring_header_t *ahdr = rss_ring_get_header(srv->audio_ring);
+			audio_codec = ahdr->codec;
+			rtp_clock = (audio_codec == 111) ? 48000 : ahdr->fps_num; /* 111=Opus */
+			srv->audio_read_seq = ahdr->write_seq;
+			audio_ts_epoch = 0;
+			last_write_seq = 0;
+			idle_count = 0;
+			srv->has_audio = true;
+			RSS_DEBUG("media: audio ring attached (codec=%u)", audio_codec);
+		}
+
 		int ret = rss_ring_wait(srv->audio_ring, 100);
-		if (ret != 0)
+		if (ret != 0) {
+			const rss_ring_header_t *h = rss_ring_get_header(srv->audio_ring);
+			uint64_t ws = h->write_seq;
+			if (ws == last_write_seq)
+				idle_count++;
+			else
+				idle_count = 0;
+			last_write_seq = ws;
+
+			if (idle_count >= 20) {
+				RSS_DEBUG("media: audio ring idle, closing");
+				rss_ring_close(srv->audio_ring);
+				srv->audio_ring = NULL;
+				idle_count = 0;
+			}
 			continue;
+		}
+		idle_count = 0;
 
 		for (int burst = 0; burst < 16; burst++) {
 			uint32_t length;

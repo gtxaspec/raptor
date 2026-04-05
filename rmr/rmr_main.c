@@ -404,6 +404,8 @@ static void record_loop(rmr_state_t *st)
 	int audio_retry = 0;
 	uint64_t last_video_ws = 0;
 	int video_idle = 0;
+	uint64_t last_audio_ws = 0;
+	int audio_idle = 0;
 
 	while (*st->running) {
 		/* Handle control socket */
@@ -556,6 +558,7 @@ static void record_loop(rmr_state_t *st)
 						    &ameta);
 				if (ret == RSS_EOVERFLOW || ret != 0)
 					break;
+				audio_idle = 0;
 
 				/* Push to audio pre-buffer */
 				if (st->audio_pb)
@@ -571,6 +574,21 @@ static void record_loop(rmr_state_t *st)
 									: alen / audio_bps;
 					audio_count++;
 				}
+			}
+
+			/* Idle detection — close audio ring if RAD stopped */
+			const rss_ring_header_t *ah = rss_ring_get_header(st->audio_ring);
+			uint64_t aws = ah->write_seq;
+			if (aws == last_audio_ws)
+				audio_idle++;
+			else
+				audio_idle = 0;
+			last_audio_ws = aws;
+			if (audio_idle >= 100) { /* ~2s at 50Hz poll */
+				RSS_DEBUG("audio ring idle, closing");
+				rss_ring_close(st->audio_ring);
+				st->audio_ring = NULL;
+				audio_idle = 0;
 			}
 		}
 

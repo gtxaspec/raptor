@@ -262,53 +262,52 @@ void *rsd_audio_reader_thread(void *arg)
 
 	RSS_DEBUG("audio reader thread started");
 
-	/* Get codec and clock from ring header */
-	const rss_ring_header_t *ahdr = rss_ring_get_header(srv->ring_audio);
-	uint32_t audio_codec = ahdr->codec;
-	uint32_t audio_clock = ahdr->fps_num; /* fps_num holds sample_rate */
-
-	/* Timestamp increment per frame — must match encoder output rate.
-	 * AAC-LC: 1024 samples per frame (RAD accumulates captures).
-	 * Opus: 20ms at 48kHz RTP clock = 960 (RFC 7587).
-	 * PCM: 20ms at native clock = sr/50. */
-	uint32_t samples_per_frame;
-	switch (audio_codec) {
-	case RSD_CODEC_AAC:
-		samples_per_frame = 1024;
-		break;
-	case RSD_CODEC_OPUS:
-		samples_per_frame = 960;
-		break;
-	default:
-		samples_per_frame = audio_clock / 50;
-		break;
-	}
-
-	/* RTP clock for timestamp conversion — Opus uses 48kHz per RFC 7587 */
-	uint32_t rtp_clock = (audio_codec == RSD_CODEC_OPUS) ? 48000 : audio_clock;
-
-	RSS_DEBUG("audio codec=%u clock=%u rtp_clock=%u spf=%u", audio_codec, audio_clock,
-		 rtp_clock, samples_per_frame);
-
-	/* Buffer for audio frames */
+	uint32_t audio_codec = 0, rtp_clock = 0;
 	uint8_t audio_buf[4096];
-
-	/* Wall-clock audio timestamps: derive RTP ts directly from IMP's
-	 * CLOCK_MONOTONIC_RAW timestamp (same clock source as video ISP).
-	 * This eliminates ADC crystal drift — the audio ADC runs on its
-	 * own crystal (~16000.5 Hz vs nominal 16000), so counter-based
-	 * timestamps diverge ~0.12ms/s (~10s/day). Wall-clock timestamps
-	 * track real time, matching the video timeline exactly. */
 	int64_t audio_ts_epoch = 0;
-
-	/* Start from the latest ring position — don't replay stale audio */
-	const rss_ring_header_t *rhdr = rss_ring_get_header(srv->ring_audio);
-	srv->audio_read_seq = rhdr->write_seq;
+	uint64_t last_write_seq = 0;
+	int idle_count = 0;
 
 	while (*srv->running) {
+		if (!srv->ring_audio) {
+			/* Ring lost — wait for RAD to recreate it */
+			srv->ring_audio = rss_ring_open("audio");
+			if (!srv->ring_audio) {
+				usleep(200000);
+				continue;
+			}
+			const rss_ring_header_t *ahdr = rss_ring_get_header(srv->ring_audio);
+			audio_codec = ahdr->codec;
+			uint32_t audio_clock = ahdr->fps_num;
+			rtp_clock = (audio_codec == RSD_CODEC_OPUS) ? 48000 : audio_clock;
+			srv->audio_read_seq = ahdr->write_seq;
+			audio_ts_epoch = 0;
+			last_write_seq = 0;
+			idle_count = 0;
+
+			RSS_DEBUG("audio codec=%u clock=%u rtp_clock=%u", audio_codec,
+				 audio_clock, rtp_clock);
+		}
+
 		int ret = rss_ring_wait(srv->ring_audio, 100);
-		if (ret != 0)
+		if (ret != 0) {
+			const rss_ring_header_t *h = rss_ring_get_header(srv->ring_audio);
+			uint64_t ws = h->write_seq;
+			if (ws == last_write_seq)
+				idle_count++;
+			else
+				idle_count = 0;
+			last_write_seq = ws;
+
+			if (idle_count >= 20) {
+				RSS_DEBUG("audio ring idle, closing");
+				rss_ring_close(srv->ring_audio);
+				srv->ring_audio = NULL;
+				idle_count = 0;
+			}
 			continue;
+		}
+		idle_count = 0;
 
 		for (int burst = 0; burst < 16; burst++) {
 			uint32_t length;
