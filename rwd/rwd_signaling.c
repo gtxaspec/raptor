@@ -266,7 +266,7 @@ rwd_client_t *rwd_client_from_offer(rwd_server_t *srv, const char *sdp, int stre
 	}
 	pthread_mutex_unlock(&srv->clients_lock);
 
-	RSS_INFO("client created: session %s (video_pt=%d audio_pt=%d)", c->session_id,
+	RSS_DEBUG("client created: session %s (video_pt=%d audio_pt=%d)", c->session_id,
 		 c->offer.video_pt, c->offer.audio_pt);
 	return c;
 }

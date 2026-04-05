@@ -538,7 +538,7 @@ static void server_run(rhd_server_t *srv)
 			if (srv->jpeg_rings[j]) {
 				const rss_ring_header_t *hdr =
 					rss_ring_get_header(srv->jpeg_rings[j]);
-				RSS_INFO("%s ring available: %ux%u", name, hdr->width, hdr->height);
+				RSS_DEBUG("%s ring available: %ux%u", name, hdr->width, hdr->height);
 				srv->jpeg_ring_count++;
 				if (hdr->data_size > frame_buf_size)
 					frame_buf_size = hdr->data_size;
@@ -740,7 +740,7 @@ static void server_run(rhd_server_t *srv)
 							if (!frame_buf)
 								frame_buf_size = 0;
 						}
-						RSS_INFO("jpeg ring reconnected (%s)",
+						RSS_DEBUG("jpeg ring reconnected (%s)",
 							 jpeg_ring_names[j]);
 					}
 					continue;
@@ -754,7 +754,7 @@ static void server_run(rhd_server_t *srv)
 					jpeg_idle[j] = 0;
 				jpeg_last_ws[j] = ws;
 				if (jpeg_idle[j] >= 10) { /* ~20s (10 ticks * 2s/tick) */
-					RSS_INFO("jpeg ring idle, closing (%s)",
+					RSS_DEBUG("jpeg ring idle, closing (%s)",
 						 jpeg_ring_names[j]);
 					rss_ring_close(srv->jpeg_rings[j]);
 					srv->jpeg_rings[j] = NULL;

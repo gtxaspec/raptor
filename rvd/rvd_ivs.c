@@ -128,7 +128,7 @@ int rvd_ivs_start(rvd_state_t *st)
 					mp.sense[idx] = sensitivity > 4 ? 4 : sensitivity;
 				}
 			}
-			RSS_INFO("IVS: %dx%d grid (%d zones, %dx%d each)", gx, gy, mp.roi_count, cw,
+			RSS_DEBUG("IVS: %dx%d grid (%d zones, %dx%d each)", gx, gy, mp.roi_count, cw,
 				 ch);
 		}
 
@@ -166,7 +166,7 @@ int rvd_ivs_start(rvd_state_t *st)
 	atomic_store(&st->ivs_motion, false);
 	atomic_store(&st->ivs_motion_ts, 0);
 
-	RSS_INFO("IVS: %s started on %dx%d (chn=%d, sensitivity=%d, skip=%d)", algo, w, h, IVS_CHN,
+	RSS_DEBUG("IVS: %s started on %dx%d (chn=%d, sensitivity=%d, skip=%d)", algo, w, h, IVS_CHN,
 		 sensitivity, skip);
 	return RSS_OK;
 

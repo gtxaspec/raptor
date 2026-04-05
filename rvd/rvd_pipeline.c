@@ -277,7 +277,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 	}
 
 	for (int s = 0; s < multi_cfg.sensor_count; s++) {
-		RSS_INFO("sensor%d: %s i2c=0x%02x bus=%d id=%d", s,
+		RSS_DEBUG("sensor%d: %s i2c=0x%02x bus=%d id=%d", s,
 			 multi_cfg.sensors[s].name, multi_cfg.sensors[s].i2c_addr,
 			 multi_cfg.sensors[s].i2c_adapter, multi_cfg.sensors[s].sensor_id);
 	}
@@ -326,7 +326,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 			snprintf(sect, sizeof(sect), "sensor%d", s);
 			int fps = rss_config_get_int(cfg, sect, "fps", sensor_fps);
 			RSS_HAL_CALL(st->ops, isp_set_sensor_fps_n, st->hal_ctx, s, fps, 1);
-			RSS_INFO("sensor%d fps: %d", s, fps);
+			RSS_DEBUG("sensor%d fps: %d", s, fps);
 		}
 	}
 
@@ -448,7 +448,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 		rss_strlcpy(st->streams[si].cfg_sect, main_sect, sizeof(st->streams[si].cfg_sect));
 		st->stream_count++;
 
-		RSS_INFO("sensor%d main: fs_chn=%d enc_grp=%d %ux%u", s,
+		RSS_DEBUG("sensor%d main: fs_chn=%d enc_grp=%d %ux%u", s,
 			 st->streams[si].fs_chn, st->streams[si].chn,
 			 st->streams[si].enc_cfg.width, st->streams[si].enc_cfg.height);
 
@@ -464,7 +464,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 			rss_strlcpy(st->streams[si].cfg_sect, sub_sect, sizeof(st->streams[si].cfg_sect));
 			st->stream_count++;
 
-			RSS_INFO("sensor%d sub: fs_chn=%d enc_grp=%d %ux%u", s,
+			RSS_DEBUG("sensor%d sub: fs_chn=%d enc_grp=%d %ux%u", s,
 				 st->streams[si].fs_chn, st->streams[si].chn,
 				 st->streams[si].enc_cfg.width, st->streams[si].enc_cfg.height);
 		}
@@ -585,7 +585,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 				fs->scaler.enable = true;
 				fs->scaler.out_width = fs->width;
 				fs->scaler.out_height = fs->height;
-				RSS_INFO("stream%d: scaler %dx%d -> %dx%d", i, sensor_w, sensor_h,
+				RSS_DEBUG("stream%d: scaler %dx%d -> %dx%d", i, sensor_w, sensor_h,
 					 fs->width, fs->height);
 			}
 		}
@@ -669,7 +669,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 			if (ret != RSS_OK)
 				RSS_WARN("osd_start(%d) failed: %d", grp, ret);
 			else
-				RSS_INFO("osd_start(%d) ok", grp);
+				RSS_DEBUG("osd_start(%d) ok", grp);
 		}
 	}
 
@@ -788,7 +788,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 		memcpy(st->bind_chain[i], chain, sizeof(rss_cell_t) * chain_len);
 		st->bind_chain_len[i] = chain_len;
 
-		RSS_INFO("stream%d bind: %d stages", i, chain_len);
+		RSS_DEBUG("stream%d bind: %d stages", i, chain_len);
 	}
 
 	/* IVS: create algo interface + channel + register BEFORE FS enable.
@@ -861,7 +861,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 		if (main_data > 8 * 1024 * 1024)
 			main_data = 8 * 1024 * 1024;
 	}
-	RSS_INFO("main ring: %u slots, %u KB data", ring_main_slots, main_data / 1024);
+	RSS_DEBUG("main ring: %u slots, %u KB data", ring_main_slots, main_data / 1024);
 
 	/* Create video rings for all non-JPEG streams */
 	for (int i = 0; i < st->stream_count; i++) {
@@ -895,7 +895,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 			if (data < min_data) data = min_data;
 			if (data > max_data) data = max_data;
 		}
-		RSS_INFO("%s ring: %u slots, %u KB data", ring_name, slots_cfg, data / 1024);
+		RSS_DEBUG("%s ring: %u slots, %u KB data", ring_name, slots_cfg, data / 1024);
 
 		st->streams[i].ring = rss_ring_create(ring_name, slots_cfg, data);
 		if (!st->streams[i].ring) {
@@ -936,7 +936,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 		uint32_t jpeg_data = jpeg_max * slots;
 		if (jpeg_data > 4 * 1024 * 1024)
 			jpeg_data = 4 * 1024 * 1024;
-		RSS_INFO("%s ring: %u slots, %u KB data (q%u, /%u, %u fps)",
+		RSS_DEBUG("%s ring: %u slots, %u KB data (q%u, /%u, %u fps)",
 			 ring_name, slots, jpeg_data / 1024, q, divisor, fps);
 
 		st->streams[ji].ring = rss_ring_create(ring_name, slots, jpeg_data);

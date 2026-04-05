@@ -209,7 +209,7 @@ static bool create_region(rvd_state_t *st, int s, int r, uint32_t w, uint32_t h)
 	reg->hal_handle = handle;
 	reg->active = true;
 
-	RSS_INFO("osd region s%d/%s: %ux%u at (%d,%d) layer=%d handle=%d%s", s, region_names[r], w,
+	RSS_DEBUG("osd region s%d/%s: %ux%u at (%d,%d) layer=%d handle=%d%s", s, region_names[r], w,
 		 h, x, y, r, handle, is_isp ? " [isp]" : "");
 	return true;
 }
@@ -316,7 +316,7 @@ void rvd_osd_init(rvd_state_t *st)
 		if (create_region(st, s, RVD_OSD_PRIVACY, OSD_TIME_W, th))
 			region_count++;
 
-		RSS_INFO("osd stream%d: %d regions created", s, region_count);
+		RSS_DEBUG("osd stream%d: %d regions created", s, region_count);
 
 		/* Privacy cover region (full-frame, initially hidden).
 		 * ISP OSD: allocated lazily in rvd_osd_set_privacy() to avoid

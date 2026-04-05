@@ -359,7 +359,7 @@ static void *ao_playback_thread(void *arg)
 {
 	ao_thread_ctx_t *ctx = arg;
 
-	RSS_INFO("ao playback thread started, waiting for speaker ring...");
+	RSS_DEBUG("ao playback thread started, waiting for speaker ring...");
 
 	/* Poll for speaker ring (created by rac play) */
 	rss_ring_t *ring = NULL;
@@ -370,7 +370,7 @@ static void *ao_playback_thread(void *arg)
 		usleep(500000);
 	}
 	if (!ring) {
-		RSS_INFO("ao playback thread exiting (no ring)");
+		RSS_DEBUG("ao playback thread exiting (no ring)");
 		return NULL;
 	}
 
@@ -385,7 +385,7 @@ static void *ao_playback_thread(void *arg)
 	uint64_t read_seq = 0;
 	uint64_t last_write_seq = atomic_load(&hdr->write_seq);
 	int idle_count = 0;
-	RSS_INFO("speaker ring connected");
+	RSS_DEBUG("speaker ring connected");
 
 	while (*ctx->running) {
 		int ret = rss_ring_wait(ring, 200);
@@ -417,7 +417,7 @@ static void *ao_playback_thread(void *arg)
 						}
 						read_seq = 0;
 						last_write_seq = atomic_load(&hdr->write_seq);
-						RSS_INFO("speaker ring reconnected");
+						RSS_DEBUG("speaker ring reconnected");
 						break;
 					}
 					usleep(100000);
@@ -446,7 +446,7 @@ static void *ao_playback_thread(void *arg)
 	free(buf);
 	if (ring)
 		rss_ring_close(ring);
-	RSS_INFO("ao playback thread exiting");
+	RSS_DEBUG("ao playback thread exiting");
 	return NULL;
 }
 
@@ -576,7 +576,7 @@ int main(int argc, char **argv)
 			RSS_FATAL("faacEncSetConfiguration failed");
 			goto cleanup;
 		}
-		RSS_INFO("aac encoder: %lu samples/frame, max %lu bytes output", aac_input_samples,
+		RSS_DEBUG("aac encoder: %lu samples/frame, max %lu bytes output", aac_input_samples,
 			 aac_max_output);
 	}
 #endif
@@ -594,7 +594,7 @@ int main(int argc, char **argv)
 		if (opus_bitrate > 256000)
 			opus_bitrate = 256000;
 		opus_encoder_ctl(opus_enc, OPUS_SET_BITRATE(opus_bitrate));
-		RSS_INFO("opus encoder: bitrate=%d", opus_bitrate);
+		RSS_DEBUG("opus encoder: bitrate=%d", opus_bitrate);
 	}
 #endif
 
@@ -612,7 +612,7 @@ int main(int argc, char **argv)
 			ns_level = RSS_NS_VERYHIGH;
 		ret = RSS_HAL_CALL(ops, audio_enable_ns, hal_ctx, ns_level);
 		if (ret == RSS_OK)
-			RSS_INFO("noise suppression: %s", ns_str);
+			RSS_DEBUG("noise suppression: %s", ns_str);
 		else
 			RSS_WARN("noise suppression failed: %d", ret);
 	}
@@ -621,7 +621,7 @@ int main(int argc, char **argv)
 	if (hpf_enabled) {
 		ret = RSS_HAL_CALL(ops, audio_enable_hpf, hal_ctx);
 		if (ret == RSS_OK)
-			RSS_INFO("high-pass filter enabled");
+			RSS_DEBUG("high-pass filter enabled");
 		else
 			RSS_WARN("high-pass filter failed: %d", ret);
 	}
@@ -636,7 +636,7 @@ int main(int argc, char **argv)
 		};
 		ret = RSS_HAL_CALL(ops, audio_enable_agc, hal_ctx, &agc_cfg);
 		if (ret == RSS_OK)
-			RSS_INFO("agc: target=%d dBfs, compression=%d dB",
+			RSS_DEBUG("agc: target=%d dBfs, compression=%d dB",
 				 agc_cfg.target_level_dbfs, agc_cfg.compression_gain_db);
 		else
 			RSS_WARN("agc failed: %d", ret);
@@ -670,7 +670,7 @@ int main(int argc, char **argv)
 			};
 			if (pthread_create(&ao_tid, NULL, ao_playback_thread, &ao_ctx) == 0) {
 				ao_thread_started = true;
-				RSS_INFO("audio output: %d Hz vol=%d gain=%d", sample_rate, ao_vol,
+				RSS_DEBUG("audio output: %d Hz vol=%d gain=%d", sample_rate, ao_vol,
 					 ao_gain_val);
 			} else {
 				RSS_WARN("ao thread create failed");
@@ -730,7 +730,7 @@ int main(int argc, char **argv)
 	}
 #endif
 
-	RSS_INFO("audio loop: %d samples/frame (%dms), %s", audio_cfg.samples_per_frame, 1000 / 50,
+	RSS_DEBUG("audio loop: %d samples/frame (%dms), %s", audio_cfg.samples_per_frame, 1000 / 50,
 		 codec_str);
 
 	rad_ctrl_ctx_t ctrl_ctx = {
@@ -861,7 +861,7 @@ int main(int argc, char **argv)
 
 		int64_t now = rss_timestamp_us();
 		if (now - last_stats >= 30000000) {
-			RSS_INFO("audio frames: %llu", (unsigned long long)frame_count);
+			RSS_DEBUG("audio frames: %llu", (unsigned long long)frame_count);
 			last_stats = now;
 		}
 	}

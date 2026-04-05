@@ -829,7 +829,7 @@ static void handle_tracker_offer(rwd_webtorrent_t *wt, wt_tls_t *tls, const char
 	if (offer_id[0] == 's' && (offer_id[1] == '0' || offer_id[1] == '1') && offer_id[2] == '_')
 		stream_idx = offer_id[1] - '0';
 
-	RSS_INFO("webtorrent: offer from peer %.16s... (stream %d)", viewer_peer_id, stream_idx);
+	RSS_DEBUG("webtorrent: offer from peer %.16s... (stream %d)", viewer_peer_id, stream_idx);
 
 	rwd_client_t *c = rwd_client_from_offer(srv, sdp, stream_idx, sdp_answer, RWD_SDP_BUF_SIZE);
 	if (!c) {
@@ -847,7 +847,7 @@ static void handle_tracker_offer(rwd_webtorrent_t *wt, wt_tls_t *tls, const char
 	for (int i = 0; i < c->offer.candidate_count; i++)
 		rwd_ice_send_check(srv, c, c->offer.candidates[i].ip, c->offer.candidates[i].port);
 
-	RSS_INFO("webtorrent: answer sent (session %s, %d candidates punched)", c->session_id,
+	RSS_DEBUG("webtorrent: answer sent (session %s, %d candidates punched)", c->session_id,
 		 c->offer.candidate_count);
 
 out:
@@ -918,7 +918,7 @@ static void *webtorrent_thread(void *arg)
 	}
 
 	while (wt->running && *srv->running) {
-		RSS_INFO("webtorrent: connecting to %s:%s%s", host, port, path);
+		RSS_DEBUG("webtorrent: connecting to %s:%s%s", host, port, path);
 
 		wt_tls_t tls;
 		if (wt_tls_connect(&tls, host, port, wt->tls_verify) != 0) {
@@ -1022,7 +1022,7 @@ int rwd_webtorrent_start(rwd_webtorrent_t *wt, rwd_server_t *srv)
 	if (rwd_stun_discover_srflx(srv->udp_fd, wt->stun_server, wt->stun_port, srv->srflx_ip,
 				    sizeof(srv->srflx_ip), &srv->srflx_port) == 0) {
 		srv->has_srflx = true;
-		RSS_INFO("webtorrent: STUN srflx %s:%u", srv->srflx_ip, srv->srflx_port);
+		RSS_DEBUG("webtorrent: STUN srflx %s:%u", srv->srflx_ip, srv->srflx_port);
 	} else {
 		RSS_WARN("webtorrent: STUN discovery failed (external access may not work)");
 	}

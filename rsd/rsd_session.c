@@ -335,7 +335,7 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 		compy_header(ctx, COMPY_HEADER_TRANSPORT,
 			     "RTP/AVP/TCP;unicast;interleaved=%" PRIu8 "-%" PRIu8, rtp_ch, rtcp_ch);
 
-		RSS_INFO("client SETUP: %s TCP interleaved %u-%u",
+		RSS_DEBUG("client SETUP: %s TCP interleaved %u-%u",
 			 is_backchannel ? "backchannel"
 			 : is_audio	? "audio"
 					: "video",
@@ -417,7 +417,7 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 			     ";server_port=%" PRIu16 "-%" PRIu16,
 			     cli_rtp, cli_rtcp, srv_rtp, srv_rtcp);
 
-		RSS_INFO("client SETUP: video UDP client=%u-%u server=%u-%u", cli_rtp, cli_rtcp,
+		RSS_DEBUG("client SETUP: video UDP client=%u-%u server=%u-%u", cli_rtp, cli_rtcp,
 			 srv_rtp, srv_rtcp);
 	}
 
@@ -539,7 +539,7 @@ static void rsd_client_t_play(VSelf, Compy_Context *ctx, const Compy_Request *re
 	compy_header(ctx, COMPY_HEADER_SESSION, "%" PRIu64, self->session_id);
 	compy_respond_ok(ctx);
 
-	RSS_INFO("client PLAY (IDR requested)");
+	RSS_DEBUG("client PLAY (IDR requested)");
 }
 
 static void rsd_client_t_pause_method(VSelf, Compy_Context *ctx, const Compy_Request *req)

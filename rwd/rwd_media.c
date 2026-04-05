@@ -115,7 +115,7 @@ static void rwd_bc_recv_t_on_audio(VSelf, uint8_t payload_type, uint32_t timesta
 			return;
 		}
 		rss_ring_set_stream_info(*ring_ptr, 0x11, 0, 0, 0, 16000, 1, 0, 0);
-		RSS_INFO("backchannel: speaker ring ready");
+		RSS_DEBUG("backchannel: speaker ring ready");
 	}
 
 	int16_t pcm48[960]; /* 20ms at 48kHz */
@@ -254,7 +254,7 @@ int rwd_media_setup(rwd_client_t *c)
 
 		c->srtp_recv = compy_srtp_recv_new(suite, &recv_key);
 		if (c->srtp_recv)
-			RSS_INFO("media: backchannel ready (pt=%d, opus decoder %s)",
+			RSS_DEBUG("media: backchannel ready (pt=%d, opus decoder %s)",
 				 bc_pt, bc->opus_dec ? "ok" : "failed");
 	}
 
@@ -267,7 +267,7 @@ int rwd_media_setup(rwd_client_t *c)
 	if (si >= 0 && si < RWD_STREAM_COUNT && srv->video_rings[si])
 		rss_ring_request_idr(srv->video_rings[si]);
 
-	RSS_INFO("media: SRTP stack ready for %s (IDR requested)", c->session_id);
+	RSS_DEBUG("media: SRTP stack ready for %s (IDR requested)", c->session_id);
 	return 0;
 }
 
@@ -526,7 +526,7 @@ void *rwd_video_reader_thread(void *arg)
 			continue;
 		}
 		srv->video_read_seq[s] = vhdr->write_seq;
-		RSS_INFO("media: video reader[%d] started", s);
+		RSS_DEBUG("media: video reader[%d] started", s);
 	}
 
 	uint64_t last_ws[RWD_STREAM_COUNT] = {0};
@@ -560,7 +560,7 @@ void *rwd_video_reader_thread(void *arg)
 					last_ws[s] = 0;
 					idle[s] = 0;
 					video_ts_epoch[s] = 0;
-					RSS_INFO("media: video reader[%d] reconnected (%s)",
+					RSS_DEBUG("media: video reader[%d] reconnected (%s)",
 						 s, ring_names[s]);
 				}
 			}
@@ -578,7 +578,7 @@ void *rwd_video_reader_thread(void *arg)
 					idle[s] = 0;
 				last_ws[s] = ws;
 				if (idle[s] >= 40) { /* ~2s at 50ms timeout */
-					RSS_INFO("media: video[%d] idle, closing ring (%s)",
+					RSS_DEBUG("media: video[%d] idle, closing ring (%s)",
 						 s, ring_names[s]);
 					rss_ring_close(srv->video_rings[s]);
 					srv->video_rings[s] = NULL;
@@ -629,7 +629,7 @@ void *rwd_video_reader_thread(void *arg)
 					c->waiting_keyframe = false;
 					c->video_ts_offset = rtp_ts;
 					c->video_ts_base_set = true;
-					RSS_INFO("media: client[%d] got keyframe, starting send",
+					RSS_DEBUG("media: client[%d] got keyframe, starting send",
 						 s);
 				}
 
@@ -644,7 +644,7 @@ void *rwd_video_reader_thread(void *arg)
 		free(srv->video_bufs[s]);
 		srv->video_bufs[s] = NULL;
 	}
-	RSS_INFO("media: video reader exiting");
+	RSS_DEBUG("media: video reader exiting");
 	return NULL;
 }
 
@@ -679,7 +679,7 @@ void *rwd_audio_reader_thread(void *arg)
 	/* Start from latest */
 	srv->audio_read_seq = ahdr->write_seq;
 
-	RSS_INFO("media: audio reader started (codec=%u)", audio_codec);
+	RSS_DEBUG("media: audio reader started (codec=%u)", audio_codec);
 
 	while (*srv->running) {
 		int ret = rss_ring_wait(srv->audio_ring, 100);
@@ -724,6 +724,6 @@ void *rwd_audio_reader_thread(void *arg)
 		}
 	}
 
-	RSS_INFO("media: audio reader exiting");
+	RSS_DEBUG("media: audio reader exiting");
 	return NULL;
 }

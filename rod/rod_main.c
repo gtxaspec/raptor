@@ -448,7 +448,7 @@ int main(int argc, char **argv)
 		if (rod_load_logo(st.cfg.logo_path, st.cfg.logo_width, st.cfg.logo_height,
 				  &st.logo_data) == 0) {
 			st.logo_data_size = st.cfg.logo_width * st.cfg.logo_height * 4;
-			RSS_INFO("logo loaded: %s (%dx%d)", st.cfg.logo_path, st.cfg.logo_width,
+			RSS_DEBUG("logo loaded: %s (%dx%d)", st.cfg.logo_path, st.cfg.logo_width,
 				 st.cfg.logo_height);
 		}
 

@@ -106,7 +106,7 @@ void *rsd_video_reader_thread(void *arg)
 	uint64_t last_write_seq = 0;
 	int idle_count = 0;
 
-	RSS_INFO("video reader[%d] started", stream_idx);
+	RSS_DEBUG("video reader[%d] started", stream_idx);
 	while (*srv->running) {
 		if (!rctx->ring) {
 			/* Ring lost — wait for RVD to recreate it */
@@ -131,7 +131,7 @@ void *rsd_video_reader_thread(void *arg)
 			last_write_seq = 0;
 			idle_count = 0;
 			video_ts_epoch = 0;
-			RSS_INFO("video reader[%d] reconnected (%s)", stream_idx, rctx->ring_name);
+			RSS_DEBUG("video reader[%d] reconnected (%s)", stream_idx, rctx->ring_name);
 		}
 
 		int ret = rss_ring_wait(rctx->ring, 100);
@@ -145,7 +145,7 @@ void *rsd_video_reader_thread(void *arg)
 			last_write_seq = ws;
 
 			if (idle_count >= 20) {
-				RSS_INFO("video reader[%d] idle, closing ring (%s)",
+				RSS_DEBUG("video reader[%d] idle, closing ring (%s)",
 					 stream_idx, rctx->ring_name);
 				rss_ring_close(rctx->ring);
 				rctx->ring = NULL;
@@ -213,7 +213,7 @@ void *rsd_video_reader_thread(void *arg)
 		pthread_mutex_unlock(&srv->clients_lock);
 	}
 
-	RSS_INFO("video reader[%d] exiting", stream_idx);
+	RSS_DEBUG("video reader[%d] exiting", stream_idx);
 	return NULL;
 }
 
@@ -259,7 +259,7 @@ void *rsd_audio_reader_thread(void *arg)
 {
 	rsd_server_t *srv = arg;
 
-	RSS_INFO("audio reader thread started");
+	RSS_DEBUG("audio reader thread started");
 
 	/* Get codec and clock from ring header */
 	const rss_ring_header_t *ahdr = rss_ring_get_header(srv->ring_audio);
@@ -286,7 +286,7 @@ void *rsd_audio_reader_thread(void *arg)
 	/* RTP clock for timestamp conversion — Opus uses 48kHz per RFC 7587 */
 	uint32_t rtp_clock = (audio_codec == RSD_CODEC_OPUS) ? 48000 : audio_clock;
 
-	RSS_INFO("audio codec=%u clock=%u rtp_clock=%u spf=%u", audio_codec, audio_clock,
+	RSS_DEBUG("audio codec=%u clock=%u rtp_clock=%u spf=%u", audio_codec, audio_clock,
 		 rtp_clock, samples_per_frame);
 
 	/* Buffer for audio frames */
@@ -355,6 +355,6 @@ void *rsd_audio_reader_thread(void *arg)
 		}
 	}
 
-	RSS_INFO("audio reader thread exiting");
+	RSS_DEBUG("audio reader thread exiting");
 	return NULL;
 }

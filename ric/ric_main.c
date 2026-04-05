@@ -221,7 +221,7 @@ int main(int argc, char **argv)
 	load_gpio_from_thingino_json(&st.cfg);
 
 	/* Wait for RVD control socket to be available */
-	RSS_INFO("waiting for RVD...");
+	RSS_DEBUG("waiting for RVD...");
 	for (int i = 0; i < 100 && *st.running; i++) {
 		char resp[256];
 		if (rss_ctrl_send_command("/var/run/rss/rvd.sock", "{\"cmd\":\"get-exposure\"}",

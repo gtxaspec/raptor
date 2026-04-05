@@ -188,7 +188,7 @@ int rwd_dtls_init(rwd_dtls_ctx_t *ctx, const char *cert_path, const char *key_pa
 		return -1;
 	}
 
-	RSS_INFO("DTLS: initialized (%s)", ctx->fingerprint);
+	RSS_DEBUG("DTLS: initialized (%s)", ctx->fingerprint);
 	return 0;
 }
 
@@ -343,7 +343,7 @@ int rwd_dtls_handshake_step(rwd_client_t *c)
 	}
 
 	c->dtls_state = RWD_DTLS_ESTABLISHED;
-	RSS_INFO("DTLS: handshake complete (profile=%d)", profile);
+	RSS_DEBUG("DTLS: handshake complete (profile=%d)", profile);
 	return 0;
 }
 
@@ -390,7 +390,7 @@ int rwd_dtls_export_srtp_keys(rwd_client_t *c, Compy_SrtpKeyMaterial *send_key,
 	memcpy(recv_key->master_key, key_material, SRTP_MASTER_KEY_LEN);
 	memcpy(recv_key->master_salt, key_material + 2 * SRTP_MASTER_KEY_LEN, SRTP_MASTER_SALT_LEN);
 
-	RSS_INFO("DTLS: SRTP keys exported (prf=%d, send_key=%02x%02x%02x%02x salt=%02x%02x)",
+	RSS_DEBUG("DTLS: SRTP keys exported (prf=%d, send_key=%02x%02x%02x%02x salt=%02x%02x)",
 		 c->tls_prf, send_key->master_key[0], send_key->master_key[1],
 		 send_key->master_key[2], send_key->master_key[3], send_key->master_salt[0],
 		 send_key->master_salt[1]);

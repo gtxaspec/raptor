@@ -92,7 +92,7 @@ static void rmd_update_state(rmd_ctx_t *ctx, bool motion)
 	}
 
 	if (ctx->state != prev)
-		RSS_INFO("state: %s -> %s", state_names[prev], state_names[ctx->state]);
+		RSS_DEBUG("state: %s -> %s", state_names[prev], state_names[ctx->state]);
 }
 
 static int rmd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, void *userdata)
@@ -159,7 +159,7 @@ int main(int argc, char **argv)
 		if (rss_ctrl_send_command("/var/run/rss/rvd.sock", "{\"cmd\":\"ivs-status\"}", resp,
 					  sizeof(resp), 500) >= 0) {
 			if (strstr(resp, "\"active\":true")) {
-				RSS_INFO("RVD IVS active");
+				RSS_DEBUG("RVD IVS active");
 				break;
 			}
 		}

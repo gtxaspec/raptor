@@ -49,7 +49,7 @@ void rmd_gpio_init(rmd_ctx_t *ctx)
 	if (ctx->cfg.gpio_pin < 0)
 		return;
 	if (gpio_export(ctx->cfg.gpio_pin) == 0)
-		RSS_INFO("GPIO %d initialized for motion output", ctx->cfg.gpio_pin);
+		RSS_DEBUG("GPIO %d initialized for motion output", ctx->cfg.gpio_pin);
 	else
 		RSS_WARN("GPIO %d export failed (may already be exported)", ctx->cfg.gpio_pin);
 }

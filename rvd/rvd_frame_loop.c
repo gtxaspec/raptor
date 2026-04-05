@@ -45,7 +45,7 @@ static void *encoder_thread(void *arg)
 	int idx = a->idx;
 	rvd_stream_t *s = &st->streams[idx];
 
-	RSS_INFO("encoder thread[%d] started (chn=%d %ux%u)", idx, s->chn, s->enc_cfg.width,
+	RSS_DEBUG("encoder thread[%d] started (chn=%d %ux%u)", idx, s->chn, s->enc_cfg.width,
 		 s->enc_cfg.height);
 
 	uint64_t frame_count = 0;
@@ -85,7 +85,7 @@ static void *encoder_thread(void *arg)
 
 		int64_t now = rss_timestamp_us();
 		if (now - last_stats >= 30000000) {
-			RSS_INFO("stream%d: %llu frames", idx, (unsigned long long)frame_count);
+			RSS_DEBUG("stream%d: %llu frames", idx, (unsigned long long)frame_count);
 			last_stats = now;
 		}
 	}
