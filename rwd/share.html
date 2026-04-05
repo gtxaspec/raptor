@@ -52,6 +52,9 @@
       <button id="talk" type="button" class="btn btn-outline-secondary btn-sm d-none" onclick="toggleTalk()">
         <i class="bi bi-mic-fill"></i> Talk
       </button>
+      <button id="chkey" type="button" class="btn btn-outline-warning btn-sm d-none ms-auto" onclick="changeKey()">
+        <i class="bi bi-key-fill"></i> Change Key
+      </button>
     </div>
   </div>
 </div>
@@ -79,21 +82,39 @@ const keyHint  = document.getElementById('key-hint');
 const params = new URLSearchParams(location.hash.slice(1));
 let shareKey = params.get('key') ?? '';
 
+const chkeyBtn = document.getElementById('chkey');
+
 if (!shareKey || shareKey.length < 8) {
   keyRow.classList.remove('d-none');
   btn.disabled = true;
+} else {
+  chkeyBtn.classList.remove('d-none');
 }
 
 keyInput.addEventListener('input', () => {
   shareKey = keyInput.value.trim();
   const valid = shareKey.length >= 8;
   btn.disabled = !valid;
+  chkeyBtn.classList.toggle('d-none', !valid);
   keyHint.textContent = valid ? '' : shareKey.length ? 'Key too short (min 8 characters)' : 'Enter a key to connect';
   if (valid) {
     location.replace('#key=' + encodeURIComponent(shareKey));
     setStatus('Ready');
   }
 });
+
+function changeKey() {
+  if (pc) stop();
+  shareKey = '';
+  keyInput.value = '';
+  keyRow.classList.remove('d-none');
+  keyInput.focus();
+  btn.disabled = true;
+  chkeyBtn.classList.add('d-none');
+  keyHint.textContent = 'Enter a key to connect';
+  location.replace('#');
+  setStatus('Ready');
+}
 
 function setStatus(text, variant = 'secondary') {
   st.textContent = text;
