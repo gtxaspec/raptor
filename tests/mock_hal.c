@@ -20,7 +20,7 @@ struct rss_hal_ctx {
 
 /* ── Stub implementations ── */
 
-static int mock_init(void *ctx, const rss_sensor_config_t *cfg)
+static int mock_init(void *ctx, const rss_multi_sensor_config_t *cfg)
 {
 	(void)ctx;
 	(void)cfg;
