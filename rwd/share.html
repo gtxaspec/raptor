@@ -116,8 +116,10 @@ function changeKey() {
   setStatus('Ready');
 }
 
-function setStatus(text, variant = 'secondary') {
-  st.textContent = text;
+function setStatus(text, variant = 'secondary', spin = false) {
+  st.innerHTML = spin
+    ? `<span class="spinner-border spinner-border-sm me-1" role="status"></span>${text}`
+    : text;
   st.className = `badge bg-${variant} ms-auto`;
 }
 
@@ -195,7 +197,7 @@ async function start() {
   btn.innerHTML = '<i class="bi bi-stop-fill"></i> Disconnect';
   btn.classList.replace('btn-outline-primary', 'btn-outline-danger');
   document.getElementById('stream').disabled = true;
-  setStatus('Computing share key…');
+  setStatus('Computing share key…', 'secondary', true);
   const infoHash = await computeInfoHash();
   const peerId   = randomId(20);
   const offerId  = randomId(10);
@@ -232,7 +234,7 @@ async function start() {
     if (state === 'failed' || state === 'disconnected') stop();
   };
 
-  setStatus('Gathering ICE candidates…');
+  setStatus('Gathering ICE candidates…', 'secondary', true);
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
   await new Promise(r => {
@@ -242,7 +244,7 @@ async function start() {
 
   let connected = false;
   for (let attempt = 1; attempt <= 3 && !connected; attempt++) {
-    setStatus(`Connecting to tracker (attempt ${attempt}/3)…`);
+    setStatus(`Connecting to tracker (attempt ${attempt}/3)…`, 'secondary', true);
     for (const tracker of TRACKERS) {
       try {
         const s = new WebSocket(tracker);
@@ -263,7 +265,7 @@ async function start() {
     stop(); return;
   }
 
-  setStatus('Waiting for camera…', 'warning');
+  setStatus('Waiting for camera…', 'warning', true);
 
   ws.onmessage = async e => {
     let msg;
@@ -271,7 +273,7 @@ async function start() {
     if (msg.answer?.sdp && pc) {
       await pc.setRemoteDescription({ type: 'answer', sdp: msg.answer.sdp });
       if (msg.answer.sdp.includes('a=sendrecv')) talkBtn.classList.remove('d-none');
-      setStatus('Connecting…');
+      setStatus('Connecting…', 'secondary', true);
     }
   };
   ws.onclose = () => {
