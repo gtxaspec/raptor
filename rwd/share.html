@@ -240,21 +240,23 @@ async function start() {
     else pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === 'complete') r(); };
   });
 
-  setStatus('Connecting to tracker…');
   let connected = false;
-  for (const tracker of TRACKERS) {
-    try {
-      const s = new WebSocket(tracker);
-      await new Promise((ok, fail) => {
-        let done = false;
-        const settle = fn => () => { if (!done) { done = true; fn(); } };
-        s.onopen  = settle(ok);
-        s.onerror = settle(fail);
-        s.onclose = settle(fail);
-        setTimeout(settle(() => { s.close(); fail(new Error('timeout')); }), 5000);
-      });
-      ws = s; connected = true; break;
-    } catch (e) { continue; }
+  for (let attempt = 1; attempt <= 3 && !connected; attempt++) {
+    setStatus(`Connecting to tracker (attempt ${attempt}/3)…`);
+    for (const tracker of TRACKERS) {
+      try {
+        const s = new WebSocket(tracker);
+        await new Promise((ok, fail) => {
+          let done = false;
+          const settle = fn => () => { if (!done) { done = true; fn(); } };
+          s.onopen  = settle(ok);
+          s.onerror = settle(fail);
+          s.onclose = settle(fail);
+          setTimeout(settle(() => { s.close(); fail(new Error('timeout')); }), 5000);
+        });
+        ws = s; connected = true; break;
+      } catch (e) { continue; }
+    }
   }
   if (!connected) {
     setStatus('Failed to connect to tracker', 'danger');
