@@ -422,14 +422,34 @@ static int handle_config_cmd(const char *cmd_json, rvd_state_t *st, char *resp, 
 
 	if (strstr(cmd_json, "\"privacy\"")) {
 		char val_str[8];
+		int channel = -1;
+		rss_json_get_int(cmd_json, "channel", &channel);
+
 		bool enable;
 		if (rss_json_get_str(cmd_json, "value", val_str, sizeof(val_str)) == 0)
 			enable = (strcmp(val_str, "on") == 0 || strcmp(val_str, "1") == 0);
+		else if (channel >= 0 && channel < st->stream_count)
+			enable = !st->privacy[channel];
 		else
-			enable = !st->privacy_active;
-		rvd_osd_set_privacy(st, enable);
-		snprintf(resp, resp_size, "{\"status\":\"ok\",\"privacy\":\"%s\"}",
-			 st->privacy_active ? "on" : "off");
+			enable = !st->privacy[0];
+
+		rvd_osd_set_privacy(st, enable, channel);
+
+		int n = snprintf(resp, resp_size, "{\"status\":\"ok\",\"privacy\":[");
+		int first = 1;
+		for (int i = 0; i < st->stream_count; i++) {
+			if (st->streams[i].is_jpeg)
+				continue;
+			if (n >= resp_size - 2)
+				break;
+			n += snprintf(resp + n, resp_size - n, "%s\"%s\"",
+				      first ? "" : ",", st->privacy[i] ? "on" : "off");
+			first = 0;
+		}
+		if (n < resp_size - 2)
+			snprintf(resp + n, resp_size - n, "]}");
+		else
+			resp[resp_size - 1] = '\0';
 		return 1;
 	}
 

@@ -67,9 +67,9 @@ typedef struct {
 	rvd_osd_region_t osd_regions[RVD_MAX_STREAMS][RVD_OSD_REGIONS];
 	int osd_retry_counter;
 
-	/* Privacy mode (full-frame cover) */
+	/* Privacy mode (full-frame cover, per-stream) */
 	int privacy_handles[RVD_MAX_STREAMS]; /* HAL region handles, -1 if none */
-	bool privacy_active;
+	bool privacy[RVD_MAX_STREAMS];
 	volatile bool pipeline_ready; /* set after FS enable + encoder start */
 
 #define RVD_MAX_BIND_STAGES 5 /* FS [→ IVS] [→ OSD] → ENC + headroom */
@@ -113,7 +113,7 @@ void rvd_osd_init(rvd_state_t *st);
 void rvd_osd_check(rvd_state_t *st);
 void rvd_osd_deinit(rvd_state_t *st);
 void *rvd_osd_thread(void *arg);
-void rvd_osd_set_privacy(rvd_state_t *st, bool enable);
+void rvd_osd_set_privacy(rvd_state_t *st, bool enable, int stream);
 
 /* rvd_ctrl.c */
 int rvd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, void *userdata);

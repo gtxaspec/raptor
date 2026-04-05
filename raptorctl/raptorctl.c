@@ -71,7 +71,6 @@ static void usage(void)
 		"  rvd set-fps <ch> <fps>              Change frame rate\n"
 		"  rvd set-qp-bounds <ch> <min> <max>  Change QP range\n"
 		"  rvd request-idr [channel]           Request keyframe\n"
-		"  rvd privacy [on|off]                Toggle privacy mode\n"
 		"  rvd set-brightness <val>            ISP brightness (0-255)\n"
 		"  rvd set-contrast <val>              ISP contrast (0-255)\n"
 		"  rvd set-saturation <val>            ISP saturation (0-255)\n"
@@ -108,6 +107,7 @@ static void usage(void)
 		"  rad ao-set-gain <val>               Change output (speaker) gain\n"
 		"\n"
 		"ROD commands:\n"
+		"  rod privacy [on|off] [channel]      Toggle privacy mode\n"
 		"  rod set-text <text>                 Change OSD text string\n"
 		"  rod set-font-color <hex>            Text color (0xAARRGGBB)\n"
 		"  rod set-stroke-color <hex>          Stroke color (0xAARRGGBB)\n"
@@ -358,7 +358,6 @@ static void daemon_help(const char *name)
 		       "  set-fps <ch> <fps>                  Change frame rate\n"
 		       "  set-qp-bounds <ch> <min> <max>      Change QP range\n"
 		       "  request-idr [channel]               Request keyframe\n"
-		       "  privacy [on|off]                    Toggle privacy mode\n"
 		       "  set-brightness <val>                ISP brightness (0-255)\n"
 		       "  set-contrast <val>                  ISP contrast (0-255)\n"
 		       "  set-saturation <val>                ISP saturation (0-255)\n"
@@ -402,6 +401,7 @@ static void daemon_help(const char *name)
 		       "  status                              Show OSD region status\n"
 		       "  config                              Show running config\n"
 		       "  set-text <text>                     Change OSD text\n"
+		       "  privacy [on|off] [channel]          Toggle privacy mode\n"
 		       "  set-font-color <0xAARRGGBB>         Text color\n"
 		       "  set-stroke-color <0xAARRGGBB>       Stroke color\n"
 		       "  set-stroke-size <0-5>               Stroke width\n");
@@ -638,6 +638,10 @@ int main(int argc, char **argv)
 	const char *cmd = argv[2];
 	char json[512];
 
+	/* Privacy is implemented by RVD but exposed under ROD for UX */
+	if (strcmp(daemon, "rod") == 0 && strcmp(cmd, "privacy") == 0)
+		daemon = "rvd";
+
 	if (strcmp(cmd, "status") == 0) {
 		snprintf(json, sizeof(json), "{\"cmd\":\"status\"}");
 
@@ -760,7 +764,11 @@ int main(int argc, char **argv)
 			snprintf(json, sizeof(json), "{\"cmd\":\"set-agc\",\"value\":%s}", argv[3]);
 
 	} else if (strcmp(cmd, "privacy") == 0) {
-		if (argc > 3)
+		if (argc > 4)
+			snprintf(json, sizeof(json),
+				 "{\"cmd\":\"privacy\",\"value\":\"%s\",\"channel\":%ld}",
+				 argv[3], strtol(argv[4], NULL, 10));
+		else if (argc > 3)
 			snprintf(json, sizeof(json), "{\"cmd\":\"privacy\",\"value\":\"%s\"}",
 				 argv[3]);
 		else
@@ -820,9 +828,9 @@ int main(int argc, char **argv)
 		int sensor_idx = -1;
 		const char *val_arg = argv[3];
 		if (argc >= 6 && strcmp(argv[4], "--sensor") == 0)
-			sensor_idx = atoi(argv[5]);
+			sensor_idx = (int)strtol(argv[5], NULL, 10);
 		else if (argc >= 5 && strcmp(argv[3], "--sensor") == 0) {
-			sensor_idx = atoi(argv[4]);
+			sensor_idx = (int)strtol(argv[4], NULL, 10);
 			val_arg = argc >= 6 ? argv[5] : "0";
 		}
 		if (sensor_idx >= 0)

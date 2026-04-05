@@ -357,7 +357,8 @@ void rvd_osd_init(rvd_state_t *st)
 		}
 	}
 
-	st->privacy_active = false;
+	for (int s = 0; s < st->stream_count; s++)
+		st->privacy[s] = false;
 	st->osd_retry_counter = 0;
 }
 
@@ -594,58 +595,67 @@ push_updates:
 	}
 }
 
-void rvd_osd_set_privacy(rvd_state_t *st, bool enable)
+/* Set privacy for a single stream index */
+static void set_privacy_stream(rvd_state_t *st, int s, bool enable)
+{
+	if (st->streams[s].is_jpeg)
+		return;
+	if (STREAM_ISP_OSD(st, s) && s > 0 &&
+	    st->streams[s].sensor_idx == st->streams[s - 1].sensor_idx)
+		return;
+
+	/* Show/hide privacy cover */
+	if (STREAM_ISP_OSD(st, s)) {
+		int sensor = st->streams[s].sensor_idx;
+		int chx = st->streams[s].fs_chn % 3;
+		int stream_w = st->streams[s].enc_cfg.width;
+		int stream_h = st->streams[s].enc_cfg.height;
+		uint32_t pcol = (uint32_t)strtoul(
+			rss_config_get_str(st->cfg, "osd", "privacy_color",
+					   "0xFF000000"), NULL, 0);
+		RSS_HAL_CALL(st->ops, isp_osd_set_mask, st->hal_ctx,
+			     sensor, chx, 0, enable ? 1 : 0,
+			     0, 0, stream_w, stream_h, pcol);
+	} else {
+		int ph = st->privacy_handles[s];
+		if (ph >= 0) {
+			int grp = st->streams[s].chn;
+			RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, ph, grp,
+				     enable ? 1 : 0, 0);
+		}
+	}
+
+	/* Show/hide privacy text region */
+	rvd_osd_region_t *preg = &st->osd_regions[s][RVD_OSD_PRIVACY];
+	if (preg->active && preg->hal_handle >= 0) {
+		if (STREAM_ISP_OSD(st, s)) {
+			int sensor = st->streams[s].sensor_idx;
+			RSS_HAL_CALL(st->ops, isp_osd_show_region, st->hal_ctx, sensor,
+				     preg->hal_handle, enable ? 1 : 0);
+		} else {
+			int grp = st->streams[s].chn;
+			RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx,
+				     preg->hal_handle, grp, enable ? 1 : 0,
+				     RVD_OSD_PRIVACY + 1);
+		}
+	}
+
+	st->privacy[s] = enable;
+}
+
+void rvd_osd_set_privacy(rvd_state_t *st, bool enable, int stream)
 {
 	if (!st->osd_enabled)
 		return;
 
-	for (int s = 0; s < st->stream_count; s++) {
-		if (st->streams[s].is_jpeg)
-			continue;
-		if (STREAM_ISP_OSD(st, s) && s > 0 &&
-		    st->streams[s].sensor_idx == st->streams[s - 1].sensor_idx)
-			continue;
-
-		/* Show/hide privacy cover */
-		if (STREAM_ISP_OSD(st, s)) {
-			/* ISP mask block: hardware color fill, no bitmap needed */
-			int sensor = st->streams[s].sensor_idx;
-			int chx = st->streams[s].fs_chn % 3;
-			int stream_w = st->streams[s].enc_cfg.width;
-			int stream_h = st->streams[s].enc_cfg.height;
-			uint32_t pcol = (uint32_t)strtoul(
-				rss_config_get_str(st->cfg, "osd", "privacy_color",
-						   "0xFF000000"), NULL, 0);
-			RSS_HAL_CALL(st->ops, isp_osd_set_mask, st->hal_ctx,
-				     sensor, chx, 0, enable ? 1 : 0,
-				     0, 0, stream_w, stream_h, pcol);
-		} else {
-			int ph = st->privacy_handles[s];
-			if (ph >= 0) {
-				int grp = st->streams[s].chn;
-				RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, ph, grp,
-					     enable ? 1 : 0, 0);
-			}
-		}
-
-		/* Show/hide privacy text region */
-		rvd_osd_region_t *preg = &st->osd_regions[s][RVD_OSD_PRIVACY];
-		if (preg->active && preg->hal_handle >= 0) {
-			if (STREAM_ISP_OSD(st, s)) {
-				int sensor = st->streams[s].sensor_idx;
-				RSS_HAL_CALL(st->ops, isp_osd_show_region, st->hal_ctx, sensor,
-					     preg->hal_handle, enable ? 1 : 0);
-			} else {
-				int grp = st->streams[s].chn;
-				RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx,
-					     preg->hal_handle, grp, enable ? 1 : 0,
-					     RVD_OSD_PRIVACY + 1);
-			}
-		}
+	if (stream >= 0 && stream < st->stream_count) {
+		set_privacy_stream(st, stream, enable);
+		RSS_INFO("privacy stream %d %s", stream, enable ? "ON" : "OFF");
+	} else {
+		for (int s = 0; s < st->stream_count; s++)
+			set_privacy_stream(st, s, enable);
+		RSS_INFO("privacy %s (all streams)", enable ? "ON" : "OFF");
 	}
-
-	st->privacy_active = enable;
-	RSS_INFO("privacy mode %s", enable ? "ON" : "OFF");
 }
 
 void *rvd_osd_thread(void *arg)
@@ -761,7 +771,7 @@ void rvd_osd_deinit(rvd_state_t *st)
 		}
 
 		/* Clean up privacy cover region */
-		if (STREAM_ISP_OSD(st, s) && st->privacy_active) {
+		if (STREAM_ISP_OSD(st, s) && st->privacy[s]) {
 			/* Disable ISP mask block */
 			int sensor = st->streams[s].sensor_idx;
 			int chx = st->streams[s].fs_chn % 3;
