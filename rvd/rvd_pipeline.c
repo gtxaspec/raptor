@@ -518,7 +518,10 @@ int rvd_pipeline_init(rvd_state_t *st)
 				continue;
 
 			int quality = rss_config_get_int(cfg, sect, "jpeg_quality", def_quality);
+			if (quality < 1) quality = 1;
+			if (quality > 100) quality = 100;
 			int fps = rss_config_get_int(cfg, sect, "jpeg_fps", def_fps);
+			if (fps < 1) fps = 1;
 
 			int ji = st->stream_count;
 			int jpeg_chn = jpeg_chn_base + st->jpeg_count;

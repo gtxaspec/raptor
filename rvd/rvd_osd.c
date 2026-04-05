@@ -137,27 +137,6 @@ static bool create_region(rvd_state_t *st, int s, int r, uint32_t w, uint32_t h)
 	reg->width = w;
 	reg->height = h;
 
-	/* For logo, pre-load the BGRA file into local_buf so SetRgnAttr
-	 * gets valid bitmap data (vendor pattern for static images). */
-	if (r == RVD_OSD_LOGO) {
-		const char *lp;
-		int lw, lh;
-		lp = rss_config_get_str(st->cfg, "osd", "logo", "");
-		lw = rss_config_get_int(st->cfg, "osd", "logo_width", OSD_LOGO_W);
-		lh = rss_config_get_int(st->cfg, "osd", "logo_height", OSD_LOGO_H);
-		int fsz = 0;
-		char *fd = rss_read_file(lp, &fsz);
-		if (fd && fsz > 0 && fsz == lw * lh * 4) {
-			for (int row = 0; row < lh && row < (int)h; row++)
-				memcpy(reg->local_buf + row * w * 4, fd + row * lw * 4, lw * 4);
-			RSS_INFO("logo %s (%dx%d) loaded into %ux%u region", lp, lw, lh, w, h);
-		} else {
-			RSS_WARN("logo load failed: %s (got %d bytes, expected %d)", lp, fsz,
-				 lw * lh * 4);
-		}
-		free(fd);
-	}
-
 	int stream_w = st->streams[s].enc_cfg.width;
 	int stream_h = st->streams[s].enc_cfg.height;
 
@@ -247,27 +226,17 @@ void rvd_osd_init(rvd_state_t *st)
 	rss_config_t *cfg = st->cfg;
 
 	/* Initialize privacy handles for all streams (including skipped ones) */
-	for (int s = 0; s < st->stream_count; s++) {
+	for (int s = 0; s < st->stream_count; s++)
 		st->privacy_handles[s] = -1;
-
-	}
 
 	for (int s = 0; s < st->stream_count; s++) {
 		if (st->streams[s].is_jpeg)
 			continue;
 		/* Per-stream OSD enable/disable from config */
-		{
-			int si = st->streams[s].sensor_idx;
-			int local_chn = st->streams[s].fs_chn % 3; /* 0=main, 1=sub */
-			char sect[32];
-			if (si == 0)
-				snprintf(sect, sizeof(sect), "stream%d", local_chn);
-			else
-				snprintf(sect, sizeof(sect), "sensor%d_stream%d", si, local_chn);
-			if (!rss_config_get_bool(cfg, sect, "osd_enabled", true)) {
-				RSS_INFO("osd stream%d: disabled by [%s] osd_enabled", s, sect);
-				continue;
-			}
+		if (!rss_config_get_bool(cfg, st->streams[s].cfg_sect, "osd_enabled", true)) {
+			RSS_INFO("osd stream%d: disabled by [%s] osd_enabled",
+				 s, st->streams[s].cfg_sect);
+			continue;
 		}
 
 		for (int r = 0; r < RVD_OSD_REGIONS; r++) {
@@ -284,11 +253,21 @@ void rvd_osd_init(rvd_state_t *st)
 		uint32_t up_w = OSD_UPTIME_W;
 		uint32_t txt_w = OSD_TEXT_W;
 
-		if (s > 0) {
+		/* Scale OSD dimensions for sub streams relative to their sensor's main */
+		int main_idx = 0;
+		for (int m = 0; m < st->stream_count; m++) {
+			if (!st->streams[m].is_jpeg &&
+			    st->streams[m].sensor_idx == st->streams[s].sensor_idx &&
+			    st->streams[m].fs_chn % 3 == 0) {
+				main_idx = m;
+				break;
+			}
+		}
+		if (s != main_idx) {
 			int sw = st->streams[s].enc_cfg.width;
-			int mw = st->streams[0].enc_cfg.width;
+			int mw = st->streams[main_idx].enc_cfg.width;
 			int sh = st->streams[s].enc_cfg.height;
-			int mh = st->streams[0].enc_cfg.height;
+			int mh = st->streams[main_idx].enc_cfg.height;
 			if (mh > 0)
 				th = th * sh / mh;
 			if (th < 20)
@@ -324,16 +303,13 @@ void rvd_osd_init(rvd_state_t *st)
 				region_count++;
 		}
 
-		{
-			const char *logo_path = rss_config_get_str(cfg, "osd", "logo", "");
-			if (logo_path[0] && access(logo_path, R_OK) == 0) {
-				uint32_t lw =
-					rss_config_get_int(cfg, "osd", "logo_width", OSD_LOGO_W);
-				uint32_t lh =
-					rss_config_get_int(cfg, "osd", "logo_height", OSD_LOGO_H);
-				if (create_region(st, s, RVD_OSD_LOGO, lw, lh))
-					region_count++;
-			}
+		/* Logo region: created with config dimensions, starts transparent.
+		 * ROD pushes actual logo data via SHM when it starts. */
+		if (rss_config_get_bool(cfg, "osd", "logo_enabled", true)) {
+			uint32_t lw = rss_config_get_int(cfg, "osd", "logo_width", OSD_LOGO_W);
+			uint32_t lh = rss_config_get_int(cfg, "osd", "logo_height", OSD_LOGO_H);
+			if (create_region(st, s, RVD_OSD_LOGO, lw, lh))
+				region_count++;
 		}
 
 		/* Privacy text region (centered, hidden until privacy mode) */
@@ -475,18 +451,16 @@ static void try_open_shm(rvd_state_t *st, int s, int r)
 	if (!reg->active)
 		return;
 
+	char name[64];
+	snprintf(name, sizeof(name), "osd_%d_%s", s, region_names[r]);
+
 	if (reg->shm) {
-		char name[64];
-		snprintf(name, sizeof(name), "osd_%d_%s", s, region_names[r]);
 		if (!shm_is_stale(reg->shm, name))
 			return; /* same SHM, nothing to do */
 		RSS_INFO("osd shm %s: producer restarted, reopening", name);
 		rss_osd_close(reg->shm);
 		reg->shm = NULL;
 	}
-
-	char name[64];
-	snprintf(name, sizeof(name), "osd_%d_%s", s, region_names[r]);
 	reg->shm = rss_osd_open(name);
 	if (!reg->shm)
 		return;
