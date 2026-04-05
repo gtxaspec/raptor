@@ -607,11 +607,26 @@ int rvd_pipeline_init(rvd_state_t *st)
 		st->use_isp_osd = false;
 	}
 	if (st->osd_enabled && st->use_isp_osd) {
-		/* ISP OSD: pool via ISP tuning, no groups or bind chain needed */
+		/* Hybrid: ISP OSD for mains, IPU OSD for subs */
 		RSS_HAL_CALL(st->ops, isp_osd_set_pool_size, st->hal_ctx, 512 * 1024);
-		RSS_INFO("using ISP OSD (no bind chain)");
+		RSS_HAL_CALL(st->ops, osd_set_pool_size, st->hal_ctx, 512 * 1024);
+
+		for (int i = 0; i < st->stream_count; i++) {
+			if (st->streams[i].is_jpeg)
+				continue;
+			if (st->streams[i].fs_chn % 3 == 0)
+				continue; /* main — uses ISP OSD, no group */
+			int grp = st->streams[i].chn;
+			ret = RSS_HAL_CALL(st->ops, osd_create_group, st->hal_ctx, grp);
+			if (ret != RSS_OK) {
+				RSS_WARN("osd_create_group(%d) failed: %d", grp, ret);
+				continue;
+			}
+			RSS_DEBUG("osd group %d created (sub, IPU OSD)", grp);
+		}
+		RSS_INFO("using hybrid OSD: ISP for mains, IPU for subs");
 	} else if (st->osd_enabled) {
-		/* IPU OSD: create groups, will be inserted into bind chain */
+		/* IPU OSD only: create groups for all streams */
 		RSS_HAL_CALL(st->ops, osd_set_pool_size, st->hal_ctx, 512 * 1024);
 
 		for (int i = 0; i < st->stream_count; i++) {
@@ -634,9 +649,12 @@ int rvd_pipeline_init(rvd_state_t *st)
 	/* IPU OSD: OSD_Start BEFORE bind, matching vendor SDK sample sequence:
 	 * CreateGroup → CreateRgn → Register → SetAttr → SetGrpRgnAttr → Start → Bind
 	 * ISP OSD: no start needed — regions are shown via ShowOsdRgn */
-	if (st->osd_enabled && !st->use_isp_osd) {
+	if (st->osd_enabled) {
 		for (int i = 0; i < st->stream_count; i++) {
 			if (st->streams[i].is_jpeg)
+				continue;
+			/* ISP OSD mains don't need osd_start */
+			if (st->use_isp_osd && st->streams[i].fs_chn % 3 == 0)
 				continue;
 			int grp = st->streams[i].chn;
 			ret = RSS_HAL_CALL(st->ops, osd_start, st->hal_ctx, grp);
@@ -745,7 +763,9 @@ int rvd_pipeline_init(rvd_state_t *st)
 		chain[chain_len++] = (rss_cell_t){RSS_DEV_FS, fsc, 0};
 		if (insert_ivs)
 			chain[chain_len++] = (rss_cell_t){RSS_DEV_IVS, 0, 0};
-		if (st->osd_enabled && !st->use_isp_osd)
+		/* OSD in bind chain: always for IPU-only mode, subs only for hybrid */
+		if (st->osd_enabled &&
+		    (!st->use_isp_osd || st->streams[i].fs_chn % 3 != 0))
 			chain[chain_len++] = (rss_cell_t){RSS_DEV_OSD, grp, 0};
 		chain[chain_len++] = (rss_cell_t){RSS_DEV_ENC, grp, 0};
 
@@ -960,7 +980,8 @@ void rvd_pipeline_deinit(rvd_state_t *st)
 		RSS_HAL_CALL(st->ops, enc_destroy_channel, st->hal_ctx, chn);
 		if (!st->streams[i].is_jpeg) {
 			RSS_HAL_CALL(st->ops, enc_destroy_group, st->hal_ctx, chn);
-			if (st->osd_enabled && !st->use_isp_osd)
+			if (st->osd_enabled &&
+			    (!st->use_isp_osd || st->streams[i].fs_chn % 3 != 0))
 				RSS_HAL_CALL(st->ops, osd_destroy_group, st->hal_ctx, chn);
 			RSS_HAL_CALL(st->ops, fs_destroy_channel, st->hal_ctx, fsc);
 		}
