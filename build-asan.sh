@@ -144,8 +144,12 @@ $CC -o "$OUT/rvd" "$OUT"/rvd_main.o "$OUT"/rvd_pipeline.o "$OUT"/rvd_frame_loop.
 echo "  -> rvd"
 
 echo "=== RAD (mock HAL) ==="
-$CC $CFLAGS $HAL_CFLAGS -c "$RAPTOR_DIR/rad/rad_main.c" -o "$OUT/rad_main.o"
-$CC -o "$OUT/rad" "$OUT/rad_main.o" $LIBS_HAL $LDFLAGS
+for f in rad_main.c rad_codec.c rad_codec_g711.c rad_codec_l16.c rad_codec_aac.c rad_codec_opus.c; do
+  $CC $CFLAGS $HAL_CFLAGS -c "$RAPTOR_DIR/rad/$f" -o "$OUT/${f%.c}.o"
+done
+$CC -o "$OUT/rad" "$OUT"/rad_main.o "$OUT"/rad_codec.o "$OUT"/rad_codec_g711.o \
+    "$OUT"/rad_codec_l16.o "$OUT"/rad_codec_aac.o "$OUT"/rad_codec_opus.o \
+    $LIBS_HAL $LDFLAGS
 echo "  -> rad"
 
 # ── Test helpers ──
