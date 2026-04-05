@@ -62,11 +62,13 @@ typedef struct {
 
 	/* OSD */
 	bool osd_enabled;
+	bool use_isp_osd; /* true = ISP OSD (no bind chain), false = IPU OSD */
 	rvd_osd_region_t osd_regions[RVD_MAX_STREAMS][RVD_OSD_REGIONS];
 	int osd_retry_counter;
 
-	/* Privacy mode (full-frame black cover) */
+	/* Privacy mode (full-frame cover) */
 	int privacy_handles[RVD_MAX_STREAMS]; /* HAL region handles, -1 if none */
+	uint8_t *privacy_bufs[RVD_MAX_STREAMS]; /* ISP OSD: BGRA bitmap (NULL for IPU OSD) */
 	bool privacy_active;
 	volatile bool pipeline_ready; /* set after FS enable + encoder start */
 

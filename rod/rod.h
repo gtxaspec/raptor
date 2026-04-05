@@ -12,7 +12,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define ROD_MAX_STREAMS	     2
+#define ROD_MAX_STREAMS	     6 /* up to 3 sensors × 2 (main+sub) */
 #define ROD_MAX_REGIONS	     5
 #define ROD_GLYPH_CACHE_SIZE 95 /* ASCII 0x20-0x7E */
 #define ROD_TIME_CHARS	     20 /* "2026-03-23 23:59:59" */

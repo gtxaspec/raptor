@@ -571,7 +571,17 @@ int rvd_pipeline_init(rvd_state_t *st)
 
 	/* ── 6. OSD pipeline (if enabled) ── */
 	st->osd_enabled = rss_config_get_bool(cfg, "osd", "enabled", true);
-	if (st->osd_enabled) {
+	st->use_isp_osd = rss_config_get_bool(cfg, "osd", "isp_osd", false);
+	if (st->use_isp_osd && (!caps || !caps->has_isp_osd)) {
+		RSS_WARN("isp_osd requested but not supported on this platform, using IPU OSD");
+		st->use_isp_osd = false;
+	}
+	if (st->osd_enabled && st->use_isp_osd) {
+		/* ISP OSD: pool via ISP tuning, no groups or bind chain needed */
+		RSS_HAL_CALL(st->ops, isp_osd_set_pool_size, st->hal_ctx, 512 * 1024);
+		RSS_INFO("using ISP OSD (no bind chain)");
+	} else if (st->osd_enabled) {
+		/* IPU OSD: create groups, will be inserted into bind chain */
 		RSS_HAL_CALL(st->ops, osd_set_pool_size, st->hal_ctx, 512 * 1024);
 
 		for (int i = 0; i < st->stream_count; i++) {
@@ -585,16 +595,16 @@ int rvd_pipeline_init(rvd_state_t *st)
 				st->osd_enabled = false;
 				break;
 			}
-			/* OSD group started via osd_show_region in rvd_osd_init */
 			RSS_DEBUG("osd group %d created", grp);
 		}
 	}
 
 	/* ── 6b. Create OSD regions + Start (before bind, per vendor sample) ── */
 	rvd_osd_init(st);
-	/* OSD_Start BEFORE bind, matching vendor SDK sample sequence:
-	 * CreateGroup → CreateRgn → Register → SetAttr → SetGrpRgnAttr → Start → Bind */
-	if (st->osd_enabled) {
+	/* IPU OSD: OSD_Start BEFORE bind, matching vendor SDK sample sequence:
+	 * CreateGroup → CreateRgn → Register → SetAttr → SetGrpRgnAttr → Start → Bind
+	 * ISP OSD: no start needed — regions are shown via ShowOsdRgn */
+	if (st->osd_enabled && !st->use_isp_osd) {
 		for (int i = 0; i < st->stream_count; i++) {
 			if (st->streams[i].is_jpeg)
 				continue;
@@ -705,7 +715,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 		chain[chain_len++] = (rss_cell_t){RSS_DEV_FS, fsc, 0};
 		if (insert_ivs)
 			chain[chain_len++] = (rss_cell_t){RSS_DEV_IVS, 0, 0};
-		if (st->osd_enabled)
+		if (st->osd_enabled && !st->use_isp_osd)
 			chain[chain_len++] = (rss_cell_t){RSS_DEV_OSD, grp, 0};
 		chain[chain_len++] = (rss_cell_t){RSS_DEV_ENC, grp, 0};
 
@@ -920,7 +930,7 @@ void rvd_pipeline_deinit(rvd_state_t *st)
 		RSS_HAL_CALL(st->ops, enc_destroy_channel, st->hal_ctx, chn);
 		if (!st->streams[i].is_jpeg) {
 			RSS_HAL_CALL(st->ops, enc_destroy_group, st->hal_ctx, chn);
-			if (st->osd_enabled)
+			if (st->osd_enabled && !st->use_isp_osd)
 				RSS_HAL_CALL(st->ops, osd_destroy_group, st->hal_ctx, chn);
 			RSS_HAL_CALL(st->ops, fs_destroy_channel, st->hal_ctx, fsc);
 		}

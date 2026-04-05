@@ -61,7 +61,7 @@ static void load_config(rod_state_t *st)
 	c->logo_width = rss_config_get_int(cfg, "osd", "logo_width", 100);
 	c->logo_height = rss_config_get_int(cfg, "osd", "logo_height", 30);
 
-	/* Stream dimensions */
+	/* Stream dimensions — sensor 0 */
 	st->stream_w[0] = rss_config_get_int(cfg, "stream0", "width", 1920);
 	st->stream_h[0] = rss_config_get_int(cfg, "stream0", "height", 1080);
 	st->stream_count = 1;
@@ -70,6 +70,22 @@ static void load_config(rod_state_t *st)
 		st->stream_w[1] = rss_config_get_int(cfg, "stream1", "width", 640);
 		st->stream_h[1] = rss_config_get_int(cfg, "stream1", "height", 360);
 		st->stream_count = 2;
+	}
+
+	/* Multi-sensor: sensor 1 streams (indices 2,3) and sensor 2 (indices 4,5) */
+	static const char *sensor_sections[] = {"sensor1_stream0", "sensor1_stream1",
+						"sensor2_stream0", "sensor2_stream1"};
+	for (int i = 0; i < 4 && st->stream_count < ROD_MAX_STREAMS; i++) {
+		const char *sec = sensor_sections[i];
+		if (rss_config_get_str(cfg, sec, "codec", "")[0] != '\0' ||
+		    rss_config_get_bool(cfg, sec, "enabled", false)) {
+			int s = st->stream_count;
+			st->stream_w[s] = rss_config_get_int(cfg, sec, "width",
+				(i % 2 == 0) ? st->stream_w[0] : st->stream_w[1]);
+			st->stream_h[s] = rss_config_get_int(cfg, sec, "height",
+				(i % 2 == 0) ? st->stream_h[0] : st->stream_h[1]);
+			st->stream_count++;
+		}
 	}
 }
 

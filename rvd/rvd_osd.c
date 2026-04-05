@@ -180,37 +180,53 @@ static bool create_region(rvd_state_t *st, int s, int r, uint32_t w, uint32_t h)
 	};
 
 	int handle = -1;
-	int ret = RSS_HAL_CALL(st->ops, osd_create_region, st->hal_ctx, &handle, &attr);
-	if (ret != RSS_OK) {
-		RSS_WARN("osd_create_region(s%d/%s) failed: %d", s, region_names[r], ret);
-		free(reg->local_buf);
-		reg->local_buf = NULL;
-		return false;
+	int ret;
+
+	if (st->use_isp_osd) {
+		/* ISP OSD: create only — SetRgnAttr deferred to OSD thread
+		 * (after FS enable, when ISP knows frame dimensions). */
+		int sensor = st->streams[s].sensor_idx;
+		ret = RSS_HAL_CALL(st->ops, isp_osd_create_region, st->hal_ctx, sensor, &handle);
+		if (ret != RSS_OK) {
+			RSS_WARN("isp_osd_create_region(s%d/%s) failed: %d", s, region_names[r], ret);
+			free(reg->local_buf);
+			reg->local_buf = NULL;
+			return false;
+		}
+	} else {
+		/* IPU OSD: create → register → set attr → hide */
+		ret = RSS_HAL_CALL(st->ops, osd_create_region, st->hal_ctx, &handle, &attr);
+		if (ret != RSS_OK) {
+			RSS_WARN("osd_create_region(s%d/%s) failed: %d", s, region_names[r], ret);
+			free(reg->local_buf);
+			reg->local_buf = NULL;
+			return false;
+		}
+
+		int grp = st->streams[s].chn;
+		ret = RSS_HAL_CALL(st->ops, osd_register_region, st->hal_ctx, handle, grp);
+		if (ret != RSS_OK) {
+			RSS_WARN("osd_register_region(s%d/%s) failed: %d", s, region_names[r], ret);
+			RSS_HAL_CALL(st->ops, osd_destroy_region, st->hal_ctx, handle);
+			free(reg->local_buf);
+			reg->local_buf = NULL;
+			return false;
+		}
+
+		/* SetRgnAttr AFTER RegisterRgn (vendor SDK sample order) */
+		ret = RSS_HAL_CALL(st->ops, osd_set_region_attr, st->hal_ctx, handle, &attr);
+		if (ret != RSS_OK)
+			RSS_WARN("osd_set_region_attr(s%d/%s) failed: %d", s, region_names[r], ret);
+
+		/* Init with show=0. Layer r+1 (1-based, matching prudynt convention). */
+		RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, handle, grp, 0, r + 1);
 	}
-
-	int grp = st->streams[s].chn;
-	ret = RSS_HAL_CALL(st->ops, osd_register_region, st->hal_ctx, handle, grp);
-	if (ret != RSS_OK) {
-		RSS_WARN("osd_register_region(s%d/%s) failed: %d", s, region_names[r], ret);
-		RSS_HAL_CALL(st->ops, osd_destroy_region, st->hal_ctx, handle);
-		free(reg->local_buf);
-		reg->local_buf = NULL;
-		return false;
-	}
-
-	/* SetRgnAttr AFTER RegisterRgn (vendor SDK sample order) */
-	ret = RSS_HAL_CALL(st->ops, osd_set_region_attr, st->hal_ctx, handle, &attr);
-	if (ret != RSS_OK)
-		RSS_WARN("osd_set_region_attr(s%d/%s) failed: %d", s, region_names[r], ret);
-
-	/* Init with show=0. Layer r+1 (1-based, matching prudynt convention). */
-	RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, handle, grp, 0, r + 1);
 
 	reg->hal_handle = handle;
 	reg->active = true;
 
-	RSS_INFO("osd region s%d/%s: %ux%u at (%d,%d) layer=%d handle=%d", s, region_names[r], w, h,
-		 x, y, r, handle);
+	RSS_INFO("osd region s%d/%s: %ux%u at (%d,%d) layer=%d handle=%d%s", s, region_names[r], w,
+		 h, x, y, r, handle, st->use_isp_osd ? " [isp]" : "");
 	return true;
 }
 
@@ -225,8 +241,19 @@ void rvd_osd_init(rvd_state_t *st)
 
 	rss_config_t *cfg = st->cfg;
 
+	/* Initialize privacy handles for all streams (including skipped ones) */
+	for (int s = 0; s < st->stream_count; s++) {
+		st->privacy_handles[s] = -1;
+		st->privacy_bufs[s] = NULL;
+	}
+
 	for (int s = 0; s < st->stream_count; s++) {
 		if (st->streams[s].is_jpeg)
+			continue;
+		/* ISP OSD: all regions render on all FS channels from that
+		 * sensor — skip sub streams to avoid duplicate overlays. */
+		if (st->use_isp_osd && s > 0 &&
+		    st->streams[s].sensor_idx == st->streams[s - 1].sensor_idx)
 			continue;
 
 		for (int r = 0; r < RVD_OSD_REGIONS; r++) {
@@ -301,33 +328,42 @@ void rvd_osd_init(rvd_state_t *st)
 
 		RSS_INFO("osd stream%d: %d regions created", s, region_count);
 
-		/* Privacy cover region (full-frame black, initially hidden) */
-		int stream_w = st->streams[s].enc_cfg.width;
-		int stream_h = st->streams[s].enc_cfg.height;
-		/* Privacy cover color from config (default black) */
-		uint32_t pcol = (uint32_t)strtoul(
-			rss_config_get_str(st->cfg, "osd", "privacy_color", "0xFF000000"), NULL, 0);
-		rss_osd_region_t cover = {
-			.type = RSS_OSD_COVER,
-			.x = 0,
-			.y = 0,
-			.width = stream_w,
-			.height = stream_h,
-			.cover_color = pcol,
-			.bitmap_fmt = RSS_PIXFMT_BGRA,
-			.layer = 0, /* below text regions (1-4) so text shows on top */
-		};
-		int ph = -1;
-		int pret = RSS_HAL_CALL(st->ops, osd_create_region, st->hal_ctx, &ph, &cover);
-		if (pret == RSS_OK) {
-			int grp = st->streams[s].chn;
-			RSS_HAL_CALL(st->ops, osd_register_region, st->hal_ctx, ph, grp);
-			RSS_HAL_CALL(st->ops, osd_set_region_attr, st->hal_ctx, ph, &cover);
-			RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, ph, grp, 0, 0);
-			st->privacy_handles[s] = ph;
-			RSS_DEBUG("privacy cover region stream%d handle=%d", s, ph);
-		} else {
+		/* Privacy cover region (full-frame, initially hidden).
+		 * ISP OSD: allocated lazily in rvd_osd_set_privacy() to avoid
+		 *   wasting ~8MB per stream at startup.
+		 * IPU OSD: native cover type (just a color, no bitmap). */
+		if (st->use_isp_osd) {
 			st->privacy_handles[s] = -1;
+			st->privacy_bufs[s] = NULL;
+		} else {
+			int stream_w = st->streams[s].enc_cfg.width;
+			int stream_h = st->streams[s].enc_cfg.height;
+			uint32_t pcol = (uint32_t)strtoul(
+				rss_config_get_str(st->cfg, "osd", "privacy_color", "0xFF000000"),
+				NULL, 0);
+			rss_osd_region_t cover = {
+				.type = RSS_OSD_COVER,
+				.x = 0,
+				.y = 0,
+				.width = stream_w,
+				.height = stream_h,
+				.cover_color = pcol,
+				.bitmap_fmt = RSS_PIXFMT_BGRA,
+				.layer = 0,
+			};
+			int ph = -1;
+			int pret = RSS_HAL_CALL(st->ops, osd_create_region, st->hal_ctx, &ph,
+						&cover);
+			if (pret == RSS_OK) {
+				int grp = st->streams[s].chn;
+				RSS_HAL_CALL(st->ops, osd_register_region, st->hal_ctx, ph, grp);
+				RSS_HAL_CALL(st->ops, osd_set_region_attr, st->hal_ctx, ph, &cover);
+				RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, ph, grp, 0, 0);
+				st->privacy_handles[s] = ph;
+				RSS_DEBUG("privacy cover region stream%d handle=%d", s, ph);
+			} else {
+				st->privacy_handles[s] = -1;
+			}
 		}
 	}
 
@@ -357,6 +393,65 @@ static bool shm_is_stale(rss_osd_shm_t *shm, const char *name)
 }
 
 /*
+ * Push bitmap from local_buf to the hardware OSD region.
+ * Handles both ISP OSD (SetRgnAttr with position) and IPU OSD (UpdateRgnAttrData).
+ */
+static void push_region(rvd_state_t *st, int s, int r)
+{
+	rvd_osd_region_t *reg = &st->osd_regions[s][r];
+	if (!reg->active || !reg->local_buf)
+		return;
+
+	if (st->use_isp_osd) {
+		int sensor = st->streams[s].sensor_idx;
+		int stream_w = st->streams[s].enc_cfg.width;
+		int stream_h = st->streams[s].enc_cfg.height;
+		char pos_key[32];
+		snprintf(pos_key, sizeof(pos_key), "stream%d_%s_pos", s, region_names[r]);
+		const char *pos_str = rss_config_get_str(st->cfg, "osd", pos_key, default_pos[r]);
+		int x, y;
+		calc_position(stream_w, stream_h, (int)reg->width, (int)reg->height, pos_str, &x, &y);
+		rss_osd_region_t attr = {
+			.type = RSS_OSD_PIC,
+			.x = x, .y = y,
+			.width = (int)reg->width,
+			.height = (int)reg->height,
+			.bitmap_data = reg->local_buf,
+			.bitmap_fmt = RSS_PIXFMT_BGRA,
+		};
+		int chx = st->streams[s].fs_chn % 3;
+		RSS_HAL_CALL(st->ops, isp_osd_set_region_attr, st->hal_ctx, sensor,
+			     reg->hal_handle, chx, &attr);
+	} else {
+		RSS_HAL_CALL(st->ops, osd_update_region_data, st->hal_ctx,
+			     reg->hal_handle, reg->local_buf);
+	}
+}
+
+/*
+ * Copy SHM bitmap into local_buf (centering if smaller) and push to hardware.
+ */
+static void read_shm_and_push(rvd_state_t *st, int s, int r)
+{
+	rvd_osd_region_t *reg = &st->osd_regions[s][r];
+	uint32_t w, h;
+	const uint8_t *bitmap = rss_osd_get_active_buffer(reg->shm, &w, &h);
+	if (!bitmap || w > reg->width || h > reg->height)
+		return;
+
+	if (w == reg->width && h == reg->height) {
+		memcpy(reg->local_buf, bitmap, w * h * 4);
+	} else {
+		uint32_t x_off = (reg->width - w) / 2;
+		memset(reg->local_buf, 0, reg->width * reg->height * 4);
+		for (uint32_t row = 0; row < h; row++)
+			memcpy(reg->local_buf + (row * reg->width + x_off) * 4,
+			       bitmap + row * w * 4, w * 4);
+	}
+	push_region(st, s, r);
+}
+
+/*
  * Try to open SHM for a region that doesn't have one yet,
  * or reopen if the producer (ROD) restarted (different inode).
  */
@@ -379,8 +474,15 @@ static void try_open_shm(rvd_state_t *st, int s, int r)
 	char name[64];
 	snprintf(name, sizeof(name), "osd_%d_%s", s, region_names[r]);
 	reg->shm = rss_osd_open(name);
-	if (reg->shm)
-		RSS_DEBUG("opened osd shm %s", name);
+	if (!reg->shm)
+		return;
+	RSS_DEBUG("opened osd shm %s", name);
+
+	/* Read and push current buffer immediately — dirty flag may have
+	 * been cleared by a previous RVD instance, but content is valid. */
+	reg->no_update_ticks = 0;
+	read_shm_and_push(st, s, r);
+	rss_osd_clear_dirty(reg->shm);
 }
 
 void rvd_osd_check(rvd_state_t *st)
@@ -463,9 +565,7 @@ void rvd_osd_check(rvd_state_t *st)
 				if (reg->local_buf) {
 					memset(reg->local_buf, 0,
 					       reg->width * reg->height * 4);
-					RSS_HAL_CALL(st->ops, osd_update_region_data,
-						     st->hal_ctx, reg->hal_handle,
-						     reg->local_buf);
+					push_region(st, s, r);
 				}
 			}
 		}
@@ -500,28 +600,7 @@ push_updates:
 				continue;
 			}
 			reg->no_update_ticks = 0;
-
-			uint32_t w, h;
-			const uint8_t *bitmap = rss_osd_get_active_buffer(reg->shm, &w, &h);
-			if (!bitmap)
-				continue;
-
-			if (w <= reg->width && h <= reg->height) {
-				if (w == reg->width && h == reg->height) {
-					/* Exact match — flat copy */
-					memcpy(reg->local_buf, bitmap, w * h * 4);
-				} else {
-					/* SHM smaller than region — center horizontally */
-					uint32_t x_off = (reg->width - w) / 2;
-					memset(reg->local_buf, 0, reg->width * reg->height * 4);
-					for (uint32_t row = 0; row < h; row++)
-						memcpy(reg->local_buf +
-							       (row * reg->width + x_off) * 4,
-						       bitmap + row * w * 4, w * 4);
-				}
-				RSS_HAL_CALL(st->ops, osd_update_region_data, st->hal_ctx,
-					     reg->hal_handle, reg->local_buf);
-			}
+			read_shm_and_push(st, s, r);
 			rss_osd_clear_dirty(reg->shm);
 		}
 	}
@@ -535,19 +614,73 @@ void rvd_osd_set_privacy(rvd_state_t *st, bool enable)
 	for (int s = 0; s < st->stream_count; s++) {
 		if (st->streams[s].is_jpeg)
 			continue;
-		int grp = st->streams[s].chn;
+		if (st->use_isp_osd && s > 0 &&
+		    st->streams[s].sensor_idx == st->streams[s - 1].sensor_idx)
+			continue;
 
-		/* Show/hide cover */
+		/* Show/hide privacy cover */
 		int ph = st->privacy_handles[s];
-		if (ph >= 0)
-			RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, ph, grp, enable ? 1 : 0,
-				     0);
+		if (st->use_isp_osd && ph < 0 && enable) {
+			/* Lazy-allocate ISP OSD privacy cover on first use */
+			int stream_w = st->streams[s].enc_cfg.width;
+			int stream_h = st->streams[s].enc_cfg.height;
+			uint32_t pcol = (uint32_t)strtoul(
+				rss_config_get_str(st->cfg, "osd", "privacy_color",
+						   "0xFF000000"), NULL, 0);
+			size_t npixels = (size_t)stream_w * stream_h;
+			uint32_t *pbuf = malloc(npixels * 4);
+			if (pbuf) {
+				for (size_t p = 0; p < npixels; p++)
+					pbuf[p] = pcol;
+				int sensor = st->streams[s].sensor_idx;
+				int ret = RSS_HAL_CALL(st->ops, isp_osd_create_region,
+						       st->hal_ctx, sensor, &ph);
+				if (ret == RSS_OK) {
+					rss_osd_region_t cover = {
+						.type = RSS_OSD_PIC,
+						.x = 0, .y = 0,
+						.width = stream_w,
+						.height = stream_h,
+						.bitmap_data = (uint8_t *)pbuf,
+						.bitmap_fmt = RSS_PIXFMT_BGRA,
+					};
+					int chx = st->streams[s].fs_chn % 3;
+					RSS_HAL_CALL(st->ops, isp_osd_set_region_attr, st->hal_ctx,
+						     sensor, ph, chx, &cover);
+					RSS_HAL_CALL(st->ops, isp_osd_show_region, st->hal_ctx,
+						     sensor, ph, 1);
+					st->privacy_handles[s] = ph;
+					st->privacy_bufs[s] = (uint8_t *)pbuf;
+				} else {
+					free(pbuf);
+				}
+			}
+		} else if (ph >= 0) {
+			if (st->use_isp_osd) {
+				int sensor = st->streams[s].sensor_idx;
+				RSS_HAL_CALL(st->ops, isp_osd_show_region, st->hal_ctx, sensor,
+					     ph, enable ? 1 : 0);
+			} else {
+				int grp = st->streams[s].chn;
+				RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, ph, grp,
+					     enable ? 1 : 0, 0);
+			}
+		}
 
 		/* Show/hide privacy text region */
 		rvd_osd_region_t *preg = &st->osd_regions[s][RVD_OSD_PRIVACY];
-		if (preg->active && preg->hal_handle >= 0)
-			RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, preg->hal_handle, grp,
-				     enable ? 1 : 0, RVD_OSD_PRIVACY + 1);
+		if (preg->active && preg->hal_handle >= 0) {
+			if (st->use_isp_osd) {
+				int sensor = st->streams[s].sensor_idx;
+				RSS_HAL_CALL(st->ops, isp_osd_show_region, st->hal_ctx, sensor,
+					     preg->hal_handle, enable ? 1 : 0);
+			} else {
+				int grp = st->streams[s].chn;
+				RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx,
+					     preg->hal_handle, grp, enable ? 1 : 0,
+					     RVD_OSD_PRIVACY + 1);
+			}
+		}
 	}
 
 	st->privacy_active = enable;
@@ -563,20 +696,49 @@ void *rvd_osd_thread(void *arg)
 	while (!st->pipeline_ready && *st->running)
 		usleep(100000);
 
-	/* Show all regions first (vendor pattern: ShowRgn before UpdateRgnAttrData) */
+	/* ISP OSD: now that FS is enabled, set initial region attrs + show.
+	 * SetRgnAttr was deferred from init because the ISP needs frame
+	 * dimensions which are only available after FS enable. */
 	for (int s = 0; s < st->stream_count; s++) {
 		if (st->streams[s].is_jpeg)
 			continue;
-		int grp = st->streams[s].chn;
 		for (int r = 0; r < RVD_OSD_REGIONS; r++) {
 			rvd_osd_region_t *reg = &st->osd_regions[s][r];
 			if (!reg->active)
 				continue;
-			/* Privacy text starts hidden — shown only during privacy mode */
 			if (r == RVD_OSD_PRIVACY)
 				continue;
-			RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, reg->hal_handle, grp, 1,
-				     r + 1);
+			if (st->use_isp_osd) {
+				int sensor = st->streams[s].sensor_idx;
+				int stream_w = st->streams[s].enc_cfg.width;
+				int stream_h = st->streams[s].enc_cfg.height;
+				char pos_key[32];
+				snprintf(pos_key, sizeof(pos_key), "stream%d_%s_pos",
+					 s, region_names[r]);
+				const char *pos_str = rss_config_get_str(
+					st->cfg, "osd", pos_key, default_pos[r]);
+				int x, y;
+				calc_position(stream_w, stream_h,
+					      (int)reg->width, (int)reg->height,
+					      pos_str, &x, &y);
+				rss_osd_region_t attr = {
+					.type = RSS_OSD_PIC,
+					.x = x, .y = y,
+					.width = (int)reg->width,
+					.height = (int)reg->height,
+					.bitmap_data = reg->local_buf,
+					.bitmap_fmt = RSS_PIXFMT_BGRA,
+				};
+				int chx = st->streams[s].fs_chn % 3;
+				RSS_HAL_CALL(st->ops, isp_osd_set_region_attr, st->hal_ctx,
+					     sensor, reg->hal_handle, chx, &attr);
+				RSS_HAL_CALL(st->ops, isp_osd_show_region, st->hal_ctx, sensor,
+					     reg->hal_handle, 1);
+			} else {
+				int grp = st->streams[s].chn;
+				RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, reg->hal_handle,
+					     grp, 1, r + 1);
+			}
 			reg->shown = true;
 		}
 	}
@@ -599,18 +761,33 @@ void rvd_osd_deinit(rvd_state_t *st)
 	for (int s = 0; s < st->stream_count; s++) {
 		if (st->streams[s].is_jpeg)
 			continue;
-		int grp = st->streams[s].chn;
-		RSS_HAL_CALL(st->ops, osd_stop, st->hal_ctx, grp);
+		if (st->use_isp_osd && s > 0 &&
+		    st->streams[s].sensor_idx == st->streams[s - 1].sensor_idx)
+			continue;
+
+		if (!st->use_isp_osd) {
+			int grp = st->streams[s].chn;
+			RSS_HAL_CALL(st->ops, osd_stop, st->hal_ctx, grp);
+		}
 
 		for (int r = 0; r < RVD_OSD_REGIONS; r++) {
 			rvd_osd_region_t *reg = &st->osd_regions[s][r];
 			if (reg->active && reg->hal_handle >= 0) {
-				RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, reg->hal_handle,
-					     grp, 0, r + 1);
-				RSS_HAL_CALL(st->ops, osd_unregister_region, st->hal_ctx,
-					     reg->hal_handle, grp);
-				RSS_HAL_CALL(st->ops, osd_destroy_region, st->hal_ctx,
-					     reg->hal_handle);
+				if (st->use_isp_osd) {
+					int sensor = st->streams[s].sensor_idx;
+					RSS_HAL_CALL(st->ops, isp_osd_show_region, st->hal_ctx,
+						     sensor, reg->hal_handle, 0);
+					RSS_HAL_CALL(st->ops, isp_osd_destroy_region, st->hal_ctx,
+						     sensor, reg->hal_handle);
+				} else {
+					int grp = st->streams[s].chn;
+					RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx,
+						     reg->hal_handle, grp, 0, r + 1);
+					RSS_HAL_CALL(st->ops, osd_unregister_region, st->hal_ctx,
+						     reg->hal_handle, grp);
+					RSS_HAL_CALL(st->ops, osd_destroy_region, st->hal_ctx,
+						     reg->hal_handle);
+				}
 			}
 			if (reg->shm) {
 				rss_osd_close(reg->shm);
@@ -625,10 +802,21 @@ void rvd_osd_deinit(rvd_state_t *st)
 		/* Clean up privacy cover region */
 		int ph = st->privacy_handles[s];
 		if (ph >= 0) {
-			RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, ph, grp, 0, 0);
-			RSS_HAL_CALL(st->ops, osd_unregister_region, st->hal_ctx, ph, grp);
-			RSS_HAL_CALL(st->ops, osd_destroy_region, st->hal_ctx, ph);
+			if (st->use_isp_osd) {
+				int sensor = st->streams[s].sensor_idx;
+				RSS_HAL_CALL(st->ops, isp_osd_show_region, st->hal_ctx, sensor,
+					     ph, 0);
+				RSS_HAL_CALL(st->ops, isp_osd_destroy_region, st->hal_ctx, sensor,
+					     ph);
+			} else {
+				int grp = st->streams[s].chn;
+				RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, ph, grp, 0, 0);
+				RSS_HAL_CALL(st->ops, osd_unregister_region, st->hal_ctx, ph, grp);
+				RSS_HAL_CALL(st->ops, osd_destroy_region, st->hal_ctx, ph);
+			}
 			st->privacy_handles[s] = -1;
 		}
+		free(st->privacy_bufs[s]);
+		st->privacy_bufs[s] = NULL;
 	}
 }
