@@ -117,14 +117,15 @@ void *rsd_video_reader_thread(void *arg)
 			}
 			const rss_ring_header_t *h = rss_ring_get_header(rctx->ring);
 			if (rctx->frame_buf_size < h->data_size) {
-				free(rctx->frame_buf);
-				rctx->frame_buf = malloc(h->data_size);
-				if (!rctx->frame_buf) {
+				uint8_t *new_buf = malloc(h->data_size);
+				if (!new_buf) {
 					rss_ring_close(rctx->ring);
 					rctx->ring = NULL;
 					rctx->frame_buf_size = 0;
 					continue;
 				}
+				free(rctx->frame_buf);
+				rctx->frame_buf = new_buf;
 				rctx->frame_buf_size = h->data_size;
 			}
 			rctx->read_seq = 0;

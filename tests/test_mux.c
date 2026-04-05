@@ -37,6 +37,8 @@ static uint8_t *make_fake_nal(uint32_t payload_size, uint8_t nal_type, uint32_t 
 {
 	*out_size = 4 + payload_size;
 	uint8_t *buf = malloc(*out_size);
+	if (!buf)
+		return NULL;
 	buf[0] = (payload_size >> 24) & 0xFF;
 	buf[1] = (payload_size >> 16) & 0xFF;
 	buf[2] = (payload_size >> 8) & 0xFF;

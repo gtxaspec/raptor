@@ -632,6 +632,11 @@ static void server_run(rhd_server_t *srv)
 					fcntl(cfd, F_SETFL, flags | O_NONBLOCK);
 
 				rhd_client_t *c = calloc(1, sizeof(*c));
+				if (!c) {
+					RSS_ERROR("client alloc failed");
+					close(cfd);
+					continue;
+				}
 				c->fd = cfd;
 				memcpy(&c->addr, &sa, sizeof(c->addr));
 #ifdef RSS_HAS_TLS

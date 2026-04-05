@@ -546,14 +546,15 @@ void *rwd_video_reader_thread(void *arg)
 					if (ds < 256 * 1024)
 						ds = 256 * 1024;
 					if (ds > srv->video_buf_sizes[s]) {
-						free(srv->video_bufs[s]);
-						srv->video_bufs[s] = malloc(ds);
-						if (!srv->video_bufs[s]) {
+						uint8_t *new_buf = malloc(ds);
+						if (!new_buf) {
 							rss_ring_close(srv->video_rings[s]);
 							srv->video_rings[s] = NULL;
 							srv->video_buf_sizes[s] = 0;
 							continue;
 						}
+						free(srv->video_bufs[s]);
+						srv->video_bufs[s] = new_buf;
 						srv->video_buf_sizes[s] = ds;
 					}
 					srv->video_read_seq[s] = h->write_seq;

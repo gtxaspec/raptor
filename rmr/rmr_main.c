@@ -448,15 +448,19 @@ static void record_loop(rmr_state_t *st)
 				const rss_ring_header_t *vhdr =
 					rss_ring_get_header(st->video_ring);
 				if (vhdr->data_size > st->frame_buf_size) {
-					free(st->frame_buf);
-					st->frame_buf = malloc(vhdr->data_size);
-					free(st->avcc_buf);
-					st->avcc_buf = malloc(vhdr->data_size);
-					if (!st->frame_buf || !st->avcc_buf) {
+					uint8_t *new_frame = malloc(vhdr->data_size);
+					uint8_t *new_avcc = malloc(vhdr->data_size);
+					if (!new_frame || !new_avcc) {
+						free(new_frame);
+						free(new_avcc);
 						rss_ring_close(st->video_ring);
 						st->video_ring = NULL;
 						continue;
 					}
+					free(st->frame_buf);
+					free(st->avcc_buf);
+					st->frame_buf = new_frame;
+					st->avcc_buf = new_avcc;
 					st->frame_buf_size = vhdr->data_size;
 					st->avcc_buf_size = vhdr->data_size;
 				}
