@@ -148,7 +148,7 @@ static int wt_tls_connect(wt_tls_t *tls, const char *host, const char *port, boo
 	 * If unavailable or tls_verify is disabled, fall back to no verification
 	 * (DTLS-SRTP still secures the media path regardless). */
 	if (tls_verify &&
-	    mbedtls_x509_crt_parse_file(&tls->ca_cert, "/etc/ssl/certs/ca-certificates.crt") > 0) {
+	    mbedtls_x509_crt_parse_file(&tls->ca_cert, "/etc/ssl/certs/ca-certificates.crt") >= 0) {
 		mbedtls_ssl_conf_ca_chain(&tls->conf, &tls->ca_cert, NULL);
 		mbedtls_ssl_conf_authmode(&tls->conf, MBEDTLS_SSL_VERIFY_REQUIRED);
 		tls->has_ca = true;
