@@ -431,8 +431,8 @@ int rvd_pipeline_init(rvd_state_t *st)
 
 		if (s == 0) {
 			/* Sensor 0: backward-compatible section names */
-			strcpy(main_sect, "stream0");
-			strcpy(sub_sect, "stream1");
+			rss_strlcpy(main_sect, "stream0", sizeof(main_sect));
+			rss_strlcpy(sub_sect, "stream1", sizeof(sub_sect));
 		} else {
 			snprintf(main_sect, sizeof(main_sect), "sensor%d_stream0", s);
 			snprintf(sub_sect, sizeof(sub_sect), "sensor%d_stream1", s);
