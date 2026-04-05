@@ -468,8 +468,32 @@ int rvd_pipeline_init(rvd_state_t *st)
 		}
 	}
 
+	/* IVDC encoder group reorder: SDK requires IVDC channels in
+	 * groups 0..N-1. Reassign groups so IVDC mains come first. */
+	{
+		int ivdc_count = 0;
+		for (int i = 0; i < st->stream_count; i++)
+			if (st->streams[i].enc_cfg.ivdc)
+				ivdc_count++;
+
+		if (ivdc_count > 0) {
+			int grp_ivdc = 0, grp_other = ivdc_count;
+			for (int i = 0; i < st->stream_count; i++) {
+				int old_grp = st->streams[i].chn;
+				if (st->streams[i].enc_cfg.ivdc)
+					st->streams[i].chn = grp_ivdc++;
+				else
+					st->streams[i].chn = grp_other++;
+				if (st->streams[i].chn != old_grp)
+					RSS_DEBUG("ivdc reorder: stream%d enc_grp %d -> %d",
+						  i, old_grp, st->streams[i].chn);
+			}
+			enc_grp_counter = grp_other;
+		}
+	}
+
 	/* JPEG snapshot channels (one per video stream) */
-	int jpeg_chn_base = enc_grp_counter; /* pack JPEG channels right after video */
+	int jpeg_chn_base = enc_grp_counter;
 	st->jpeg_count = 0;
 	for (int j = 0; j < RVD_MAX_JPEG; j++)
 		st->jpeg_streams[j] = -1;

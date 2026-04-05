@@ -244,7 +244,7 @@ void rvd_osd_init(rvd_state_t *st)
 	/* Initialize privacy handles for all streams (including skipped ones) */
 	for (int s = 0; s < st->stream_count; s++) {
 		st->privacy_handles[s] = -1;
-		st->privacy_bufs[s] = NULL;
+
 	}
 
 	for (int s = 0; s < st->stream_count; s++) {
@@ -349,7 +349,7 @@ void rvd_osd_init(rvd_state_t *st)
 		 * IPU OSD: native cover type (just a color, no bitmap). */
 		if (st->use_isp_osd) {
 			st->privacy_handles[s] = -1;
-			st->privacy_bufs[s] = NULL;
+	
 		} else {
 			int stream_w = st->streams[s].enc_cfg.width;
 			int stream_h = st->streams[s].enc_cfg.height;
@@ -634,48 +634,21 @@ void rvd_osd_set_privacy(rvd_state_t *st, bool enable)
 			continue;
 
 		/* Show/hide privacy cover */
-		int ph = st->privacy_handles[s];
-		if (st->use_isp_osd && ph < 0 && enable) {
-			/* Lazy-allocate ISP OSD privacy cover on first use */
+		if (st->use_isp_osd) {
+			/* ISP mask block: hardware color fill, no bitmap needed */
+			int sensor = st->streams[s].sensor_idx;
+			int chx = st->streams[s].fs_chn % 3;
 			int stream_w = st->streams[s].enc_cfg.width;
 			int stream_h = st->streams[s].enc_cfg.height;
 			uint32_t pcol = (uint32_t)strtoul(
 				rss_config_get_str(st->cfg, "osd", "privacy_color",
 						   "0xFF000000"), NULL, 0);
-			size_t npixels = (size_t)stream_w * stream_h;
-			uint32_t *pbuf = malloc(npixels * 4);
-			if (pbuf) {
-				for (size_t p = 0; p < npixels; p++)
-					pbuf[p] = pcol;
-				int sensor = st->streams[s].sensor_idx;
-				int ret = RSS_HAL_CALL(st->ops, isp_osd_create_region,
-						       st->hal_ctx, sensor, &ph);
-				if (ret == RSS_OK) {
-					rss_osd_region_t cover = {
-						.type = RSS_OSD_PIC,
-						.x = 0, .y = 0,
-						.width = stream_w,
-						.height = stream_h,
-						.bitmap_data = (uint8_t *)pbuf,
-						.bitmap_fmt = RSS_PIXFMT_BGRA,
-					};
-					int chx = st->streams[s].fs_chn % 3;
-					RSS_HAL_CALL(st->ops, isp_osd_set_region_attr, st->hal_ctx,
-						     sensor, ph, chx, &cover);
-					RSS_HAL_CALL(st->ops, isp_osd_show_region, st->hal_ctx,
-						     sensor, ph, 1);
-					st->privacy_handles[s] = ph;
-					st->privacy_bufs[s] = (uint8_t *)pbuf;
-				} else {
-					free(pbuf);
-				}
-			}
-		} else if (ph >= 0) {
-			if (st->use_isp_osd) {
-				int sensor = st->streams[s].sensor_idx;
-				RSS_HAL_CALL(st->ops, isp_osd_show_region, st->hal_ctx, sensor,
-					     ph, enable ? 1 : 0);
-			} else {
+			RSS_HAL_CALL(st->ops, isp_osd_set_mask, st->hal_ctx,
+				     sensor, chx, 0, enable ? 1 : 0,
+				     0, 0, stream_w, stream_h, pcol);
+		} else {
+			int ph = st->privacy_handles[s];
+			if (ph >= 0) {
 				int grp = st->streams[s].chn;
 				RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, ph, grp,
 					     enable ? 1 : 0, 0);
@@ -815,14 +788,17 @@ void rvd_osd_deinit(rvd_state_t *st)
 		}
 
 		/* Clean up privacy cover region */
+		if (st->use_isp_osd && st->privacy_active) {
+			/* Disable ISP mask block */
+			int sensor = st->streams[s].sensor_idx;
+			int chx = st->streams[s].fs_chn % 3;
+			RSS_HAL_CALL(st->ops, isp_osd_set_mask, st->hal_ctx,
+				     sensor, chx, 0, 0, 0, 0, 0, 0, 0);
+		}
 		int ph = st->privacy_handles[s];
 		if (ph >= 0) {
 			if (st->use_isp_osd) {
-				int sensor = st->streams[s].sensor_idx;
-				RSS_HAL_CALL(st->ops, isp_osd_show_region, st->hal_ctx, sensor,
-					     ph, 0);
-				RSS_HAL_CALL(st->ops, isp_osd_destroy_region, st->hal_ctx, sensor,
-					     ph);
+				/* No handle to destroy — mask blocks are stateless */
 			} else {
 				int grp = st->streams[s].chn;
 				RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, ph, grp, 0, 0);
@@ -831,7 +807,5 @@ void rvd_osd_deinit(rvd_state_t *st)
 			}
 			st->privacy_handles[s] = -1;
 		}
-		free(st->privacy_bufs[s]);
-		st->privacy_bufs[s] = NULL;
 	}
 }

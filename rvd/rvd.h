@@ -68,7 +68,6 @@ typedef struct {
 
 	/* Privacy mode (full-frame cover) */
 	int privacy_handles[RVD_MAX_STREAMS]; /* HAL region handles, -1 if none */
-	uint8_t *privacy_bufs[RVD_MAX_STREAMS]; /* ISP OSD: BGRA bitmap (NULL for IPU OSD) */
 	bool privacy_active;
 	volatile bool pipeline_ready; /* set after FS enable + encoder start */
 
