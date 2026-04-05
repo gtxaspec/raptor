@@ -98,7 +98,8 @@ typedef struct {
 	uint64_t read_seq;
 	uint8_t *frame_buf;
 	uint32_t frame_buf_size;
-	int idx; /* RSD_STREAM_MAIN or RSD_STREAM_SUB */
+	int idx;
+	const char *ring_name; /* for reconnection after RVD restart */
 } rsd_ring_ctx_t;
 
 /* Server state */

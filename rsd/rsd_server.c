@@ -276,11 +276,13 @@ int rsd_server_init(rsd_server_t *srv)
 		return -1;
 	}
 	srv->video[RSD_STREAM_MAIN].idx = RSD_STREAM_MAIN;
+	srv->video[RSD_STREAM_MAIN].ring_name = ring_names[RSD_STREAM_MAIN];
 
 	/* Try to open remaining rings (all optional except main) */
 	for (int s = 1; s < RSD_STREAM_COUNT; s++) {
 		srv->video[s].ring = rss_ring_open(ring_names[s]);
 		srv->video[s].idx = s;
+		srv->video[s].ring_name = ring_names[s];
 		if (srv->video[s].ring)
 			RSS_INFO("stream %d (%s) ring available", s, ring_names[s]);
 	}

@@ -33,6 +33,7 @@ typedef struct {
 
 	/* Rings */
 	rss_ring_t *video_ring;
+	const char *video_ring_name;
 	rss_ring_t *audio_ring;
 	uint64_t video_read_seq;
 	uint64_t audio_read_seq;

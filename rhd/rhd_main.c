@@ -517,6 +517,9 @@ static int server_init(rhd_server_t *srv)
 static void server_run(rhd_server_t *srv)
 {
 	uint64_t jpeg_read_seqs[RHD_MAX_JPEG] = {0};
+	uint64_t jpeg_last_ws[RHD_MAX_JPEG] = {0};
+	int jpeg_idle[RHD_MAX_JPEG] = {0};
+	int jpeg_reconnect_tick = 0;
 	uint8_t *frame_buf = NULL;
 	uint32_t frame_buf_size = 0;
 
@@ -718,6 +721,44 @@ static void server_run(rhd_server_t *srv)
 		/* If we have MJPEG clients, wait for next frame from ring */
 		if (has_mjpeg_clients && srv->jpeg_rings[0]) {
 			rss_ring_wait(srv->jpeg_rings[0], 100);
+		}
+
+		/* Periodic JPEG ring reconnection (~every 2s) */
+		if (++jpeg_reconnect_tick >= 20) {
+			jpeg_reconnect_tick = 0;
+			for (int j = 0; j < RHD_MAX_JPEG; j++) {
+				if (!srv->jpeg_rings[j]) {
+					srv->jpeg_rings[j] = rss_ring_open(jpeg_ring_names[j]);
+					if (srv->jpeg_rings[j]) {
+						jpeg_read_seqs[j] = 0;
+						const rss_ring_header_t *hdr =
+							rss_ring_get_header(srv->jpeg_rings[j]);
+						if (hdr->data_size > frame_buf_size) {
+							free(frame_buf);
+							frame_buf_size = hdr->data_size;
+							frame_buf = malloc(frame_buf_size);
+						}
+						RSS_INFO("jpeg ring reconnected (%s)",
+							 jpeg_ring_names[j]);
+					}
+					continue;
+				}
+				const rss_ring_header_t *hdr =
+					rss_ring_get_header(srv->jpeg_rings[j]);
+				uint64_t ws = hdr->write_seq;
+				if (ws == jpeg_last_ws[j])
+					jpeg_idle[j]++;
+				else
+					jpeg_idle[j] = 0;
+				jpeg_last_ws[j] = ws;
+				if (jpeg_idle[j] >= 10) { /* ~2s */
+					RSS_INFO("jpeg ring idle, closing (%s)",
+						 jpeg_ring_names[j]);
+					rss_ring_close(srv->jpeg_rings[j]);
+					srv->jpeg_rings[j] = NULL;
+					jpeg_idle[j] = 0;
+				}
+			}
 		}
 	}
 

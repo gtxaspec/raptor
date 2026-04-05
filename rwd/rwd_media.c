@@ -529,15 +529,47 @@ void *rwd_video_reader_thread(void *arg)
 		RSS_INFO("media: video reader[%d] started", s);
 	}
 
+	uint64_t last_ws[RWD_STREAM_COUNT] = {0};
+	int idle[RWD_STREAM_COUNT] = {0};
+
 	while (*srv->running) {
-		/* Poll both rings (short timeout so we alternate quickly) */
+		/* Poll all rings (short timeout so we alternate quickly) */
 		for (int s = 0; s < RWD_STREAM_COUNT; s++) {
+			/* Reconnect closed rings */
+			if (!srv->video_rings[s] && srv->video_bufs[s]) {
+				srv->video_rings[s] = rss_ring_open(ring_names[s]);
+				if (srv->video_rings[s]) {
+					srv->video_read_seq[s] = 0;
+					last_ws[s] = 0;
+					idle[s] = 0;
+					video_ts_epoch[s] = 0;
+					RSS_INFO("media: video reader[%d] reconnected (%s)",
+						 s, ring_names[s]);
+				}
+			}
 			if (!srv->video_rings[s] || !srv->video_bufs[s])
 				continue;
 
 			int ret = rss_ring_wait(srv->video_rings[s], 50);
-			if (ret != 0)
+			if (ret != 0) {
+				const rss_ring_header_t *h =
+					rss_ring_get_header(srv->video_rings[s]);
+				uint64_t ws = h->write_seq;
+				if (ws == last_ws[s])
+					idle[s]++;
+				else
+					idle[s] = 0;
+				last_ws[s] = ws;
+				if (idle[s] >= 40) { /* ~2s at 50ms timeout */
+					RSS_INFO("media: video[%d] idle, closing ring (%s)",
+						 s, ring_names[s]);
+					rss_ring_close(srv->video_rings[s]);
+					srv->video_rings[s] = NULL;
+					idle[s] = 0;
+				}
 				continue;
+			}
+			idle[s] = 0;
 
 			uint32_t length;
 			rss_ring_slot_t meta;

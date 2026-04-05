@@ -102,12 +102,51 @@ void *rsd_video_reader_thread(void *arg)
 	 * timestamp, same clock source as audio. Both streams share the same
 	 * timebase so inter-stream drift is zero by construction. */
 	int64_t video_ts_epoch = 0;
+	uint64_t last_write_seq = 0;
+	int idle_count = 0;
 
 	RSS_INFO("video reader[%d] started", stream_idx);
 	while (*srv->running) {
+		if (!rctx->ring) {
+			/* Ring lost — wait for RVD to recreate it */
+			rctx->ring = rss_ring_open(rctx->ring_name);
+			if (!rctx->ring) {
+				usleep(200000);
+				continue;
+			}
+			const rss_ring_header_t *h = rss_ring_get_header(rctx->ring);
+			if (rctx->frame_buf_size < h->data_size) {
+				free(rctx->frame_buf);
+				rctx->frame_buf = malloc(h->data_size);
+				rctx->frame_buf_size = h->data_size;
+			}
+			rctx->read_seq = 0;
+			last_write_seq = 0;
+			idle_count = 0;
+			video_ts_epoch = 0;
+			RSS_INFO("video reader[%d] reconnected (%s)", stream_idx, rctx->ring_name);
+		}
+
 		int ret = rss_ring_wait(rctx->ring, 100);
-		if (ret != 0)
+		if (ret != 0) {
+			const rss_ring_header_t *h = rss_ring_get_header(rctx->ring);
+			uint64_t ws = h->write_seq;
+			if (ws == last_write_seq)
+				idle_count++;
+			else
+				idle_count = 0;
+			last_write_seq = ws;
+
+			if (idle_count >= 20) {
+				RSS_INFO("video reader[%d] idle, closing ring (%s)",
+					 stream_idx, rctx->ring_name);
+				rss_ring_close(rctx->ring);
+				rctx->ring = NULL;
+				idle_count = 0;
+			}
 			continue;
+		}
+		idle_count = 0;
 
 		uint32_t length;
 		rss_ring_slot_t meta;

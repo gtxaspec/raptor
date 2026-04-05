@@ -402,6 +402,8 @@ static void record_loop(rmr_state_t *st)
 
 	int ctrl_fd = st->ctrl ? rss_ctrl_get_fd(st->ctrl) : -1;
 	int audio_retry = 0;
+	uint64_t last_video_ws = 0;
+	int video_idle = 0;
 
 	while (*st->running) {
 		/* Handle control socket */
@@ -439,6 +441,20 @@ static void record_loop(rmr_state_t *st)
 			}
 		}
 
+		/* ── Reconnect video ring if RVD restarted ── */
+		if (!st->video_ring) {
+			st->video_ring = rss_ring_open(st->video_ring_name);
+			if (st->video_ring) {
+				st->video_read_seq = 0;
+				st->params.ready = false;
+				video_idle = 0;
+				RSS_INFO("video ring reconnected (%s)", st->video_ring_name);
+			} else {
+				usleep(200000);
+			}
+			continue;
+		}
+
 		/* ── Read video frame from ring ── */
 		uint32_t length;
 		rss_ring_slot_t meta;
@@ -451,11 +467,26 @@ static void record_loop(rmr_state_t *st)
 			continue;
 		}
 		if (ret == -EAGAIN) {
-			rss_ring_wait(st->video_ring, 40);
+			const rss_ring_header_t *vhdr = rss_ring_get_header(st->video_ring);
+			uint64_t ws = vhdr->write_seq;
+			if (ws == last_video_ws)
+				video_idle++;
+			else
+				video_idle = 0;
+			last_video_ws = ws;
+			if (video_idle >= 50) { /* ~2s at 40ms wait */
+				RSS_INFO("video ring idle, closing (%s)", st->video_ring_name);
+				rss_ring_close(st->video_ring);
+				st->video_ring = NULL;
+				video_idle = 0;
+			} else {
+				rss_ring_wait(st->video_ring, 40);
+			}
 			continue;
 		}
 		if (ret != 0)
 			continue;
+		video_idle = 0;
 
 		/* Extract codec params from first keyframe */
 		if (meta.is_key && !st->params.ready)
@@ -724,9 +755,10 @@ int main(int argc, char **argv)
 	if (ri < 0 || ri >= (int)(sizeof(ring_names) / sizeof(ring_names[0])))
 		ri = 0;
 	const char *ring_name = ring_names[ri];
+	st.video_ring_name = ring_name;
 
 	for (int attempt = 0; attempt < 30 && *st.running; attempt++) {
-		st.video_ring = rss_ring_open(ring_name);
+		st.video_ring = rss_ring_open(st.video_ring_name);
 		if (st.video_ring)
 			break;
 		RSS_DEBUG("waiting for %s ring...", ring_name);
