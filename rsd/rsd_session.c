@@ -142,7 +142,7 @@ static int detect_stream_idx(const rsd_server_t *srv, CharSlice99 uri)
 	} else {
 		/* Default endpoints — /stream0 through /stream5 for multi-sensor */
 		for (int s = 0; s < RSD_STREAM_COUNT; s++) {
-			char path[16];
+			char path[24];
 			snprintf(path, sizeof(path), "/stream%d", s);
 			if (CharSlice99_primitive_ends_with(base, CharSlice99_from_str(path)))
 				return s;
