@@ -445,6 +445,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 		st->streams[si].fs_chn = fs_base;
 		st->streams[si].chn = enc_grp_counter++;
 		st->streams[si].sensor_idx = s;
+		rss_strlcpy(st->streams[si].cfg_sect, main_sect, sizeof(st->streams[si].cfg_sect));
 		st->stream_count++;
 
 		RSS_INFO("sensor%d main: fs_chn=%d enc_grp=%d %ux%u", s,
@@ -460,6 +461,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 			st->streams[si].fs_chn = fs_base + 1;
 			st->streams[si].chn = enc_grp_counter++;
 			st->streams[si].sensor_idx = s;
+			rss_strlcpy(st->streams[si].cfg_sect, sub_sect, sizeof(st->streams[si].cfg_sect));
 			st->stream_count++;
 
 			RSS_INFO("sensor%d sub: fs_chn=%d enc_grp=%d %ux%u", s,
@@ -499,8 +501,8 @@ int rvd_pipeline_init(rvd_state_t *st)
 		st->jpeg_streams[j] = -1;
 
 	if (rss_config_get_bool(cfg, "jpeg", "enabled", true)) {
-		st->jpeg_quality = rss_config_get_int(cfg, "jpeg", "quality", 75);
-		int jpeg_fps = rss_config_get_int(cfg, "jpeg", "fps", 1);
+		int def_quality = rss_config_get_int(cfg, "jpeg", "quality", 75);
+		int def_fps = rss_config_get_int(cfg, "jpeg", "fps", 1);
 		int video_count = st->stream_count;
 
 		for (int v = 0; v < video_count && st->jpeg_count < RVD_MAX_JPEG; v++) {
@@ -511,10 +513,12 @@ int rvd_pipeline_init(rvd_state_t *st)
 				st->jpeg_count++;
 				continue;
 			}
-			char key[32];
-			snprintf(key, sizeof(key), "jpeg%d_enabled", v);
-			if (!rss_config_get_bool(cfg, "jpeg", key, true))
+			const char *sect = st->streams[v].cfg_sect;
+			if (!rss_config_get_bool(cfg, sect, "jpeg", true))
 				continue;
+
+			int quality = rss_config_get_int(cfg, sect, "jpeg_quality", def_quality);
+			int fps = rss_config_get_int(cfg, sect, "jpeg_fps", def_fps);
 
 			int ji = st->stream_count;
 			int jpeg_chn = jpeg_chn_base + st->jpeg_count;
@@ -523,7 +527,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 				.codec = RSS_CODEC_JPEG,
 				.width = st->streams[v].enc_cfg.width,
 				.height = st->streams[v].enc_cfg.height,
-				.fps_num = jpeg_fps,
+				.fps_num = fps,
 				.fps_den = 1,
 				.bitrate = 0,
 			};
@@ -532,14 +536,15 @@ int rvd_pipeline_init(rvd_state_t *st)
 			st->streams[ji].chn = jpeg_chn;
 			st->streams[ji].sensor_idx = st->streams[v].sensor_idx;
 			st->streams[ji].is_jpeg = true;
+			st->streams[ji].enc_cfg.init_qp = quality;
 			st->jpeg_streams[st->jpeg_count] = ji;
 			st->stream_count = ji + 1;
 			st->jpeg_count++;
 
-			RSS_INFO("jpeg%d: sensor%d %ux%u @ %d fps, quality %d (enc chn %d)",
-				 st->jpeg_count - 1, st->streams[ji].sensor_idx,
+			RSS_INFO("jpeg%d: [%s] sensor%d %ux%u @ %d fps, quality %d (enc chn %d)",
+				 st->jpeg_count - 1, sect, st->streams[ji].sensor_idx,
 				 st->streams[ji].enc_cfg.width, st->streams[ji].enc_cfg.height,
-				 jpeg_fps, st->jpeg_quality, jpeg_chn);
+				 fps, quality, jpeg_chn);
 		}
 	}
 
@@ -693,7 +698,6 @@ int rvd_pipeline_init(rvd_state_t *st)
 					RSS_WARN("jpeg bufshare failed: %d (non-fatal)", ret);
 			}
 
-			st->streams[i].enc_cfg.init_qp = st->jpeg_quality;
 			ret = RSS_HAL_CALL(st->ops, enc_create_channel, st->hal_ctx, chn,
 					   &st->streams[i].enc_cfg);
 			if (ret != RSS_OK) {
@@ -817,7 +821,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 		if (st->streams[i].is_jpeg) {
 			RSS_INFO("stream%d: %ux%u JPEG @ %u fps, quality %d", i,
 				 st->streams[i].enc_cfg.width, st->streams[i].enc_cfg.height,
-				 st->streams[i].enc_cfg.fps_num, st->jpeg_quality);
+				 st->streams[i].enc_cfg.fps_num, st->streams[i].enc_cfg.init_qp);
 		} else {
 			RSS_INFO("stream%d: %ux%u %s @ %u fps, %u bps", i,
 				 st->streams[i].enc_cfg.width, st->streams[i].enc_cfg.height,
@@ -919,7 +923,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 		 *     1-2 fps → 4, 3-8 fps → 8, 9+ fps → 16 */
 		uint32_t w = st->streams[ji].enc_cfg.width;
 		uint32_t h = st->streams[ji].enc_cfg.height;
-		uint32_t q = (uint32_t)st->jpeg_quality;
+		uint32_t q = (uint32_t)st->streams[ji].enc_cfg.init_qp;
 		uint32_t fps = st->streams[ji].enc_cfg.fps_num;
 		uint32_t divisor = (q >= 90) ? 6 : (q >= 70) ? 16 : 24;
 		uint32_t slots = (fps >= 9) ? 16 : (fps >= 3) ? 8 : 4;

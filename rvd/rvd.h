@@ -29,6 +29,7 @@ typedef struct {
 	int chn;	  /* encoder group/channel index */
 	int fs_chn;	  /* framesource channel (sensor*3 + local) */
 	int sensor_idx;	  /* which sensor (0, 1, 2) */
+	char cfg_sect[32]; /* config section name (e.g. "stream0", "sensor1_stream0") */
 	bool enabled;
 	bool is_jpeg; /* true for snapshot channel */
 } rvd_stream_t;
@@ -87,7 +88,6 @@ typedef struct {
 	/* JPEG snapshots (one per video stream) */
 	int jpeg_streams[RVD_MAX_JPEG]; /* stream indices, -1 if disabled */
 	int jpeg_count;
-	int jpeg_quality;
 
 	volatile sig_atomic_t *running;
 
