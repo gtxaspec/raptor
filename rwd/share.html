@@ -192,6 +192,9 @@ function randomId(len) {
 }
 
 async function start() {
+  btn.innerHTML = '<i class="bi bi-stop-fill"></i> Disconnect';
+  btn.classList.replace('btn-outline-primary', 'btn-outline-danger');
+  document.getElementById('stream').disabled = true;
   setStatus('Computing share key…');
   const infoHash = await computeInfoHash();
   const peerId   = randomId(20);
@@ -224,10 +227,7 @@ async function start() {
     const state = pc.iceConnectionState;
     setStatus(state, state === 'connected' || state === 'completed' ? 'success' : 'secondary');
     if (state === 'connected' || state === 'completed') {
-      btn.innerHTML = '<i class="bi bi-stop-fill"></i> Disconnect';
-      btn.classList.replace('btn-outline-primary', 'btn-outline-danger');
       muteBtn.classList.remove('d-none');
-      document.getElementById('stream').disabled = true;
     }
     if (state === 'failed' || state === 'disconnected') stop();
   };
