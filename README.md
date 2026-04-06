@@ -25,12 +25,14 @@ ring buffers at runtime, gracefully skipping any that don't exist.
    |  \                 [RHD] HTTP snapshots / MJPEG
    |   \                [RMR] fragmented MP4 recording
    |    \               [RWD] WebRTC/WHIP server (DTLS-SRTP via mbedTLS + compy)
-   |     `--osd shm <-- [ROD] OSD text / logo renderer
-   |     `--ivs ------> [RMD] motion detection → triggers RMR
+   |     \              [RWC] USB webcam (UVC bulk + UAC1 mic)
+   |      `--osd shm <-- [ROD] OSD text / logo renderer
+   |      `--ivs ------> [RMD] motion detection → triggers RMR
    |
   [RAD] --audio ring--> [RSD] (interleaved A/V)
    |                    [RMR] (muxed A/V)
    |                    [RWD] (WebRTC A/V)
+   |                    [RWC] (USB mic via /dev/uac_mic)
    |
   [RIC] ---- ctrl sock --> [RVD] (exposure queries, ISP mode switch)
 ```
@@ -48,6 +50,7 @@ ring buffers at runtime, gracefully skipping any that don't exist.
 | RMR  | `rmr`  | Recording/Muxing Daemon. Reads H.264/H.265 + audio from rings and writes crash-safe fragmented MP4 segments to SD card. Own fMP4 muxer with zero external dependencies. |
 | RMD  | `rmd`  | Motion Detection Daemon. Queries RVD for IVS hardware motion results (configurable grid ROI), manages idle/active/cooldown state machine, triggers recording via RMR and GPIO output on motion events. |
 | RWD  | `rwd`  | WebRTC Daemon. Sends live H.264 + Opus to browsers and go2rtc via WHIP signaling with sub-second latency. ICE-lite, DTLS-SRTP (mbedTLS), SRTP (compy). Two-way audio backchannel (browser mic → camera speaker via Opus decode). HTTPS by default for signaling (enables `getUserMedia` Talk button). Embedded player at `/webrtc`. Optional WebTorrent sharing (`WEBTORRENT=1`) enables external viewing without port forwarding via public tracker signaling + STUN NAT traversal. Requires `TLS=1` and `MBEDTLS_SSL_DTLS_SRTP`. |
+| RWC  | `rwc`  | USB Webcam Daemon. Reads JPEG (or H.264) video from rings and raw PCM audio, feeds them to the Linux UVC+UAC gadget via V4L2 and `/dev/uac_mic`. Camera appears as a standard USB webcam with microphone on any connected host. MJPEG + H.264 at 1080p/720p/360p, 16kHz mono mic. Bulk video endpoint (works through USB hubs), isochronous audio. No ALSA dependency — custom minimal UAC1 kernel function. Requires `CONFIG_USB_G_WEBCAM=m` and the thingino kernel webcam patches. |
 
 ### Tools
 
