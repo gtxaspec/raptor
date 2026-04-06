@@ -48,12 +48,20 @@ typedef struct {
     struct uvc_streaming_control commit;
     uint8_t last_cs;         /* track CS for DATA event */
 
-    /* Rings */
+    /* Video rings */
     rss_ring_t *jpeg_ring;
     rss_ring_t *video_ring;
     uint64_t read_seq;
     uint8_t *frame_buf;
     uint32_t frame_buf_size;
+
+    /* Audio */
+    int mic_fd;                /* /dev/uac_mic */
+    rss_ring_t *audio_ring;
+    uint64_t audio_seq;
+    uint8_t *audio_buf;
+    uint32_t audio_buf_size;
+    bool audio_enabled;
 
     /* Control socket */
     rss_ctrl_t *ctrl;
@@ -538,6 +546,9 @@ int main(int argc, char **argv)
 
     const char *jpeg_name = rss_config_get_str(ctx.cfg, "webcam", "jpeg_stream", "jpeg0");
     const char *h264_name = rss_config_get_str(ctx.cfg, "webcam", "h264_stream", "video0");
+    st.audio_enabled = rss_config_get_bool(ctx.cfg, "webcam", "audio", true);
+    const char *audio_name = rss_config_get_str(ctx.cfg, "webcam", "audio_stream", "audio");
+    st.mic_fd = -1;
 
     /* Open UVC device */
     if (uvc_open(&st) < 0) {
@@ -589,14 +600,50 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    /* Audio setup */
+    if (st.audio_enabled) {
+        /* Open audio ring */
+        for (int attempt = 0; attempt < 10 && *st.running; attempt++) {
+            st.audio_ring = try_open_ring(audio_name);
+            if (st.audio_ring)
+                break;
+            RSS_DEBUG("waiting for audio ring...");
+            sleep(1);
+        }
+
+        /* Open /dev/uac_mic */
+        st.mic_fd = open("/dev/uac_mic", O_WRONLY | O_NONBLOCK);
+        if (st.mic_fd < 0) {
+            RSS_WARN("cannot open /dev/uac_mic: %s (audio disabled)", strerror(errno));
+            st.audio_enabled = false;
+        } else if (!st.audio_ring) {
+            RSS_WARN("audio ring not available (audio disabled)");
+            close(st.mic_fd);
+            st.mic_fd = -1;
+            st.audio_enabled = false;
+        } else {
+            st.audio_buf_size = 4096;
+            st.audio_buf = malloc(st.audio_buf_size);
+            if (!st.audio_buf) {
+                RSS_WARN("audio buffer alloc failed");
+                close(st.mic_fd);
+                st.mic_fd = -1;
+                st.audio_enabled = false;
+            } else {
+                RSS_INFO("audio enabled: %s → /dev/uac_mic", audio_name);
+            }
+        }
+    }
+
     /* Control socket */
     rss_mkdir_p("/var/run/rss");
     st.ctrl = rss_ctrl_listen("/var/run/rss/rwc.sock");
 
     /* Main loop */
-    RSS_INFO("rwc running (jpeg=%s video=%s)",
+    RSS_INFO("rwc running (jpeg=%s video=%s audio=%s)",
              st.jpeg_ring ? "yes" : "no",
-             st.video_ring ? "yes" : "no");
+             st.video_ring ? "yes" : "no",
+             st.audio_enabled ? "yes" : "no");
 
     int reconnect_tick = 0;
 
@@ -635,9 +682,37 @@ int main(int argc, char **argv)
         if (nfds > 1 && (fds[1].revents & POLLIN))
             rss_ctrl_accept_and_handle(st.ctrl, ctrl_handler, &st);
 
-        /* Deliver frames when streaming */
+        /* Deliver video frames when streaming */
         if (st.streaming)
             deliver_frame(&st);
+
+        /* Feed audio to /dev/uac_mic — drain all available frames */
+        if (st.audio_enabled && st.audio_ring && st.mic_fd >= 0) {
+            for (int af = 0; af < 64; af++) {
+                uint32_t alen = 0;
+                rss_ring_slot_t ameta;
+                int aret = rss_ring_read(st.audio_ring, &st.audio_seq,
+                                         st.audio_buf, st.audio_buf_size,
+                                         &alen, &ameta);
+                if (aret == RSS_EOVERFLOW && st.audio_seq > 0) {
+                    st.audio_seq--;
+                    aret = rss_ring_read(st.audio_ring, &st.audio_seq,
+                                         st.audio_buf, st.audio_buf_size,
+                                         &alen, &ameta);
+                }
+                if (aret != 0 || alen == 0)
+                    break;
+
+                /* L16 codec uses network byte order (big-endian).
+                 * UAC expects little-endian PCM. Byte-swap each sample. */
+                uint16_t *samples = (uint16_t *)st.audio_buf;
+                uint32_t nsamples = alen / 2;
+                for (uint32_t s = 0; s < nsamples; s++)
+                    samples[s] = (samples[s] >> 8) | (samples[s] << 8);
+
+                write(st.mic_fd, st.audio_buf, alen);
+            }
+        }
 
         /* Ring reconnection (~every 2s) */
         if (++reconnect_tick >= 40) {
@@ -690,8 +765,11 @@ int main(int argc, char **argv)
     RSS_INFO("rwc shutting down");
     stop_streaming(&st);
     free(st.frame_buf);
+    free(st.audio_buf);
     if (st.jpeg_ring) rss_ring_close(st.jpeg_ring);
     if (st.video_ring) rss_ring_close(st.video_ring);
+    if (st.audio_ring) rss_ring_close(st.audio_ring);
+    if (st.mic_fd >= 0) close(st.mic_fd);
     if (st.ctrl) rss_ctrl_destroy(st.ctrl);
     close(st.uvc_fd);
     rss_config_free(ctx.cfg);
