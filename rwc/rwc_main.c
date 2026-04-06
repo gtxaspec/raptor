@@ -282,6 +282,9 @@ static int start_streaming(rwc_state_t *st)
 			goto err_unmap;
 		}
 
+		/* Queue with bytesused=1 to avoid vb2 zero-bytesused warning.
+		 * The actual payload is set when deliver_frame fills the buffer. */
+		buf.bytesused = 1;
 		if (ioctl(st->uvc_fd, VIDIOC_QBUF, &buf) < 0) {
 			RSS_ERROR("VIDIOC_QBUF %d: %s", i, strerror(errno));
 			goto err_unmap;
@@ -604,6 +607,14 @@ static int ctrl_handler(const char *cmd_json, char *resp, int resp_size,
 
 static void audio_init(rwc_state_t *st, const char *ring_name)
 {
+	/* Check for /dev/uac_mic first — no point waiting for ring if
+	 * the kernel UAC function isn't loaded */
+	st->mic_fd = open("/dev/uac_mic", O_WRONLY | O_NONBLOCK);
+	if (st->mic_fd < 0) {
+		RSS_INFO("no /dev/uac_mic (audio disabled)");
+		goto disable;
+	}
+
 	/* Open audio ring with retry */
 	for (int attempt = 0; attempt < 10 && *st->running; attempt++) {
 		st->audio_ring = try_open_ring(ring_name);
@@ -611,13 +622,6 @@ static void audio_init(rwc_state_t *st, const char *ring_name)
 			break;
 		RSS_DEBUG("waiting for audio ring...");
 		sleep(1);
-	}
-
-	st->mic_fd = open("/dev/uac_mic", O_WRONLY | O_NONBLOCK);
-	if (st->mic_fd < 0) {
-		RSS_WARN("cannot open /dev/uac_mic: %s (audio disabled)",
-		         strerror(errno));
-		goto disable;
 	}
 
 	if (!st->audio_ring) {
