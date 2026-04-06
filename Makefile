@@ -34,6 +34,13 @@ CFLAGS += -DPLATFORM_$(PLATFORM)
 CFLAGS += -I$(CURDIR)/$(HAL_DIR)/include
 CFLAGS += -I$(CURDIR)/$(IPC_DIR)/include
 CFLAGS += -I$(CURDIR)/$(COMMON_DIR)/include
+
+# xburst2 (T40/T41) toolchain uses -mfp64 ABI by default.
+# Ensure largefile support matches buildroot target flags.
+ifneq ($(filter T40 T41,$(PLATFORM)),)
+CFLAGS += -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE -D_FILE_OFFSET_BITS=64
+endif
+
 CFLAGS += $(EXTRA_CFLAGS)
 
 # Build info — generate a tiny .o with string constants that each daemon links.
