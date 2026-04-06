@@ -45,7 +45,7 @@
 #include <rss_common.h>
 
 static const char *daemons[] = {"rvd", "rsd", "rad", "rod", "rhd",
-				"ric", "rmr", "rmd", "rwd", NULL};
+				"ric", "rmr", "rmd", "rwd", "rwc", NULL};
 
 static void usage(void)
 {
@@ -429,6 +429,10 @@ static void daemon_help(const char *name)
 	} else if (strcmp(name, "rmd") == 0) {
 		printf("\nCommands:\n"
 		       "  status                              Show motion status\n"
+		       "  config                              Show running config\n");
+	} else if (strcmp(name, "rwc") == 0) {
+		printf("\nCommands:\n"
+		       "  status                              Show webcam status\n"
 		       "  config                              Show running config\n");
 	} else {
 		printf("\nCommands:\n"

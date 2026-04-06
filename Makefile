@@ -140,7 +140,7 @@ LDFLAGS_HAL += -Wl,-z,max-page-size=0x1000
 LDFLAGS     += -Wl,-z,max-page-size=0x1000
 
 # Targets
-DAEMONS := rvd rsd rad rhd rod ric rmr rmd rwd
+DAEMONS := rvd rsd rad rhd rod ric rmr rmd rwd rwc
 TOOLS   := raptorctl ringdump rac rlatency
 
 .PHONY: all clean libs $(DAEMONS) $(TOOLS) install
@@ -222,6 +222,12 @@ rwd: $(LIB_IPC) $(LIB_COMMON) $(LIB_COMPY) $(RSS_TLS_OBJ) $(RSS_BUILD_OBJ)
 	$(Q)$(MAKE) -C rwd CC="$(CC)" CFLAGS="$(CFLAGS) $(COMPY_CFLAGS) -DMBEDTLS_ALLOW_PRIVATE_ACCESS -DRSS_HAS_TLS" \
 		LIBS="$(LIB_IPC) $(LIB_COMMON) $(LIB_COMPY) $(RSS_TLS_OBJ) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS) $(LDFLAGS_TLS) -lopus" WEBTORRENT=$(WEBTORRENT) Q="$(Q)"
+
+rwc: $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_OBJ)
+	@echo "  BUILD   rwc"
+	$(Q)$(MAKE) -C rwc CC="$(CC)" CFLAGS="$(CFLAGS)" \
+		LIBS="$(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_LIBS)" \
+		LDFLAGS="$(LDFLAGS)" Q="$(Q)"
 
 # -- Tools --
 
