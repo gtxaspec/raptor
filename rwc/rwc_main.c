@@ -220,7 +220,33 @@ static void handle_data_event(rwc_state_t *st,
 static int start_streaming(rwc_state_t *st)
 {
 	struct v4l2_requestbuffers rb;
+	struct v4l2_format fmt;
 	int i;
+
+	/* Apply committed format before allocating buffers */
+	st->cur_format = st->probe.bFormatIndex;
+	st->cur_frame = st->probe.bFrameIndex;
+	st->cur_interval = st->probe.dwFrameInterval;
+
+	/* Set format + imagesize so the kernel allocates properly sized buffers.
+	 * For MJPEG, bpp=0 so the kernel uses sizeimage directly.
+	 * Use the ring's data_size as a safe upper bound for compressed frames.
+	 */
+	memset(&fmt, 0, sizeof(fmt));
+	fmt.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
+	fmt.fmt.pix.pixelformat = (st->cur_format == RWC_FMT_H264)
+		? V4L2_PIX_FMT_H264 : V4L2_PIX_FMT_MJPEG;
+	fmt.fmt.pix.width = rwc_frames[st->cur_frame].width;
+	fmt.fmt.pix.height = rwc_frames[st->cur_frame].height;
+	fmt.fmt.pix.sizeimage = st->frame_buf_size;
+	fmt.fmt.pix.field = V4L2_FIELD_NONE;
+
+	if (ioctl(st->uvc_fd, VIDIOC_S_FMT, &fmt) < 0)
+		RSS_WARN("VIDIOC_S_FMT: %s", strerror(errno));
+	else
+		RSS_DEBUG("V4L2 format: %ux%u sizeimage=%u",
+		          fmt.fmt.pix.width, fmt.fmt.pix.height,
+		          fmt.fmt.pix.sizeimage);
 
 	memset(&rb, 0, sizeof(rb));
 	rb.count = st->buf_count;
@@ -268,9 +294,6 @@ static int start_streaming(rwc_state_t *st)
 		goto err_unmap;
 	}
 
-	st->cur_format = st->probe.bFormatIndex;
-	st->cur_frame = st->probe.bFrameIndex;
-	st->cur_interval = st->probe.dwFrameInterval;
 	st->read_seq = 0;
 	st->streaming = true;
 
