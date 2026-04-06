@@ -20,5 +20,6 @@ test_enc
 scripts/
 rmd/rmd
 rwd/rwd
+rwc/rwc
 rlatency/rlatency
 rss_build_info.*
