@@ -47,90 +47,97 @@
 static const char *daemons[] = {"rvd", "rsd", "rad", "rod", "rhd",
 				"ric", "rmr", "rmd", "rwd", "rwc", NULL};
 
-static void usage(void)
+/* Per-daemon help entries. NULL daemon = global commands. */
+struct help_entry {
+	const char *daemon;
+	const char *text;
+};
+
+static const struct help_entry help_entries[] = {
+	{NULL,  "status                              Show daemon status"},
+	{NULL,  "memory                              Show memory usage (private/shared)"},
+	{NULL,  "cpu                                 Show CPU usage (1s sample)"},
+	{NULL,  "get <section> <key>                 Read config value"},
+	{NULL,  "set <section> <key> <value>         Set config value"},
+	{NULL,  "config save                         Save running config to disk"},
+	{NULL,  "<daemon> status                     Show daemon details"},
+	{NULL,  "<daemon> config                     Show running config"},
+	{NULL,  "<daemon> <cmd> [args...]            Send command"},
+	{"rvd", "set-rc-mode <ch> <mode> [bps]       Change rate control mode"},
+	{"rvd", "set-bitrate <ch> <bps>              Change bitrate"},
+	{"rvd", "set-gop <ch> <length>               Change GOP length"},
+	{"rvd", "set-fps <ch> <fps>                  Change frame rate"},
+	{"rvd", "set-qp-bounds <ch> <min> <max>      Change QP range"},
+	{"rvd", "request-idr [channel]               Request keyframe"},
+	{"rvd", "set-brightness <val>                ISP brightness (0-255)"},
+	{"rvd", "set-contrast <val>                  ISP contrast (0-255)"},
+	{"rvd", "set-saturation <val>                ISP saturation (0-255)"},
+	{"rvd", "set-sharpness <val>                 ISP sharpness (0-255)"},
+	{"rvd", "set-hue <val>                       ISP hue (0-255)"},
+	{"rvd", "set-sinter <val>                    Spatial NR (0-255)"},
+	{"rvd", "set-temper <val>                    Temporal NR (0-255)"},
+	{"rvd", "set-hflip <0|1>                     Horizontal flip"},
+	{"rvd", "set-vflip <0|1>                     Vertical flip"},
+	{"rvd", "set-antiflicker <0|1|2>             Off/50Hz/60Hz"},
+	{"rvd", "set-ae-comp <val>                   AE compensation"},
+	{"rvd", "set-max-again <val>                 Max analog gain"},
+	{"rvd", "set-max-dgain <val>                 Max digital gain"},
+	{"rvd", "set-defog <0|1>                     Defog enable"},
+	{"rvd", "set-wb <mode> [r] [b]               White balance"},
+	{"rvd", "get-wb                              Show white balance settings"},
+	{"rvd", "get-isp                             Show all ISP settings"},
+	{"rvd", "get-exposure                        Show exposure info"},
+	{"rsd", "clients                             List connected clients"},
+	{"rad", "set-volume <val>                    Input volume"},
+	{"rad", "set-gain <val>                      Input gain"},
+	{"rad", "set-alc-gain <0-7>                  ALC gain (T21/T31 only)"},
+	{"rad", "set-ns <0|1> [level]                Noise suppression"},
+	{"rad", "set-hpf <0|1>                       High-pass filter"},
+	{"rad", "set-agc <0|1> [target] [comp]       Automatic gain control"},
+	{"rad", "ao-set-volume <val>                 Speaker volume"},
+	{"rad", "ao-set-gain <val>                   Speaker gain"},
+	{"rod", "privacy [on|off] [channel]          Toggle privacy mode"},
+	{"rod", "set-text <text>                     Change OSD text"},
+	{"rod", "set-font-color <0xAARRGGBB>         Text color"},
+	{"rod", "set-stroke-color <0xAARRGGBB>       Stroke color"},
+	{"rod", "set-stroke-size <0-5>               Stroke width"},
+	{"ric", "mode <auto|day|night>               Set day/night mode"},
+	{"rhd", "clients                             List connected clients"},
+	{"rwd", "clients                             List connected clients"},
+	{"rwd", "share                               Show WebTorrent share URL"},
+	{"rwd", "share-rotate                        Generate new share key"},
+	{"rmd", "sensitivity <0-4>                   Set motion sensitivity"},
+	{NULL,  "test-motion [sec]                   Trigger clip recording (default 10s)"},
+	{NULL, NULL}
+};
+
+static int same_section(const char *a, const char *b)
 {
-	fprintf(stderr,
-		"Usage: raptorctl <command>\n"
-		"\n"
-		"Commands:\n"
-		"  status                              Show daemon status\n"
-		"  memory                              Show memory usage (private/shared)\n"
-		"  cpu                                 Show CPU usage (1s sample)\n"
-		"  get <section> <key>                 Read config value\n"
-		"  set <section> <key> <value>         Set config value\n"
-		"  config save                         Save running config to disk\n"
-		"  <daemon> status                     Show daemon details\n"
-		"  <daemon> config                     Show running config\n"
-		"  <daemon> <cmd> [args...]            Send command\n"
-		"\n"
-		"RVD commands:\n"
-		"  rvd set-rc-mode <ch> <mode> [bps]   Change rate control mode\n"
-		"      modes: fixqp cbr vbr smart capped_vbr capped_quality\n"
-		"  rvd set-bitrate <ch> <bps>          Change bitrate\n"
-		"  rvd set-gop <ch> <length>           Change GOP length\n"
-		"  rvd set-fps <ch> <fps>              Change frame rate\n"
-		"  rvd set-qp-bounds <ch> <min> <max>  Change QP range\n"
-		"  rvd request-idr [channel]           Request keyframe\n"
-		"  rvd set-brightness <val>            ISP brightness (0-255)\n"
-		"  rvd set-contrast <val>              ISP contrast (0-255)\n"
-		"  rvd set-saturation <val>            ISP saturation (0-255)\n"
-		"  rvd set-sharpness <val>             ISP sharpness (0-255)\n"
-		"  rvd set-hue <val>                   ISP hue (0-255)\n"
-		"  rvd set-sinter <val>                Spatial NR (0-255)\n"
-		"  rvd set-temper <val>                Temporal NR (0-255)\n"
-		"  rvd set-hflip <0|1>                 Horizontal flip\n"
-		"  rvd set-vflip <0|1>                 Vertical flip\n"
-		"  rvd set-antiflicker <0|1|2>         Off/50Hz/60Hz\n"
-		"  rvd set-ae-comp <val>               AE compensation\n"
-		"  rvd set-max-again <val>             Max analog gain\n"
-		"  rvd set-max-dgain <val>             Max digital gain\n"
-		"  rvd set-defog <0|1>                 Defog enable\n"
-		"    ISP commands accept --sensor N for multi-sensor (e.g. set-brightness 128 --sensor 1)\n"
-		"  rvd set-wb <mode> [r_gain] [b_gain] White balance mode + gains\n"
-		"      modes: auto manual daylight cloudy incandescent\n"
-		"             flourescent twilight shade warm_flourescent custom\n"
-		"  rvd get-wb                          Show white balance settings\n"
-		"  rvd get-isp                         Show all ISP settings\n"
-		"\n"
-		"RSD commands:\n"
-		"  rsd clients                         List connected RTSP clients\n"
-		"\n"
-		"RAD commands:\n"
-		"  rad set-volume <val>                Change input volume\n"
-		"  rad set-gain <val>                  Change input gain\n"
-		"  rad set-alc-gain <0-7>              ALC gain (T21/T31 only)\n"
-		"  rad set-ns <0|1> [level]            Noise suppression "
-		"(low/moderate/high/veryhigh)\n"
-		"  rad set-hpf <0|1>                   High-pass filter\n"
-		"  rad set-agc <0|1> [target] [comp]   Automatic gain control\n"
-		"  rad ao-set-volume <val>             Change output (speaker) volume\n"
-		"  rad ao-set-gain <val>               Change output (speaker) gain\n"
-		"\n"
-		"ROD commands:\n"
-		"  rod privacy [on|off] [channel]      Toggle privacy mode\n"
-		"  rod set-text <text>                 Change OSD text string\n"
-		"  rod set-font-color <hex>            Text color (0xAARRGGBB)\n"
-		"  rod set-stroke-color <hex>          Stroke color (0xAARRGGBB)\n"
-		"  rod set-stroke-size <0-5>           Stroke width in pixels\n"
-		"\n"
-		"RIC commands:\n"
-		"  ric mode <auto|day|night>           Set day/night mode\n"
-		"\n"
-		"RHD commands:\n"
-		"  rhd clients                         List connected HTTP clients\n"
-		"\n"
-		"RWD commands:\n"
-		"  rwd clients                         List connected WebRTC clients\n"
-		"  rwd share                           Show WebTorrent share URL\n"
-		"  rwd share-rotate                    Generate new share key\n"
-		"\n"
-		"RMR commands:\n"
-		"  rmr status                          Show recording status\n"
-		"\n"
-		"Testing:\n"
-		"  test-motion [sec]                   Trigger clip recording (default 10s)\n"
-		"\n"
-		"Daemons: rvd, rsd, rad, rod, rhd, ric, rmr, rmd, rwd\n");
+	if (a == b)
+		return 1;
+	if (!a || !b)
+		return 0;
+	return strcmp(a, b) == 0;
+}
+
+static void usage(FILE *out)
+{
+	fprintf(out, "Usage: raptorctl <command>\n\nCommands:\n");
+	const char *cur = NULL;
+	for (const struct help_entry *e = help_entries; e->text; e++) {
+		if (!same_section(e->daemon, cur)) {
+			if (e->daemon)
+				fprintf(out, "\n%s commands:\n", e->daemon);
+			else if (cur)
+				fprintf(out, "\n");
+			cur = e->daemon;
+		}
+		if (e->daemon)
+			fprintf(out, "  %s %s\n", e->daemon, e->text);
+		else
+			fprintf(out, "  %s\n", e->text);
+	}
+	fprintf(out, "\nDaemons: rvd, rsd, rad, rod, rhd, ric, rmr, rmd, rwd, rwc\n");
 }
 
 /* Read private and shared memory from /proc/<pid>/smaps.
@@ -347,97 +354,12 @@ static void cmd_memory(void)
 
 static void daemon_help(const char *name)
 {
-	if (strcmp(name, "rvd") == 0) {
-		printf("\nCommands:\n"
-		       "  status                              Show encoder channel stats\n"
-		       "  config                              Show running config\n"
-		       "  set-rc-mode <ch> <mode> [bps]       Change rate control mode\n"
-		       "      modes: fixqp cbr vbr smart capped_vbr capped_quality\n"
-		       "  set-bitrate <ch> <bps>              Change bitrate\n"
-		       "  set-gop <ch> <length>               Change GOP length\n"
-		       "  set-fps <ch> <fps>                  Change frame rate\n"
-		       "  set-qp-bounds <ch> <min> <max>      Change QP range\n"
-		       "  request-idr [channel]               Request keyframe\n"
-		       "  set-brightness <val>                ISP brightness (0-255)\n"
-		       "  set-contrast <val>                  ISP contrast (0-255)\n"
-		       "  set-saturation <val>                ISP saturation (0-255)\n"
-		       "  set-sharpness <val>                 ISP sharpness (0-255)\n"
-		       "  set-hue <val>                       ISP hue (0-255)\n"
-		       "  set-sinter <val>                    Spatial NR (0-255)\n"
-		       "  set-temper <val>                    Temporal NR (0-255)\n"
-		       "  set-hflip <0|1>                     Horizontal flip\n"
-		       "  set-vflip <0|1>                     Vertical flip\n"
-		       "  set-antiflicker <0|1|2>             Off/50Hz/60Hz\n"
-		       "  set-ae-comp <val>                   AE compensation\n"
-		       "  set-max-again <val>                 Max analog gain\n"
-		       "  set-max-dgain <val>                 Max digital gain\n"
-		       "  set-defog <0|1>                     Defog enable\n"
-		       "  set-wb <mode> [r_gain] [b_gain]     White balance\n"
-		       "      modes: auto manual daylight cloudy incandescent\n"
-		       "             flourescent twilight shade warm_flourescent custom\n"
-		       "  get-wb                              Show white balance settings\n"
-		       "  get-isp                             Show all ISP settings\n"
-		       "\n  ISP commands accept --sensor N for multi-sensor\n");
-	} else if (strcmp(name, "rsd") == 0) {
-		printf("\nCommands:\n"
-		       "  status                              Show RTSP status\n"
-		       "  config                              Show running config\n"
-		       "  clients                             List connected clients\n");
-	} else if (strcmp(name, "rad") == 0) {
-		printf("\nCommands:\n"
-		       "  status                              Show audio status\n"
-		       "  config                              Show running config\n"
-		       "  set-volume <val>                    Input volume\n"
-		       "  set-gain <val>                      Input gain\n"
-		       "  set-alc-gain <0-7>                  ALC gain (T21/T31 only)\n"
-		       "  set-ns <0|1> [level]                Noise suppression\n"
-		       "      levels: low moderate high veryhigh\n"
-		       "  set-hpf <0|1>                       High-pass filter\n"
-		       "  set-agc <0|1> [target] [comp]       Automatic gain control\n"
-		       "  ao-set-volume <val>                 Speaker volume\n"
-		       "  ao-set-gain <val>                   Speaker gain\n");
-	} else if (strcmp(name, "rod") == 0) {
-		printf("\nCommands:\n"
-		       "  status                              Show OSD region status\n"
-		       "  config                              Show running config\n"
-		       "  set-text <text>                     Change OSD text\n"
-		       "  privacy [on|off] [channel]          Toggle privacy mode\n"
-		       "  set-font-color <0xAARRGGBB>         Text color\n"
-		       "  set-stroke-color <0xAARRGGBB>       Stroke color\n"
-		       "  set-stroke-size <0-5>               Stroke width\n");
-	} else if (strcmp(name, "ric") == 0) {
-		printf("\nCommands:\n"
-		       "  status                              Show day/night status\n"
-		       "  config                              Show running config\n"
-		       "  mode <auto|day|night>               Set day/night mode\n");
-	} else if (strcmp(name, "rhd") == 0) {
-		printf("\nCommands:\n"
-		       "  status                              Show HTTP status\n"
-		       "  config                              Show running config\n"
-		       "  clients                             List connected clients\n");
-	} else if (strcmp(name, "rwd") == 0) {
-		printf("\nCommands:\n"
-		       "  status                              Show WebRTC status\n"
-		       "  config                              Show running config\n"
-		       "  clients                             List connected clients\n"
-		       "  share                               Show WebTorrent share URL\n"
-		       "  share-rotate                        Generate new share key\n");
-	} else if (strcmp(name, "rmr") == 0) {
-		printf("\nCommands:\n"
-		       "  status                              Show recording status\n"
-		       "  config                              Show running config\n");
-	} else if (strcmp(name, "rmd") == 0) {
-		printf("\nCommands:\n"
-		       "  status                              Show motion status\n"
-		       "  config                              Show running config\n");
-	} else if (strcmp(name, "rwc") == 0) {
-		printf("\nCommands:\n"
-		       "  status                              Show webcam status\n"
-		       "  config                              Show running config\n");
-	} else {
-		printf("\nCommands:\n"
-		       "  status                              Show status\n"
-		       "  config                              Show running config\n");
+	printf("\nCommands:\n"
+	       "  status                              Show status\n"
+	       "  config                              Show running config\n");
+	for (const struct help_entry *e = help_entries; e->text; e++) {
+		if (e->daemon && strcmp(e->daemon, name) == 0)
+			printf("  %s\n", e->text);
 	}
 }
 
@@ -470,12 +392,12 @@ static int send_cmd(const char *daemon, const char *json)
 int main(int argc, char **argv)
 {
 	if (argc < 2) {
-		usage();
+		usage(stderr);
 		return 1;
 	}
 
 	if (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0) {
-		usage();
+		usage(stdout);
 		return 0;
 	}
 
@@ -622,7 +544,7 @@ int main(int argc, char **argv)
 
 	if (!is_daemon(argv[1])) {
 		fprintf(stderr, "Unknown daemon: %s\n", argv[1]);
-		usage();
+		usage(stderr);
 		return 1;
 	}
 
