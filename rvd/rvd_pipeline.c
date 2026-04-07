@@ -95,7 +95,7 @@ static void load_stream_config(rss_config_t *cfg, const char *section, rvd_strea
 		.pixfmt = RSS_PIXFMT_NV12,
 		.fps_num = fps,
 		.fps_den = 1,
-		.nr_vbs = rss_config_get_int(cfg, section, "nr_vbs", 3),
+		.nr_vbs = rss_config_get_int(cfg, section, "nr_vbs", 2),
 	};
 
 	/* Encoder config */
