@@ -211,6 +211,7 @@ struct rwd_server {
 	int http_port;
 	int max_clients;
 	char local_ip[64];
+	bool local_ip_configured; /* true if set from config (don't auto-refresh) */
 
 	/* Server-reflexive address (STUN-discovered, for external candidates) */
 	char srflx_ip[64];

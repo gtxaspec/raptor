@@ -249,6 +249,13 @@ rwd_client_t *rwd_client_from_offer(rwd_server_t *srv, const char *sdp, int stre
 		return NULL;
 	}
 
+	/* Re-detect local IP per session (handles late DHCP / IP change) */
+	if (!srv->local_ip_configured) {
+		char ip[64];
+		if (rwd_get_local_ip(ip, sizeof(ip)) == 0)
+			rss_strlcpy(srv->local_ip, ip, sizeof(srv->local_ip));
+	}
+
 	int sdp_len = rwd_sdp_generate_answer(c, srv, sdp_answer, sdp_answer_size);
 	if (sdp_len < 0) {
 		rwd_dtls_client_free(c);

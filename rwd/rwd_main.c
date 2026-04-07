@@ -620,8 +620,10 @@ int main(int argc, char **argv)
 	const char *cfg_ip = rss_config_get_str(dctx.cfg, "webrtc", "local_ip", "");
 	if (cfg_ip[0]) {
 		rss_strlcpy(srv.local_ip, cfg_ip, sizeof(srv.local_ip));
+		srv.local_ip_configured = true;
 	} else {
 		rwd_get_local_ip(srv.local_ip, sizeof(srv.local_ip));
+		srv.local_ip_configured = false;
 	}
 	RSS_INFO("local IP: %s", srv.local_ip);
 
