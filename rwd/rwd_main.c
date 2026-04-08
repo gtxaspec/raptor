@@ -739,6 +739,7 @@ cleanup:
 #ifdef RSS_HAS_TLS
 	rss_tls_free(srv.tls);
 #endif
+	rwd_signaling_cleanup();
 	pthread_mutex_destroy(&srv.clients_lock);
 	rss_config_free(dctx.cfg);
 	rss_daemon_cleanup("rwd");

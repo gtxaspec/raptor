@@ -25,96 +25,11 @@
 
 #include "rwd.h"
 
-/* ── Embedded WebRTC player page ── */
-
-static const char webrtc_html[] =
-	"<!DOCTYPE html>\n"
-	"<html><head><meta charset='utf-8'>\n"
-	"<meta name='viewport' content='width=device-width,initial-scale=1'>\n"
-	"<title>Raptor WebRTC</title>\n"
-	"<style>body{margin:0;background:#111;display:flex;flex-direction:column;"
-	"align-items:center;justify-content:center;min-height:100vh;font-family:sans-serif}"
-	"video{width:100%;max-height:90vh;object-fit:contain;background:#000}"
-	"button{margin:10px;padding:8px 24px;font-size:16px;cursor:pointer;"
-	"border:1px solid #555;background:#222;color:#fff;border-radius:4px}"
-	"button:hover{background:#333}button.active{background:#600;border-color:#a00}"
-	"select{margin:10px;padding:8px;font-size:16px;"
-	"background:#222;color:#fff;border:1px solid #555;border-radius:4px}"
-	"#status{color:#888;font-size:14px}</style>\n"
-	"</head><body>\n"
-	"<video id='v' autoplay muted playsinline></video>\n"
-	"<div>"
-	"<select id='stream'><option value='0'>Main</option><option value='1'>Sub</option></select>"
-	"<button id='btn' onclick='toggle()'>Connect</button>"
-	"<button id='mute' onclick='toggleMute()' style='display:none'>Unmute</button>"
-	"<button id='talk' onclick='toggleTalk()' style='display:none'>Talk</button>"
-	"<span id='status'></span></div>\n"
-	"<script>\n"
-	"let pc=null,resource=null,micStream=null,micSender=null;\n"
-	"const v=document.getElementById('v'),btn=document.getElementById('btn'),"
-	"st=document.getElementById('status');\n"
-	"async function start(){\n"
-	"  st.textContent='Connecting...';\n"
-	"  pc=new RTCPeerConnection({iceServers:[]});\n"
-	"  pc.addTransceiver('video',{direction:'recvonly'});\n"
-	"  const at=pc.addTransceiver('audio',{direction:'sendrecv'});\n"
-	"  try{const caps=RTCRtpSender.getCapabilities('audio').codecs;"
-	"const pcmu=caps.filter(c=>c.mimeType==='audio/PCMU');"
-	"const opus=caps.filter(c=>c.mimeType==='audio/opus');"
-	"if(pcmu.length)at.setCodecPreferences([...pcmu,...opus])}catch(e){}\n"
-	"  pc.ontrack=e=>{if(!v.srcObject){v.srcObject=new "
-	"MediaStream()}v.srcObject.addTrack(e.track);v.muted=true;v.play().catch(()=>{})};\n"
-	"  pc.oniceconnectionstatechange=()=>{st.textContent=pc.iceConnectionState;"
-	"if(pc.iceConnectionState==='failed'||pc.iceConnectionState==='disconnected')stop()};\n"
-	"  const offer=await pc.createOffer();\n"
-	"  await pc.setLocalDescription(offer);\n"
-	"  await new Promise(r=>{if(pc.iceGatheringState==='complete')r();"
-	"else pc.onicegatheringstatechange=()=>{if(pc.iceGatheringState==='complete')r()}});\n"
-	"  const stream=document.getElementById('stream').value;\n"
-	"  const resp=await fetch('/whip?stream='+stream,{method:'POST',"
-	"headers:{'Content-Type':'application/sdp'},body:pc.localDescription.sdp});\n"
-	"  if(!resp.ok){st.textContent='Error: '+resp.status;return}\n"
-	"  resource=resp.headers.get('Location');\n"
-	"  const sdp=await resp.text();\n"
-	"  await pc.setRemoteDescription({type:'answer',sdp});\n"
-	"  btn.textContent='Disconnect';document.getElementById('mute').style.display='';\n"
-	"  if(sdp.includes('a=sendrecv')&&navigator.mediaDevices)"
-	"document.getElementById('talk').style.display='';\n"
-	"  document.getElementById('stream').disabled=true;\n"
-	"}\n"
-	"async function stop(){\n"
-	"  stopTalk();\n"
-	"  if(resource)fetch(resource,{method:'DELETE'}).catch(()=>{});\n"
-	"  if(pc)pc.close();\n"
-	"  pc=null;resource=null;v.srcObject=null;\n"
-	"  btn.textContent='Connect';st.textContent='';"
-	"document.getElementById('mute').style.display='none';"
-	"document.getElementById('talk').style.display='none';"
-	"document.getElementById('stream').disabled=false;\n"
-	"}\n"
-	"function toggle(){pc?stop():start()}\n"
-	"function toggleMute(){v.muted=!v.muted;"
-	"document.getElementById('mute').textContent=v.muted?'Unmute':'Mute'}\n"
-	"async function toggleTalk(){\n"
-	"  if(micStream){stopTalk();return}\n"
-	"  try{\n"
-	"    micStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});\n"
-	"    const track=micStream.getAudioTracks()[0];\n"
-	"    const "
-	"txcv=pc.getTransceivers().find(t=>t.receiver.track&&t.receiver.track.kind==='audio');\n"
-	"    if(txcv){txcv.sender.replaceTrack(track);micSender=txcv.sender}"
-	"    else{micSender=pc.addTrack(track,micStream)}\n"
-	"    document.getElementById('talk').textContent='Stop Talk';"
-	"document.getElementById('talk').classList.add('active');\n"
-	"  }catch(e){st.textContent='Mic: '+e.message}\n"
-	"}\n"
-	"function stopTalk(){\n"
-	"  if(micStream){micStream.getTracks().forEach(t=>t.stop());micStream=null}\n"
-	"  if(micSender&&pc){try{micSender.replaceTrack(null)}catch(e){}micSender=null}\n"
-	"  document.getElementById('talk').textContent='Talk';"
-	"document.getElementById('talk').classList.remove('active');\n"
-	"}\n"
-	"</script></body></html>\n";
+/* WebRTC player page — loaded from file on first request, cached.
+ * Edit the file on device and restart RWD to pick up changes. */
+#define WEBRTC_HTML_PATH "/usr/share/raptor/webrtc.html"
+static char *webrtc_html;
+static int webrtc_html_len;
 
 /* ── HTTP I/O helpers (plain or TLS) ── */
 
@@ -323,6 +238,12 @@ static void handle_whip_delete(rwd_server_t *srv, int fd, const char *session_id
 	http_send(fd, "200 OK", "text/plain", "OK", 2, NULL);
 }
 
+void rwd_signaling_cleanup(void)
+{
+	free(webrtc_html);
+	webrtc_html = NULL;
+}
+
 /* ── Main HTTP request handler ── */
 
 void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
@@ -399,8 +320,20 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 
 	/* GET /webrtc — serve player page */
 	if (strcmp(method, "GET") == 0 && strcmp(path, "/webrtc") == 0) {
-		http_send(client_fd, "200 OK", "text/html; charset=utf-8", webrtc_html,
-			  sizeof(webrtc_html) - 1, "Cache-Control: no-cache\r\n");
+		if (!webrtc_html) {
+			webrtc_html = rss_read_file(WEBRTC_HTML_PATH, &webrtc_html_len);
+			if (webrtc_html)
+				RSS_DEBUG("loaded %s (%d bytes)", WEBRTC_HTML_PATH, webrtc_html_len);
+			else
+				RSS_WARN("%s not found", WEBRTC_HTML_PATH);
+		}
+		if (webrtc_html)
+			http_send(client_fd, "200 OK", "text/html; charset=utf-8",
+				  webrtc_html, (size_t)webrtc_html_len,
+				  "Cache-Control: no-cache\r\n");
+		else
+			http_send(client_fd, "404 Not Found", "text/plain",
+				  "player not installed", 20, NULL);
 		http_close(client_fd);
 		return;
 	}
