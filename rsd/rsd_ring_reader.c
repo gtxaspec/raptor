@@ -268,6 +268,19 @@ void *rsd_audio_reader_thread(void *arg)
 	uint64_t last_write_seq = 0;
 	int idle_count = 0;
 
+	/* Initialize codec from pre-opened ring (server opens it before
+	 * spawning this thread).  Without this, audio_codec stays 0 and
+	 * codec-specific framing (e.g. AAC AU headers) is never applied. */
+	if (srv->ring_audio) {
+		const rss_ring_header_t *ahdr = rss_ring_get_header(srv->ring_audio);
+		audio_codec = ahdr->codec;
+		uint32_t audio_clock = ahdr->fps_num;
+		rtp_clock = (audio_codec == RSD_CODEC_OPUS) ? 48000 : audio_clock;
+		srv->audio_read_seq = ahdr->write_seq;
+		RSS_DEBUG("audio codec=%u clock=%u rtp_clock=%u", audio_codec, audio_clock,
+			  rtp_clock);
+	}
+
 	while (*srv->running) {
 		if (!srv->ring_audio) {
 			/* Ring lost — wait for RAD to recreate it */
