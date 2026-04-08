@@ -98,9 +98,9 @@ static void print_header(const rss_ring_header_t *hdr, const char *name)
 		hdr->stream_id, codec_str(hdr->codec), hdr->codec, hdr->width, hdr->height,
 		hdr->fps_num, hdr->fps_den, hdr->slot_count, hdr->data_size,
 		(double)hdr->data_size / (1024.0 * 1024.0), atomic_load(&hdr->write_seq),
-		atomic_load(&hdr->reader_count),
-		atomic_load(&hdr->reader_pids[0]), atomic_load(&hdr->reader_pids[1]),
-		atomic_load(&hdr->reader_pids[2]), atomic_load(&hdr->reader_pids[3]));
+		atomic_load(&hdr->reader_count), atomic_load(&hdr->reader_pids[0]),
+		atomic_load(&hdr->reader_pids[1]), atomic_load(&hdr->reader_pids[2]),
+		atomic_load(&hdr->reader_pids[3]));
 }
 
 static int64_t clock_monotonic_raw_us(void)

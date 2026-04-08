@@ -26,12 +26,12 @@ typedef struct {
 	rss_video_config_t enc_cfg;
 	rss_fs_config_t fs_cfg;
 	rss_ring_t *ring;
-	int chn;	  /* encoder group/channel index */
-	int fs_chn;	  /* framesource channel (sensor*3 + local) */
-	int sensor_idx;	  /* which sensor (0, 1, 2) */
+	int chn;	   /* encoder group/channel index */
+	int fs_chn;	   /* framesource channel (sensor*3 + local) */
+	int sensor_idx;	   /* which sensor (0, 1, 2) */
 	char cfg_sect[32]; /* config section name (e.g. "stream0", "sensor1_stream0") */
 	bool enabled;
-	bool is_jpeg;  /* true for snapshot channel */
+	bool is_jpeg;	/* true for snapshot channel */
 	bool jpeg_idle; /* true = stop encoder when no consumers */
 } rvd_stream_t;
 
@@ -43,7 +43,7 @@ typedef struct {
 	uint32_t height;
 	uint8_t *local_buf; /* local copy for HAL (IMP DMA needs non-SHM memory) */
 	bool active;
-	bool shown;          /* true after first ShowRgn(1) from update thread */
+	bool shown;	     /* true after first ShowRgn(1) from update thread */
 	int no_update_ticks; /* ticks since last dirty — detect dead producer */
 } rvd_osd_region_t;
 

@@ -57,7 +57,7 @@ typedef struct {
 
 #define RHD_SEND_TIMEOUT_MS 3000 /* max time to drain a one-shot response */
 
-#define RHD_MAX_JPEG 6 /* up to 2 per sensor, 3 sensors */
+#define RHD_MAX_JPEG	    6 /* up to 2 per sensor, 3 sensors */
 
 typedef struct {
 	int listen_fd;
@@ -92,7 +92,7 @@ typedef struct {
 
 /* Address helpers — use shared rss_net.h */
 #define client_addr_str rss_addr_str
-#define client_port     rss_addr_port
+#define client_port	rss_addr_port
 
 /* Base64 and HTTP auth moved to raptor-common (rss_http.h) */
 
@@ -295,8 +295,8 @@ static int http_send_mjpeg_frame(rhd_client_t *c, const uint8_t *data, uint32_t 
 
 /* ── Snapshot handler — serve latest JPEG from ring ── */
 
-static bool handle_snapshot(rhd_client_t *c, int epoll_fd, rss_ring_t *ring,
-			    uint8_t *buf, uint32_t buf_size)
+static bool handle_snapshot(rhd_client_t *c, int epoll_fd, rss_ring_t *ring, uint8_t *buf,
+			    uint32_t buf_size)
 {
 	if (!ring || !buf) {
 		http_error(c, "503 Service Unavailable", "JPEG ring not available");
@@ -343,10 +343,8 @@ static void remove_client(rhd_server_t *srv, int idx)
 {
 	rhd_client_t *c = srv->clients[idx];
 	char addrstr[INET6_ADDRSTRLEN];
-	RSS_INFO("client %s:%u disconnected%s",
-		 client_addr_str(&c->addr, addrstr, sizeof(addrstr)),
-		 client_port(&c->addr),
-		 c->is_mjpeg ? " (mjpeg)" : "");
+	RSS_INFO("client %s:%u disconnected%s", client_addr_str(&c->addr, addrstr, sizeof(addrstr)),
+		 client_port(&c->addr), c->is_mjpeg ? " (mjpeg)" : "");
 	epoll_ctl(srv->epoll_fd, EPOLL_CTL_DEL, c->fd, NULL);
 #ifdef RSS_HAS_TLS
 	rss_tls_close(c->tls);
@@ -393,8 +391,7 @@ static void handle_request(rhd_server_t *srv, rhd_client_t *c)
 
 	char addrstr[INET6_ADDRSTRLEN];
 	RSS_INFO("%s %s from %s:%u", method, path,
-		 client_addr_str(&c->addr, addrstr, sizeof(addrstr)),
-		 client_port(&c->addr));
+		 client_addr_str(&c->addr, addrstr, sizeof(addrstr)), client_port(&c->addr));
 
 	if (strcmp(method, "GET") != 0) {
 		http_error(c, "405 Method Not Allowed", "GET only");
@@ -409,8 +406,8 @@ static void handle_request(rhd_server_t *srv, rhd_client_t *c)
 	if (strncmp(path, "/snap", 5) == 0) {
 		int si = parse_stream_param(path);
 		if (si < srv->jpeg_ring_count && srv->jpeg_rings[si]) {
-			if (handle_snapshot(c, srv->epoll_fd, srv->jpeg_rings[si],
-					    srv->snap_buf, srv->snap_buf_size))
+			if (handle_snapshot(c, srv->epoll_fd, srv->jpeg_rings[si], srv->snap_buf,
+					    srv->snap_buf_size))
 				return; /* keep alive — async send in progress */
 		} else {
 			http_error(c, "404 Not Found", "Stream not available");
@@ -458,7 +455,8 @@ static int rhd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 {
 	rhd_server_t *srv = userdata;
 
-	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, srv->cfg, srv->config_path);
+	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, srv->cfg,
+					srv->config_path);
 	if (rc >= 0)
 		return rc;
 
@@ -471,8 +469,7 @@ static int rhd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			char addr[INET6_ADDRSTRLEN];
 			client_addr_str(&c->addr, addr, sizeof(addr));
 			n += snprintf(resp_buf + n, resp_buf_size - n,
-				      "%s{\"ip\":\"%s\",\"type\":\"%s\"}",
-				      i > 0 ? "," : "", addr,
+				      "%s{\"ip\":\"%s\",\"type\":\"%s\"}", i > 0 ? "," : "", addr,
 				      c->is_mjpeg ? "mjpeg" : "snapshot");
 		}
 		snprintf(resp_buf + n, resp_buf_size - n, "]}");
@@ -532,9 +529,8 @@ static void server_run(rhd_server_t *srv)
 	uint32_t frame_buf_size = 0;
 
 	/* JPEG ring names: sensor 0 = jpeg0/jpeg1, sensor N = sN_jpeg0/sN_jpeg1 */
-	static const char *jpeg_ring_names[RHD_MAX_JPEG] = {
-		"jpeg0", "jpeg1", "s1_jpeg0", "s1_jpeg1", "s2_jpeg0", "s2_jpeg1"
-	};
+	static const char *jpeg_ring_names[RHD_MAX_JPEG] = {"jpeg0",	"jpeg1",    "s1_jpeg0",
+							    "s1_jpeg1", "s2_jpeg0", "s2_jpeg1"};
 
 	/* Try to open JPEG rings */
 	for (int attempt = 0; attempt < 30 && *srv->running; attempt++) {
@@ -546,7 +542,8 @@ static void server_run(rhd_server_t *srv)
 			if (srv->jpeg_rings[j]) {
 				const rss_ring_header_t *hdr =
 					rss_ring_get_header(srv->jpeg_rings[j]);
-				RSS_DEBUG("%s ring available: %ux%u", name, hdr->width, hdr->height);
+				RSS_DEBUG("%s ring available: %ux%u", name, hdr->width,
+					  hdr->height);
 				srv->jpeg_ring_count++;
 				if (hdr->data_size > frame_buf_size)
 					frame_buf_size = hdr->data_size;
@@ -643,7 +640,7 @@ static void server_run(rhd_server_t *srv)
 						 client_addr_str(&sa, addrstr, sizeof(addrstr)),
 						 client_port(&sa), srv->max_clients);
 					http_send_fd(cfd, "503 Service Unavailable", "text/plain",
-					     "Too many clients", 16);
+						     "Too many clients", 16);
 					close(cfd);
 					continue;
 				}
@@ -771,7 +768,7 @@ static void server_run(rhd_server_t *srv)
 								frame_buf_size = 0;
 						}
 						RSS_DEBUG("jpeg ring reconnected (%s)",
-							 jpeg_ring_names[j]);
+							  jpeg_ring_names[j]);
 					}
 					continue;
 				}
@@ -785,7 +782,7 @@ static void server_run(rhd_server_t *srv)
 				jpeg_last_ws[j] = ws;
 				if (jpeg_idle[j] >= 10) { /* ~20s (10 ticks * 2s/tick) */
 					RSS_DEBUG("jpeg ring idle, closing (%s)",
-						 jpeg_ring_names[j]);
+						  jpeg_ring_names[j]);
 					if (was_streaming)
 						rss_ring_release(srv->jpeg_rings[j]);
 					rss_ring_close(srv->jpeg_rings[j]);
@@ -857,10 +854,10 @@ int main(int argc, char **argv)
 #ifdef RSS_HAS_TLS
 	bool https = rss_config_get_bool(ctx.cfg, "http", "https", false);
 	if (https) {
-		const char *cert = rss_config_get_str(ctx.cfg, "http", "cert",
-						      "/etc/ssl/certs/uhttpd.crt");
-		const char *key = rss_config_get_str(ctx.cfg, "http", "key",
-						     "/etc/ssl/private/uhttpd.key");
+		const char *cert =
+			rss_config_get_str(ctx.cfg, "http", "cert", "/etc/ssl/certs/uhttpd.crt");
+		const char *key =
+			rss_config_get_str(ctx.cfg, "http", "key", "/etc/ssl/private/uhttpd.key");
 		srv.tls = rss_tls_init(cert, key);
 		if (srv.tls)
 			RSS_INFO("HTTPS enabled");

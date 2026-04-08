@@ -46,7 +46,7 @@ static void *encoder_thread(void *arg)
 	rvd_stream_t *s = &st->streams[idx];
 
 	RSS_DEBUG("encoder thread[%d] started (chn=%d %ux%u)", idx, s->chn, s->enc_cfg.width,
-		 s->enc_cfg.height);
+		  s->enc_cfg.height);
 
 	uint64_t frame_count = 0;
 	int64_t last_stats = rss_timestamp_us();
@@ -66,7 +66,8 @@ static void *encoder_thread(void *arg)
 					  rss_ring_get_header(s->ring)->reader_pids[3]);
 				uint32_t reaped = rss_ring_reap_dead_readers(s->ring);
 				if (reaped)
-					RSS_WARN("jpeg chn %d: reaped %u dead reader(s)", s->chn, reaped);
+					RSS_WARN("jpeg chn %d: reaped %u dead reader(s)", s->chn,
+						 reaped);
 				last_reap = now_reap;
 			}
 

@@ -129,7 +129,8 @@ static void load_sensor_from_section(rss_config_t *cfg, const char *section,
 		char *s = rss_read_file("/proc/jz/sensor/name", NULL);
 		if (s) {
 			char *nl = strchr(s, '\n');
-			if (nl) *nl = '\0';
+			if (nl)
+				*nl = '\0';
 			rss_strlcpy(sensor->name, s, sizeof(sensor->name));
 			free(s);
 		}
@@ -138,13 +139,17 @@ static void load_sensor_from_section(rss_config_t *cfg, const char *section,
 	sensor->i2c_addr = rss_config_get_int(cfg, section, "i2c_addr", 0);
 	if (sensor->i2c_addr == 0 && use_procfs) {
 		char *s = rss_read_file("/proc/jz/sensor/i2c_addr", NULL);
-		if (s) { sensor->i2c_addr = (uint16_t)strtol(s, NULL, 0); free(s); }
+		if (s) {
+			sensor->i2c_addr = (uint16_t)strtol(s, NULL, 0);
+			free(s);
+		}
 	}
 
 	sensor->i2c_adapter = rss_config_get_int(cfg, section, "i2c_adapter", -1);
 	if (sensor->i2c_adapter < 0 && use_procfs) {
 		char *s = rss_read_file("/proc/jz/sensor/i2c_adapter", NULL);
-		if (!s) s = rss_read_file("/proc/jz/sensor/i2c_bus", NULL);
+		if (!s)
+			s = rss_read_file("/proc/jz/sensor/i2c_bus", NULL);
 		sensor->i2c_adapter = s ? (int)strtol(s, NULL, 10) : 0;
 		free(s);
 	}
@@ -155,13 +160,19 @@ static void load_sensor_from_section(rss_config_t *cfg, const char *section,
 	sensor->pwdn_gpio = rss_config_get_int(cfg, section, "pwdn_gpio", -1);
 	if (sensor->pwdn_gpio == -1 && use_procfs) {
 		char *s = rss_read_file("/proc/jz/sensor/pwdn_gpio", NULL);
-		if (s) { sensor->pwdn_gpio = (int)strtol(s, NULL, 10); free(s); }
+		if (s) {
+			sensor->pwdn_gpio = (int)strtol(s, NULL, 10);
+			free(s);
+		}
 	}
 	sensor->power_gpio = rss_config_get_int(cfg, section, "power_gpio", -1);
 	sensor->rst_gpio = rss_config_get_int(cfg, section, "rst_gpio", -1);
 	if (sensor->rst_gpio == -1 && use_procfs) {
 		char *s = rss_read_file("/proc/jz/sensor/rst_gpio", NULL);
-		if (s) { sensor->rst_gpio = (int)strtol(s, NULL, 10); free(s); }
+		if (s) {
+			sensor->rst_gpio = (int)strtol(s, NULL, 10);
+			free(s);
+		}
 	}
 
 	sensor->default_boot = rss_config_get_int(cfg, section, "boot", -1);
@@ -261,7 +272,8 @@ int rvd_pipeline_init(rvd_state_t *st)
 	}
 	st->sensor_count = multi_cfg.sensor_count;
 	if (st->sensor_count > RVD_MAX_SENSORS) {
-		RSS_FATAL("sensor_count %d exceeds RVD_MAX_SENSORS %d", st->sensor_count, RVD_MAX_SENSORS);
+		RSS_FATAL("sensor_count %d exceeds RVD_MAX_SENSORS %d", st->sensor_count,
+			  RVD_MAX_SENSORS);
 		return RSS_ERR;
 	}
 
@@ -277,9 +289,9 @@ int rvd_pipeline_init(rvd_state_t *st)
 	}
 
 	for (int s = 0; s < multi_cfg.sensor_count; s++) {
-		RSS_DEBUG("sensor%d: %s i2c=0x%02x bus=%d id=%d", s,
-			 multi_cfg.sensors[s].name, multi_cfg.sensors[s].i2c_addr,
-			 multi_cfg.sensors[s].i2c_adapter, multi_cfg.sensors[s].sensor_id);
+		RSS_DEBUG("sensor%d: %s i2c=0x%02x bus=%d id=%d", s, multi_cfg.sensors[s].name,
+			  multi_cfg.sensors[s].i2c_addr, multi_cfg.sensors[s].i2c_adapter,
+			  multi_cfg.sensors[s].sensor_id);
 	}
 
 	/* ── 3. Init HAL (brings up ISP + sensor(s)) ── */
@@ -310,8 +322,12 @@ int rvd_pipeline_init(rvd_state_t *st)
 		int sensor_fps = rss_config_get_int(cfg, fps_section, "fps", 0);
 		if (sensor_fps <= 0) {
 			char *s = rss_read_file("/proc/jz/sensor/max_fps", NULL);
-			if (s) { sensor_fps = (int)strtol(s, NULL, 10); free(s); }
-			if (sensor_fps <= 0) sensor_fps = 25;
+			if (s) {
+				sensor_fps = (int)strtol(s, NULL, 10);
+				free(s);
+			}
+			if (sensor_fps <= 0)
+				sensor_fps = 25;
 		}
 		/* Sensor 0 FPS via legacy ops */
 		ret = RSS_HAL_CALL(st->ops, isp_set_sensor_fps, st->hal_ctx, sensor_fps, 1);
@@ -405,7 +421,8 @@ int rvd_pipeline_init(rvd_state_t *st)
 			if (cfg_sw > 0 && cfg_sh > 0) {
 				sensor_w = cfg_sw;
 				sensor_h = cfg_sh;
-				RSS_INFO("sensor resolution from config: %dx%d", sensor_w, sensor_h);
+				RSS_INFO("sensor resolution from config: %dx%d", sensor_w,
+					 sensor_h);
 			} else {
 				RSS_WARN("could not determine sensor resolution");
 			}
@@ -448,25 +465,27 @@ int rvd_pipeline_init(rvd_state_t *st)
 		rss_strlcpy(st->streams[si].cfg_sect, main_sect, sizeof(st->streams[si].cfg_sect));
 		st->stream_count++;
 
-		RSS_DEBUG("sensor%d main: fs_chn=%d enc_grp=%d %ux%u", s,
-			 st->streams[si].fs_chn, st->streams[si].chn,
-			 st->streams[si].enc_cfg.width, st->streams[si].enc_cfg.height);
+		RSS_DEBUG("sensor%d main: fs_chn=%d enc_grp=%d %ux%u", s, st->streams[si].fs_chn,
+			  st->streams[si].chn, st->streams[si].enc_cfg.width,
+			  st->streams[si].enc_cfg.height);
 
 		/* Sub stream (optional) */
 		bool sub_enabled = (s == 0) ? rss_config_get_bool(cfg, "stream1", "enabled", true)
 					    : rss_config_get_bool(cfg, sub_sect, "enabled", true);
 		if (sub_enabled) {
 			si = st->stream_count;
-			load_stream_config(cfg, sub_sect, &st->streams[si], sub_w, sub_h, 25, 1000000);
+			load_stream_config(cfg, sub_sect, &st->streams[si], sub_w, sub_h, 25,
+					   1000000);
 			st->streams[si].fs_chn = fs_base + 1;
 			st->streams[si].chn = enc_grp_counter++;
 			st->streams[si].sensor_idx = s;
-			rss_strlcpy(st->streams[si].cfg_sect, sub_sect, sizeof(st->streams[si].cfg_sect));
+			rss_strlcpy(st->streams[si].cfg_sect, sub_sect,
+				    sizeof(st->streams[si].cfg_sect));
 			st->stream_count++;
 
 			RSS_DEBUG("sensor%d sub: fs_chn=%d enc_grp=%d %ux%u", s,
-				 st->streams[si].fs_chn, st->streams[si].chn,
-				 st->streams[si].enc_cfg.width, st->streams[si].enc_cfg.height);
+				  st->streams[si].fs_chn, st->streams[si].chn,
+				  st->streams[si].enc_cfg.width, st->streams[si].enc_cfg.height);
 		}
 	}
 
@@ -487,8 +506,8 @@ int rvd_pipeline_init(rvd_state_t *st)
 				else
 					st->streams[i].chn = grp_other++;
 				if (st->streams[i].chn != old_grp)
-					RSS_DEBUG("ivdc reorder: stream%d enc_grp %d -> %d",
-						  i, old_grp, st->streams[i].chn);
+					RSS_DEBUG("ivdc reorder: stream%d enc_grp %d -> %d", i,
+						  old_grp, st->streams[i].chn);
 			}
 			enc_grp_counter = grp_other;
 		}
@@ -518,10 +537,13 @@ int rvd_pipeline_init(rvd_state_t *st)
 				continue;
 
 			int quality = rss_config_get_int(cfg, sect, "jpeg_quality", def_quality);
-			if (quality < 1) quality = 1;
-			if (quality > 100) quality = 100;
+			if (quality < 1)
+				quality = 1;
+			if (quality > 100)
+				quality = 100;
 			int fps = rss_config_get_int(cfg, sect, "jpeg_fps", def_fps);
-			if (fps < 1) fps = 1;
+			if (fps < 1)
+				fps = 1;
 
 			int ji = st->stream_count;
 			int jpeg_chn = jpeg_chn_base + st->jpeg_count;
@@ -547,8 +569,8 @@ int rvd_pipeline_init(rvd_state_t *st)
 
 			RSS_INFO("jpeg%d: [%s] sensor%d %ux%u @ %d fps, quality %d (enc chn %d)",
 				 st->jpeg_count - 1, sect, st->streams[ji].sensor_idx,
-				 st->streams[ji].enc_cfg.width, st->streams[ji].enc_cfg.height,
-				 fps, quality, jpeg_chn);
+				 st->streams[ji].enc_cfg.width, st->streams[ji].enc_cfg.height, fps,
+				 quality, jpeg_chn);
 		}
 	}
 
@@ -573,8 +595,8 @@ int rvd_pipeline_init(rvd_state_t *st)
 			 * framesource creation time. Enable crop on main streams (full res)
 			 * to explicitly set the input resolution. Skip on sub streams
 			 * since crop dimensions can't exceed scaler output. */
-			if (st->sensor_count > 1 &&
-			    fs->width == sensor_w && fs->height == sensor_h) {
+			if (st->sensor_count > 1 && fs->width == sensor_w &&
+			    fs->height == sensor_h) {
 				fs->crop.enable = true;
 				fs->crop.x = 0;
 				fs->crop.y = 0;
@@ -587,7 +609,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 				fs->scaler.out_width = fs->width;
 				fs->scaler.out_height = fs->height;
 				RSS_DEBUG("stream%d: scaler %dx%d -> %dx%d", i, sensor_w, sensor_h,
-					 fs->width, fs->height);
+					  fs->width, fs->height);
 			}
 		}
 	}
@@ -772,8 +794,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 		if (insert_ivs)
 			chain[chain_len++] = (rss_cell_t){RSS_DEV_IVS, 0, 0};
 		/* OSD in bind chain: always for IPU-only mode, subs only for hybrid */
-		if (st->osd_enabled &&
-		    (!st->use_isp_osd || st->streams[i].fs_chn % 3 != 0))
+		if (st->osd_enabled && (!st->use_isp_osd || st->streams[i].fs_chn % 3 != 0))
 			chain[chain_len++] = (rss_cell_t){RSS_DEV_OSD, grp, 0};
 		chain[chain_len++] = (rss_cell_t){RSS_DEV_ENC, grp, 0};
 
@@ -831,13 +852,18 @@ int rvd_pipeline_init(rvd_state_t *st)
 			st->streams[i].enabled = true;
 			if (st->streams[i].is_jpeg) {
 				RSS_INFO("stream%d: %ux%u JPEG @ %u fps, quality %d (always-on)", i,
-					 st->streams[i].enc_cfg.width, st->streams[i].enc_cfg.height,
-					 st->streams[i].enc_cfg.fps_num, st->streams[i].enc_cfg.init_qp);
+					 st->streams[i].enc_cfg.width,
+					 st->streams[i].enc_cfg.height,
+					 st->streams[i].enc_cfg.fps_num,
+					 st->streams[i].enc_cfg.init_qp);
 			} else {
 				RSS_INFO("stream%d: %ux%u %s @ %u fps, %u bps", i,
-					 st->streams[i].enc_cfg.width, st->streams[i].enc_cfg.height,
-					 st->streams[i].enc_cfg.codec == RSS_CODEC_H265 ? "H.265" : "H.264",
-					 st->streams[i].enc_cfg.fps_num, st->streams[i].enc_cfg.bitrate);
+					 st->streams[i].enc_cfg.width,
+					 st->streams[i].enc_cfg.height,
+					 st->streams[i].enc_cfg.codec == RSS_CODEC_H265 ? "H.265"
+											: "H.264",
+					 st->streams[i].enc_cfg.fps_num,
+					 st->streams[i].enc_cfg.bitrate);
 			}
 		}
 	}
@@ -897,12 +923,16 @@ int rvd_pipeline_init(rvd_state_t *st)
 		} else {
 			uint32_t bps = st->streams[i].enc_cfg.bitrate;
 			uint32_t fps = st->streams[i].enc_cfg.fps_num;
-			if (fps == 0) fps = 25;
+			if (fps == 0)
+				fps = 25;
 			uint32_t max_frame = (uint32_t)((uint64_t)bps * 4 / 8 / fps);
-			if (max_frame < min_frame) max_frame = min_frame;
+			if (max_frame < min_frame)
+				max_frame = min_frame;
 			data = max_frame * (uint32_t)slots_cfg;
-			if (data < min_data) data = min_data;
-			if (data > max_data) data = max_data;
+			if (data < min_data)
+				data = min_data;
+			if (data > max_data)
+				data = max_data;
 		}
 		RSS_DEBUG("%s ring: %u slots, %u KB data", ring_name, slots_cfg, data / 1024);
 
@@ -945,8 +975,8 @@ int rvd_pipeline_init(rvd_state_t *st)
 		uint32_t jpeg_data = jpeg_max * slots;
 		if (jpeg_data > 4 * 1024 * 1024)
 			jpeg_data = 4 * 1024 * 1024;
-		RSS_DEBUG("%s ring: %u slots, %u KB data (q%u, /%u, %u fps)",
-			 ring_name, slots, jpeg_data / 1024, q, divisor, fps);
+		RSS_DEBUG("%s ring: %u slots, %u KB data (q%u, /%u, %u fps)", ring_name, slots,
+			  jpeg_data / 1024, q, divisor, fps);
 
 		st->streams[ji].ring = rss_ring_create(ring_name, slots, jpeg_data);
 		if (!st->streams[ji].ring) {
@@ -996,8 +1026,7 @@ void rvd_pipeline_deinit(rvd_state_t *st)
 		RSS_HAL_CALL(st->ops, enc_destroy_channel, st->hal_ctx, chn);
 		if (!st->streams[i].is_jpeg) {
 			RSS_HAL_CALL(st->ops, enc_destroy_group, st->hal_ctx, chn);
-			if (st->osd_enabled &&
-			    (!st->use_isp_osd || st->streams[i].fs_chn % 3 != 0))
+			if (st->osd_enabled && (!st->use_isp_osd || st->streams[i].fs_chn % 3 != 0))
 				RSS_HAL_CALL(st->ops, osd_destroy_group, st->hal_ctx, chn);
 			RSS_HAL_CALL(st->ops, fs_destroy_channel, st->hal_ctx, fsc);
 		}
