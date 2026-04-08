@@ -15,11 +15,11 @@
 #include <pthread.h>
 #include <sys/socket.h>
 #include <opus/opus.h>
+#ifdef RAPTOR_AAC
+#include <aacdec.h>
+#endif
 
 #include "rwd.h"
-
-/* Audio codec IDs (RTP payload types, shared with RAD/RSD) */
-#define RWD_CODEC_OPUS 111
 
 /* ── sendto-based UDP transport (Compy_Transport interface) ──
  *
@@ -96,6 +96,17 @@ static int16_t ulaw_decode(uint8_t ulaw)
 	int magnitude = ((mantissa << 3) + 0x84) << exponent;
 	magnitude -= 0x84;
 	return (int16_t)(sign ? -magnitude : magnitude);
+}
+
+static int16_t alaw_decode(uint8_t alaw)
+{
+	alaw ^= 0x55;
+	int sign = alaw & 0x80;
+	int exponent = (alaw >> 4) & 0x07;
+	int mantissa = alaw & 0x0f;
+	int magnitude =
+		(exponent == 0) ? (mantissa << 4) + 8 : ((mantissa << 4) + 264) << (exponent - 1);
+	return (int16_t)(sign ? magnitude : -magnitude);
 }
 
 static void rwd_bc_recv_t_on_audio(VSelf, uint8_t payload_type, uint32_t timestamp, uint32_t ssrc,
@@ -209,9 +220,10 @@ int rwd_media_setup(rwd_client_t *c)
 		if (udp_a.self) {
 			c->srtp_audio = compy_transport_srtp(udp_a, suite, &send_key);
 
-			int audio_pt = c->offer.audio_pt > 0 ? c->offer.audio_pt : RWD_AUDIO_PT;
+			int audio_pt = srv->wire_pt;
+			int audio_clock = srv->wire_clock;
 			c->rtp_audio = Compy_RtpTransport_new(c->srtp_audio, (uint8_t)audio_pt,
-							      RWD_AUDIO_CLOCK);
+							      audio_clock);
 			Compy_RtpTransport_set_ssrc(c->rtp_audio, c->audio_ssrc);
 			/* sdes:mid extension for audio */
 			if (c->offer.mid_ext_id > 0 && c->offer.mid_ext_id <= 14) {
@@ -467,17 +479,15 @@ static void rwd_send_video_frame(rwd_client_t *c, const uint8_t *data, uint32_t 
 	}
 }
 
-static void rwd_send_audio_frame(rwd_client_t *c, uint32_t codec, const uint8_t *data, uint32_t len,
+static void rwd_send_audio_frame(rwd_client_t *c, const uint8_t *data, uint32_t len,
 				 uint32_t rtp_ts)
 {
 	if (!c->rtp_audio || !c->sending)
 		return;
 
-	/* Opus: raw packet, marker=true */
 	(void)!Compy_RtpTransport_send_packet(c->rtp_audio, Compy_RtpTimestamp_Raw(rtp_ts), true,
 					      U8Slice99_empty(),
 					      U8Slice99_new((uint8_t *)data, len));
-	(void)codec;
 
 	/* Periodic RTCP SR (every 5 seconds) */
 	if (c->rtcp_audio) {
@@ -655,6 +665,114 @@ void *rwd_video_reader_thread(void *arg)
 
 /* ── Audio reader thread ── */
 
+/* Encode a PCM16 sample to μ-law (ITU-T G.711) */
+static uint8_t ulaw_encode(int16_t pcm)
+{
+	int sign = (pcm >> 8) & 0x80;
+	if (sign)
+		pcm = -pcm;
+	if (pcm > 32635)
+		pcm = 32635;
+	pcm += 0x84;
+	int exponent = 7;
+	for (int mask = 0x4000; (pcm & mask) == 0 && exponent > 0; exponent--, mask >>= 1)
+		;
+	int mantissa = (pcm >> (exponent + 3)) & 0x0F;
+	return (uint8_t)(~(sign | (exponent << 4) | mantissa));
+}
+
+/* Convert L16 (big-endian PCM16) to PCMU (8kHz μ-law).
+ * Downsamples 2:1 with 2-tap averaging if source is 16kHz. */
+static int rwd_l16_to_pcmu(const uint8_t *data, uint32_t len, uint8_t *out, int out_size,
+			   int sample_rate)
+{
+	const uint16_t *src = (const uint16_t *)data;
+	int samples = (int)(len / 2);
+	int step = (sample_rate > 8000) ? sample_rate / 8000 : 1;
+	samples -= samples % step; /* ensure even division for averaging */
+	int out_samples = samples / step;
+	if (out_samples > out_size)
+		out_samples = out_size;
+	if (step == 2) {
+		/* 2-tap low-pass: average adjacent samples to reduce aliasing */
+		for (int i = 0; i < out_samples; i++) {
+			int16_t a = (int16_t)ntohs(src[i * 2]);
+			int16_t b = (int16_t)ntohs(src[i * 2 + 1]);
+			out[i] = ulaw_encode((int16_t)((a + b) / 2));
+		}
+	} else {
+		for (int i = 0; i < out_samples; i++)
+			out[i] = ulaw_encode((int16_t)ntohs(src[i * step]));
+	}
+	return out_samples;
+}
+
+/* Decode one ring frame to PCM. Returns number of PCM samples produced,
+ * or 0 on failure. Output is native-endian 16-bit mono. */
+static int rwd_decode_to_pcm(uint32_t codec, const uint8_t *data, uint32_t len,
+#ifdef RAPTOR_AAC
+			     HAACDecoder aac_dec,
+#endif
+			     int16_t *pcm, int pcm_max)
+{
+	int pcm_samples = 0;
+
+	switch (codec) {
+	case RWD_CODEC_PCMU:
+		pcm_samples = (int)len;
+		if (pcm_samples > pcm_max)
+			pcm_samples = pcm_max;
+		for (int i = 0; i < pcm_samples; i++)
+			pcm[i] = ulaw_decode(data[i]);
+		break;
+
+	case RWD_CODEC_PCMA:
+		pcm_samples = (int)len;
+		if (pcm_samples > pcm_max)
+			pcm_samples = pcm_max;
+		for (int i = 0; i < pcm_samples; i++)
+			pcm[i] = alaw_decode(data[i]);
+		break;
+
+	case RWD_CODEC_L16: {
+		const uint16_t *src = (const uint16_t *)data;
+		pcm_samples = (int)(len / 2);
+		if (pcm_samples > pcm_max)
+			pcm_samples = pcm_max;
+		for (int i = 0; i < pcm_samples; i++)
+			pcm[i] = (int16_t)ntohs(src[i]);
+		break;
+	}
+
+#ifdef RAPTOR_AAC
+	case RWD_CODEC_AAC:
+		if (!aac_dec)
+			return 0;
+		{
+			unsigned char *inp = (unsigned char *)data;
+			int left = (int)len;
+			int err = AACDecode(aac_dec, &inp, &left, pcm);
+			if (err != 0)
+				return 0;
+			AACFrameInfo info;
+			AACGetLastFrameInfo(aac_dec, &info);
+			pcm_samples = info.outputSamps;
+			if (info.nChans == 2) {
+				pcm_samples /= 2;
+				for (int i = 0; i < pcm_samples; i++)
+					pcm[i] = (pcm[i * 2] + pcm[i * 2 + 1]) / 2;
+			}
+		}
+		break;
+#endif
+
+	default:
+		return 0;
+	}
+
+	return pcm_samples;
+}
+
 void *rwd_audio_reader_thread(void *arg)
 {
 	rwd_server_t *srv = arg;
@@ -662,11 +780,27 @@ void *rwd_audio_reader_thread(void *arg)
 	RSS_DEBUG("media: audio reader started");
 
 	uint32_t audio_codec = 0;
-	uint32_t rtp_clock = 48000;
+	int sample_rate = 0;
 	int64_t audio_ts_epoch = 0;
 	uint8_t audio_buf[4096];
+	uint8_t transcode_out[1024]; /* max Opus or PCMU frame output */
 	uint64_t last_write_seq = 0;
 	int idle_count = 0;
+	bool need_transcode = false;
+
+	/* PCM accumulation buffer for Opus transcoding (handles non-aligned
+	 * frame sizes like AAC's 1024 samples vs Opus's 320/960) */
+	int16_t pcm_accum[2048];
+	int pcm_accum_fill = 0;
+	int opus_frame_size = 0;  /* valid Opus frame size for current sample rate */
+	uint32_t opus_rtp_ts = 0; /* running RTP timestamp for Opus output */
+	bool opus_rtp_ts_init = false;
+
+	/* Transcoding state (created when needed) */
+	OpusEncoder *opus_enc = NULL;
+#ifdef RAPTOR_AAC
+	HAACDecoder aac_dec = NULL;
+#endif
 
 	while (*srv->running) {
 		if (!srv->audio_ring) {
@@ -677,13 +811,117 @@ void *rwd_audio_reader_thread(void *arg)
 			}
 			const rss_ring_header_t *ahdr = rss_ring_get_header(srv->audio_ring);
 			audio_codec = ahdr->codec;
-			rtp_clock = (audio_codec == RWD_CODEC_OPUS) ? 48000 : ahdr->fps_num;
+			sample_rate = ahdr->fps_num;
 			srv->audio_read_seq = ahdr->write_seq;
 			audio_ts_epoch = 0;
 			last_write_seq = 0;
 			idle_count = 0;
+			pcm_accum_fill = 0;
+			opus_rtp_ts = 0;
+			opus_rtp_ts_init = false;
+
+			/* Tear down old transcoder if codec changed */
+			if (opus_enc) {
+				opus_encoder_destroy(opus_enc);
+				opus_enc = NULL;
+			}
+#ifdef RAPTOR_AAC
+			if (aac_dec) {
+				AACFreeDecoder(aac_dec);
+				aac_dec = NULL;
+			}
+#endif
+			need_transcode = false;
+
+			/* Decide wire codec based on audio_mode */
+			if (srv->audio_mode == RWD_AUDIO_MODE_AUTO) {
+				switch (audio_codec) {
+				case RWD_CODEC_OPUS:
+					srv->wire_codec = RWD_CODEC_OPUS;
+					srv->wire_pt = RWD_AUDIO_PT;
+					srv->wire_clock = 48000;
+					break;
+				case RWD_CODEC_PCMU:
+					srv->wire_codec = RWD_CODEC_PCMU;
+					srv->wire_pt = 0;
+					srv->wire_clock = 8000;
+					break;
+				case RWD_CODEC_PCMA:
+					srv->wire_codec = RWD_CODEC_PCMA;
+					srv->wire_pt = 8;
+					srv->wire_clock = 8000;
+					break;
+				case RWD_CODEC_L16:
+					/* L16 not supported by WebRTC → encode to PCMU */
+					srv->wire_codec = RWD_CODEC_PCMU;
+					srv->wire_pt = 0;
+					srv->wire_clock = 8000;
+					need_transcode = true;
+					break;
+				default:
+					/* AAC and others → transcode to Opus */
+					srv->wire_codec = RWD_CODEC_OPUS;
+					srv->wire_pt = RWD_AUDIO_PT;
+					srv->wire_clock = 48000;
+					need_transcode = true;
+					break;
+				}
+			} else {
+				/* opus mode: always transcode to Opus */
+				srv->wire_codec = RWD_CODEC_OPUS;
+				srv->wire_pt = RWD_AUDIO_PT;
+				srv->wire_clock = 48000;
+				need_transcode = (audio_codec != RWD_CODEC_OPUS);
+			}
+
+			if (need_transcode && srv->wire_codec == RWD_CODEC_OPUS) {
+				int err;
+				opus_enc = opus_encoder_create(sample_rate, 1,
+							       OPUS_APPLICATION_AUDIO, &err);
+				if (err != OPUS_OK) {
+					RSS_WARN("media: opus encoder init failed: %d", err);
+					opus_enc = NULL;
+				} else {
+					opus_encoder_ctl(opus_enc,
+							 OPUS_SET_BITRATE(srv->opus_bitrate));
+					opus_encoder_ctl(opus_enc,
+							 OPUS_SET_COMPLEXITY(srv->opus_complexity));
+					opus_frame_size = sample_rate / 50; /* 20ms */
+				}
+#ifdef RAPTOR_AAC
+				if (audio_codec == RWD_CODEC_AAC) {
+					aac_dec = AACInitDecoder();
+					if (aac_dec) {
+						AACFrameInfo fi = {0};
+						fi.nChans = 1;
+						fi.sampRateCore = sample_rate;
+						AACSetRawBlockParams(aac_dec, 0, &fi);
+					} else {
+						RSS_WARN("media: AAC decoder init failed");
+					}
+				}
+#endif
+			}
+
+			/* Set has_audio last — signaling thread reads it to
+			 * gate SDP audio, must see wire fields first. */
 			srv->has_audio = true;
-			RSS_DEBUG("media: audio ring attached (codec=%u)", audio_codec);
+
+			const char *codec_name = audio_codec == RWD_CODEC_PCMU	 ? "PCMU"
+						 : audio_codec == RWD_CODEC_PCMA ? "PCMA"
+						 : audio_codec == RWD_CODEC_L16	 ? "L16"
+						 : audio_codec == RWD_CODEC_AAC	 ? "AAC"
+						 : audio_codec == RWD_CODEC_OPUS ? "Opus"
+										 : "unknown";
+			const char *wire_name = srv->wire_codec == RWD_CODEC_PCMU   ? "PCMU"
+						: srv->wire_codec == RWD_CODEC_PCMA ? "PCMA"
+						: srv->wire_codec == RWD_CODEC_OPUS ? "Opus"
+										    : "unknown";
+			if (need_transcode)
+				RSS_INFO("media: audio %s → %s (%d Hz)", codec_name, wire_name,
+					 sample_rate);
+			else
+				RSS_INFO("media: audio %s passthrough", codec_name);
 		}
 
 		int ret = rss_ring_wait(srv->audio_ring, 100);
@@ -722,28 +960,114 @@ void *rwd_audio_reader_thread(void *arg)
 
 			srv->audio_read_seq = read_seq;
 
+			/* Skip transcoding + send when no clients are active */
+			if (srv->client_count == 0) {
+				if (pcm_accum_fill > 0) {
+					pcm_accum_fill = 0;
+					opus_rtp_ts_init = false;
+				}
+				continue;
+			}
+
 			if (audio_ts_epoch == 0)
 				audio_ts_epoch = meta.timestamp;
 			uint32_t rtp_ts = (uint32_t)((uint64_t)(meta.timestamp - audio_ts_epoch) *
-						     rtp_clock / 1000000);
+						     srv->wire_clock / 1000000);
 
-			pthread_mutex_lock(&srv->clients_lock);
-			for (int i = 0; i < RWD_MAX_CLIENTS; i++) {
-				rwd_client_t *c = srv->clients[i];
-				if (!c || !c->sending || !c->rtp_audio)
-					continue;
-
-				if (!c->audio_ts_base_set) {
-					c->audio_ts_offset = rtp_ts;
-					c->audio_ts_base_set = true;
+			if (!need_transcode) {
+				/* Passthrough: send ring data directly */
+				pthread_mutex_lock(&srv->clients_lock);
+				for (int i = 0; i < RWD_MAX_CLIENTS; i++) {
+					rwd_client_t *c = srv->clients[i];
+					if (!c || !c->sending || !c->rtp_audio)
+						continue;
+					if (!c->audio_ts_base_set) {
+						c->audio_ts_offset = rtp_ts;
+						c->audio_ts_base_set = true;
+					}
+					rwd_send_audio_frame(c, audio_buf, length,
+							     rtp_ts - c->audio_ts_offset);
 				}
-				uint32_t client_ts = rtp_ts - c->audio_ts_offset;
-				rwd_send_audio_frame(c, audio_codec, audio_buf, length, client_ts);
+				pthread_mutex_unlock(&srv->clients_lock);
+			} else if (srv->wire_codec == RWD_CODEC_PCMU) {
+				/* L16 → PCMU (table lookup) */
+				int enc_len = rwd_l16_to_pcmu(audio_buf, length, transcode_out,
+							      sizeof(transcode_out), sample_rate);
+				if (enc_len > 0) {
+					pthread_mutex_lock(&srv->clients_lock);
+					for (int i = 0; i < RWD_MAX_CLIENTS; i++) {
+						rwd_client_t *c = srv->clients[i];
+						if (!c || !c->sending || !c->rtp_audio)
+							continue;
+						if (!c->audio_ts_base_set) {
+							c->audio_ts_offset = rtp_ts;
+							c->audio_ts_base_set = true;
+						}
+						rwd_send_audio_frame(c, transcode_out, enc_len,
+								     rtp_ts - c->audio_ts_offset);
+					}
+					pthread_mutex_unlock(&srv->clients_lock);
+				}
+			} else if (opus_enc && opus_frame_size > 0) {
+				/* Decode → accumulate → encode Opus in 20ms frames.
+				 * Each Opus frame advances RTP ts by 960 (48kHz × 20ms). */
+				int16_t dec_pcm[2048];
+				int n = rwd_decode_to_pcm(audio_codec, audio_buf, length,
+#ifdef RAPTOR_AAC
+							  aac_dec,
+#endif
+							  dec_pcm, 2048);
+				int copy = n;
+				if (pcm_accum_fill + copy > 2048)
+					copy = 2048 - pcm_accum_fill;
+				if (copy > 0) {
+					memcpy(pcm_accum + pcm_accum_fill, dec_pcm, copy * 2);
+					pcm_accum_fill += copy;
+				}
+				/* Use running timestamp — avoids gaps between
+				 * AAC frame batches (1024 vs 3×320 = 960) */
+				if (!opus_rtp_ts_init) {
+					opus_rtp_ts = rtp_ts;
+					opus_rtp_ts_init = true;
+				}
+				while (pcm_accum_fill >= opus_frame_size) {
+					opus_int32 el =
+						opus_encode(opus_enc, pcm_accum, opus_frame_size,
+							    transcode_out, sizeof(transcode_out));
+					pcm_accum_fill -= opus_frame_size;
+					if (pcm_accum_fill > 0)
+						memmove(pcm_accum, pcm_accum + opus_frame_size,
+							pcm_accum_fill * 2);
+					if (el <= 0) {
+						opus_rtp_ts += 960;
+						continue;
+					}
+					pthread_mutex_lock(&srv->clients_lock);
+					for (int i = 0; i < RWD_MAX_CLIENTS; i++) {
+						rwd_client_t *c = srv->clients[i];
+						if (!c || !c->sending || !c->rtp_audio)
+							continue;
+						if (!c->audio_ts_base_set) {
+							c->audio_ts_offset = opus_rtp_ts;
+							c->audio_ts_base_set = true;
+						}
+						rwd_send_audio_frame(c, transcode_out, el,
+								     opus_rtp_ts -
+									     c->audio_ts_offset);
+					}
+					pthread_mutex_unlock(&srv->clients_lock);
+					opus_rtp_ts += 960;
+				}
 			}
-			pthread_mutex_unlock(&srv->clients_lock);
 		}
 	}
 
+	if (opus_enc)
+		opus_encoder_destroy(opus_enc);
+#ifdef RAPTOR_AAC
+	if (aac_dec)
+		AACFreeDecoder(aac_dec);
+#endif
 	RSS_DEBUG("media: audio reader exiting");
 	return NULL;
 }

@@ -83,6 +83,26 @@ int rwd_sdp_parse_offer(const char *sdp, rwd_sdp_offer_t *offer)
 			in_video = false;
 			in_audio = true;
 			offer->has_audio = true;
+			/* Scan PT list in m-line for static PCMU(0) and PCMA(8).
+			 * Format: m=audio <port> <proto> <pt> [<pt> ...] */
+			const char *pts = line + 7;
+			int field = 0;
+			while (*pts) {
+				while (*pts == ' ')
+					pts++;
+				if (!*pts)
+					break;
+				if (field >= 2) {
+					int pt = (int)strtol(pts, NULL, 10);
+					if (pt == 0)
+						offer->has_pcmu = true;
+					if (pt == 8)
+						offer->has_pcma = true;
+				}
+				field++;
+				while (*pts && *pts != ' ')
+					pts++;
+			}
 			continue;
 		}
 		if (line[0] == 'm') {
@@ -274,9 +294,24 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 		APPEND("a=candidate:2 1 UDP 1694498815 %s %u typ srflx raddr %s rport %d",
 		       srv->srflx_ip, srv->srflx_port, srv->local_ip, srv->udp_port);
 
-	/* Audio m-line (if browser offered Opus) */
+	/* Audio m-line — use wire_codec, but only if the browser offered it.
+	 * Fall back to Opus (always offered by WebRTC clients) if not. */
 	if (c->offer.has_audio && c->offer.audio_pt >= 0) {
-		APPEND("m=audio %d UDP/TLS/RTP/SAVPF %d 0", srv->udp_port, c->offer.audio_pt);
+		int wc = srv->wire_codec;
+		int wpt = srv->wire_pt;
+		/* Verify browser offered our wire codec — all WebRTC browsers
+		 * offer PCMU (mandatory per RFC 7874), but check anyway. If
+		 * not offered, fall back to Opus in SDP. Note: the audio
+		 * reader still sends wire_codec to all clients, so a mismatch
+		 * here means this client gets no audio. */
+		if ((wc == RWD_CODEC_PCMU && !c->offer.has_pcmu) ||
+		    (wc == RWD_CODEC_PCMA && !c->offer.has_pcma)) {
+			RSS_WARN("sdp: browser didn't offer %s, falling back to Opus",
+				 wc == RWD_CODEC_PCMU ? "PCMU" : "PCMA");
+			wc = RWD_CODEC_OPUS;
+			wpt = c->offer.audio_pt;
+		}
+		APPEND("m=audio %d UDP/TLS/RTP/SAVPF %d", srv->udp_port, wpt);
 		APPEND("c=IN %s %s", ip_ver, srv->local_ip);
 		APPEND("a=rtcp-mux");
 		APPEND("a=rtcp-rsize");
@@ -286,12 +321,14 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 		APPEND("a=setup:passive");
 		APPEND("a=mid:%s", c->offer.mid_audio[0] ? c->offer.mid_audio : "1");
 		APPEND("a=sendrecv");
-		/* NOTE: sdes:mid extmap intentionally omitted — pion requires
-		 * HandleUndeclaredSSRCWithoutAnswer for PT-based track matching.
-		 * go2rtc sets this internally for webrtc: sources. */
-		APPEND("a=rtpmap:%d opus/48000/2", c->offer.audio_pt);
-		APPEND("a=fmtp:%d minptime=10;useinbandfec=1", c->offer.audio_pt);
-		APPEND("a=rtpmap:0 PCMU/8000");
+		if (wc == RWD_CODEC_PCMU)
+			APPEND("a=rtpmap:0 PCMU/8000");
+		else if (wc == RWD_CODEC_PCMA)
+			APPEND("a=rtpmap:8 PCMA/8000");
+		else {
+			APPEND("a=rtpmap:%d opus/48000/2", wpt);
+			APPEND("a=fmtp:%d minptime=10;useinbandfec=1", wpt);
+		}
 		APPEND("a=ssrc:%u cname:raptor", c->audio_ssrc);
 		APPEND("a=candidate:1 1 UDP 2130706431 %s %d typ host", srv->local_ip,
 		       srv->udp_port);

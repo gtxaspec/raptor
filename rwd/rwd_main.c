@@ -616,6 +616,19 @@ int main(int argc, char **argv)
 		srv.max_clients = 1;
 	if (srv.max_clients > RWD_MAX_CLIENTS)
 		srv.max_clients = RWD_MAX_CLIENTS;
+	const char *audio_mode_str = rss_config_get_str(dctx.cfg, "webrtc", "audio_mode", "auto");
+	srv.audio_mode =
+		(strcmp(audio_mode_str, "opus") == 0) ? RWD_AUDIO_MODE_OPUS : RWD_AUDIO_MODE_AUTO;
+	srv.opus_complexity = rss_config_get_int(dctx.cfg, "webrtc", "opus_complexity", 2);
+	if (srv.opus_complexity < 0)
+		srv.opus_complexity = 0;
+	if (srv.opus_complexity > 10)
+		srv.opus_complexity = 10;
+	srv.opus_bitrate = rss_config_get_int(dctx.cfg, "webrtc", "opus_bitrate", 64000);
+	/* Defaults until audio reader detects ring codec */
+	srv.wire_codec = RWD_CODEC_OPUS;
+	srv.wire_pt = RWD_AUDIO_PT;
+	srv.wire_clock = RWD_AUDIO_CLOCK;
 	pthread_mutex_init(&srv.clients_lock, NULL);
 
 	/* Initialize CRC32 table before any threads start */

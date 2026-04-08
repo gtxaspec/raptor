@@ -44,6 +44,17 @@
 #define RWD_VIDEO_CLOCK 90000
 #define RWD_AUDIO_CLOCK 48000 /* Opus RTP clock per RFC 7587 */
 
+/* Audio codec IDs (matches RAD ring codec field) */
+#define RWD_CODEC_PCMU 0
+#define RWD_CODEC_PCMA 8
+#define RWD_CODEC_L16  11
+#define RWD_CODEC_AAC  97
+#define RWD_CODEC_OPUS 111
+
+/* Audio wire mode: how RWD sends audio to browsers */
+#define RWD_AUDIO_MODE_OPUS 0 /* always transcode to Opus */
+#define RWD_AUDIO_MODE_AUTO 1 /* passthrough when possible */
+
 /* STUN constants (RFC 5389) */
 #define STUN_HEADER_SIZE	    20
 #define STUN_MAGIC_COOKIE	    0x2112A442
@@ -78,6 +89,8 @@ typedef struct {
 	int video_pt;	      /* browser's H264 payload type (-1 if none) */
 	char video_fmtp[256]; /* browser's fmtp for the matched H264 PT */
 	int audio_pt;	      /* browser's Opus payload type (-1 if none) */
+	bool has_pcmu;	      /* browser offered PCMU (PT 0) */
+	bool has_pcma;	      /* browser offered PCMA (PT 8) */
 	char mid_video[16];   /* BUNDLE mid for video */
 	char mid_audio[16];   /* BUNDLE mid for audio */
 
@@ -206,6 +219,12 @@ struct rwd_server {
 	rss_ring_t *audio_ring;
 	uint64_t audio_read_seq;
 	bool has_audio;
+	int audio_mode;	     /* RWD_AUDIO_MODE_OPUS or _AUTO */
+	int opus_complexity; /* 0-10 for transcode encoder */
+	int opus_bitrate;    /* bps for transcode encoder */
+	int wire_codec;	     /* codec actually sent on the wire (set by audio reader) */
+	int wire_pt;	     /* RTP payload type for wire codec */
+	int wire_clock;	     /* RTP clock rate for wire codec */
 
 	int udp_port;
 	int http_port;
