@@ -58,7 +58,11 @@ int main(int argc, char **argv)
 	srv.cfg = dctx.cfg;
 	srv.config_path = dctx.config_path;
 	srv.running = dctx.running;
-	srv.port = rss_config_get_int(dctx.cfg, "rtsp", "port", 554);
+	bool tls_enabled = false;
+#ifdef COMPY_HAS_TLS
+	tls_enabled = rss_config_get_bool(dctx.cfg, "rtsp", "tls", false);
+#endif
+	srv.port = rss_config_get_int(dctx.cfg, "rtsp", "port", tls_enabled ? 322 : 554);
 	srv.max_clients = rss_config_get_int(dctx.cfg, "rtsp", "max_clients", RSD_MAX_CLIENTS);
 	if (srv.max_clients < 1)
 		srv.max_clients = 1;
@@ -91,22 +95,21 @@ int main(int argc, char **argv)
 	}
 
 #ifdef COMPY_HAS_TLS
-	/* RTSPS — enabled when tls = true and cert/key paths are set */
-	const char *tls_cert = rss_config_get_str(dctx.cfg, "rtsp", "tls_cert", "");
-	const char *tls_key = rss_config_get_str(dctx.cfg, "rtsp", "tls_key", "");
-	if (rss_config_get_bool(dctx.cfg, "rtsp", "tls", false) && tls_cert[0] && tls_key[0]) {
+	/* RTSPS — enabled when tls = true in config */
+	if (tls_enabled) {
+		const char *tls_cert = rss_config_get_str(dctx.cfg, "rtsp", "tls_cert",
+							  "/etc/ssl/certs/uhttpd.crt");
+		const char *tls_key = rss_config_get_str(dctx.cfg, "rtsp", "tls_key",
+							 "/etc/ssl/private/uhttpd.key");
 		Compy_TlsConfig tls_cfg = {.cert_path = tls_cert, .key_path = tls_key};
 		srv.tls_ctx = Compy_TlsContext_new(tls_cfg);
 		if (srv.tls_ctx) {
-			/* RTSPS: use tls_port if set, otherwise fall back to port */
-			srv.port = rss_config_get_int(dctx.cfg, "rtsp", "tls_port", srv.port);
 			RSS_INFO("RTSPS enabled (cert=%s, port=%d)", tls_cert, srv.port);
 		} else {
-			RSS_FATAL("TLS enabled but failed to load cert/key (cert=%s, key=%s)",
-				  tls_cert, tls_key);
-			rss_config_free(dctx.cfg);
-			rss_daemon_cleanup("rsd");
-			return 1;
+			RSS_WARN("TLS enabled but cert/key not usable (cert=%s, key=%s), "
+				 "falling back to plain RTSP on port 554",
+				 tls_cert, tls_key);
+			srv.port = 554;
 		}
 	}
 #endif
