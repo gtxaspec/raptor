@@ -56,7 +56,7 @@ $CC $CFLAGS -c "$COMMON_DIR/src/rss_log.c" -o "$OUT/rss_log.o"
 $CC $CFLAGS -c "$COMMON_DIR/src/rss_config.c" -o "$OUT/rss_config.o"
 $CC $CFLAGS -c "$COMMON_DIR/src/rss_daemon.c" -o "$OUT/rss_daemon.o"
 $CC $CFLAGS -c "$COMMON_DIR/src/rss_util.c" -o "$OUT/rss_util.o"
-$CC $CFLAGS -c "$COMMON_DIR/src/rss_ctrl.c" -o "$OUT/rss_ctrl_common.o"
+$CC $CFLAGS -c "$COMMON_DIR/src/rss_ctrl_cmds.c" -o "$OUT/rss_ctrl_common.o"
 $CC $CFLAGS -c "$COMMON_DIR/src/rss_http.c" -o "$OUT/rss_http.o"
 # Build info stub
 cat > "$OUT/rss_build_info.c" << 'BUILDEOF'
