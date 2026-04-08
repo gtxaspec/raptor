@@ -93,12 +93,14 @@ int http_send_async(rhd_client_t *c, int epoll_fd, const char *content_type, con
 			    "\r\n",
 			    content_type, body_len);
 
-	c->send_buf = malloc((uint32_t)hlen + body_len);
+	if (hlen < 0)
+		return -1;
+	c->send_buf = malloc((size_t)hlen + body_len);
 	if (!c->send_buf)
 		return -1;
-	memcpy(c->send_buf, header, hlen);
+	memcpy(c->send_buf, header, (size_t)hlen);
 	memcpy(c->send_buf + hlen, body, body_len);
-	c->send_len = (uint32_t)hlen + body_len;
+	c->send_len = (uint32_t)((size_t)hlen + body_len);
 	c->send_off = 0;
 
 	struct timespec ts;
@@ -199,11 +201,13 @@ int http_send_mjpeg_frame(rhd_client_t *c, const uint8_t *data, uint32_t len)
 
 	/* Combine header + JPEG + CRLF into a single write to avoid
 	 * TLS record fragmentation that causes render flicker in browsers. */
-	uint32_t total = (uint32_t)hlen + len + 2;
+	if (hlen < 0)
+		return -1;
+	size_t total = (size_t)hlen + len + 2;
 	uint8_t *frame = malloc(total);
 	if (!frame)
 		return -1;
-	memcpy(frame, part_hdr, hlen);
+	memcpy(frame, part_hdr, (size_t)hlen);
 	memcpy(frame + hlen, data, len);
 	frame[hlen + len] = '\r';
 	frame[hlen + len + 1] = '\n';
