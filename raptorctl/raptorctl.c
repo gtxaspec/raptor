@@ -36,6 +36,7 @@
  *   raptorctl rod set-text <text>          Change OSD text string
  */
 
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -168,6 +169,66 @@ static int read_smaps(int pid, long *priv_kb, long *shared_kb)
 	return 0;
 }
 
+/* Raptor threads use pthread_attr_setstacksize (128KB or 64KB).
+ * SDK/library threads use the default (~2MB). Threshold to distinguish. */
+#define RAPTOR_STACK_THRESHOLD 256 /* KB — anything above is SDK */
+
+/* Sum all per-thread stack sizes via /proc/pid/task/tid/smaps.
+ * Each thread has an anonymous [stack] mapping with Size and Rss.
+ * Splits into raptor vs SDK based on stack allocation size. */
+typedef struct {
+	long raptor_alloc, raptor_used;
+	long sdk_alloc, sdk_used;
+} stack_info_t;
+
+static void read_total_stack(int pid, stack_info_t *info)
+{
+	memset(info, 0, sizeof(*info));
+
+	char task_dir[64];
+	snprintf(task_dir, sizeof(task_dir), "/proc/%d/task", pid);
+	DIR *d = opendir(task_dir);
+	if (!d)
+		return;
+
+	struct dirent *ent;
+	while ((ent = readdir(d)) != NULL) {
+		if (ent->d_name[0] == '.')
+			continue;
+		char smaps_path[128];
+		snprintf(smaps_path, sizeof(smaps_path), "%s/%s/smaps", task_dir, ent->d_name);
+		FILE *f = fopen(smaps_path, "r");
+		if (!f)
+			continue;
+		char line[256];
+		int in_stack = 0;
+		long sz = 0, rss = 0;
+		while (fgets(line, sizeof(line), f)) {
+			if (strstr(line, "[stack]")) {
+				in_stack = 1;
+				sz = rss = 0;
+			} else if (in_stack) {
+				long val;
+				if (sscanf(line, "Size: %ld kB", &val) == 1) {
+					sz = val;
+				} else if (sscanf(line, "Rss: %ld kB", &val) == 1) {
+					rss = val;
+					if (sz > RAPTOR_STACK_THRESHOLD) {
+						info->sdk_alloc += sz;
+						info->sdk_used += rss;
+					} else {
+						info->raptor_alloc += sz;
+						info->raptor_used += rss;
+					}
+					in_stack = 0;
+				}
+			}
+		}
+		fclose(f);
+	}
+	closedir(d);
+}
+
 /* Read utime + stime (in clock ticks) from /proc/<pid>/stat.
  * Fields 14 and 15 (1-indexed) in the stat line. Also reads
  * num_threads (field 20) and vsize (field 23, in bytes). */
@@ -272,8 +333,8 @@ static void cmd_cpu(void)
 		idx++;
 	}
 
-	printf("%-6s  %6s  %7s  %6s\n", "DAEMON", "CPU %", "THREADS", "VSIZE");
-	printf("%-6s  %6s  %7s  %6s\n", "------", "-----", "-------", "-----");
+	printf("%-6s  %6s  %7s\n", "DAEMON", "CPU %", "THREADS");
+	printf("%-6s  %6s  %7s\n", "------", "-----", "-------");
 
 	double total_cpu = 0;
 	idx = 0;
@@ -284,11 +345,10 @@ static void cmd_cpu(void)
 		unsigned long delta = s2[idx].ticks - s1[idx].ticks;
 		double pct = 100.0 * (double)delta / (double)total_delta;
 		total_cpu += pct;
-		printf("%-6s  %5.1f%%  %7d  %4lu KB\n", daemons[i], pct, s2[idx].threads,
-		       s2[idx].vsize / 1024);
+		printf("%-6s  %5.1f%%  %7d\n", daemons[i], pct, s2[idx].threads);
 		idx++;
 	}
-	printf("%-6s  %6s  %7s  %6s\n", "------", "-----", "-------", "-----");
+	printf("%-6s  %6s  %7s\n", "------", "-----", "-------");
 	printf("%-6s  %5.1f%%\n", "TOTAL", total_cpu);
 }
 
@@ -308,8 +368,9 @@ static void cmd_memory(void)
 	long total_priv = 0, total_shared = 0;
 	int running = 0;
 
-	printf("%-6s  %8s  %8s  %8s\n", "DAEMON", "PRIVATE", "SHARED", "RSS");
-	printf("%-6s  %8s  %8s  %8s\n", "------", "-------", "------", "---");
+#define MEM_HDR "%-6s  %9s  %9s  %9s  %13s  %13s  %9s\n"
+	printf(MEM_HDR, "DAEMON", "PRIVATE", "SHARED", "RSS", "STACK raptor", "STACK sdk", "VSIZE");
+	printf(MEM_HDR, "------", "-------", "------", "---", "------------", "---------", "-----");
 
 	for (int i = 0; daemons[i]; i++) {
 		int pid = rss_daemon_check(daemons[i]);
@@ -320,8 +381,15 @@ static void cmd_memory(void)
 		if (read_smaps(pid, &priv, &shared) < 0)
 			continue;
 
-		printf("%-6s  %6ld KB  %6ld KB  %6ld KB\n", daemons[i], priv, shared,
-		       priv + shared);
+		unsigned long ticks, vsize;
+		int threads;
+		read_proc_stat(pid, &ticks, &threads, &vsize);
+		stack_info_t stk;
+		read_total_stack(pid, &stk);
+
+		printf("%-6s  %6ld KB  %6ld KB  %6ld KB  %3ld/%-5ld KB  %3ld/%-5ld KB  %6lu KB\n",
+		       daemons[i], priv, shared, priv + shared, stk.raptor_used, stk.raptor_alloc,
+		       stk.sdk_used, stk.sdk_alloc, vsize / 1024);
 		total_priv += priv;
 		total_shared += shared;
 		running++;
@@ -332,23 +400,58 @@ static void cmd_memory(void)
 		return;
 	}
 
-	/* SHM rings are shared — count them once */
-	long shm_total = 0;
-	FILE *f = popen("du -sk /dev/shm/rss_ring_* /dev/shm/rss_osd_* 2>/dev/null", "r");
+	/* SHM breakdown — list individual rings and OSD buffers */
+	long shm_rings = 0, shm_osd = 0;
+
+	printf(MEM_HDR, "------", "-------", "------", "---", "------------", "---------", "-----");
+	printf("%-6s  %6ld KB  %6ld KB\n", "TOTAL", total_priv, total_shared);
+
+	printf("\nSHM rings:\n");
+	FILE *f = popen("ls -l /dev/shm/rss_ring_* 2>/dev/null", "r");
 	if (f) {
-		char line[256];
-		long val;
+		char line[512];
 		while (fgets(line, sizeof(line), f)) {
-			if (sscanf(line, "%ld", &val) == 1)
-				shm_total += val;
+			long sz;
+			char name[128];
+			/* ls -l: perms links owner group size date date date name */
+			if (sscanf(line, "%*s %*s %*s %*s %ld %*s %*s %*s %127s", &sz, name) == 2) {
+				const char *base = strrchr(name, '/');
+				base = base ? base + 1 : name;
+				/* strip rss_ring_ prefix */
+				const char *label = base;
+				if (strncmp(label, "rss_ring_", 9) == 0)
+					label += 9;
+				printf("  %-20s %6ld KB\n", label, sz / 1024);
+				shm_rings += sz / 1024;
+			}
 		}
 		pclose(f);
 	}
 
-	printf("%-6s  %8s  %8s  %8s\n", "------", "-------", "------", "---");
-	printf("%-6s  %6ld KB  %6ld KB\n", "TOTAL", total_priv, total_shared);
-	printf("\nSHM rings + OSD: %ld KB (shared, counted once)\n", shm_total);
-	printf("Actual memory:   %ld KB (private + SHM)\n", total_priv + shm_total);
+	printf("OSD buffers:\n");
+	f = popen("ls -l /dev/shm/rss_osd_* 2>/dev/null", "r");
+	if (f) {
+		char line[512];
+		while (fgets(line, sizeof(line), f)) {
+			long sz;
+			char name[128];
+			if (sscanf(line, "%*s %*s %*s %*s %ld %*s %*s %*s %127s", &sz, name) == 2) {
+				const char *base = strrchr(name, '/');
+				base = base ? base + 1 : name;
+				const char *label = base;
+				if (strncmp(label, "rss_osd_", 8) == 0)
+					label += 8;
+				printf("  %-20s %6ld KB\n", label, sz / 1024);
+				shm_osd += sz / 1024;
+			}
+		}
+		pclose(f);
+	}
+
+	long shm_total = shm_rings + shm_osd;
+	printf("SHM total: %ld KB (rings %ld KB + OSD %ld KB)\n", shm_total, shm_rings, shm_osd);
+	printf("Actual memory: %ld KB (private + SHM)\n", total_priv + shm_total);
+	printf("Note: STACK is included in PRIVATE (not additional)\n");
 }
 
 static void daemon_help(const char *name)
