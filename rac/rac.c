@@ -129,7 +129,8 @@ int main(int argc, char **argv)
 			return 1;
 		}
 		char json[128];
-		snprintf(json, sizeof(json), "{\"cmd\":\"ao-set-volume\",\"value\":%s}", argv[2]);
+		long val = strtol(argv[2], NULL, 10);
+		snprintf(json, sizeof(json), "{\"cmd\":\"ao-set-volume\",\"value\":%ld}", val);
 		return cmd_ctrl(json);
 
 	} else if (strcmp(cmd, "ao-gain") == 0) {
@@ -138,7 +139,8 @@ int main(int argc, char **argv)
 			return 1;
 		}
 		char json[128];
-		snprintf(json, sizeof(json), "{\"cmd\":\"ao-set-gain\",\"value\":%s}", argv[2]);
+		long val = strtol(argv[2], NULL, 10);
+		snprintf(json, sizeof(json), "{\"cmd\":\"ao-set-gain\",\"value\":%ld}", val);
 		return cmd_ctrl(json);
 
 	} else if (strcmp(cmd, "-h") == 0 || strcmp(cmd, "help") == 0) {
