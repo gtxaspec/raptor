@@ -50,8 +50,43 @@ static void *encoder_thread(void *arg)
 
 	uint64_t frame_count = 0;
 	int64_t last_stats = rss_timestamp_us();
+	int64_t last_reap = last_stats;
 
 	while (*st->running) {
+		/* JPEG on-demand: start/stop encoder based on ring consumers */
+		if (s->is_jpeg && s->jpeg_idle && s->ring) {
+			/* Periodically check for crashed consumers (~10s) */
+			int64_t now_reap = rss_timestamp_us();
+			if (now_reap - last_reap >= 10000000) {
+				RSS_DEBUG("jpeg chn %d: reap check (readers=%u pids=[%u,%u,%u,%u])",
+					  s->chn, rss_ring_reader_count(s->ring),
+					  rss_ring_get_header(s->ring)->reader_pids[0],
+					  rss_ring_get_header(s->ring)->reader_pids[1],
+					  rss_ring_get_header(s->ring)->reader_pids[2],
+					  rss_ring_get_header(s->ring)->reader_pids[3]);
+				uint32_t reaped = rss_ring_reap_dead_readers(s->ring);
+				if (reaped)
+					RSS_WARN("jpeg chn %d: reaped %u dead reader(s)", s->chn, reaped);
+				last_reap = now_reap;
+			}
+
+			if (rss_ring_reader_count(s->ring) == 0) {
+				if (s->enabled) {
+					RSS_HAL_CALL(st->ops, enc_stop, st->hal_ctx, s->chn);
+					s->enabled = false;
+					RSS_INFO("jpeg chn %d: stopped (no consumers)", s->chn);
+				}
+				usleep(100000);
+				continue;
+			}
+			if (!s->enabled) {
+				RSS_HAL_CALL(st->ops, enc_start, st->hal_ctx, s->chn);
+				s->enabled = true;
+				RSS_INFO("jpeg chn %d: started (%u consumers)", s->chn,
+					 rss_ring_reader_count(s->ring));
+			}
+		}
+
 		/* Check for consumer IDR request (set via ring header flag) */
 		if (s->ring && rss_ring_check_idr(s->ring))
 			RSS_HAL_CALL(st->ops, enc_request_idr, st->hal_ctx, s->chn);

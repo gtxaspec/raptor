@@ -539,6 +539,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 			st->streams[ji].chn = jpeg_chn;
 			st->streams[ji].sensor_idx = st->streams[v].sensor_idx;
 			st->streams[ji].is_jpeg = true;
+			st->streams[ji].jpeg_idle = rss_config_get_bool(cfg, "jpeg", "idle", true);
 			st->streams[ji].enc_cfg.init_qp = quality;
 			st->jpeg_streams[st->jpeg_count] = ji;
 			st->stream_count = ji + 1;
@@ -814,22 +815,30 @@ int rvd_pipeline_init(rvd_state_t *st)
 			}
 		}
 
-		ret = RSS_HAL_CALL(st->ops, enc_start, st->hal_ctx, chn);
-		if (ret != RSS_OK) {
-			RSS_FATAL("enc_start(%d) failed: %d", i, ret);
-			return ret;
-		}
-
-		st->streams[i].enabled = true;
-		if (st->streams[i].is_jpeg) {
-			RSS_INFO("stream%d: %ux%u JPEG @ %u fps, quality %d", i,
+		/* JPEG channels start on-demand (when a ring consumer connects)
+		 * to avoid VPU overhead that halves H.264 FPS on shared groups. */
+		if (st->streams[i].is_jpeg && st->streams[i].jpeg_idle) {
+			st->streams[i].enabled = false;
+			RSS_INFO("stream%d: %ux%u JPEG @ %u fps, quality %d (on-demand)", i,
 				 st->streams[i].enc_cfg.width, st->streams[i].enc_cfg.height,
 				 st->streams[i].enc_cfg.fps_num, st->streams[i].enc_cfg.init_qp);
 		} else {
-			RSS_INFO("stream%d: %ux%u %s @ %u fps, %u bps", i,
-				 st->streams[i].enc_cfg.width, st->streams[i].enc_cfg.height,
-				 st->streams[i].enc_cfg.codec == RSS_CODEC_H265 ? "H.265" : "H.264",
-				 st->streams[i].enc_cfg.fps_num, st->streams[i].enc_cfg.bitrate);
+			ret = RSS_HAL_CALL(st->ops, enc_start, st->hal_ctx, chn);
+			if (ret != RSS_OK) {
+				RSS_FATAL("enc_start(%d) failed: %d", i, ret);
+				return ret;
+			}
+			st->streams[i].enabled = true;
+			if (st->streams[i].is_jpeg) {
+				RSS_INFO("stream%d: %ux%u JPEG @ %u fps, quality %d (always-on)", i,
+					 st->streams[i].enc_cfg.width, st->streams[i].enc_cfg.height,
+					 st->streams[i].enc_cfg.fps_num, st->streams[i].enc_cfg.init_qp);
+			} else {
+				RSS_INFO("stream%d: %ux%u %s @ %u fps, %u bps", i,
+					 st->streams[i].enc_cfg.width, st->streams[i].enc_cfg.height,
+					 st->streams[i].enc_cfg.codec == RSS_CODEC_H265 ? "H.265" : "H.264",
+					 st->streams[i].enc_cfg.fps_num, st->streams[i].enc_cfg.bitrate);
+			}
 		}
 	}
 

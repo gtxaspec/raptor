@@ -31,7 +31,8 @@ typedef struct {
 	int sensor_idx;	  /* which sensor (0, 1, 2) */
 	char cfg_sect[32]; /* config section name (e.g. "stream0", "sensor1_stream0") */
 	bool enabled;
-	bool is_jpeg; /* true for snapshot channel */
+	bool is_jpeg;  /* true for snapshot channel */
+	bool jpeg_idle; /* true = stop encoder when no consumers */
 } rvd_stream_t;
 
 /* Per-OSD-region state */

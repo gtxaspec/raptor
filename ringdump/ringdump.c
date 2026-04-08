@@ -91,11 +91,16 @@ static void print_header(const rss_ring_header_t *hdr, const char *name)
 		"  FPS:       %u/%u\n"
 		"  Slots:     %u\n"
 		"  Data:      %u bytes (%.1f MB)\n"
-		"  Write seq: %" PRIu64 "\n",
+		"  Write seq: %" PRIu64 "\n"
+		"  Readers:   %u\n"
+		"  PIDs:      [%u, %u, %u, %u]\n",
 		name, hdr->magic, (hdr->magic == RSS_RING_MAGIC) ? "OK" : "BAD", hdr->version,
 		hdr->stream_id, codec_str(hdr->codec), hdr->codec, hdr->width, hdr->height,
 		hdr->fps_num, hdr->fps_den, hdr->slot_count, hdr->data_size,
-		(double)hdr->data_size / (1024.0 * 1024.0), atomic_load(&hdr->write_seq));
+		(double)hdr->data_size / (1024.0 * 1024.0), atomic_load(&hdr->write_seq),
+		atomic_load(&hdr->reader_count),
+		atomic_load(&hdr->reader_pids[0]), atomic_load(&hdr->reader_pids[1]),
+		atomic_load(&hdr->reader_pids[2]), atomic_load(&hdr->reader_pids[3]));
 }
 
 static int64_t clock_monotonic_raw_us(void)
@@ -166,17 +171,20 @@ int main(int argc, char **argv)
 
 	signal(SIGINT, sighandler);
 	signal(SIGTERM, sighandler);
+	signal(SIGPIPE, SIG_IGN);
 
 	rss_ring_t *ring = rss_ring_open(ring_name);
 	if (!ring) {
 		fprintf(stderr, "Cannot open ring '%s' -- not created yet?\n", ring_name);
 		return 1;
 	}
+	rss_ring_acquire(ring);
 
 	const rss_ring_header_t *hdr = rss_ring_get_header(ring);
 	print_header(hdr, ring_name);
 
 	if (!follow && !dump_raw && !latency_mode) {
+		rss_ring_release(ring);
 		rss_ring_close(ring);
 		return 0;
 	}
@@ -201,6 +209,7 @@ int main(int argc, char **argv)
 	uint8_t *frame_buf = malloc(buf_size);
 	if (!frame_buf) {
 		fprintf(stderr, "Failed to allocate %u byte read buffer\n", buf_size);
+		rss_ring_release(ring);
 		rss_ring_close(ring);
 		return 1;
 	}
@@ -286,6 +295,7 @@ int main(int argc, char **argv)
 			(double)lat_max / 1000.0, lat_count);
 
 	free(frame_buf);
+	rss_ring_release(ring);
 	rss_ring_close(ring);
 	return 0;
 }
