@@ -1,4 +1,4 @@
-SRCS := raptorctl.c
+SRCS := raptorctl.c raptorctl_info.c
 OBJS := $(SRCS:.c=.o)
 BIN  := raptorctl
 
