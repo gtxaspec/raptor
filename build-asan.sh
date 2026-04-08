@@ -83,7 +83,8 @@ LIBS_HAL="$OUT/libmock_hal.a $LIBS"
 
 echo "=== RHD ==="
 $CC $CFLAGS -c "$RAPTOR_DIR/rhd/rhd_main.c" -o "$OUT/rhd_main.o"
-$CC -o "$OUT/rhd" "$OUT/rhd_main.o" $LIBS $LDFLAGS
+$CC $CFLAGS -c "$RAPTOR_DIR/rhd/rhd_http.c" -o "$OUT/rhd_http.o"
+$CC -o "$OUT/rhd" "$OUT/rhd_main.o" "$OUT/rhd_http.o" $LIBS $LDFLAGS
 echo "  -> rhd"
 
 echo "=== RSD ==="
@@ -123,7 +124,8 @@ echo "  -> rmr"
 
 echo "=== raptorctl ==="
 $CC $CFLAGS -c "$RAPTOR_DIR/raptorctl/raptorctl.c" -o "$OUT/raptorctl.o"
-$CC -o "$OUT/raptorctl" "$OUT/raptorctl.o" $LIBS $LDFLAGS
+$CC $CFLAGS -c "$RAPTOR_DIR/raptorctl/raptorctl_info.c" -o "$OUT/raptorctl_info.o"
+$CC -o "$OUT/raptorctl" "$OUT/raptorctl.o" "$OUT/raptorctl_info.o" $LIBS $LDFLAGS
 echo "  -> raptorctl"
 
 echo "=== ringdump ==="
@@ -156,7 +158,9 @@ echo "  -> rad"
 
 echo "=== rac ==="
 $CC $CFLAGS -c "$RAPTOR_DIR/rac/rac.c" -o "$OUT/rac.o"
-$CC -o "$OUT/rac" "$OUT/rac.o" $LIBS $LDFLAGS
+$CC $CFLAGS -c "$RAPTOR_DIR/rac/rac_record.c" -o "$OUT/rac_record.o"
+$CC $CFLAGS -c "$RAPTOR_DIR/rac/rac_play.c" -o "$OUT/rac_play.o"
+$CC -o "$OUT/rac" "$OUT/rac.o" "$OUT/rac_record.o" "$OUT/rac_play.o" $LIBS $LDFLAGS
 echo "  -> rac"
 
 echo "=== create_rings ==="
