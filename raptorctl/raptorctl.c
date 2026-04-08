@@ -220,7 +220,7 @@ static void read_total_stack(int pid, stack_info_t *info)
 						info->raptor_alloc += sz;
 						info->raptor_used += rss;
 					}
-					in_stack = 0;
+					break; /* one [stack] per thread */
 				}
 			}
 		}
@@ -387,7 +387,7 @@ static void cmd_memory(void)
 		stack_info_t stk;
 		read_total_stack(pid, &stk);
 
-		printf("%-6s  %6ld KB  %6ld KB  %6ld KB  %3ld/%-5ld KB  %3ld/%-5ld KB  %6lu KB\n",
+		printf("%-6s  %6ld KB  %6ld KB  %6ld KB  %4ld/%5ld KB  %4ld/%5ld KB  %6lu KB\n",
 		       daemons[i], priv, shared, priv + shared, stk.raptor_used, stk.raptor_alloc,
 		       stk.sdk_used, stk.sdk_alloc, vsize / 1024);
 		total_priv += priv;
