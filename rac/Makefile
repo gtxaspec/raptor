@@ -1,4 +1,4 @@
-SRCS := rac.c
+SRCS := rac.c rac_record.c rac_play.c
 OBJS := $(SRCS:.c=.o)
 BIN  := rac
 
