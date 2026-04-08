@@ -218,14 +218,14 @@ int main(int argc, char **argv)
 		return ret < 0 ? 1 : 0;
 	RSS_BANNER("ric");
 
+	ric_state_t st = {0};
+	int epoll_fd = -1;
+
 	if (!rss_config_get_bool(ctx.cfg, "ircut", "enabled", true)) {
 		RSS_INFO("IR-cut control disabled in config, exiting");
-		rss_config_free(ctx.cfg);
-		rss_daemon_cleanup("ric");
-		return 0;
+		goto cleanup;
 	}
 
-	ric_state_t st = {0};
 	st.cfg = ctx.cfg;
 	st.config_path = ctx.config_path;
 	st.running = ctx.running;
@@ -270,7 +270,6 @@ int main(int argc, char **argv)
 	rss_mkdir_p("/var/run/rss");
 	st.ctrl = rss_ctrl_listen("/var/run/rss/ric.sock");
 
-	int epoll_fd = -1;
 	int ctrl_fd = st.ctrl ? rss_ctrl_get_fd(st.ctrl) : -1;
 	if (ctrl_fd >= 0) {
 		epoll_fd = epoll_create1(0);
@@ -303,15 +302,13 @@ int main(int argc, char **argv)
 
 	RSS_INFO("ric shutting down");
 
+cleanup:
 	ric_adc_cleanup(&st);
-
 	if (epoll_fd >= 0)
 		close(epoll_fd);
 	if (st.ctrl)
 		rss_ctrl_destroy(st.ctrl);
-
 	rss_config_free(ctx.cfg);
 	rss_daemon_cleanup("ric");
-
 	return 0;
 }

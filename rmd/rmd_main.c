@@ -136,18 +136,18 @@ int main(int argc, char **argv)
 		return ret < 0 ? 1 : 0;
 	RSS_BANNER("rmd");
 
+	rmd_ctx_t ctx = {0};
+	ctx.settings.gpio_pin = -1;
+	int epoll_fd = -1;
+
 	if (!rss_config_get_bool(dctx.cfg, "motion", "enabled", false)) {
 		RSS_INFO("motion detection disabled in config");
-		rss_config_free(dctx.cfg);
-		rss_daemon_cleanup("rmd");
-		return 0;
+		goto cleanup;
 	}
 
-	rmd_ctx_t ctx = {0};
 	ctx.cfg = dctx.cfg;
 	ctx.config_path = dctx.config_path;
 	ctx.running = dctx.running;
-	ctx.settings.gpio_pin = -1;
 	load_config(&ctx);
 
 	/* Wait for RVD control socket */
@@ -171,7 +171,7 @@ int main(int argc, char **argv)
 	rss_mkdir_p("/var/run/rss");
 	ctx.ctrl = rss_ctrl_listen("/var/run/rss/rmd.sock");
 
-	int epoll_fd = epoll_create1(0);
+	epoll_fd = epoll_create1(0);
 	int ctrl_fd = -1;
 	if (ctx.ctrl && epoll_fd >= 0) {
 		ctrl_fd = rss_ctrl_get_fd(ctx.ctrl);
@@ -204,17 +204,15 @@ int main(int argc, char **argv)
 
 	RSS_INFO("rmd shutting down");
 
-	/* Clean stop */
+cleanup:
 	if (ctx.recording_active)
 		rmd_trigger_recording(&ctx, false);
 	rmd_gpio_set(&ctx, false);
-
 	if (ctx.ctrl)
 		rss_ctrl_destroy(ctx.ctrl);
 	if (epoll_fd >= 0)
 		close(epoll_fd);
 	rss_config_free(dctx.cfg);
 	rss_daemon_cleanup("rmd");
-
 	return 0;
 }

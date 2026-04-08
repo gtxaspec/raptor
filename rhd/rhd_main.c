@@ -865,19 +865,18 @@ int main(int argc, char **argv)
 	}
 #endif
 
-	if (server_init(&srv) < 0) {
-		rss_config_free(ctx.cfg);
-		return 1;
-	}
+	if (server_init(&srv) < 0)
+		goto cleanup;
 
 	server_run(&srv);
 
 	RSS_INFO("rhd shutting down");
+
+cleanup:
 #ifdef RSS_HAS_TLS
 	rss_tls_free(srv.tls);
 #endif
 	rss_config_free(ctx.cfg);
 	rss_daemon_cleanup("rhd");
-
 	return 0;
 }
