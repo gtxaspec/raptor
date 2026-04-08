@@ -495,9 +495,14 @@ static void rwd_run(rwd_server_t *srv)
 	}
 
 	/* Start media reader threads */
+	pthread_attr_t tattr;
+	pthread_attr_init(&tattr);
+	pthread_attr_setstacksize(&tattr, 128 * 1024);
+
 	pthread_t video_tid, audio_tid;
-	pthread_create(&video_tid, NULL, rwd_video_reader_thread, srv);
-	pthread_create(&audio_tid, NULL, rwd_audio_reader_thread, srv);
+	pthread_create(&video_tid, &tattr, rwd_video_reader_thread, srv);
+	pthread_create(&audio_tid, &tattr, rwd_audio_reader_thread, srv);
+	pthread_attr_destroy(&tattr);
 
 	uint8_t udp_buf[RWD_UDP_BUF_SIZE];
 	struct epoll_event events[16];
