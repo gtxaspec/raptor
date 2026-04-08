@@ -29,7 +29,7 @@
 #define RSD_CODEC_OPUS 111
 
 /* RTP payload types for audio */
-#define RSD_AUDIO_PT_L16   96  /* dynamic PT for L16 */
+#define RSD_AUDIO_PT_L16   98  /* dynamic PT for L16 */
 #define RSD_AUDIO_PT_AAC   97  /* dynamic PT for AAC (RFC 3640) */
 #define RSD_AUDIO_PT_OPUS  111 /* dynamic PT for Opus (RFC 7587) */
 #define RSD_BACKCHANNEL_PT 110 /* backchannel audio PT (PCMU default) */
