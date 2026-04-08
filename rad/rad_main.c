@@ -353,6 +353,21 @@ static void *ao_playback_thread(void *arg)
 	return NULL;
 }
 
+/* Bridge HAL logging into the daemon's syslog-aware logger */
+static const rss_log_level_t hal_level_map[] = {
+	[0] = RSS_LOG_FATAL, [1] = RSS_LOG_ERROR, [2] = RSS_LOG_WARN,
+	[3] = RSS_LOG_INFO,  [4] = RSS_LOG_DEBUG,
+};
+
+static void hal_log_bridge(int level, const char *file, int line, const char *fmt, ...)
+{
+	rss_log_level_t lvl = (level >= 0 && level <= 4) ? hal_level_map[level] : RSS_LOG_DEBUG;
+	va_list ap;
+	va_start(ap, fmt);
+	rss_vlog(lvl, file, line, fmt, ap);
+	va_end(ap);
+}
+
 int main(int argc, char **argv)
 {
 	rss_daemon_ctx_t dctx;
@@ -360,6 +375,7 @@ int main(int argc, char **argv)
 	if (ret != 0)
 		return ret < 0 ? 1 : 0;
 	RSS_BANNER("rad");
+	rss_hal_set_log_func(hal_log_bridge);
 
 	if (!rss_config_get_bool(dctx.cfg, "audio", "enabled", true)) {
 		RSS_INFO("audio disabled in config");

@@ -8,9 +8,33 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include <errno.h>
 #include <time.h>
 #include <raptor_hal.h>
+
+/* ── Log callback (matches hal_common.c) ── */
+
+static const char *mock_level_str[] = {"FTL", "ERR", "WRN", "INF", "DBG"};
+
+static void mock_log_stderr(int level, const char *file, int line, const char *fmt, ...)
+{
+	if (level < 0) level = 0;
+	if (level > 4) level = 4;
+	fprintf(stderr, "[HAL %s] %s:%d: ", mock_level_str[level], file, line);
+	va_list ap;
+	va_start(ap, fmt);
+	vfprintf(stderr, fmt, ap);
+	va_end(ap);
+	fputc('\n', stderr);
+}
+
+rss_hal_log_func_t rss_hal_log_fn = mock_log_stderr;
+
+void rss_hal_set_log_func(rss_hal_log_func_t func)
+{
+	rss_hal_log_fn = func ? func : mock_log_stderr;
+}
 
 /* Minimal internal context */
 struct rss_hal_ctx {
