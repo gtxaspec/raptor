@@ -429,36 +429,29 @@ static int rwd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		if (srv->webtorrent) {
 			rwd_webtorrent_t *wt = srv->webtorrent;
 			rwd_webtorrent_rotate_key(wt);
-			snprintf(resp_buf, resp_buf_size,
-				 "{\"status\":\"ok\",\"key\":\"%s\","
-				 "\"url\":\"%s#key=%s\"}",
-				 wt->share_key, wt->viewer_base_url, wt->share_key);
-		} else {
-			snprintf(resp_buf, resp_buf_size,
-				 "{\"status\":\"error\",\"message\":\"webtorrent not enabled\"}");
+			return rss_ctrl_resp(resp_buf, resp_buf_size,
+					     "{\"status\":\"ok\",\"key\":\"%s\","
+					     "\"url\":\"%s#key=%s\"}",
+					     wt->share_key, wt->viewer_base_url, wt->share_key);
 		}
-		return (int)strlen(resp_buf);
+		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "webtorrent not enabled");
 	}
 
 	if (strstr(cmd_json, "\"share\"")) {
 		if (srv->webtorrent) {
 			rwd_webtorrent_t *wt = srv->webtorrent;
-			snprintf(resp_buf, resp_buf_size,
-				 "{\"status\":\"ok\",\"key\":\"%s\","
-				 "\"url\":\"%s#key=%s\"}",
-				 wt->share_key, wt->viewer_base_url, wt->share_key);
-		} else {
-			snprintf(resp_buf, resp_buf_size,
-				 "{\"status\":\"error\",\"message\":\"webtorrent not enabled\"}");
+			return rss_ctrl_resp(resp_buf, resp_buf_size,
+					     "{\"status\":\"ok\",\"key\":\"%s\","
+					     "\"url\":\"%s#key=%s\"}",
+					     wt->share_key, wt->viewer_base_url, wt->share_key);
 		}
-		return (int)strlen(resp_buf);
+		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "webtorrent not enabled");
 	}
 
 	/* Default: status */
-	snprintf(resp_buf, resp_buf_size,
-		 "{\"status\":\"ok\",\"clients\":%d,\"udp_port\":%d,\"http_port\":%d}",
-		 srv->client_count, srv->udp_port, srv->http_port);
-	return (int)strlen(resp_buf);
+	return rss_ctrl_resp(resp_buf, resp_buf_size,
+			     "{\"status\":\"ok\",\"clients\":%d,\"udp_port\":%d,\"http_port\":%d}",
+			     srv->client_count, srv->udp_port, srv->http_port);
 }
 
 /* ── Main event loop ── */

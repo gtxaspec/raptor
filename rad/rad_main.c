@@ -61,8 +61,6 @@ static void rad_fmt_result(char *buf, int bufsz, int ret)
 		snprintf(buf, bufsz, "{\"status\":\"error\",\"reason\":\"failed (%d)\"}", ret);
 }
 
-#define CTRL_RESP(buf) return (int)strlen(buf)
-
 static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, void *userdata)
 {
 	rad_ctrl_ctx_t *ctx = userdata;
@@ -82,11 +80,9 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				rss_config_set_int(ctx->cfg, "audio", "volume", val);
 			}
 			rad_fmt_result(resp_buf, resp_buf_size, ret);
-		} else {
-			snprintf(resp_buf, resp_buf_size,
-				 "{\"status\":\"error\",\"reason\":\"need value\"}");
+			return (int)strlen(resp_buf);
 		}
-		CTRL_RESP(resp_buf);
+		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value");
 	}
 
 	if (strstr(cmd_json, "\"set-gain\"")) {
@@ -98,11 +94,9 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				rss_config_set_int(ctx->cfg, "audio", "gain", val);
 			}
 			rad_fmt_result(resp_buf, resp_buf_size, ret);
-		} else {
-			snprintf(resp_buf, resp_buf_size,
-				 "{\"status\":\"error\",\"reason\":\"need value\"}");
+			return (int)strlen(resp_buf);
 		}
-		CTRL_RESP(resp_buf);
+		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value");
 	}
 
 	if (strstr(cmd_json, "\"set-alc-gain\"")) {
@@ -111,18 +105,14 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 					       ctx->ai_dev, 0, val);
 			if (ret == 0) {
 				rss_config_set_int(ctx->cfg, "audio", "alc_gain", val);
-				snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
-			} else {
-				snprintf(resp_buf, resp_buf_size,
-					 "{\"status\":\"error\",\"reason\":\"%s\"}",
-					 ret == RSS_ERR_NOTSUP ? "not supported on this platform"
-							       : "failed");
+				return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
 			}
-		} else {
-			snprintf(resp_buf, resp_buf_size,
-				 "{\"status\":\"error\",\"reason\":\"need value 0-7\"}");
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+						   ret == RSS_ERR_NOTSUP
+							   ? "not supported on this platform"
+							   : "failed");
 		}
-		CTRL_RESP(resp_buf);
+		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value 0-7");
 	}
 
 #ifdef RAPTOR_AUDIO_EFFECTS
@@ -146,18 +136,14 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			if (ret == RSS_OK)
 				ctx->ns_enabled = !!val;
 			if (ret == RSS_ERR_NOTSUP)
-				snprintf(resp_buf, resp_buf_size,
-					 "{\"status\":\"error\",\"reason\":\"not supported on this "
-					 "SoC\"}");
-			else
-				snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\",\"ns\":%s}",
-					 ret == RSS_OK ? "ok" : "error",
-					 ctx->ns_enabled ? "true" : "false");
-		} else {
-			snprintf(resp_buf, resp_buf_size,
-				 "{\"status\":\"error\",\"reason\":\"need value (0/1)\"}");
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+							   "not supported on this SoC");
+			return rss_ctrl_resp(resp_buf, resp_buf_size,
+					     "{\"status\":\"%s\",\"ns\":%s}",
+					     ret == RSS_OK ? "ok" : "error",
+					     ctx->ns_enabled ? "true" : "false");
 		}
-		CTRL_RESP(resp_buf);
+		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value (0/1)");
 	}
 
 	if (strstr(cmd_json, "\"set-hpf\"")) {
@@ -170,18 +156,14 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			if (ret == RSS_OK)
 				ctx->hpf_enabled = !!val;
 			if (ret == RSS_ERR_NOTSUP)
-				snprintf(resp_buf, resp_buf_size,
-					 "{\"status\":\"error\",\"reason\":\"not supported on this "
-					 "SoC\"}");
-			else
-				snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\",\"hpf\":%s}",
-					 ret == RSS_OK ? "ok" : "error",
-					 ctx->hpf_enabled ? "true" : "false");
-		} else {
-			snprintf(resp_buf, resp_buf_size,
-				 "{\"status\":\"error\",\"reason\":\"need value (0/1)\"}");
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+							   "not supported on this SoC");
+			return rss_ctrl_resp(resp_buf, resp_buf_size,
+					     "{\"status\":\"%s\",\"hpf\":%s}",
+					     ret == RSS_OK ? "ok" : "error",
+					     ctx->hpf_enabled ? "true" : "false");
 		}
-		CTRL_RESP(resp_buf);
+		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value (0/1)");
 	}
 
 	if (strstr(cmd_json, "\"set-agc\"")) {
@@ -203,18 +185,14 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			if (ret == RSS_OK)
 				ctx->agc_enabled = !!val;
 			if (ret == RSS_ERR_NOTSUP)
-				snprintf(resp_buf, resp_buf_size,
-					 "{\"status\":\"error\",\"reason\":\"not supported on this "
-					 "SoC\"}");
-			else
-				snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\",\"agc\":%s}",
-					 ret == RSS_OK ? "ok" : "error",
-					 ctx->agc_enabled ? "true" : "false");
-		} else {
-			snprintf(resp_buf, resp_buf_size,
-				 "{\"status\":\"error\",\"reason\":\"need value (0/1)\"}");
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+							   "not supported on this SoC");
+			return rss_ctrl_resp(resp_buf, resp_buf_size,
+					     "{\"status\":\"%s\",\"agc\":%s}",
+					     ret == RSS_OK ? "ok" : "error",
+					     ctx->agc_enabled ? "true" : "false");
 		}
-		CTRL_RESP(resp_buf);
+		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value (0/1)");
 	}
 #endif /* RAPTOR_AUDIO_EFFECTS */
 
@@ -222,37 +200,30 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		if (rss_json_get_int(cmd_json, "value", &val) == 0 && ctx->ao_enabled) {
 			RSS_HAL_CALL(ctx->ops, ao_set_volume, ctx->hal_ctx, val);
 			ctx->ao_volume = val;
-			snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
-		} else {
-			snprintf(resp_buf, resp_buf_size,
-				 "{\"status\":\"error\",\"reason\":\"%s\"}",
-				 ctx->ao_enabled ? "need value" : "ao disabled");
+			return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
 		}
-		CTRL_RESP(resp_buf);
+		return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+					   ctx->ao_enabled ? "need value" : "ao disabled");
 	}
 
 	if (strstr(cmd_json, "\"ao-set-gain\"")) {
 		if (rss_json_get_int(cmd_json, "value", &val) == 0 && ctx->ao_enabled) {
 			RSS_HAL_CALL(ctx->ops, ao_set_gain, ctx->hal_ctx, val);
 			ctx->ao_gain = val;
-			snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
-		} else {
-			snprintf(resp_buf, resp_buf_size,
-				 "{\"status\":\"error\",\"reason\":\"%s\"}",
-				 ctx->ao_enabled ? "need value" : "ao disabled");
+			return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
 		}
-		CTRL_RESP(resp_buf);
+		return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+					   ctx->ao_enabled ? "need value" : "ao disabled");
 	}
 
 	if (strstr(cmd_json, "\"config-show\"")) {
-		snprintf(resp_buf, resp_buf_size,
-			 "{\"status\":\"ok\",\"config\":{"
-			 "\"codec\":\"%s\",\"sample_rate\":%d,"
-			 "\"volume\":%d,\"gain\":%d,\"device\":%d,"
-			 "\"config_path\":\"%s\"}}",
-			 ctx->codec_str, ctx->sample_rate, ctx->volume, ctx->gain, ctx->ai_dev,
-			 ctx->config_path);
-		CTRL_RESP(resp_buf);
+		return rss_ctrl_resp(resp_buf, resp_buf_size,
+				     "{\"status\":\"ok\",\"config\":{"
+				     "\"codec\":\"%s\",\"sample_rate\":%d,"
+				     "\"volume\":%d,\"gain\":%d,\"device\":%d,"
+				     "\"config_path\":\"%s\"}}",
+				     ctx->codec_str, ctx->sample_rate, ctx->volume, ctx->gain,
+				     ctx->ai_dev, ctx->config_path);
 	}
 
 	if (strstr(cmd_json, "\"status\"")) {
@@ -273,11 +244,10 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			      ctx->agc_enabled ? "true" : "false");
 #endif
 		snprintf(resp_buf + n, resp_buf_size - n, "}");
-		CTRL_RESP(resp_buf);
+		return (int)strlen(resp_buf);
 	}
 
-	snprintf(resp_buf, resp_buf_size, "{\"status\":\"error\",\"reason\":\"unknown command\"}");
-	CTRL_RESP(resp_buf);
+	return rss_ctrl_resp_error(resp_buf, resp_buf_size, "unknown command");
 }
 
 /* ── AO playback thread: reads from speaker ring, sends to hardware ── */

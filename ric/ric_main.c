@@ -152,10 +152,9 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			isp_state = val;
 			RSS_INFO("ISP mode set to %s (GPIO unchanged)", val);
 		}
-		snprintf(resp_buf, resp_buf_size,
-			 "{\"status\":\"ok\",\"isp_mode\":\"%s\",\"hw_state\":\"%s\"}", isp_state,
-			 st->current_mode == RIC_MODE_DAY ? "day" : "night");
-		return (int)strlen(resp_buf);
+		return rss_ctrl_resp(resp_buf, resp_buf_size,
+				     "{\"status\":\"ok\",\"isp_mode\":\"%s\",\"hw_state\":\"%s\"}",
+				     isp_state, st->current_mode == RIC_MODE_DAY ? "day" : "night");
 	}
 
 	if (strstr(cmd_json, "\"mode\"")) {
@@ -172,43 +171,41 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			}
 			rss_config_set_str(st->cfg, "ircut", "mode", val);
 		}
-		snprintf(resp_buf, resp_buf_size,
-			 "{\"status\":\"ok\",\"mode\":\"%s\",\"state\":\"%s\"}",
-			 st->settings.opmode == RIC_AUTO
-				 ? "auto"
-				 : (st->settings.opmode == RIC_FORCE_DAY ? "day" : "night"),
-			 st->current_mode == RIC_MODE_DAY ? "day" : "night");
-		return (int)strlen(resp_buf);
+		return rss_ctrl_resp(
+			resp_buf, resp_buf_size, "{\"status\":\"ok\",\"mode\":\"%s\",\"state\":\"%s\"}",
+			st->settings.opmode == RIC_AUTO
+				? "auto"
+				: (st->settings.opmode == RIC_FORCE_DAY ? "day" : "night"),
+			st->current_mode == RIC_MODE_DAY ? "day" : "night");
 	}
 
 	if (strstr(cmd_json, "\"config-show\"")) {
 		char exp_resp[256] = {0};
 		rss_ctrl_send_command("/var/run/rss/rvd.sock", "{\"cmd\":\"get-exposure\"}",
 				      exp_resp, sizeof(exp_resp), 1000);
-		snprintf(resp_buf, resp_buf_size,
-			 "{\"status\":\"ok\",\"mode\":\"%s\",\"state\":\"%s\","
-			 "\"exposure\":%s,"
-			 "\"night_threshold\":%d,\"day_threshold\":%d}",
-			 st->settings.opmode == RIC_AUTO
-				 ? "auto"
-				 : (st->settings.opmode == RIC_FORCE_DAY ? "day" : "night"),
-			 st->current_mode == RIC_MODE_DAY ? "day" : "night",
-			 exp_resp[0] ? exp_resp : "null", st->settings.night_threshold,
-			 st->settings.day_threshold);
-		return (int)strlen(resp_buf);
+		return rss_ctrl_resp(
+			resp_buf, resp_buf_size,
+			"{\"status\":\"ok\",\"mode\":\"%s\",\"state\":\"%s\","
+			"\"exposure\":%s,"
+			"\"night_threshold\":%d,\"day_threshold\":%d}",
+			st->settings.opmode == RIC_AUTO
+				? "auto"
+				: (st->settings.opmode == RIC_FORCE_DAY ? "day" : "night"),
+			st->current_mode == RIC_MODE_DAY ? "day" : "night",
+			exp_resp[0] ? exp_resp : "null", st->settings.night_threshold,
+			st->settings.day_threshold);
 	}
 
 	/* Default: status */
 	char exp_resp[256] = {0};
 	rss_ctrl_send_command("/var/run/rss/rvd.sock", "{\"cmd\":\"get-exposure\"}", exp_resp,
 			      sizeof(exp_resp), 1000);
-	snprintf(resp_buf, resp_buf_size,
-		 "{\"status\":\"ok\",\"mode\":\"%s\",\"state\":\"%s\",\"exposure\":%s}",
-		 st->settings.opmode == RIC_AUTO ? "auto"
-					    : (st->settings.opmode == RIC_FORCE_DAY ? "day" : "night"),
-		 st->current_mode == RIC_MODE_DAY ? "day" : "night",
-		 exp_resp[0] ? exp_resp : "null");
-	return (int)strlen(resp_buf);
+	return rss_ctrl_resp(
+		resp_buf, resp_buf_size,
+		"{\"status\":\"ok\",\"mode\":\"%s\",\"state\":\"%s\",\"exposure\":%s}",
+		st->settings.opmode == RIC_AUTO ? "auto"
+					   : (st->settings.opmode == RIC_FORCE_DAY ? "day" : "night"),
+		st->current_mode == RIC_MODE_DAY ? "day" : "night", exp_resp[0] ? exp_resp : "null");
 }
 
 /* ── Entry point ── */

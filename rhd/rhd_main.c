@@ -481,11 +481,10 @@ static int rhd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	for (int i = 0; i < srv->client_count; i++)
 		if (srv->clients[i]->is_mjpeg)
 			mjpeg++;
-	snprintf(resp_buf, resp_buf_size,
-		 "{\"status\":\"ok\",\"clients\":%d,\"mjpeg\":%d,\"port\":%d,"
-		 "\"jpeg_rings\":%d}",
-		 srv->client_count, mjpeg, srv->port, srv->jpeg_ring_count);
-	return (int)strlen(resp_buf);
+	return rss_ctrl_resp(resp_buf, resp_buf_size,
+			     "{\"status\":\"ok\",\"clients\":%d,\"mjpeg\":%d,\"port\":%d,"
+			     "\"jpeg_rings\":%d}",
+			     srv->client_count, mjpeg, srv->port, srv->jpeg_ring_count);
 }
 
 static int server_init(rhd_server_t *srv)

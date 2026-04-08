@@ -310,12 +310,10 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			rss_config_set_str(st->cfg, "osd", "text_string", val);
 			for (int s = 0; s < st->stream_count; s++)
 				st->regions[s][ROD_REGION_TEXT].needs_update = true;
-			snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
+			return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
 		} else {
-			snprintf(resp_buf, resp_buf_size,
-				 "{\"status\":\"error\",\"msg\":\"missing value\"}");
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "missing value");
 		}
-		return (int)strlen(resp_buf);
 	}
 
 	if (strstr(cmd_json, "\"set-font-color\"")) {
@@ -327,12 +325,10 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				for (int r = 0; r < ROD_MAX_REGIONS; r++)
 					if (st->regions[s][r].enabled)
 						st->regions[s][r].needs_update = true;
-			snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
+			return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
 		} else {
-			snprintf(resp_buf, resp_buf_size,
-				 "{\"status\":\"error\",\"msg\":\"missing value\"}");
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "missing value");
 		}
-		return (int)strlen(resp_buf);
 	}
 
 	if (strstr(cmd_json, "\"set-stroke-color\"")) {
@@ -344,12 +340,10 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				for (int r = 0; r < ROD_MAX_REGIONS; r++)
 					if (st->regions[s][r].enabled)
 						st->regions[s][r].needs_update = true;
-			snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
+			return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
 		} else {
-			snprintf(resp_buf, resp_buf_size,
-				 "{\"status\":\"error\",\"msg\":\"missing value\"}");
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "missing value");
 		}
-		return (int)strlen(resp_buf);
 	}
 
 	if (strstr(cmd_json, "\"set-stroke-size\"")) {
@@ -361,32 +355,31 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				for (int r = 0; r < ROD_MAX_REGIONS; r++)
 					if (st->regions[s][r].enabled)
 						st->regions[s][r].needs_update = true;
-			snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
+			return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
 		} else {
-			snprintf(resp_buf, resp_buf_size,
-				 "{\"status\":\"error\",\"msg\":\"need value 0-5\"}");
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value 0-5");
 		}
-		return (int)strlen(resp_buf);
 	}
 
 	if (strstr(cmd_json, "\"config-show\"")) {
-		snprintf(resp_buf, resp_buf_size,
-			 "{\"status\":\"ok\",\"config\":{"
-			 "\"font_size\":%d,"
-			 "\"font_color\":\"0x%08X\","
-			 "\"stroke_color\":\"0x%08X\","
-			 "\"font_stroke\":%d,"
-			 "\"time_enabled\":%s,"
-			 "\"uptime_enabled\":%s,"
-			 "\"text_enabled\":%s,"
-			 "\"text_string\":\"%s\","
-			 "\"logo_enabled\":%s}}",
-			 st->settings.font_size, st->settings.font_color, st->settings.stroke_color,
-			 st->settings.font_stroke, st->settings.time_enabled ? "true" : "false",
-			 st->settings.uptime_enabled ? "true" : "false",
-			 st->settings.text_enabled ? "true" : "false", st->settings.text_string,
-			 st->settings.logo_enabled ? "true" : "false");
-		return (int)strlen(resp_buf);
+		return rss_ctrl_resp(resp_buf, resp_buf_size,
+				     "{\"status\":\"ok\",\"config\":{"
+				     "\"font_size\":%d,"
+				     "\"font_color\":\"0x%08X\","
+				     "\"stroke_color\":\"0x%08X\","
+				     "\"font_stroke\":%d,"
+				     "\"time_enabled\":%s,"
+				     "\"uptime_enabled\":%s,"
+				     "\"text_enabled\":%s,"
+				     "\"text_string\":\"%s\","
+				     "\"logo_enabled\":%s}}",
+				     st->settings.font_size, st->settings.font_color,
+				     st->settings.stroke_color, st->settings.font_stroke,
+				     st->settings.time_enabled ? "true" : "false",
+				     st->settings.uptime_enabled ? "true" : "false",
+				     st->settings.text_enabled ? "true" : "false",
+				     st->settings.text_string,
+				     st->settings.logo_enabled ? "true" : "false");
 	}
 
 	/* Default: status */
@@ -396,9 +389,9 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			if (st->regions[s][r].enabled)
 				region_count++;
 
-	snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\",\"streams\":%d,\"regions\":%d}",
-		 st->stream_count, region_count);
-	return (int)strlen(resp_buf);
+	return rss_ctrl_resp(resp_buf, resp_buf_size,
+			     "{\"status\":\"ok\",\"streams\":%d,\"regions\":%d}", st->stream_count,
+			     region_count);
 }
 
 /* ── Entry point ── */

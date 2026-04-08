@@ -400,13 +400,13 @@ static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return rc;
 
 	if (strstr(cmd_json, "\"config-show\"")) {
-		snprintf(resp_buf, resp_buf_size,
-			 "{\"status\":\"ok\",\"config\":{"
-			 "\"port\":%d,\"clients\":%d,"
-			 "\"max_clients\":%d,"
-			 "\"config_path\":\"%s\"}}",
-			 srv->port, srv->client_count, srv->max_clients, srv->config_path);
-		return (int)strlen(resp_buf);
+		return rss_ctrl_resp(resp_buf, resp_buf_size,
+				     "{\"status\":\"ok\",\"config\":{"
+				     "\"port\":%d,\"clients\":%d,"
+				     "\"max_clients\":%d,"
+				     "\"config_path\":\"%s\"}}",
+				     srv->port, srv->client_count, srv->max_clients,
+				     srv->config_path);
 	}
 
 	if (strstr(cmd_json, "\"clients\"")) {
@@ -445,9 +445,8 @@ static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 	/* Default: status */
-	snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\",\"clients\":%d,\"port\":%d}",
-		 srv->client_count, srv->port);
-	return (int)strlen(resp_buf);
+	return rss_ctrl_resp(resp_buf, resp_buf_size, "{\"status\":\"ok\",\"clients\":%d,\"port\":%d}",
+			     srv->client_count, srv->port);
 }
 
 void rsd_server_run(rsd_server_t *srv)

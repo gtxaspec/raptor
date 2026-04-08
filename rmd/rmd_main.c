@@ -114,21 +114,18 @@ static int rmd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				 val);
 			rss_ctrl_send_command("/var/run/rss/rvd.sock", cmd, resp, sizeof(resp),
 					      1000);
-			snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\",\"sensitivity\":%d}",
-				 val);
+			return rss_ctrl_resp(resp_buf, resp_buf_size,
+					     "{\"status\":\"ok\",\"sensitivity\":%d}", val);
 		} else {
-			snprintf(resp_buf, resp_buf_size,
-				 "{\"status\":\"error\",\"reason\":\"missing value\"}");
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "missing value");
 		}
-		return (int)strlen(resp_buf);
 	}
 
 	/* Default: status */
-	snprintf(resp_buf, resp_buf_size,
-		 "{\"status\":\"ok\",\"state\":\"%s\",\"recording\":%s,\"sensitivity\":%d}",
-		 state_names[ctx->state], ctx->recording_active ? "true" : "false",
-		 ctx->settings.sensitivity);
-	return (int)strlen(resp_buf);
+	return rss_ctrl_resp(resp_buf, resp_buf_size,
+			     "{\"status\":\"ok\",\"state\":\"%s\",\"recording\":%s,\"sensitivity\":%d}",
+			     state_names[ctx->state], ctx->recording_active ? "true" : "false",
+			     ctx->settings.sensitivity);
 }
 
 int main(int argc, char **argv)

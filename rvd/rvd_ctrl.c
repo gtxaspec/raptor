@@ -58,15 +58,15 @@ static rss_wb_mode_t wb_mode_from_str(const char *s)
 #define CTRL_RETURN(buf) return (int)strlen(buf)
 
 /* Format HAL return code into JSON error response */
-static void fmt_hal_result(char *buf, int bufsz, int ret)
+static int fmt_hal_result(char *buf, int bufsz, int ret)
 {
 	if (ret == 0)
-		snprintf(buf, bufsz, "{\"status\":\"ok\"}");
+		return rss_ctrl_resp_ok(buf, bufsz);
 	else if (ret == RSS_ERR_NOTSUP)
-		snprintf(buf, bufsz,
-			 "{\"status\":\"error\",\"reason\":\"not supported on this SoC\"}");
+		return rss_ctrl_resp_error(buf, bufsz, "not supported on this SoC");
 	else
-		snprintf(buf, bufsz, "{\"status\":\"error\",\"reason\":\"failed (%d)\"}", ret);
+		return rss_ctrl_resp(buf, bufsz,
+				     "{\"status\":\"error\",\"reason\":\"failed (%d)\"}", ret);
 }
 
 static const char *stream_section(int idx)
@@ -88,7 +88,7 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 				continue;
 			RSS_HAL_CALL(st->ops, enc_request_idr, st->hal_ctx, st->streams[i].chn);
 		}
-		snprintf(resp, resp_size, "{\"status\":\"ok\"}");
+		rss_ctrl_resp_ok(resp, resp_size);
 		return 1;
 	}
 
@@ -126,11 +126,10 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 				rss_config_set_str(st->cfg, stream_section(chn), "rc_mode",
 						   mode_str);
 			}
-			snprintf(resp, resp_size, "{\"status\":\"%s\",\"rc_mode\":\"%s\"}",
-				 ret == 0 ? "ok" : "error", mode_str);
+			rss_ctrl_resp(resp, resp_size, "{\"status\":\"%s\",\"rc_mode\":\"%s\"}",
+				      ret == 0 ? "ok" : "error", mode_str);
 		} else {
-			snprintf(resp, resp_size,
-				 "{\"status\":\"error\",\"reason\":\"need channel and mode\"}");
+			rss_ctrl_resp_error(resp, resp_size, "need channel and mode");
 		}
 		return 1;
 	}
@@ -147,8 +146,7 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 			}
 			fmt_hal_result(resp, resp_size, ret);
 		} else {
-			snprintf(resp, resp_size,
-				 "{\"status\":\"error\",\"reason\":\"need channel and value\"}");
+			rss_ctrl_resp_error(resp, resp_size, "need channel and value");
 		}
 		return 1;
 	}
@@ -165,8 +163,7 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 			}
 			fmt_hal_result(resp, resp_size, ret);
 		} else {
-			snprintf(resp, resp_size,
-				 "{\"status\":\"error\",\"reason\":\"need channel and value\"}");
+			rss_ctrl_resp_error(resp, resp_size, "need channel and value");
 		}
 		return 1;
 	}
@@ -183,8 +180,7 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 			}
 			fmt_hal_result(resp, resp_size, ret);
 		} else {
-			snprintf(resp, resp_size,
-				 "{\"status\":\"error\",\"reason\":\"need channel and value\"}");
+			rss_ctrl_resp_error(resp, resp_size, "need channel and value");
 		}
 		return 1;
 	}
@@ -204,8 +200,7 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 			}
 			fmt_hal_result(resp, resp_size, ret);
 		} else {
-			snprintf(resp, resp_size,
-				 "{\"status\":\"error\",\"reason\":\"need channel, min, max\"}");
+			rss_ctrl_resp_error(resp, resp_size, "need channel, min, max");
 		}
 		return 1;
 	}
@@ -232,8 +227,7 @@ static int handle_isp_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 				ret = RSS_HAL_CALL(st->ops, fn, st->hal_ctx, val);                 \
 			fmt_hal_result(resp, resp_size, ret);                                      \
 		} else {                                                                           \
-			snprintf(resp, resp_size,                                                  \
-				 "{\"status\":\"error\",\"reason\":\"need value\"}");              \
+			rss_ctrl_resp_error(resp, resp_size, "need value");                        \
 		}                                                                                  \
 		return 1;                                                                          \
 	}
@@ -245,8 +239,7 @@ static int handle_isp_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 			int ret = RSS_HAL_CALL(st->ops, fn, st->hal_ctx, val);                     \
 			fmt_hal_result(resp, resp_size, ret);                                      \
 		} else {                                                                           \
-			snprintf(resp, resp_size,                                                  \
-				 "{\"status\":\"error\",\"reason\":\"need value\"}");              \
+			rss_ctrl_resp_error(resp, resp_size, "need value");                        \
 		}                                                                                  \
 		return 1;                                                                          \
 	}
@@ -285,19 +278,20 @@ static int handle_isp_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 		if (rss_json_get_int(cmd_json, "b_gain", &b_gain) == 0)
 			wb.b_gain = (uint16_t)b_gain;
 		int ret = RSS_HAL_CALL(st->ops, isp_set_wb, st->hal_ctx, &wb);
-		snprintf(resp, resp_size,
-			 "{\"status\":\"%s\",\"mode\":\"%s\",\"r_gain\":%u,\"b_gain\":%u}",
-			 ret == 0 ? "ok" : "error", wb_mode_str(wb.mode), wb.r_gain, wb.b_gain);
+		rss_ctrl_resp(resp, resp_size,
+			      "{\"status\":\"%s\",\"mode\":\"%s\",\"r_gain\":%u,\"b_gain\":%u}",
+			      ret == 0 ? "ok" : "error", wb_mode_str(wb.mode), wb.r_gain,
+			      wb.b_gain);
 		return 1;
 	}
 
 	if (strstr(cmd_json, "\"get-wb\"")) {
 		rss_wb_config_t wb = {0};
 		RSS_HAL_CALL(st->ops, isp_get_wb, st->hal_ctx, &wb);
-		snprintf(resp, resp_size,
-			 "{\"status\":\"ok\",\"mode\":\"%s\",\"r_gain\":%u,\"g_gain\":%u,\"b_"
-			 "gain\":%u}",
-			 wb_mode_str(wb.mode), wb.r_gain, wb.g_gain, wb.b_gain);
+		rss_ctrl_resp(resp, resp_size,
+			      "{\"status\":\"ok\",\"mode\":\"%s\",\"r_gain\":%u,\"g_gain\":%u,"
+			      "\"b_gain\":%u}",
+			      wb_mode_str(wb.mode), wb.r_gain, wb.g_gain, wb.b_gain);
 		return 1;
 	}
 
@@ -318,24 +312,25 @@ static int handle_isp_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 		RSS_HAL_CALL(st->ops, isp_get_max_dgain, st->hal_ctx, &dgain);
 		rss_wb_config_t wb = {0};
 		RSS_HAL_CALL(st->ops, isp_get_wb, st->hal_ctx, &wb);
-		snprintf(resp, resp_size,
-			 "{\"status\":\"ok\","
-			 "\"brightness\":%u,\"contrast\":%u,\"saturation\":%u,"
-			 "\"sharpness\":%u,\"hue\":%u,\"sinter\":%u,\"temper\":%u,"
-			 "\"hflip\":%d,\"vflip\":%d,\"ae_comp\":%d,"
-			 "\"max_again\":%u,\"max_dgain\":%u,"
-			 "\"wb_mode\":\"%s\",\"wb_r\":%u,\"wb_g\":%u,\"wb_b\":%u}",
-			 bri, con, sat, shp, hue, sin, tem, hf, vf, ae, again, dgain,
-			 wb.mode == RSS_WB_MANUAL ? "manual" : "auto", wb.r_gain, wb.g_gain,
-			 wb.b_gain);
+		rss_ctrl_resp(resp, resp_size,
+			      "{\"status\":\"ok\","
+			      "\"brightness\":%u,\"contrast\":%u,\"saturation\":%u,"
+			      "\"sharpness\":%u,\"hue\":%u,\"sinter\":%u,\"temper\":%u,"
+			      "\"hflip\":%d,\"vflip\":%d,\"ae_comp\":%d,"
+			      "\"max_again\":%u,\"max_dgain\":%u,"
+			      "\"wb_mode\":\"%s\",\"wb_r\":%u,\"wb_g\":%u,\"wb_b\":%u}",
+			      bri, con, sat, shp, hue, sin, tem, hf, vf, ae, again, dgain,
+			      wb.mode == RSS_WB_MANUAL ? "manual" : "auto", wb.r_gain, wb.g_gain,
+			      wb.b_gain);
 		return 1;
 	}
 
 	if (strstr(cmd_json, "\"get-exposure\"")) {
 		rss_exposure_t exp = {0};
 		RSS_HAL_CALL(st->ops, isp_get_exposure, st->hal_ctx, &exp);
-		snprintf(resp, resp_size, "{\"total_gain\":%u,\"exposure_us\":%u,\"ae_luma\":%u}",
-			 exp.total_gain, exp.exposure_time, exp.ae_luma);
+		rss_ctrl_resp(resp, resp_size,
+			      "{\"total_gain\":%u,\"exposure_us\":%u,\"ae_luma\":%u}",
+			      exp.total_gain, exp.exposure_time, exp.ae_luma);
 		return 1;
 	}
 
@@ -344,10 +339,10 @@ static int handle_isp_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 		if (rss_json_get_str(cmd_json, "value", mode_str, sizeof(mode_str)) == 0) {
 			int mode = (strcmp(mode_str, "night") == 0) ? 1 : 0;
 			RSS_HAL_CALL(st->ops, isp_set_running_mode, st->hal_ctx, mode);
-			snprintf(resp, resp_size, "{\"status\":\"ok\",\"mode\":\"%s\"}",
-				 mode ? "night" : "day");
+			rss_ctrl_resp(resp, resp_size, "{\"status\":\"ok\",\"mode\":\"%s\"}",
+				      mode ? "night" : "day");
 		} else {
-			snprintf(resp, resp_size, "{\"status\":\"error\"}");
+			rss_ctrl_resp(resp, resp_size, "{\"status\":\"error\"}");
 		}
 		return 1;
 	}
@@ -362,10 +357,10 @@ static int handle_ivs_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 	if (strstr(cmd_json, "\"ivs-status\"")) {
 		bool motion = atomic_load(&st->ivs_motion);
 		int64_t ts = atomic_load(&st->ivs_motion_ts);
-		snprintf(resp, resp_size,
-			 "{\"status\":\"ok\",\"active\":%s,\"motion\":%s,\"timestamp\":%" PRId64
-			 "}",
-			 st->ivs_active ? "true" : "false", motion ? "true" : "false", ts);
+		rss_ctrl_resp(
+			resp, resp_size,
+			"{\"status\":\"ok\",\"active\":%s,\"motion\":%s,\"timestamp\":%" PRId64 "}",
+			st->ivs_active ? "true" : "false", motion ? "true" : "false", ts);
 		return 1;
 	}
 
@@ -381,10 +376,10 @@ static int handle_ivs_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 					mp.sense[i] = sens;
 				RSS_HAL_CALL(st->ops, ivs_set_param, st->hal_ctx, st->ivs_chn, &mp);
 			}
-			snprintf(resp, resp_size, "{\"status\":\"ok\",\"sensitivity\":%d}", sens);
+			rss_ctrl_resp(resp, resp_size, "{\"status\":\"ok\",\"sensitivity\":%d}",
+				      sens);
 		} else {
-			snprintf(resp, resp_size,
-				 "{\"status\":\"error\",\"reason\":\"invalid or ivs not active\"}");
+			rss_ctrl_resp_error(resp, resp_size, "invalid or ivs not active");
 		}
 		return 1;
 	}
@@ -502,6 +497,5 @@ int rvd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, vo
 	if (handle_config_cmd(cmd_json, st, resp_buf, resp_buf_size))
 		CTRL_RETURN(resp_buf);
 
-	snprintf(resp_buf, resp_buf_size, "{\"status\":\"error\",\"reason\":\"unknown command\"}");
-	CTRL_RETURN(resp_buf);
+	return rss_ctrl_resp_error(resp_buf, resp_buf_size, "unknown command");
 }
