@@ -32,6 +32,11 @@
 #include <rss_tls.h>
 #endif
 
+/* Index page — loaded from file on first request, cached */
+#define RHD_INDEX_PATH "/usr/share/raptor/index.html"
+static char *index_html;
+static int index_html_len;
+
 #define RHD_MAX_CLIENTS	   8
 #define RHD_RECV_BUF	   4096
 #define RHD_MJPEG_BOUNDARY "raptorframe"
@@ -418,18 +423,17 @@ static void handle_request(rhd_server_t *srv, rhd_client_t *c)
 		c->is_mjpeg = true;
 		return; /* keep alive */
 	} else if (strcmp(path, "/") == 0) {
-		const char *html =
-			"<html><head><title>Raptor</title></head>"
-			"<body "
-			"style=\"background:#1a1a1a;color:#ccc;font-family:sans-serif;margin:"
-			"20px\">"
-			"<h3 style=\"color:#fff\">Raptor</h3>"
-			"<a style=\"color:#6af\" href=\"/snap.jpg\">Snapshot (main)</a> | "
-			"<a style=\"color:#6af\" href=\"/snap.jpg?stream=1\">Snapshot (sub)</a> | "
-			"<a style=\"color:#6af\" href=\"/mjpeg\">MJPEG Stream</a><br><br>"
-			"<img src=\"/mjpeg\" style=\"max-width:100%;border:1px solid #333\">"
-			"</body></html>";
-		http_send(c, "200 OK", "text/html", html, (int)strlen(html));
+		if (!index_html) {
+			index_html = rss_read_file(RHD_INDEX_PATH, &index_html_len);
+			if (index_html)
+				RSS_DEBUG("loaded %s (%d bytes)", RHD_INDEX_PATH, index_html_len);
+			else
+				RSS_WARN("%s not found", RHD_INDEX_PATH);
+		}
+		if (index_html)
+			http_send(c, "200 OK", "text/html", index_html, index_html_len);
+		else
+			http_error(c, "404 Not Found", "index page not installed");
 	} else {
 		http_error(c, "404 Not Found", "Not found");
 	}
@@ -873,6 +877,7 @@ int main(int argc, char **argv)
 	RSS_INFO("rhd shutting down");
 
 cleanup:
+	free(index_html);
 #ifdef RSS_HAS_TLS
 	rss_tls_free(srv.tls);
 #endif
