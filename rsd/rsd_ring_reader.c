@@ -146,8 +146,8 @@ void *rsd_video_reader_thread(void *arg)
 			last_write_seq = ws;
 
 			if (idle_count >= 20) {
-				RSS_DEBUG("video reader[%d] idle, closing ring (%s)",
-					 stream_idx, rctx->ring_name);
+				RSS_DEBUG("video reader[%d] idle, closing ring (%s)", stream_idx,
+					  rctx->ring_name);
 				rss_ring_close(rctx->ring);
 				rctx->ring = NULL;
 				idle_count = 0;
@@ -187,8 +187,8 @@ void *rsd_video_reader_thread(void *arg)
 
 		if (video_ts_epoch == 0)
 			video_ts_epoch = meta.timestamp;
-		uint32_t rtp_ts = (uint32_t)((uint64_t)(meta.timestamp - video_ts_epoch)
-					     * 90000 / 1000000);
+		uint32_t rtp_ts =
+			(uint32_t)((uint64_t)(meta.timestamp - video_ts_epoch) * 90000 / 1000000);
 
 		pthread_mutex_lock(&srv->clients_lock);
 		for (int i = 0; i < srv->client_count; i++) {
@@ -285,8 +285,8 @@ void *rsd_audio_reader_thread(void *arg)
 			last_write_seq = 0;
 			idle_count = 0;
 
-			RSS_DEBUG("audio codec=%u clock=%u rtp_clock=%u", audio_codec,
-				 audio_clock, rtp_clock);
+			RSS_DEBUG("audio codec=%u clock=%u rtp_clock=%u", audio_codec, audio_clock,
+				  rtp_clock);
 		}
 
 		int ret = rss_ring_wait(srv->ring_audio, 100);
@@ -329,8 +329,8 @@ void *rsd_audio_reader_thread(void *arg)
 			 * IMP_System_Init, CLOCK_MONOTONIC_RAW). */
 			if (audio_ts_epoch == 0)
 				audio_ts_epoch = meta.timestamp;
-			uint32_t rtp_ts = (uint32_t)((uint64_t)(meta.timestamp - audio_ts_epoch)
-						     * rtp_clock / 1000000);
+			uint32_t rtp_ts = (uint32_t)((uint64_t)(meta.timestamp - audio_ts_epoch) *
+						     rtp_clock / 1000000);
 
 			pthread_mutex_lock(&srv->clients_lock);
 			for (int i = 0; i < srv->client_count; i++) {

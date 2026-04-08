@@ -29,7 +29,10 @@ static const uint8_t test_sps[] = {
 
 /* Minimal H.264 PPS */
 static const uint8_t test_pps[] = {
-	0x68, 0xCE, 0x38, 0x80,
+	0x68,
+	0xCE,
+	0x38,
+	0x80,
 };
 
 /* Fake IDR NAL (AVCC format: 4-byte length prefix + payload) */
@@ -81,7 +84,7 @@ int main(void)
 	/* Write 3 GOPs (3 fragments) at 25fps, GOP=25 */
 	int64_t v_dts = 0;
 	int64_t a_dts = 0;
-	uint32_t v_inc = 90000 / 25; /* 3600 */
+	uint32_t v_inc = 90000 / 25;	    /* 3600 */
 	uint32_t a_samples_per_frame = 320; /* 20ms at 16kHz */
 
 	for (int gop = 0; gop < 3; gop++) {

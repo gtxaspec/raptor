@@ -99,7 +99,8 @@ static int rmd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 {
 	rmd_ctx_t *ctx = userdata;
 
-	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, ctx->config, ctx->config_path);
+	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, ctx->config,
+					ctx->config_path);
 	if (rc >= 0)
 		return rc;
 

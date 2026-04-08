@@ -152,10 +152,10 @@ struct rwd_client {
 	uint32_t audio_ssrc;
 
 	/* Backchannel (browser → camera audio) */
-	Compy_SrtpRecvCtx *srtp_recv;	  /* decrypt incoming SRTP */
-	Compy_Backchannel *backchannel;	  /* RTP receiver + audio callback */
-	rss_ring_t *speaker_ring;	  /* output ring for RAD playback */
-	void *bc_recv;			  /* rwd_bc_recv_t, kept alive for callback */
+	Compy_SrtpRecvCtx *srtp_recv;	/* decrypt incoming SRTP */
+	Compy_Backchannel *backchannel; /* RTP receiver + audio callback */
+	rss_ring_t *speaker_ring;	/* output ring for RAD playback */
+	void *bc_recv;			/* rwd_bc_recv_t, kept alive for callback */
 
 	/* Media state */
 	int stream_idx; /* 0=main, 1=sub */

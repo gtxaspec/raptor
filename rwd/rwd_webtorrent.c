@@ -622,8 +622,8 @@ int rwd_stun_discover_srflx(int udp_fd, const char *server, int port, char *ip_o
 			uint8_t buf[256];
 			struct sockaddr_storage from;
 			socklen_t from_len = sizeof(from);
-			ssize_t n = recvfrom(udp_fd, buf, sizeof(buf), 0,
-					     (struct sockaddr *)&from, &from_len);
+			ssize_t n = recvfrom(udp_fd, buf, sizeof(buf), 0, (struct sockaddr *)&from,
+					     &from_len);
 			if (n < 20)
 				continue;
 			if (buf[0] != 0x01 || buf[1] != 0x01)
@@ -650,11 +650,10 @@ int rwd_stun_discover_srflx(int udp_fd, const char *server, int port, char *ip_o
 
 					if (family == 0x01 && attr_len >= 8) {
 						/* IPv4: 4-byte address XOR'd with magic cookie */
-						uint32_t xaddr =
-							(((uint32_t)p[8] << 24) |
-							 ((uint32_t)p[9] << 16) |
-							 ((uint32_t)p[10] << 8) | p[11]) ^
-							0x2112A442;
+						uint32_t xaddr = (((uint32_t)p[8] << 24) |
+								  ((uint32_t)p[9] << 16) |
+								  ((uint32_t)p[10] << 8) | p[11]) ^
+								 0x2112A442;
 						struct in_addr addr;
 						addr.s_addr = htonl(xaddr);
 						inet_ntop(AF_INET, &addr, ip_out, ip_size);
@@ -667,7 +666,7 @@ int rwd_stun_discover_srflx(int udp_fd, const char *server, int port, char *ip_o
 						/* IPv6: 16-byte address XOR'd with
 						 * magic cookie (4) + txn ID (12) */
 						uint8_t xor_key[16];
-						memcpy(xor_key, req + 4, 4);  /* magic */
+						memcpy(xor_key, req + 4, 4);	  /* magic */
 						memcpy(xor_key + 4, req + 8, 12); /* txn ID */
 						struct in6_addr addr6;
 						for (int i = 0; i < 16; i++)
@@ -848,7 +847,7 @@ static void handle_tracker_offer(rwd_webtorrent_t *wt, wt_tls_t *tls, const char
 		rwd_ice_send_check(srv, c, c->offer.candidates[i].ip, c->offer.candidates[i].port);
 
 	RSS_DEBUG("webtorrent: answer sent (session %s, %d candidates punched)", c->session_id,
-		 c->offer.candidate_count);
+		  c->offer.candidate_count);
 
 out:
 	free(offer_obj);

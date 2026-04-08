@@ -60,8 +60,8 @@ static int64_t wall_clock_us(void)
 /* ── RTCP Sender Report parsing ── */
 
 typedef struct {
-	int64_t ntp_us;    /* NTP timestamp converted to Unix µs */
-	uint32_t rtp_ts;   /* corresponding RTP timestamp */
+	int64_t ntp_us;	 /* NTP timestamp converted to Unix µs */
+	uint32_t rtp_ts; /* corresponding RTP timestamp */
 	bool valid;
 } sr_info_t;
 
@@ -142,8 +142,8 @@ static int parse_rtp_header(const uint8_t *data, size_t len, rtp_header_t *hdr)
 	hdr->marker = (data[1] >> 7) & 0x01;
 	hdr->pt = data[1] & 0x7F;
 	hdr->seq = (uint16_t)data[2] << 8 | data[3];
-	hdr->ts = (uint32_t)data[4] << 24 | (uint32_t)data[5] << 16 |
-		  (uint32_t)data[6] << 8 | data[7];
+	hdr->ts = (uint32_t)data[4] << 24 | (uint32_t)data[5] << 16 | (uint32_t)data[6] << 8 |
+		  data[7];
 
 	int offset = 12 + cc * 4;
 	if (extension && (size_t)offset + 4 <= len) {
@@ -157,10 +157,10 @@ static int parse_rtp_header(const uint8_t *data, size_t len, rtp_header_t *hdr)
 /* ── Simple RTSP client (just enough for DESCRIBE → SETUP → PLAY) ── */
 
 typedef struct {
-	int tcp_fd;        /* RTSP control connection */
-	int rtp_fd;        /* UDP RTP socket */
-	int rtcp_fd;       /* UDP RTCP socket */
-	int rtp_port;      /* local RTP port */
+	int tcp_fd;   /* RTSP control connection */
+	int rtp_fd;   /* UDP RTP socket */
+	int rtcp_fd;  /* UDP RTCP socket */
+	int rtp_port; /* local RTP port */
 	int cseq;
 	char session[128];
 	uint32_t rtp_clock; /* from SDP (90000 for video) */
@@ -197,8 +197,7 @@ static int rtsp_send(rtsp_ctx_t *ctx, const char *method, const char *url,
 			   "CSeq: %d\r\n"
 			   "%s%s"
 			   "\r\n",
-			   method, url, ++ctx->cseq,
-			   ctx->session[0] ? "Session: " : "",
+			   method, url, ++ctx->cseq, ctx->session[0] ? "Session: " : "",
 			   ctx->session[0] ? ctx->session : "");
 	if (extra_headers) {
 		/* Insert extra headers before final \r\n */
@@ -247,8 +246,10 @@ static int create_udp_pair(int *rtp_fd, int *rtcp_fd, int *rtp_port)
 		int fd1 = socket(AF_INET, SOCK_DGRAM, 0);
 		int fd2 = socket(AF_INET, SOCK_DGRAM, 0);
 		if (fd1 < 0 || fd2 < 0) {
-			if (fd1 >= 0) close(fd1);
-			if (fd2 >= 0) close(fd2);
+			if (fd1 >= 0)
+				close(fd1);
+			if (fd2 >= 0)
+				close(fd2);
 			continue;
 		}
 
@@ -296,9 +297,11 @@ static int rtsp_connect(rtsp_ctx_t *ctx, const char *url)
 	/* Handle IPv6 [addr]:port */
 	if (*p == '[') {
 		const char *end = strchr(p, ']');
-		if (!end) return -1;
+		if (!end)
+			return -1;
 		size_t hlen = (size_t)(end - p - 1);
-		if (hlen >= sizeof(host)) return -1;
+		if (hlen >= sizeof(host))
+			return -1;
 		memcpy(host, p + 1, hlen);
 		p = end + 1;
 		if (*p == ':')
@@ -308,12 +311,14 @@ static int rtsp_connect(rtsp_ctx_t *ctx, const char *url)
 		const char *slash = strchr(p, '/');
 		if (colon && (!slash || colon < slash)) {
 			size_t hlen = (size_t)(colon - p);
-			if (hlen >= sizeof(host)) return -1;
+			if (hlen >= sizeof(host))
+				return -1;
 			memcpy(host, p, hlen);
 			port = (int)strtol(colon + 1, (char **)&p, 10);
 		} else if (slash) {
 			size_t hlen = (size_t)(slash - p);
-			if (hlen >= sizeof(host)) return -1;
+			if (hlen >= sizeof(host))
+				return -1;
 			memcpy(host, p, hlen);
 			p = slash;
 		} else {
@@ -448,8 +453,7 @@ static int rtsp_connect(rtsp_ctx_t *ctx, const char *url)
 
 	/* SETUP (UDP) */
 	char transport[128];
-	snprintf(transport, sizeof(transport),
-		 "Transport: RTP/AVP;unicast;client_port=%d-%d\r\n",
+	snprintf(transport, sizeof(transport), "Transport: RTP/AVP;unicast;client_port=%d-%d\r\n",
 		 ctx->rtp_port, ctx->rtp_port + 1);
 	if (rtsp_send(ctx, "SETUP", control_url, transport) < 0)
 		return -1;
@@ -541,15 +545,12 @@ static void stats_print(const lat_stats_t *s)
 	double stddev = (variance > 0) ? sqrt(variance) : 0;
 
 	fprintf(stderr,
-		"\n--- latency (%"PRIu64" frames) ---\n"
+		"\n--- latency (%" PRIu64 " frames) ---\n"
 		"  Min:    %7.2f ms\n"
 		"  Avg:    %7.2f ms\n"
 		"  Max:    %7.2f ms\n"
 		"  StdDev: %7.2f ms\n",
-		s->count,
-		(double)s->min / 1000.0,
-		avg / 1000.0,
-		(double)s->max / 1000.0,
+		s->count, (double)s->min / 1000.0, avg / 1000.0, (double)s->max / 1000.0,
 		stddev / 1000.0);
 
 	/* Percentiles */
@@ -651,8 +652,9 @@ int main(int argc, char **argv)
 	}
 
 	if (!quiet)
-		fprintf(stderr, "Playing (RTP port %d, clock %u Hz)\n"
-				"Waiting for RTCP Sender Report...\n",
+		fprintf(stderr,
+			"Playing (RTP port %d, clock %u Hz)\n"
+			"Waiting for RTCP Sender Report...\n",
 			ctx.rtp_port, ctx.rtp_clock);
 
 	/* Receive loop */
@@ -685,7 +687,8 @@ int main(int argc, char **argv)
 				if (parse_rtcp_sr(buf, (size_t)n, &new_sr)) {
 					sr = new_sr;
 					if (!quiet && stats.count == 0)
-						fprintf(stderr, "SR received (NTP offset established)\n");
+						fprintf(stderr,
+							"SR received (NTP offset established)\n");
 				}
 			}
 		}
@@ -718,8 +721,8 @@ int main(int argc, char **argv)
 			 *
 			 * Use signed 32-bit difference for RTP timestamp wrap. */
 			int32_t ts_diff = (int32_t)(rtp.ts - sr.rtp_ts);
-			int64_t frame_ntp_us = sr.ntp_us +
-					       (int64_t)ts_diff * 1000000LL / (int64_t)ctx.rtp_clock;
+			int64_t frame_ntp_us =
+				sr.ntp_us + (int64_t)ts_diff * 1000000LL / (int64_t)ctx.rtp_clock;
 
 			int64_t now = wall_clock_us();
 			int64_t latency_us = now - frame_ntp_us;
@@ -729,16 +732,17 @@ int main(int argc, char **argv)
 
 			if (verbose)
 				fprintf(stderr,
-					"#%-6"PRIu64" lat=%7.2f ms  rtp_ts=%-10u  size=%-6zu  M=%d\n",
-					frame_count, (double)latency_us / 1000.0,
-					rtp.ts, (size_t)n, rtp.marker ? 1 : 0);
+					"#%-6" PRIu64
+					" lat=%7.2f ms  rtp_ts=%-10u  size=%-6zu  M=%d\n",
+					frame_count, (double)latency_us / 1000.0, rtp.ts, (size_t)n,
+					rtp.marker ? 1 : 0);
 			else if (!quiet && frame_count % 25 == 0)
-				fprintf(stderr, "\r  %"PRIu64" frames, avg %.2f ms, "
-						"min %.2f ms, max %.2f ms   ",
+				fprintf(stderr,
+					"\r  %" PRIu64 " frames, avg %.2f ms, "
+					"min %.2f ms, max %.2f ms   ",
 					stats.count,
 					(double)stats.sum / (double)stats.count / 1000.0,
-					(double)stats.min / 1000.0,
-					(double)stats.max / 1000.0);
+					(double)stats.min / 1000.0, (double)stats.max / 1000.0);
 
 			if (max_frames > 0 && (int)frame_count >= max_frames)
 				break;
@@ -749,7 +753,7 @@ int main(int argc, char **argv)
 		fprintf(stderr, "\n");
 
 	stats_print(&stats);
-	fprintf(stderr, "  RTP packets: %"PRIu64"\n", rtp_packet_count);
+	fprintf(stderr, "  RTP packets: %" PRIu64 "\n", rtp_packet_count);
 
 	stats_free(&stats);
 	rtsp_teardown(&ctx, url);

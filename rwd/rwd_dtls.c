@@ -391,8 +391,8 @@ int rwd_dtls_export_srtp_keys(rwd_client_t *c, Compy_SrtpKeyMaterial *send_key,
 	memcpy(recv_key->master_salt, key_material + 2 * SRTP_MASTER_KEY_LEN, SRTP_MASTER_SALT_LEN);
 
 	RSS_DEBUG("DTLS: SRTP keys exported (prf=%d, send_key=%02x%02x%02x%02x salt=%02x%02x)",
-		 c->tls_prf, send_key->master_key[0], send_key->master_key[1],
-		 send_key->master_key[2], send_key->master_key[3], send_key->master_salt[0],
-		 send_key->master_salt[1]);
+		  c->tls_prf, send_key->master_key[0], send_key->master_key[1],
+		  send_key->master_key[2], send_key->master_key[3], send_key->master_salt[0],
+		  send_key->master_salt[1]);
 	return 0;
 }

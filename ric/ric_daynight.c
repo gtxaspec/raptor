@@ -254,7 +254,7 @@ void ric_poll_exposure(ric_state_t *st)
 		if (st->cooldown_remaining == 0 && st->current_mode == RIC_MODE_NIGHT) {
 			st->night_gain_baseline = total_gain;
 			RSS_DEBUG("night baseline: gain=%u (day trigger < %u)", total_gain,
-				 total_gain * (uint32_t)st->cfg.day_gain_pct / 100);
+				  total_gain * (uint32_t)st->cfg.day_gain_pct / 100);
 		}
 		return;
 	}
@@ -313,7 +313,7 @@ void ric_poll_exposure(ric_state_t *st)
 			st->day_count = 0;
 			if (st->night_count >= st->cfg.hysteresis_sec) {
 				RSS_DEBUG("night detected (luma=%u gain=%u for %ds)", ae_luma,
-					 total_gain, st->cfg.hysteresis_sec);
+					  total_gain, st->cfg.hysteresis_sec);
 				ric_set_mode(st, RIC_MODE_NIGHT);
 			}
 		} else {
@@ -327,8 +327,8 @@ void ric_poll_exposure(ric_state_t *st)
 				uint32_t day_thr = st->night_gain_baseline *
 						   (uint32_t)st->cfg.day_gain_pct / 100;
 				RSS_DEBUG("day detected (gain=%u < %u [%d%% of %u] for %ds)",
-					 total_gain, day_thr, st->cfg.day_gain_pct,
-					 st->night_gain_baseline, st->cfg.hysteresis_sec);
+					  total_gain, day_thr, st->cfg.day_gain_pct,
+					  st->night_gain_baseline, st->cfg.hysteresis_sec);
 				ric_set_mode(st, RIC_MODE_DAY);
 			}
 		} else {

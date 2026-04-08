@@ -44,8 +44,8 @@
 #include <rss_ipc.h>
 #include <rss_common.h>
 
-static const char *daemons[] = {"rvd", "rsd", "rad", "rod", "rhd",
-				"ric", "rmr", "rmd", "rwd", "rwc", NULL};
+static const char *daemons[] = {"rvd", "rsd", "rad", "rod", "rhd", "ric",
+				"rmr", "rmd", "rwd", "rwc", NULL};
 
 /* Per-daemon help entries. NULL daemon = global commands. */
 struct help_entry {
@@ -54,15 +54,15 @@ struct help_entry {
 };
 
 static const struct help_entry help_entries[] = {
-	{NULL,  "status                              Show daemon status"},
-	{NULL,  "memory                              Show memory usage (private/shared)"},
-	{NULL,  "cpu                                 Show CPU usage (1s sample)"},
-	{NULL,  "get <section> <key>                 Read config value"},
-	{NULL,  "set <section> <key> <value>         Set config value"},
-	{NULL,  "config save                         Save running config to disk"},
-	{NULL,  "<daemon> status                     Show daemon details"},
-	{NULL,  "<daemon> config                     Show running config"},
-	{NULL,  "<daemon> <cmd> [args...]            Send command"},
+	{NULL, "status                              Show daemon status"},
+	{NULL, "memory                              Show memory usage (private/shared)"},
+	{NULL, "cpu                                 Show CPU usage (1s sample)"},
+	{NULL, "get <section> <key>                 Read config value"},
+	{NULL, "set <section> <key> <value>         Set config value"},
+	{NULL, "config save                         Save running config to disk"},
+	{NULL, "<daemon> status                     Show daemon details"},
+	{NULL, "<daemon> config                     Show running config"},
+	{NULL, "<daemon> <cmd> [args...]            Send command"},
 	{"rvd", "set-rc-mode <ch> <mode> [bps]       Change rate control mode"},
 	{"rvd", "set-bitrate <ch> <bps>              Change bitrate"},
 	{"rvd", "set-gop <ch> <length>               Change GOP length"},
@@ -107,9 +107,8 @@ static const struct help_entry help_entries[] = {
 	{"rwd", "share                               Show WebTorrent share URL"},
 	{"rwd", "share-rotate                        Generate new share key"},
 	{"rmd", "sensitivity <0-4>                   Set motion sensitivity"},
-	{NULL,  "test-motion [sec]                   Trigger clip recording (default 10s)"},
-	{NULL, NULL}
-};
+	{NULL, "test-motion [sec]                   Trigger clip recording (default 10s)"},
+	{NULL, NULL}};
 
 static int same_section(const char *a, const char *b)
 {
@@ -223,8 +222,8 @@ static unsigned long read_total_cpu_ticks(void)
 	char line[256];
 	unsigned long user = 0, nice = 0, sys = 0, idle = 0, iow = 0, irq = 0, sirq = 0;
 	if (fgets(line, sizeof(line), f))
-		sscanf(line, "cpu %lu %lu %lu %lu %lu %lu %lu",
-		       &user, &nice, &sys, &idle, &iow, &irq, &sirq);
+		sscanf(line, "cpu %lu %lu %lu %lu %lu %lu %lu", &user, &nice, &sys, &idle, &iow,
+		       &irq, &sirq);
 	fclose(f);
 	return user + nice + sys + idle + iow + irq + sirq;
 }
@@ -285,8 +284,8 @@ static void cmd_cpu(void)
 		unsigned long delta = s2[idx].ticks - s1[idx].ticks;
 		double pct = 100.0 * (double)delta / (double)total_delta;
 		total_cpu += pct;
-		printf("%-6s  %5.1f%%  %7d  %4lu KB\n", daemons[i], pct,
-		       s2[idx].threads, s2[idx].vsize / 1024);
+		printf("%-6s  %5.1f%%  %7d  %4lu KB\n", daemons[i], pct, s2[idx].threads,
+		       s2[idx].vsize / 1024);
 		idx++;
 	}
 	printf("%-6s  %6s  %7s  %6s\n", "------", "-----", "-------", "-----");
@@ -692,8 +691,8 @@ int main(int argc, char **argv)
 	} else if (strcmp(cmd, "privacy") == 0) {
 		if (argc > 4)
 			snprintf(json, sizeof(json),
-				 "{\"cmd\":\"privacy\",\"value\":\"%s\",\"channel\":%ld}",
-				 argv[3], strtol(argv[4], NULL, 10));
+				 "{\"cmd\":\"privacy\",\"value\":\"%s\",\"channel\":%ld}", argv[3],
+				 strtol(argv[4], NULL, 10));
 		else if (argc > 3)
 			snprintf(json, sizeof(json), "{\"cmd\":\"privacy\",\"value\":\"%s\"}",
 				 argv[3]);
@@ -716,25 +715,28 @@ int main(int argc, char **argv)
 
 	} else if (strcmp(cmd, "set-rc-mode") == 0) {
 		if (argc < 5) {
-			fprintf(stderr, "Usage: raptorctl %s set-rc-mode <ch> <mode> [bitrate]\n"
-					"  modes: fixqp cbr vbr smart capped_vbr capped_quality\n",
+			fprintf(stderr,
+				"Usage: raptorctl %s set-rc-mode <ch> <mode> [bitrate]\n"
+				"  modes: fixqp cbr vbr smart capped_vbr capped_quality\n",
 				daemon);
 			return 1;
 		}
 		int n = snprintf(json, sizeof(json),
-				 "{\"cmd\":\"set-rc-mode\",\"channel\":%s,\"mode\":\"%s\"",
-				 argv[3], argv[4]);
+				 "{\"cmd\":\"set-rc-mode\",\"channel\":%s,\"mode\":\"%s\"", argv[3],
+				 argv[4]);
 		if (argc >= 6)
 			n += snprintf(json + n, sizeof(json) - n, ",\"bitrate\":%s", argv[5]);
 		snprintf(json + n, sizeof(json) - n, "}");
 
 	} else if (strcmp(cmd, "set-wb") == 0) {
 		if (argc < 4) {
-			fprintf(stderr, "Usage: raptorctl %s set-wb <auto|manual> [r_gain] [b_gain]\n",
+			fprintf(stderr,
+				"Usage: raptorctl %s set-wb <auto|manual> [r_gain] [b_gain]\n",
 				daemon);
 			return 1;
 		}
-		int n = snprintf(json, sizeof(json), "{\"cmd\":\"set-wb\",\"mode\":\"%s\"", argv[3]);
+		int n = snprintf(json, sizeof(json), "{\"cmd\":\"set-wb\",\"mode\":\"%s\"",
+				 argv[3]);
 		if (argc >= 5)
 			n += snprintf(json + n, sizeof(json) - n, ",\"r_gain\":%s", argv[4]);
 		if (argc >= 6)
@@ -760,12 +762,10 @@ int main(int argc, char **argv)
 			val_arg = argc >= 6 ? argv[5] : "0";
 		}
 		if (sensor_idx >= 0)
-			snprintf(json, sizeof(json),
-				 "{\"cmd\":\"%s\",\"value\":%s,\"sensor\":%d}",
+			snprintf(json, sizeof(json), "{\"cmd\":\"%s\",\"value\":%s,\"sensor\":%d}",
 				 cmd, val_arg, sensor_idx);
 		else
-			snprintf(json, sizeof(json), "{\"cmd\":\"%s\",\"value\":%s}",
-				 cmd, val_arg);
+			snprintf(json, sizeof(json), "{\"cmd\":\"%s\",\"value\":%s}", cmd, val_arg);
 
 	} else if (strncmp(cmd, "get-", 4) == 0) {
 		/* Generic get-X pass-through */

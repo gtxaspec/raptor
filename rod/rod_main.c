@@ -81,9 +81,11 @@ static void load_config(rod_state_t *st)
 		    rss_config_get_bool(cfg, sec, "enabled", false)) {
 			int s = st->stream_count;
 			st->stream_w[s] = rss_config_get_int(cfg, sec, "width",
-				(i % 2 == 0) ? st->stream_w[0] : st->stream_w[1]);
+							     (i % 2 == 0) ? st->stream_w[0]
+									  : st->stream_w[1]);
 			st->stream_h[s] = rss_config_get_int(cfg, sec, "height",
-				(i % 2 == 0) ? st->stream_h[0] : st->stream_h[1]);
+							     (i % 2 == 0) ? st->stream_h[0]
+									  : st->stream_h[1]);
 			st->stream_count++;
 		}
 	}
@@ -291,7 +293,8 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 {
 	rod_state_t *st = userdata;
 
-	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, st->config, st->config_path);
+	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, st->config,
+					st->config_path);
 	if (rc >= 0)
 		return rc;
 
@@ -379,8 +382,7 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			 "\"text_string\":\"%s\","
 			 "\"logo_enabled\":%s}}",
 			 st->cfg.font_size, st->cfg.font_color, st->cfg.stroke_color,
-			 st->cfg.font_stroke,
-			 st->cfg.time_enabled ? "true" : "false",
+			 st->cfg.font_stroke, st->cfg.time_enabled ? "true" : "false",
 			 st->cfg.uptime_enabled ? "true" : "false",
 			 st->cfg.text_enabled ? "true" : "false", st->cfg.text_string,
 			 st->cfg.logo_enabled ? "true" : "false");
@@ -449,7 +451,7 @@ int main(int argc, char **argv)
 				  &st.logo_data) == 0) {
 			st.logo_data_size = st.cfg.logo_width * st.cfg.logo_height * 4;
 			RSS_DEBUG("logo loaded: %s (%dx%d)", st.cfg.logo_path, st.cfg.logo_width,
-				 st.cfg.logo_height);
+				  st.cfg.logo_height);
 		}
 
 		/* Sub-stream logo: try smaller variant */

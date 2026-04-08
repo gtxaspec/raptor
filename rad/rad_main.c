@@ -55,7 +55,8 @@ static void rad_fmt_result(char *buf, int bufsz, int ret)
 	if (ret == 0)
 		snprintf(buf, bufsz, "{\"status\":\"ok\"}");
 	else if (ret == RSS_ERR_NOTSUP)
-		snprintf(buf, bufsz, "{\"status\":\"error\",\"reason\":\"not supported on this SoC\"}");
+		snprintf(buf, bufsz,
+			 "{\"status\":\"error\",\"reason\":\"not supported on this SoC\"}");
 	else
 		snprintf(buf, bufsz, "{\"status\":\"error\",\"reason\":\"failed (%d)\"}", ret);
 }
@@ -67,13 +68,15 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	rad_ctrl_ctx_t *ctx = userdata;
 	int val;
 
-	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, ctx->cfg, ctx->config_path);
+	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, ctx->cfg,
+					ctx->config_path);
 	if (rc >= 0)
 		return rc;
 
 	if (strstr(cmd_json, "\"set-volume\"")) {
 		if (rss_json_get_int(cmd_json, "value", &val) == 0) {
-			int ret = RSS_HAL_CALL(ctx->ops, audio_set_volume, ctx->hal_ctx, ctx->ai_dev, 0, val);
+			int ret = RSS_HAL_CALL(ctx->ops, audio_set_volume, ctx->hal_ctx,
+					       ctx->ai_dev, 0, val);
 			if (ret == 0) {
 				ctx->volume = val;
 				rss_config_set_int(ctx->cfg, "audio", "volume", val);
@@ -88,7 +91,8 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 
 	if (strstr(cmd_json, "\"set-gain\"")) {
 		if (rss_json_get_int(cmd_json, "value", &val) == 0) {
-			int ret = RSS_HAL_CALL(ctx->ops, audio_set_gain, ctx->hal_ctx, ctx->ai_dev, 0, val);
+			int ret = RSS_HAL_CALL(ctx->ops, audio_set_gain, ctx->hal_ctx, ctx->ai_dev,
+					       0, val);
 			if (ret == 0) {
 				ctx->gain = val;
 				rss_config_set_int(ctx->cfg, "audio", "gain", val);
@@ -112,7 +116,7 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				snprintf(resp_buf, resp_buf_size,
 					 "{\"status\":\"error\",\"reason\":\"%s\"}",
 					 ret == RSS_ERR_NOTSUP ? "not supported on this platform"
-								: "failed");
+							       : "failed");
 			}
 		} else {
 			snprintf(resp_buf, resp_buf_size,
@@ -143,7 +147,8 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				ctx->ns_enabled = !!val;
 			if (ret == RSS_ERR_NOTSUP)
 				snprintf(resp_buf, resp_buf_size,
-					 "{\"status\":\"error\",\"reason\":\"not supported on this SoC\"}");
+					 "{\"status\":\"error\",\"reason\":\"not supported on this "
+					 "SoC\"}");
 			else
 				snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\",\"ns\":%s}",
 					 ret == RSS_OK ? "ok" : "error",
@@ -166,7 +171,8 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				ctx->hpf_enabled = !!val;
 			if (ret == RSS_ERR_NOTSUP)
 				snprintf(resp_buf, resp_buf_size,
-					 "{\"status\":\"error\",\"reason\":\"not supported on this SoC\"}");
+					 "{\"status\":\"error\",\"reason\":\"not supported on this "
+					 "SoC\"}");
 			else
 				snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\",\"hpf\":%s}",
 					 ret == RSS_OK ? "ok" : "error",
@@ -198,7 +204,8 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				ctx->agc_enabled = !!val;
 			if (ret == RSS_ERR_NOTSUP)
 				snprintf(resp_buf, resp_buf_size,
-					 "{\"status\":\"error\",\"reason\":\"not supported on this SoC\"}");
+					 "{\"status\":\"error\",\"reason\":\"not supported on this "
+					 "SoC\"}");
 			else
 				snprintf(resp_buf, resp_buf_size, "{\"status\":\"%s\",\"agc\":%s}",
 					 ret == RSS_OK ? "ok" : "error",
@@ -495,7 +502,7 @@ int main(int argc, char **argv)
 		ret = RSS_HAL_CALL(ops, audio_enable_agc, hal_ctx, &agc_cfg);
 		if (ret == RSS_OK)
 			RSS_DEBUG("agc: target=%d dBfs, compression=%d dB",
-				 agc_cfg.target_level_dbfs, agc_cfg.compression_gain_db);
+				  agc_cfg.target_level_dbfs, agc_cfg.compression_gain_db);
 		else
 			RSS_WARN("agc failed: %d", ret);
 	}
@@ -529,7 +536,7 @@ int main(int argc, char **argv)
 			if (pthread_create(&ao_tid, NULL, ao_playback_thread, &ao_ctx) == 0) {
 				ao_thread_started = true;
 				RSS_DEBUG("audio output: %d Hz vol=%d gain=%d", sample_rate, ao_vol,
-					 ao_gain_val);
+					  ao_gain_val);
 			} else {
 				RSS_WARN("ao thread create failed");
 				ao_enabled = false;
@@ -566,7 +573,7 @@ int main(int argc, char **argv)
 		RSS_WARN("control socket failed (non-fatal)");
 
 	RSS_DEBUG("audio loop: %d samples/frame (%dms), %s", audio_cfg.samples_per_frame, 1000 / 50,
-		 codec_str);
+		  codec_str);
 
 	rad_ctrl_ctx_t ctrl_ctx = {
 		.cfg = dctx.cfg,
@@ -624,9 +631,8 @@ int main(int argc, char **argv)
 		const int16_t *pcm = frame.data;
 		int out_len;
 
-		out_len = codec_ops->encode(&codec_ctx, pcm, samples,
-					   encode_buf, encode_buf_size,
-					   frame.timestamp);
+		out_len = codec_ops->encode(&codec_ctx, pcm, samples, encode_buf, encode_buf_size,
+					    frame.timestamp);
 
 		if (out_len > 0)
 			rss_ring_publish(ring, encode_buf, out_len, frame.timestamp, codec_id, 0);

@@ -160,7 +160,7 @@ static void close_segment(rmr_state_t *st)
 	if (fd >= 0) {
 		rmr_storage_close_segment(fd);
 		RSS_DEBUG("segment closed: %s (%" PRIu64 " frames, %" PRIu64 " bytes)",
-			 st->segment_path, st->frames_written, st->bytes_written);
+			  st->segment_path, st->frames_written, st->bytes_written);
 	}
 }
 
@@ -204,7 +204,7 @@ static void close_clip(rmr_state_t *st)
 	if (st->clip_fd >= 0) {
 		rmr_storage_close_segment(st->clip_fd);
 		RSS_DEBUG("motion clip closed: %s (%" PRIu64 " bytes)", st->clip_path,
-			 st->clip_bytes);
+			  st->clip_bytes);
 		st->clip_fd = -1;
 	}
 }
@@ -310,7 +310,8 @@ static int open_clip_with_prebuffer(rmr_state_t *st, uint32_t audio_samples_per_
 
 	/* Replay video pre-buffer */
 	int vcount = rmr_prebuf_iterate(st->video_pb, vstart, replay_video_frame, &rc);
-	RSS_DEBUG("pre-buffer: replayed %d video frames (%.1fs)", vcount, v_duration_us / 1000000.0);
+	RSS_DEBUG("pre-buffer: replayed %d video frames (%.1fs)", vcount,
+		  v_duration_us / 1000000.0);
 
 	/* Replay audio pre-buffer — match video duration by frame count.
 	 * Timestamp matching is unreliable across rings, so calculate
@@ -337,7 +338,7 @@ static int open_clip_with_prebuffer(rmr_state_t *st, uint32_t audio_samples_per_
 		rc.count = 0;
 		int acount = rmr_prebuf_iterate(st->audio_pb, astart, replay_audio_frame, &rc);
 		RSS_DEBUG("pre-buffer: replayed %d audio frames (target %d, %.1fs)", acount,
-			 audio_frame_count, v_duration_us / 1000000.0);
+			  audio_frame_count, v_duration_us / 1000000.0);
 	}
 
 	return 0;
@@ -439,7 +440,7 @@ static void record_loop(rmr_state_t *st)
 				else if (st->audio_codec == RMR_AUDIO_OPUS)
 					audio_samples_per_frame = st->audio_sample_rate / 50;
 				RSS_DEBUG("audio ring attached (late): codec=%u rate=%u",
-					 st->audio_codec, st->audio_sample_rate);
+					  st->audio_codec, st->audio_sample_rate);
 			}
 		}
 
@@ -447,8 +448,7 @@ static void record_loop(rmr_state_t *st)
 		if (!st->video_ring) {
 			st->video_ring = rss_ring_open(st->video_ring_name);
 			if (st->video_ring) {
-				const rss_ring_header_t *vhdr =
-					rss_ring_get_header(st->video_ring);
+				const rss_ring_header_t *vhdr = rss_ring_get_header(st->video_ring);
 				if (vhdr->data_size > st->frame_buf_size) {
 					uint8_t *new_frame = malloc(vhdr->data_size);
 					uint8_t *new_avcc = malloc(vhdr->data_size);
@@ -787,9 +787,7 @@ int main(int argc, char **argv)
 	st.clip_length_sec = rss_config_get_int(dctx.cfg, "recording", "clip_length_sec", 60);
 
 	/* Open video ring (stream 0-5 for multi-sensor) */
-	static const char *ring_names[] = {
-		"main", "sub", "s1_main", "s1_sub", "s2_main", "s2_sub"
-	};
+	static const char *ring_names[] = {"main", "sub", "s1_main", "s1_sub", "s2_main", "s2_sub"};
 	int ri = st.stream_idx;
 	if (ri < 0 || ri >= (int)(sizeof(ring_names) / sizeof(ring_names[0])))
 		ri = 0;
@@ -857,7 +855,7 @@ int main(int argc, char **argv)
 		st.video_pb = rmr_prebuf_create(v_slots, (uint32_t)v_data);
 		if (st.video_pb)
 			RSS_DEBUG("video pre-buffer: %u slots, %u KB data", v_slots,
-				 (uint32_t)(v_data / 1024));
+				  (uint32_t)(v_data / 1024));
 		else
 			RSS_WARN("video pre-buffer alloc failed");
 
@@ -873,7 +871,7 @@ int main(int argc, char **argv)
 			st.audio_pb = rmr_prebuf_create(a_slots, a_data);
 			if (st.audio_pb)
 				RSS_DEBUG("audio pre-buffer: %u slots, %u KB data", a_slots,
-					 a_data / 1024);
+					  a_data / 1024);
 			else
 				RSS_WARN("audio pre-buffer alloc failed");
 		}

@@ -313,8 +313,7 @@ static void handle_udp_packet(rwd_server_t *srv, const uint8_t *buf, size_t len,
 			rwd_client_t *c = find_client_by_addr(srv, from, from_len);
 			if (c && c->sending) {
 				int si = c->stream_idx;
-				if (si >= 0 && si < RWD_STREAM_COUNT &&
-				    srv->video_rings[si])
+				if (si >= 0 && si < RWD_STREAM_COUNT && srv->video_rings[si])
 					rss_ring_request_idr(srv->video_rings[si]);
 			}
 			pthread_mutex_unlock(&srv->clients_lock);
@@ -392,7 +391,8 @@ static int rwd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 {
 	rwd_server_t *srv = userdata;
 
-	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, srv->cfg, srv->config_path);
+	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, srv->cfg,
+					srv->config_path);
 	if (rc >= 0)
 		return rc;
 

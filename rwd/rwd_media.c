@@ -135,8 +135,8 @@ static void rwd_bc_recv_t_on_audio(VSelf, uint8_t payload_type, uint32_t timesta
 			pcm_up[i * 2] = s;
 			pcm_up[i * 2 + 1] = s;
 		}
-		rss_ring_publish(*ring_ptr, (const uint8_t *)pcm_up, n * 4,
-				 rss_timestamp_us(), 0, 0);
+		rss_ring_publish(*ring_ptr, (const uint8_t *)pcm_up, n * 4, rss_timestamp_us(), 0,
+				 0);
 	} else if (self->opus_dec && payload.len > 0) {
 		/* Opus → PCM16 at 48kHz, downsample 3:1 to 16kHz */
 		int samples = opus_decode(self->opus_dec, payload.ptr, (opus_int32)payload.len,
@@ -257,8 +257,8 @@ int rwd_media_setup(rwd_client_t *c)
 
 		c->srtp_recv = compy_srtp_recv_new(suite, &recv_key);
 		if (c->srtp_recv)
-			RSS_DEBUG("media: backchannel ready (pt=%d, opus decoder %s)",
-				 bc_pt, bc->opus_dec ? "ok" : "failed");
+			RSS_DEBUG("media: backchannel ready (pt=%d, opus decoder %s)", bc_pt,
+				  bc->opus_dec ? "ok" : "failed");
 	}
 
 	c->media_ready = true;
@@ -371,7 +371,8 @@ static const uint8_t *find_nalu_end(const uint8_t *nalu_start, const uint8_t *en
 {
 	const uint8_t *p = nalu_start;
 	while (p < end - 3) {
-		if (p[0] == 0 && p[1] == 0 && (p[2] == 1 || (p[2] == 0 && p + 3 < end && p[3] == 1)))
+		if (p[0] == 0 && p[1] == 0 &&
+		    (p[2] == 1 || (p[2] == 0 && p + 3 < end && p[3] == 1)))
 			return p;
 		p++;
 	}
@@ -493,9 +494,8 @@ static void rwd_send_audio_frame(rwd_client_t *c, uint32_t codec, const uint8_t 
  * Reads from both main (stream 0) and sub (stream 1) rings,
  * dispatching frames to clients based on their stream_idx. */
 
-static const char *ring_names[RWD_STREAM_COUNT] = {
-	"main", "sub", "s1_main", "s1_sub", "s2_main", "s2_sub"
-};
+static const char *ring_names[RWD_STREAM_COUNT] = {"main",   "sub",	"s1_main",
+						   "s1_sub", "s2_main", "s2_sub"};
 
 void *rwd_video_reader_thread(void *arg)
 {
@@ -544,8 +544,8 @@ void *rwd_video_reader_thread(void *arg)
 				if (srv->video_rings[s]) {
 					const rss_ring_header_t *h =
 						rss_ring_get_header(srv->video_rings[s]);
-					uint32_t ds = h->data_size /
-						(h->slot_count ? h->slot_count : 1);
+					uint32_t ds =
+						h->data_size / (h->slot_count ? h->slot_count : 1);
 					if (ds < 256 * 1024)
 						ds = 256 * 1024;
 					if (ds > srv->video_buf_sizes[s]) {
@@ -564,8 +564,8 @@ void *rwd_video_reader_thread(void *arg)
 					last_ws[s] = 0;
 					idle[s] = 0;
 					video_ts_epoch[s] = 0;
-					RSS_DEBUG("media: video reader[%d] reconnected (%s)",
-						 s, ring_names[s]);
+					RSS_DEBUG("media: video reader[%d] reconnected (%s)", s,
+						  ring_names[s]);
 				}
 			}
 			if (!srv->video_rings[s] || !srv->video_bufs[s])
@@ -582,8 +582,8 @@ void *rwd_video_reader_thread(void *arg)
 					idle[s] = 0;
 				last_ws[s] = ws;
 				if (idle[s] >= 40) { /* ~2s at 50ms timeout */
-					RSS_DEBUG("media: video[%d] idle, closing ring (%s)",
-						 s, ring_names[s]);
+					RSS_DEBUG("media: video[%d] idle, closing ring (%s)", s,
+						  ring_names[s]);
 					rss_ring_close(srv->video_rings[s]);
 					srv->video_rings[s] = NULL;
 					idle[s] = 0;
@@ -618,8 +618,9 @@ void *rwd_video_reader_thread(void *arg)
 
 			if (video_ts_epoch[s] == 0)
 				video_ts_epoch[s] = meta.timestamp;
-			uint32_t rtp_ts = (uint32_t)((uint64_t)(meta.timestamp - video_ts_epoch[s])
-						     * RWD_VIDEO_CLOCK / 1000000);
+			uint32_t rtp_ts =
+				(uint32_t)((uint64_t)(meta.timestamp - video_ts_epoch[s]) *
+					   RWD_VIDEO_CLOCK / 1000000);
 
 			pthread_mutex_lock(&srv->clients_lock);
 			for (int i = 0; i < RWD_MAX_CLIENTS; i++) {
@@ -634,7 +635,7 @@ void *rwd_video_reader_thread(void *arg)
 					c->video_ts_offset = rtp_ts;
 					c->video_ts_base_set = true;
 					RSS_DEBUG("media: client[%d] got keyframe, starting send",
-						 s);
+						  s);
 				}
 
 				uint32_t client_ts = rtp_ts - c->video_ts_offset;
@@ -723,8 +724,8 @@ void *rwd_audio_reader_thread(void *arg)
 
 			if (audio_ts_epoch == 0)
 				audio_ts_epoch = meta.timestamp;
-			uint32_t rtp_ts = (uint32_t)((uint64_t)(meta.timestamp - audio_ts_epoch)
-						     * rtp_clock / 1000000);
+			uint32_t rtp_ts = (uint32_t)((uint64_t)(meta.timestamp - audio_ts_epoch) *
+						     rtp_clock / 1000000);
 
 			pthread_mutex_lock(&srv->clients_lock);
 			for (int i = 0; i < RWD_MAX_CLIENTS; i++) {

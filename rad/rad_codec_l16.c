@@ -14,8 +14,8 @@ static int l16_init(rad_codec_ctx_t *ctx, rss_config_t *cfg, int sample_rate)
 	return 0;
 }
 
-static int l16_encode(rad_codec_ctx_t *ctx, const int16_t *pcm, int samples,
-		      uint8_t *out, int out_size, int64_t timestamp)
+static int l16_encode(rad_codec_ctx_t *ctx, const int16_t *pcm, int samples, uint8_t *out,
+		      int out_size, int64_t timestamp)
 {
 	(void)ctx;
 	(void)timestamp;

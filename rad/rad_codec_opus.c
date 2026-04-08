@@ -19,8 +19,7 @@ static int opus_init_codec(rad_codec_ctx_t *ctx, rss_config_t *cfg, int sample_r
 		return -1;
 
 	int err;
-	st->enc = opus_encoder_create(sample_rate, 1,
-				      OPUS_APPLICATION_RESTRICTED_LOWDELAY, &err);
+	st->enc = opus_encoder_create(sample_rate, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY, &err);
 	if (err != OPUS_OK || !st->enc) {
 		free(st);
 		return -1;
@@ -32,8 +31,10 @@ static int opus_init_codec(rad_codec_ctx_t *ctx, rss_config_t *cfg, int sample_r
 	opus_encoder_ctl(st->enc, OPUS_SET_BITRATE(bitrate));
 
 	int complexity = rss_config_get_int(cfg, "audio", "opus_complexity", 5);
-	if (complexity < 0) complexity = 0;
-	if (complexity > 10) complexity = 10;
+	if (complexity < 0)
+		complexity = 0;
+	if (complexity > 10)
+		complexity = 10;
 	opus_encoder_ctl(st->enc, OPUS_SET_COMPLEXITY(complexity));
 
 	ctx->priv = st;
@@ -43,8 +44,8 @@ static int opus_init_codec(rad_codec_ctx_t *ctx, rss_config_t *cfg, int sample_r
 	return 0;
 }
 
-static int opus_encode_frame(rad_codec_ctx_t *ctx, const int16_t *pcm, int samples,
-			     uint8_t *out, int out_size, int64_t timestamp)
+static int opus_encode_frame(rad_codec_ctx_t *ctx, const int16_t *pcm, int samples, uint8_t *out,
+			     int out_size, int64_t timestamp)
 {
 	(void)timestamp;
 	opus_state_t *st = ctx->priv;

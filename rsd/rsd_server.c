@@ -259,9 +259,8 @@ static void handle_client_data(rsd_server_t *srv, int fd)
 int rsd_server_init(rsd_server_t *srv)
 {
 	/* Ring names for multi-sensor: sensor 0 = main/sub, sensor N = sN_main/sN_sub */
-	static const char *ring_names[RSD_STREAM_COUNT] = {
-		"main", "sub", "s1_main", "s1_sub", "s2_main", "s2_sub"
-	};
+	static const char *ring_names[RSD_STREAM_COUNT] = {"main",   "sub",	"s1_main",
+							   "s1_sub", "s2_main", "s2_sub"};
 
 	/* Wait for main ring to appear */
 	RSS_INFO("waiting for video ring...");

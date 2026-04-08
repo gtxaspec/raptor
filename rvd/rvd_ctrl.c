@@ -20,16 +20,16 @@ static const struct {
 	const char *name;
 	rss_wb_mode_t mode;
 } wb_mode_table[] = {
-	{"auto",             RSS_WB_AUTO},
-	{"manual",           RSS_WB_MANUAL},
-	{"daylight",         RSS_WB_DAYLIGHT},
-	{"cloudy",           RSS_WB_CLOUDY},
-	{"incandescent",     RSS_WB_INCANDESCENT},
-	{"flourescent",      RSS_WB_FLOURESCENT},
-	{"twilight",         RSS_WB_TWILIGHT},
-	{"shade",            RSS_WB_SHADE},
+	{"auto", RSS_WB_AUTO},
+	{"manual", RSS_WB_MANUAL},
+	{"daylight", RSS_WB_DAYLIGHT},
+	{"cloudy", RSS_WB_CLOUDY},
+	{"incandescent", RSS_WB_INCANDESCENT},
+	{"flourescent", RSS_WB_FLOURESCENT},
+	{"twilight", RSS_WB_TWILIGHT},
+	{"shade", RSS_WB_SHADE},
 	{"warm_flourescent", RSS_WB_WARM_FLOURESCENT},
-	{"custom",           RSS_WB_CUSTOM},
+	{"custom", RSS_WB_CUSTOM},
 };
 #define WB_MODE_COUNT (sizeof(wb_mode_table) / sizeof(wb_mode_table[0]))
 
@@ -63,7 +63,8 @@ static void fmt_hal_result(char *buf, int bufsz, int ret)
 	if (ret == 0)
 		snprintf(buf, bufsz, "{\"status\":\"ok\"}");
 	else if (ret == RSS_ERR_NOTSUP)
-		snprintf(buf, bufsz, "{\"status\":\"error\",\"reason\":\"not supported on this SoC\"}");
+		snprintf(buf, bufsz,
+			 "{\"status\":\"error\",\"reason\":\"not supported on this SoC\"}");
 	else
 		snprintf(buf, bufsz, "{\"status\":\"error\",\"reason\":\"failed (%d)\"}", ret);
 }
@@ -96,12 +97,15 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 		rss_json_get_str(cmd_json, "mode", mode_str, sizeof(mode_str));
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
 		    chn < st->stream_count && mode_str[0]) {
-			static const struct { const char *name; rss_rc_mode_t mode; } rc_map[] = {
-				{"fixqp",          RSS_RC_FIXQP},
-				{"cbr",            RSS_RC_CBR},
-				{"vbr",            RSS_RC_VBR},
-				{"smart",          RSS_RC_SMART},
-				{"capped_vbr",     RSS_RC_CAPPED_VBR},
+			static const struct {
+				const char *name;
+				rss_rc_mode_t mode;
+			} rc_map[] = {
+				{"fixqp", RSS_RC_FIXQP},
+				{"cbr", RSS_RC_CBR},
+				{"vbr", RSS_RC_VBR},
+				{"smart", RSS_RC_SMART},
+				{"capped_vbr", RSS_RC_CAPPED_VBR},
 				{"capped_quality", RSS_RC_CAPPED_QUALITY},
 			};
 			rss_rc_mode_t mode = RSS_RC_CBR;
@@ -119,7 +123,8 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 					       st->streams[chn].chn, mode, bitrate);
 			if (ret == 0) {
 				st->streams[chn].enc_cfg.rc_mode = mode;
-				rss_config_set_str(st->cfg, stream_section(chn), "rc_mode", mode_str);
+				rss_config_set_str(st->cfg, stream_section(chn), "rc_mode",
+						   mode_str);
 			}
 			snprintf(resp, resp_size, "{\"status\":\"%s\",\"rc_mode\":\"%s\"}",
 				 ret == 0 ? "ok" : "error", mode_str);
@@ -282,8 +287,7 @@ static int handle_isp_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 		int ret = RSS_HAL_CALL(st->ops, isp_set_wb, st->hal_ctx, &wb);
 		snprintf(resp, resp_size,
 			 "{\"status\":\"%s\",\"mode\":\"%s\",\"r_gain\":%u,\"b_gain\":%u}",
-			 ret == 0 ? "ok" : "error", wb_mode_str(wb.mode),
-			 wb.r_gain, wb.b_gain);
+			 ret == 0 ? "ok" : "error", wb_mode_str(wb.mode), wb.r_gain, wb.b_gain);
 		return 1;
 	}
 
@@ -291,7 +295,8 @@ static int handle_isp_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 		rss_wb_config_t wb = {0};
 		RSS_HAL_CALL(st->ops, isp_get_wb, st->hal_ctx, &wb);
 		snprintf(resp, resp_size,
-			 "{\"status\":\"ok\",\"mode\":\"%s\",\"r_gain\":%u,\"g_gain\":%u,\"b_gain\":%u}",
+			 "{\"status\":\"ok\",\"mode\":\"%s\",\"r_gain\":%u,\"g_gain\":%u,\"b_"
+			 "gain\":%u}",
 			 wb_mode_str(wb.mode), wb.r_gain, wb.g_gain, wb.b_gain);
 		return 1;
 	}
@@ -321,8 +326,8 @@ static int handle_isp_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 			 "\"max_again\":%u,\"max_dgain\":%u,"
 			 "\"wb_mode\":\"%s\",\"wb_r\":%u,\"wb_g\":%u,\"wb_b\":%u}",
 			 bri, con, sat, shp, hue, sin, tem, hf, vf, ae, again, dgain,
-			 wb.mode == RSS_WB_MANUAL ? "manual" : "auto",
-			 wb.r_gain, wb.g_gain, wb.b_gain);
+			 wb.mode == RSS_WB_MANUAL ? "manual" : "auto", wb.r_gain, wb.g_gain,
+			 wb.b_gain);
 		return 1;
 	}
 
@@ -442,8 +447,8 @@ static int handle_config_cmd(const char *cmd_json, rvd_state_t *st, char *resp, 
 				continue;
 			if (n >= resp_size - 2)
 				break;
-			n += snprintf(resp + n, resp_size - n, "%s\"%s\"",
-				      first ? "" : ",", st->privacy[i] ? "on" : "off");
+			n += snprintf(resp + n, resp_size - n, "%s\"%s\"", first ? "" : ",",
+				      st->privacy[i] ? "on" : "off");
 			first = 0;
 		}
 		if (n < resp_size - 2)

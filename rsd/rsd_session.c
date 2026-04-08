@@ -13,7 +13,6 @@
 
 #include "rsd.h"
 
-
 /* ── Backchannel audio receiver (separate type for interface99) ── */
 
 typedef struct {
@@ -336,10 +335,10 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 			     "RTP/AVP/TCP;unicast;interleaved=%" PRIu8 "-%" PRIu8, rtp_ch, rtcp_ch);
 
 		RSS_DEBUG("client SETUP: %s TCP interleaved %u-%u",
-			 is_backchannel ? "backchannel"
-			 : is_audio	? "audio"
-					: "video",
-			 rtp_ch, rtcp_ch);
+			  is_backchannel ? "backchannel"
+			  : is_audio	 ? "audio"
+					 : "video",
+			  rtp_ch, rtcp_ch);
 
 		/* Track RTCP channel for incoming RR routing */
 		if (!is_backchannel) {
@@ -418,7 +417,7 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 			     cli_rtp, cli_rtcp, srv_rtp, srv_rtcp);
 
 		RSS_DEBUG("client SETUP: video UDP client=%u-%u server=%u-%u", cli_rtp, cli_rtcp,
-			 srv_rtp, srv_rtcp);
+			  srv_rtp, srv_rtcp);
 	}
 
 	if (is_backchannel) {
@@ -482,8 +481,8 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 		}
 	}
 
-	compy_header(ctx, COMPY_HEADER_SESSION, "%" PRIu64 ";timeout=%d",
-		     self->session_id, self->srv->session_timeout);
+	compy_header(ctx, COMPY_HEADER_SESSION, "%" PRIu64 ";timeout=%d", self->session_id,
+		     self->srv->session_timeout);
 	compy_respond_ok(ctx);
 }
 

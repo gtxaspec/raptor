@@ -18,9 +18,9 @@
 
 typedef struct {
 	faacEncHandle handle;
-	int16_t *pcm_buf;         /* accumulation buffer */
-	int pcm_fill;             /* samples accumulated */
-	int frame_samples;        /* samples needed per AAC frame */
+	int16_t *pcm_buf;	  /* accumulation buffer */
+	int pcm_fill;		  /* samples accumulated */
+	int frame_samples;	  /* samples needed per AAC frame */
 	unsigned long max_output; /* max encoded bytes per frame */
 } aac_state_t;
 
@@ -67,13 +67,13 @@ static int aac_init(rad_codec_ctx_t *ctx, rss_config_t *cfg, int sample_rate)
 	ctx->priv = st;
 	ctx->encode_buf_size = (int)st->max_output;
 
-	RSS_DEBUG("aac encoder: %d samples/frame, max %lu bytes output",
-		  st->frame_samples, st->max_output);
+	RSS_DEBUG("aac encoder: %d samples/frame, max %lu bytes output", st->frame_samples,
+		  st->max_output);
 	return 0;
 }
 
-static int aac_encode(rad_codec_ctx_t *ctx, const int16_t *pcm, int samples,
-		      uint8_t *out, int out_size, int64_t timestamp)
+static int aac_encode(rad_codec_ctx_t *ctx, const int16_t *pcm, int samples, uint8_t *out,
+		      int out_size, int64_t timestamp)
 {
 	aac_state_t *st = ctx->priv;
 	const int16_t *src = pcm;
@@ -93,8 +93,7 @@ static int aac_encode(rad_codec_ctx_t *ctx, const int16_t *pcm, int samples,
 						st->frame_samples, out, out_size);
 			st->pcm_fill = 0;
 			if (len > 0 && ctx->ring)
-				rss_ring_publish(ctx->ring, out, len,
-						 timestamp, ctx->codec_id, 0);
+				rss_ring_publish(ctx->ring, out, len, timestamp, ctx->codec_id, 0);
 		}
 	}
 

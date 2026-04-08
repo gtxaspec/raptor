@@ -111,7 +111,7 @@ int rod_render_init(rod_state_t *st, int stream_idx, int font_size)
 	f->text_height = (f->text_height + 1) & ~1;
 
 	RSS_DEBUG("font[%d]: %s size=%d, %d glyphs cached, text=%dx%d", stream_idx,
-		 st->cfg.font_path, font_size, f->glyph_count, f->max_text_width, f->text_height);
+		  st->cfg.font_path, font_size, f->glyph_count, f->max_text_width, f->text_height);
 	return 0;
 }
 
