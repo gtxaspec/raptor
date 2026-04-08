@@ -142,6 +142,22 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	if (rc >= 0)
 		return rc;
 
+	if (strstr(cmd_json, "\"isp-mode\"")) {
+		/* ISP running mode only — no GPIO/IR-cut toggling */
+		char val[16];
+		const char *isp_state = "day";
+		if (rss_json_get_str(cmd_json, "value", val, sizeof(val)) == 0) {
+			ric_mode_t m = strcmp(val, "night") == 0 ? RIC_MODE_NIGHT : RIC_MODE_DAY;
+			ric_set_isp_mode(m);
+			isp_state = val;
+			RSS_INFO("ISP mode set to %s (GPIO unchanged)", val);
+		}
+		snprintf(resp_buf, resp_buf_size,
+			 "{\"status\":\"ok\",\"isp_mode\":\"%s\",\"hw_state\":\"%s\"}", isp_state,
+			 st->current_mode == RIC_MODE_DAY ? "day" : "night");
+		return (int)strlen(resp_buf);
+	}
+
 	if (strstr(cmd_json, "\"mode\"")) {
 		char val[16];
 		if (rss_json_get_str(cmd_json, "value", val, sizeof(val)) == 0) {

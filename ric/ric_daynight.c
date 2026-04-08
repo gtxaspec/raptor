@@ -145,61 +145,60 @@ void ric_gpio_init(ric_state_t *st)
 }
 
 /*
- * Set the IR-cut filter and ISP running mode.
- *
- * Single GPIO mode: pin high = day (filter closed), low = night (filter open).
- * Dual GPIO mode: pulse pin1/pin2 for 100ms, then both low (motor driver).
+ * Set ISP running mode only (day/night) via RVD control socket.
+ * Does not toggle GPIO/IR-cut hardware.
  */
+void ric_set_isp_mode(ric_mode_t mode)
+{
+	char resp[128];
+	rss_ctrl_send_command("/var/run/rss/rvd.sock",
+			      mode == RIC_MODE_NIGHT
+				      ? "{\"cmd\":\"set-running-mode\",\"value\":\"night\"}"
+				      : "{\"cmd\":\"set-running-mode\",\"value\":\"day\"}",
+			      resp, sizeof(resp), 2000);
+}
+
+static void ric_set_gpio(ric_state_t *st, ric_mode_t mode)
+{
+	if (mode == RIC_MODE_NIGHT) {
+		if (st->cfg.gpio_ircut >= 0) {
+			if (st->cfg.gpio_ircut2 >= 0) {
+				gpio_set(st->cfg.gpio_ircut, 0);
+				gpio_set(st->cfg.gpio_ircut2, 1);
+				usleep(100000);
+				gpio_set(st->cfg.gpio_ircut, 0);
+				gpio_set(st->cfg.gpio_ircut2, 0);
+			} else {
+				gpio_set(st->cfg.gpio_ircut, 0);
+			}
+		}
+		if (st->cfg.gpio_irled >= 0)
+			gpio_set(st->cfg.gpio_irled, 1);
+	} else {
+		if (st->cfg.gpio_ircut >= 0) {
+			if (st->cfg.gpio_ircut2 >= 0) {
+				gpio_set(st->cfg.gpio_ircut, 1);
+				gpio_set(st->cfg.gpio_ircut2, 0);
+				usleep(100000);
+				gpio_set(st->cfg.gpio_ircut, 0);
+				gpio_set(st->cfg.gpio_ircut2, 0);
+			} else {
+				gpio_set(st->cfg.gpio_ircut, 1);
+			}
+		}
+		if (st->cfg.gpio_irled >= 0)
+			gpio_set(st->cfg.gpio_irled, 0);
+	}
+}
+
 void ric_set_mode(ric_state_t *st, ric_mode_t mode)
 {
 	if (mode == st->current_mode)
 		return;
 
-	if (mode == RIC_MODE_NIGHT) {
-		/* Night: open IR-cut filter, enable IR LEDs, ISP night mode */
-		if (st->cfg.gpio_ircut2 >= 0) {
-			/* Dual GPIO: pulse for motor */
-			gpio_set(st->cfg.gpio_ircut, 0);
-			gpio_set(st->cfg.gpio_ircut2, 1);
-			usleep(100000); /* 100ms pulse */
-			gpio_set(st->cfg.gpio_ircut, 0);
-			gpio_set(st->cfg.gpio_ircut2, 0);
-		} else {
-			/* Single GPIO */
-			gpio_set(st->cfg.gpio_ircut, 0);
-		}
-		if (st->cfg.gpio_irled >= 0)
-			gpio_set(st->cfg.gpio_irled, 1);
-		{
-			char resp[128];
-			rss_ctrl_send_command("/var/run/rss/rvd.sock",
-					      "{\"cmd\":\"set-running-mode\",\"value\":\"night\"}",
-					      resp, sizeof(resp), 2000);
-		}
-		RSS_INFO("switched to NIGHT mode");
-	} else {
-		/* Day: close IR-cut filter, disable IR LEDs, ISP day mode */
-		if (st->cfg.gpio_ircut2 >= 0) {
-			/* Dual GPIO: pulse for motor */
-			gpio_set(st->cfg.gpio_ircut, 1);
-			gpio_set(st->cfg.gpio_ircut2, 0);
-			usleep(100000); /* 100ms pulse */
-			gpio_set(st->cfg.gpio_ircut, 0);
-			gpio_set(st->cfg.gpio_ircut2, 0);
-		} else {
-			/* Single GPIO */
-			gpio_set(st->cfg.gpio_ircut, 1);
-		}
-		if (st->cfg.gpio_irled >= 0)
-			gpio_set(st->cfg.gpio_irled, 0);
-		{
-			char resp[128];
-			rss_ctrl_send_command("/var/run/rss/rvd.sock",
-					      "{\"cmd\":\"set-running-mode\",\"value\":\"day\"}",
-					      resp, sizeof(resp), 2000);
-		}
-		RSS_INFO("switched to DAY mode");
-	}
+	ric_set_gpio(st, mode);
+	ric_set_isp_mode(mode);
+	RSS_INFO("switched to %s mode", mode == RIC_MODE_NIGHT ? "NIGHT" : "DAY");
 
 	st->current_mode = mode;
 	st->day_count = 0;

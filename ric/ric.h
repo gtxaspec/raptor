@@ -91,6 +91,7 @@ typedef struct {
 /* ric_daynight.c */
 void ric_gpio_init(ric_state_t *st);
 void ric_set_mode(ric_state_t *st, ric_mode_t mode);
+void ric_set_isp_mode(ric_mode_t mode);
 void ric_poll_exposure(ric_state_t *st);
 bool ric_adc_start(ric_state_t *st);
 void ric_adc_cleanup(ric_state_t *st);

@@ -102,7 +102,8 @@ static const struct help_entry help_entries[] = {
 	{"rod", "set-font-color <0xAARRGGBB>         Text color"},
 	{"rod", "set-stroke-color <0xAARRGGBB>       Stroke color"},
 	{"rod", "set-stroke-size <0-5>               Stroke width"},
-	{"ric", "mode <auto|day|night>               Set day/night mode"},
+	{"ric", "mode <auto|day|night>               Set day/night mode (GPIO + ISP)"},
+	{"ric", "isp-mode <day|night>                Set ISP mode only (no GPIO)"},
 	{"rhd", "clients                             List connected clients"},
 	{"rwd", "clients                             List connected clients"},
 	{"rwd", "share                               Show WebTorrent share URL"},
@@ -815,6 +816,13 @@ int main(int argc, char **argv)
 			return 1;
 		}
 		snprintf(json, sizeof(json), "{\"cmd\":\"mode\",\"value\":\"%s\"}", argv[3]);
+
+	} else if (strcmp(cmd, "isp-mode") == 0) {
+		if (argc < 4) {
+			fprintf(stderr, "Usage: raptorctl %s isp-mode <day|night>\n", daemon);
+			return 1;
+		}
+		snprintf(json, sizeof(json), "{\"cmd\":\"isp-mode\",\"value\":\"%s\"}", argv[3]);
 
 	} else if (strcmp(cmd, "set-rc-mode") == 0) {
 		if (argc < 5) {
