@@ -1,4 +1,4 @@
-SRCS := rhd_main.c
+SRCS := rhd_main.c rhd_http.c
 OBJS := $(SRCS:.c=.o)
 BIN  := rhd
 
