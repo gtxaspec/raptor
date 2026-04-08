@@ -49,6 +49,7 @@ static void *encoder_thread(void *arg)
 		  s->enc_cfg.height);
 
 	uint64_t frame_count = 0;
+	int poll_errors = 0;
 	int64_t last_stats = rss_timestamp_us();
 	int64_t last_reap = last_stats;
 
@@ -95,13 +96,21 @@ static void *encoder_thread(void *arg)
 		/* Block until encoder has a frame (up to 1 second timeout).
 		 * Each thread blocks independently so channels don't starve. */
 		int ret = RSS_HAL_CALL(st->ops, enc_poll, st->hal_ctx, s->chn, 1000);
-		if (ret != RSS_OK)
+		if (ret != RSS_OK) {
+			/* Timeouts are normal (sensor idle, JPEG on-demand stopped).
+			 * Log on repeated failures to catch flaky sensor/encoder. */
+			if (++poll_errors == 10)
+				RSS_WARN("stream%d: enc_poll failing (chn %d, last=%d)", idx,
+					 s->chn, ret);
 			continue;
+		}
+		poll_errors = 0;
 
 		rss_frame_t frame;
 		ret = RSS_HAL_CALL(st->ops, enc_get_frame, st->hal_ctx, s->chn, &frame);
 		if (ret != RSS_OK) {
-			RSS_DEBUG("enc_get_frame(chn %d) failed: %d", s->chn, ret);
+			RSS_WARN("stream%d: enc_get_frame failed (chn %d, ret=%d)", idx,
+				 s->chn, ret);
 			continue;
 		}
 
