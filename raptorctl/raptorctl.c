@@ -196,7 +196,7 @@ static void read_total_stack(int pid, stack_info_t *info)
 	while ((ent = readdir(d)) != NULL) {
 		if (ent->d_name[0] == '.')
 			continue;
-		char smaps_path[128];
+		char smaps_path[512];
 		snprintf(smaps_path, sizeof(smaps_path), "%s/%s/smaps", task_dir, ent->d_name);
 		FILE *f = fopen(smaps_path, "r");
 		if (!f)
