@@ -43,7 +43,7 @@ static int aac_init(rad_codec_ctx_t *ctx, rss_config_t *cfg, int sample_rate)
 	aac_cfg->inputFormat = FAAC_INPUT_16BIT;
 	aac_cfg->outputFormat = RAW_STREAM;
 	aac_cfg->bandWidth = sample_rate;
-	int bitrate = rss_config_get_int(cfg, "audio", "bitrate", 32000);
+	int bitrate = rss_config_get_int(cfg, "audio", "bitrate", 128000);
 	if (bitrate > 256000)
 		bitrate = 256000;
 	aac_cfg->bitRate = bitrate;
