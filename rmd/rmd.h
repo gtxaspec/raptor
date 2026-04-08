@@ -33,7 +33,7 @@ typedef struct {
 
 /* Daemon context */
 typedef struct {
-	rmd_config_t cfg;
+	rmd_config_t settings;
 
 	rmd_state_t state;
 	int64_t last_motion_us;
@@ -42,7 +42,7 @@ typedef struct {
 	bool recording_active;
 
 	rss_ctrl_t *ctrl;
-	rss_config_t *config;
+	rss_config_t *cfg;
 	const char *config_path;
 
 	volatile sig_atomic_t *running;

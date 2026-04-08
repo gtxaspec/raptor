@@ -82,7 +82,7 @@ typedef struct {
 
 /* Global state */
 typedef struct {
-	rod_config_t cfg;
+	rod_config_t settings;
 
 	/* Fonts (one per stream — different sizes) */
 	rod_font_t fonts[ROD_MAX_STREAMS];
@@ -105,7 +105,7 @@ typedef struct {
 
 	/* Control */
 	rss_ctrl_t *ctrl;
-	rss_config_t *config;
+	rss_config_t *cfg;
 	const char *config_path;
 
 	volatile sig_atomic_t *running;

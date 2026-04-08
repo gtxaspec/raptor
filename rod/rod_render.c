@@ -20,9 +20,9 @@ int rod_render_init(rod_state_t *st, int stream_idx, int font_size)
 	if (stream_idx > 0 && st->fonts[0].sft.font) {
 		f->sft.font = st->fonts[0].sft.font;
 	} else {
-		f->sft.font = sft_loadfile(st->cfg.font_path);
+		f->sft.font = sft_loadfile(st->settings.font_path);
 		if (!f->sft.font) {
-			RSS_FATAL("failed to load font: %s", st->cfg.font_path);
+			RSS_FATAL("failed to load font: %s", st->settings.font_path);
 			return -1;
 		}
 	}
@@ -45,8 +45,8 @@ int rod_render_init(rod_state_t *st, int stream_idx, int font_size)
 	f->text_height = f->ascender + descender;
 
 	/* Add stroke padding to height */
-	if (st->cfg.font_stroke > 0)
-		f->text_height += st->cfg.font_stroke * 2;
+	if (st->settings.font_stroke > 0)
+		f->text_height += st->settings.font_stroke * 2;
 
 	/* Cache printable ASCII */
 	int max_adv = 0;
@@ -103,7 +103,7 @@ int rod_render_init(rod_state_t *st, int stream_idx, int font_size)
 
 	/* Max text width: used for per-role sizing in create_shms.
 	 * Store max_advance * 24 as a reference for char-count scaling. */
-	int pad = st->cfg.font_stroke > 0 ? st->cfg.font_stroke * 2 : 0;
+	int pad = st->settings.font_stroke > 0 ? st->settings.font_stroke * 2 : 0;
 	f->max_text_width = 24 * max_adv + pad;
 
 	/* Ensure even dimensions (SDK may require 2-aligned) */
@@ -111,7 +111,7 @@ int rod_render_init(rod_state_t *st, int stream_idx, int font_size)
 	f->text_height = (f->text_height + 1) & ~1;
 
 	RSS_DEBUG("font[%d]: %s size=%d, %d glyphs cached, text=%dx%d", stream_idx,
-		  st->cfg.font_path, font_size, f->glyph_count, f->max_text_width, f->text_height);
+		  st->settings.font_path, font_size, f->glyph_count, f->max_text_width, f->text_height);
 	return 0;
 }
 
@@ -211,14 +211,14 @@ void rod_draw_text(rod_state_t *st, int stream_idx, uint8_t *buf, uint32_t buf_w
 		   const char *text, int align)
 {
 	rod_font_t *f = &st->fonts[stream_idx];
-	int stroke = st->cfg.font_stroke;
+	int stroke = st->settings.font_stroke;
 	int baseline = f->ascender + (stroke > 0 ? stroke : 0);
 
 	/* Clear buffer to transparent */
 	memset(buf, 0, buf_w * buf_h * 4);
 
 	/* Extract BGRA color components */
-	uint32_t c = st->cfg.font_color;
+	uint32_t c = st->settings.font_color;
 	uint8_t txt_b = (uint8_t)(c & 0xFF);
 	uint8_t txt_g = (uint8_t)((c >> 8) & 0xFF);
 	uint8_t txt_r = (uint8_t)((c >> 16) & 0xFF);
@@ -239,7 +239,7 @@ void rod_draw_text(rod_state_t *st, int stream_idx, uint8_t *buf, uint32_t buf_w
 
 	if (stroke > 0) {
 		/* Stroke: render text at offsets in stroke color */
-		uint32_t sc = st->cfg.stroke_color;
+		uint32_t sc = st->settings.stroke_color;
 		uint8_t s_b = (uint8_t)(sc & 0xFF);
 		uint8_t s_g = (uint8_t)((sc >> 8) & 0xFF);
 		uint8_t s_r = (uint8_t)((sc >> 16) & 0xFF);

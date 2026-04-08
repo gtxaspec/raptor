@@ -30,8 +30,8 @@ static uint32_t parse_color(const char *s)
 
 static void load_config(rod_state_t *st)
 {
-	rss_config_t *cfg = st->config;
-	rod_config_t *c = &st->cfg;
+	rss_config_t *cfg = st->cfg;
+	rod_config_t *c = &st->settings;
 
 	c->enabled = rss_config_get_bool(cfg, "osd", "enabled", true);
 	rss_strlcpy(c->font_path,
@@ -123,17 +123,17 @@ static void create_shms(rod_state_t *st)
 		int adv = f->max_text_width / 24; /* approximate per-char advance */
 		if (adv < 10)
 			adv = 10;
-		int pad = st->cfg.font_stroke > 0 ? st->cfg.font_stroke * 2 : 0;
+		int pad = st->settings.font_stroke > 0 ? st->settings.font_stroke * 2 : 0;
 
-		if (st->cfg.time_enabled)
+		if (st->settings.time_enabled)
 			create_region_shm(st, s, ROD_REGION_TIME, ROD_TIME_CHARS * adv + pad,
 					  f->text_height);
 
-		if (st->cfg.uptime_enabled)
+		if (st->settings.uptime_enabled)
 			create_region_shm(st, s, ROD_REGION_UPTIME, ROD_UPTIME_CHARS * adv + pad,
 					  f->text_height);
 
-		if (st->cfg.text_enabled)
+		if (st->settings.text_enabled)
 			create_region_shm(st, s, ROD_REGION_TEXT, ROD_TEXT_CHARS * adv + pad,
 					  f->text_height);
 
@@ -142,11 +142,11 @@ static void create_shms(rod_state_t *st)
 		create_region_shm(st, s, ROD_REGION_PRIVACY, ROD_TIME_CHARS * adv + pad,
 				  f->text_height);
 
-		if (st->cfg.logo_enabled) {
+		if (st->settings.logo_enabled) {
 			int lw, lh;
 			if (s == 0) {
-				lw = st->cfg.logo_width;
-				lh = st->cfg.logo_height;
+				lw = st->settings.logo_width;
+				lh = st->settings.logo_height;
 			} else {
 				/* Scale logo for sub stream */
 				lw = st->logo_sub_w;
@@ -165,8 +165,8 @@ static void render_logo(rod_state_t *st, int s)
 		return;
 
 	uint8_t *logo = (s == 0) ? st->logo_data : st->logo_sub_data;
-	int logo_w = (s == 0) ? st->cfg.logo_width : st->logo_sub_w;
-	int logo_h = (s == 0) ? st->cfg.logo_height : st->logo_sub_h;
+	int logo_w = (s == 0) ? st->settings.logo_width : st->logo_sub_w;
+	int logo_h = (s == 0) ? st->settings.logo_height : st->logo_sub_h;
 	if (!logo)
 		return;
 
@@ -244,7 +244,7 @@ static void render_tick(rod_state_t *st)
 	time_t now = time(NULL);
 	struct tm tm;
 	localtime_r(&now, &tm);
-	strftime(time_str, sizeof(time_str), st->cfg.time_format, &tm);
+	strftime(time_str, sizeof(time_str), st->settings.time_format, &tm);
 
 	/* Format uptime */
 	char uptime_str[64];
@@ -252,16 +252,16 @@ static void render_tick(rod_state_t *st)
 
 	for (int s = 0; s < st->stream_count; s++) {
 		/* Time (1Hz) */
-		if (st->cfg.time_enabled)
+		if (st->settings.time_enabled)
 			render_text_region(st, s, ROD_REGION_TIME, time_str);
 
 		/* Uptime (1Hz) */
-		if (st->cfg.uptime_enabled)
+		if (st->settings.uptime_enabled)
 			render_text_region(st, s, ROD_REGION_UPTIME, uptime_str);
 
 		/* Text (on change only) */
-		if (st->cfg.text_enabled && st->regions[s][ROD_REGION_TEXT].needs_update) {
-			render_text_region(st, s, ROD_REGION_TEXT, st->cfg.text_string);
+		if (st->settings.text_enabled && st->regions[s][ROD_REGION_TEXT].needs_update) {
+			render_text_region(st, s, ROD_REGION_TEXT, st->settings.text_string);
 			st->regions[s][ROD_REGION_TEXT].needs_update = false;
 		}
 
@@ -272,7 +272,7 @@ static void render_tick(rod_state_t *st)
 		}
 
 		/* Logo (once) */
-		if (st->cfg.logo_enabled && st->regions[s][ROD_REGION_LOGO].needs_update)
+		if (st->settings.logo_enabled && st->regions[s][ROD_REGION_LOGO].needs_update)
 			render_logo(st, s);
 
 		/* Heartbeat: touch any active region so RVD knows we're alive.
@@ -293,7 +293,7 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 {
 	rod_state_t *st = userdata;
 
-	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, st->config,
+	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, st->cfg,
 					st->config_path);
 	if (rc >= 0)
 		return rc;
@@ -306,8 +306,8 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				if ((unsigned char)val[i] < 0x20)
 					val[i] = ' ';
 			}
-			rss_strlcpy(st->cfg.text_string, val, sizeof(st->cfg.text_string));
-			rss_config_set_str(st->config, "osd", "text_string", val);
+			rss_strlcpy(st->settings.text_string, val, sizeof(st->settings.text_string));
+			rss_config_set_str(st->cfg, "osd", "text_string", val);
 			for (int s = 0; s < st->stream_count; s++)
 				st->regions[s][ROD_REGION_TEXT].needs_update = true;
 			snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
@@ -321,8 +321,8 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	if (strstr(cmd_json, "\"set-font-color\"")) {
 		char val[16];
 		if (rss_json_get_str(cmd_json, "value", val, sizeof(val)) == 0) {
-			st->cfg.font_color = parse_color(val);
-			rss_config_set_str(st->config, "osd", "font_color", val);
+			st->settings.font_color = parse_color(val);
+			rss_config_set_str(st->cfg, "osd", "font_color", val);
 			for (int s = 0; s < st->stream_count; s++)
 				for (int r = 0; r < ROD_MAX_REGIONS; r++)
 					if (st->regions[s][r].enabled)
@@ -338,8 +338,8 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	if (strstr(cmd_json, "\"set-stroke-color\"")) {
 		char val[16];
 		if (rss_json_get_str(cmd_json, "value", val, sizeof(val)) == 0) {
-			st->cfg.stroke_color = parse_color(val);
-			rss_config_set_str(st->config, "osd", "stroke_color", val);
+			st->settings.stroke_color = parse_color(val);
+			rss_config_set_str(st->cfg, "osd", "stroke_color", val);
 			for (int s = 0; s < st->stream_count; s++)
 				for (int r = 0; r < ROD_MAX_REGIONS; r++)
 					if (st->regions[s][r].enabled)
@@ -355,8 +355,8 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	if (strstr(cmd_json, "\"set-stroke-size\"")) {
 		int val;
 		if (rss_json_get_int(cmd_json, "value", &val) == 0 && val >= 0 && val <= 5) {
-			st->cfg.font_stroke = val;
-			rss_config_set_int(st->config, "osd", "font_stroke", val);
+			st->settings.font_stroke = val;
+			rss_config_set_int(st->cfg, "osd", "font_stroke", val);
 			for (int s = 0; s < st->stream_count; s++)
 				for (int r = 0; r < ROD_MAX_REGIONS; r++)
 					if (st->regions[s][r].enabled)
@@ -381,11 +381,11 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			 "\"text_enabled\":%s,"
 			 "\"text_string\":\"%s\","
 			 "\"logo_enabled\":%s}}",
-			 st->cfg.font_size, st->cfg.font_color, st->cfg.stroke_color,
-			 st->cfg.font_stroke, st->cfg.time_enabled ? "true" : "false",
-			 st->cfg.uptime_enabled ? "true" : "false",
-			 st->cfg.text_enabled ? "true" : "false", st->cfg.text_string,
-			 st->cfg.logo_enabled ? "true" : "false");
+			 st->settings.font_size, st->settings.font_color, st->settings.stroke_color,
+			 st->settings.font_stroke, st->settings.time_enabled ? "true" : "false",
+			 st->settings.uptime_enabled ? "true" : "false",
+			 st->settings.text_enabled ? "true" : "false", st->settings.text_string,
+			 st->settings.logo_enabled ? "true" : "false");
 		return (int)strlen(resp_buf);
 	}
 
@@ -420,7 +420,7 @@ int main(int argc, char **argv)
 	}
 
 	rod_state_t st = {0};
-	st.config = ctx.cfg;
+	st.cfg = ctx.cfg;
 	st.config_path = ctx.config_path;
 	st.running = ctx.running;
 	load_config(&st);
@@ -432,7 +432,7 @@ int main(int argc, char **argv)
 		int fs = rss_config_get_int(ctx.cfg, "osd", key, 0);
 		if (fs <= 0) {
 			/* No per-stream override — auto-scale from global */
-			fs = st.cfg.font_size;
+			fs = st.settings.font_size;
 			if (s > 0) {
 				fs = fs * st.stream_h[s] / st.stream_h[0];
 				if (fs < 12)
@@ -446,12 +446,12 @@ int main(int argc, char **argv)
 	}
 
 	/* Load logo */
-	if (st.cfg.logo_enabled) {
-		if (rod_load_logo(st.cfg.logo_path, st.cfg.logo_width, st.cfg.logo_height,
+	if (st.settings.logo_enabled) {
+		if (rod_load_logo(st.settings.logo_path, st.settings.logo_width, st.settings.logo_height,
 				  &st.logo_data) == 0) {
-			st.logo_data_size = st.cfg.logo_width * st.cfg.logo_height * 4;
-			RSS_DEBUG("logo loaded: %s (%dx%d)", st.cfg.logo_path, st.cfg.logo_width,
-				  st.cfg.logo_height);
+			st.logo_data_size = st.settings.logo_width * st.settings.logo_height * 4;
+			RSS_DEBUG("logo loaded: %s (%dx%d)", st.settings.logo_path, st.settings.logo_width,
+				  st.settings.logo_height);
 		}
 
 		/* Sub-stream logo: try smaller variant */

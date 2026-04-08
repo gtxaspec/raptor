@@ -50,20 +50,20 @@ static int gpio_set_value(int pin, int value)
 
 void rmd_gpio_init(rmd_ctx_t *ctx)
 {
-	if (ctx->cfg.gpio_pin < 0)
+	if (ctx->settings.gpio_pin < 0)
 		return;
-	if (gpio_export(ctx->cfg.gpio_pin) == 0)
-		RSS_DEBUG("GPIO %d initialized for motion output", ctx->cfg.gpio_pin);
+	if (gpio_export(ctx->settings.gpio_pin) == 0)
+		RSS_DEBUG("GPIO %d initialized for motion output", ctx->settings.gpio_pin);
 	else
-		RSS_WARN("GPIO %d export failed (may already be exported)", ctx->cfg.gpio_pin);
+		RSS_WARN("GPIO %d export failed (may already be exported)", ctx->settings.gpio_pin);
 }
 
 void rmd_gpio_set(rmd_ctx_t *ctx, bool active)
 {
-	if (ctx->cfg.gpio_pin < 0)
+	if (ctx->settings.gpio_pin < 0)
 		return;
-	gpio_set_value(ctx->cfg.gpio_pin, active ? 1 : 0);
-	RSS_DEBUG("GPIO %d = %d", ctx->cfg.gpio_pin, active ? 1 : 0);
+	gpio_set_value(ctx->settings.gpio_pin, active ? 1 : 0);
+	RSS_DEBUG("GPIO %d = %d", ctx->settings.gpio_pin, active ? 1 : 0);
 }
 
 /* ── Recording trigger via RMR control socket ── */

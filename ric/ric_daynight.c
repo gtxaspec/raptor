@@ -58,7 +58,7 @@ bool ric_adc_start(ric_state_t *st)
 	if (!adc_load())
 		return false;
 
-	int channel = st->cfg.adc_channel;
+	int channel = st->settings.adc_channel;
 	if (adc_init() != 0) {
 		RSS_WARN("ADC: SU_ADC_Init failed");
 		return false;
@@ -86,7 +86,7 @@ void ric_adc_cleanup(ric_state_t *st)
 {
 	if (st->adc_initialized) {
 		if (adc_disable)
-			adc_disable((uint32_t)st->cfg.adc_channel);
+			adc_disable((uint32_t)st->settings.adc_channel);
 		if (adc_exit)
 			adc_exit();
 		st->adc_initialized = false;
@@ -137,11 +137,11 @@ static void gpio_set(int pin, int value)
 
 void ric_gpio_init(ric_state_t *st)
 {
-	gpio_export(st->cfg.gpio_ircut);
-	if (st->cfg.gpio_ircut2 >= 0)
-		gpio_export(st->cfg.gpio_ircut2);
-	if (st->cfg.gpio_irled >= 0)
-		gpio_export(st->cfg.gpio_irled);
+	gpio_export(st->settings.gpio_ircut);
+	if (st->settings.gpio_ircut2 >= 0)
+		gpio_export(st->settings.gpio_ircut2);
+	if (st->settings.gpio_irled >= 0)
+		gpio_export(st->settings.gpio_irled);
 }
 
 /*
@@ -161,33 +161,33 @@ void ric_set_isp_mode(ric_mode_t mode)
 static void ric_set_gpio(ric_state_t *st, ric_mode_t mode)
 {
 	if (mode == RIC_MODE_NIGHT) {
-		if (st->cfg.gpio_ircut >= 0) {
-			if (st->cfg.gpio_ircut2 >= 0) {
-				gpio_set(st->cfg.gpio_ircut, 0);
-				gpio_set(st->cfg.gpio_ircut2, 1);
+		if (st->settings.gpio_ircut >= 0) {
+			if (st->settings.gpio_ircut2 >= 0) {
+				gpio_set(st->settings.gpio_ircut, 0);
+				gpio_set(st->settings.gpio_ircut2, 1);
 				usleep(100000);
-				gpio_set(st->cfg.gpio_ircut, 0);
-				gpio_set(st->cfg.gpio_ircut2, 0);
+				gpio_set(st->settings.gpio_ircut, 0);
+				gpio_set(st->settings.gpio_ircut2, 0);
 			} else {
-				gpio_set(st->cfg.gpio_ircut, 0);
+				gpio_set(st->settings.gpio_ircut, 0);
 			}
 		}
-		if (st->cfg.gpio_irled >= 0)
-			gpio_set(st->cfg.gpio_irled, 1);
+		if (st->settings.gpio_irled >= 0)
+			gpio_set(st->settings.gpio_irled, 1);
 	} else {
-		if (st->cfg.gpio_ircut >= 0) {
-			if (st->cfg.gpio_ircut2 >= 0) {
-				gpio_set(st->cfg.gpio_ircut, 1);
-				gpio_set(st->cfg.gpio_ircut2, 0);
+		if (st->settings.gpio_ircut >= 0) {
+			if (st->settings.gpio_ircut2 >= 0) {
+				gpio_set(st->settings.gpio_ircut, 1);
+				gpio_set(st->settings.gpio_ircut2, 0);
 				usleep(100000);
-				gpio_set(st->cfg.gpio_ircut, 0);
-				gpio_set(st->cfg.gpio_ircut2, 0);
+				gpio_set(st->settings.gpio_ircut, 0);
+				gpio_set(st->settings.gpio_ircut2, 0);
 			} else {
-				gpio_set(st->cfg.gpio_ircut, 1);
+				gpio_set(st->settings.gpio_ircut, 1);
 			}
 		}
-		if (st->cfg.gpio_irled >= 0)
-			gpio_set(st->cfg.gpio_irled, 0);
+		if (st->settings.gpio_irled >= 0)
+			gpio_set(st->settings.gpio_irled, 0);
 	}
 }
 
@@ -231,7 +231,7 @@ static int json_parse_uint(const char *json, const char *key, uint32_t *out)
 
 void ric_poll_exposure(ric_state_t *st)
 {
-	if (st->cfg.opmode != RIC_AUTO)
+	if (st->settings.opmode != RIC_AUTO)
 		return;
 
 	/* Query RVD for ISP exposure data via control socket */
@@ -253,14 +253,14 @@ void ric_poll_exposure(ric_state_t *st)
 		if (st->cooldown_remaining == 0 && st->current_mode == RIC_MODE_NIGHT) {
 			st->night_gain_baseline = total_gain;
 			RSS_DEBUG("night baseline: gain=%u (day trigger < %u)", total_gain,
-				  total_gain * (uint32_t)st->cfg.day_gain_pct / 100);
+				  total_gain * (uint32_t)st->settings.day_gain_pct / 100);
 		}
 		return;
 	}
 
 	bool want_night, want_day;
 
-	if (st->cfg.trigger == RIC_TRIGGER_LUMA) {
+	if (st->settings.trigger == RIC_TRIGGER_LUMA) {
 		/*
 		 * Hybrid luma+gain algorithm (sensor-independent):
 		 *
@@ -276,43 +276,43 @@ void ric_poll_exposure(ric_state_t *st)
 		 *   ae_luma is NOT used here because IR illumination inflates
 		 *   it regardless of ambient light level.
 		 */
-		want_night = (ae_luma < (uint32_t)st->cfg.night_luma) ||
-			     (total_gain > (uint32_t)st->cfg.night_gain);
+		want_night = (ae_luma < (uint32_t)st->settings.night_luma) ||
+			     (total_gain > (uint32_t)st->settings.night_gain);
 
 		if (st->night_gain_baseline > 0) {
 			uint32_t day_thr =
-				st->night_gain_baseline * (uint32_t)st->cfg.day_gain_pct / 100;
+				st->night_gain_baseline * (uint32_t)st->settings.day_gain_pct / 100;
 			want_day = (total_gain < day_thr);
 		} else {
 			want_day = false;
 		}
-	} else if (st->cfg.trigger == RIC_TRIGGER_ADC) {
+	} else if (st->settings.trigger == RIC_TRIGGER_ADC) {
 		/*
 		 * ADC mode: read photoresistor via SU_ADC.
 		 * Direct ambient light measurement — unaffected by IR LEDs
 		 * or camera sensor. No flip-flop, no calibration needed.
 		 * High ADC value = bright, low = dark.
 		 */
-		int adc_val = adc_read(st->cfg.adc_channel);
+		int adc_val = adc_read(st->settings.adc_channel);
 		if (adc_val < 0) {
 			/* ADC read failed — skip this poll */
 			return;
 		}
-		want_night = (adc_val < st->cfg.adc_night);
-		want_day = (adc_val > st->cfg.adc_day);
+		want_night = (adc_val < st->settings.adc_night);
+		want_day = (adc_val > st->settings.adc_day);
 	} else {
 		/* Gain mode (legacy): fixed thresholds, sensor-dependent. */
-		want_night = (total_gain > (uint32_t)st->cfg.night_threshold);
-		want_day = (total_gain < (uint32_t)st->cfg.day_threshold);
+		want_night = (total_gain > (uint32_t)st->settings.night_threshold);
+		want_day = (total_gain < (uint32_t)st->settings.day_threshold);
 	}
 
 	if (st->current_mode == RIC_MODE_DAY) {
 		if (want_night) {
 			st->night_count++;
 			st->day_count = 0;
-			if (st->night_count >= st->cfg.hysteresis_sec) {
+			if (st->night_count >= st->settings.hysteresis_sec) {
 				RSS_DEBUG("night detected (luma=%u gain=%u for %ds)", ae_luma,
-					  total_gain, st->cfg.hysteresis_sec);
+					  total_gain, st->settings.hysteresis_sec);
 				ric_set_mode(st, RIC_MODE_NIGHT);
 			}
 		} else {
@@ -322,12 +322,12 @@ void ric_poll_exposure(ric_state_t *st)
 		if (want_day) {
 			st->day_count++;
 			st->night_count = 0;
-			if (st->day_count >= st->cfg.hysteresis_sec) {
+			if (st->day_count >= st->settings.hysteresis_sec) {
 				uint32_t day_thr = st->night_gain_baseline *
-						   (uint32_t)st->cfg.day_gain_pct / 100;
+						   (uint32_t)st->settings.day_gain_pct / 100;
 				RSS_DEBUG("day detected (gain=%u < %u [%d%% of %u] for %ds)",
-					  total_gain, day_thr, st->cfg.day_gain_pct,
-					  st->night_gain_baseline, st->cfg.hysteresis_sec);
+					  total_gain, day_thr, st->settings.day_gain_pct,
+					  st->night_gain_baseline, st->settings.hysteresis_sec);
 				ric_set_mode(st, RIC_MODE_DAY);
 			}
 		} else {

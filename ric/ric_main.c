@@ -19,8 +19,8 @@
 
 static void load_config(ric_state_t *st)
 {
-	rss_config_t *cfg = st->config;
-	ric_config_t *c = &st->cfg;
+	rss_config_t *cfg = st->cfg;
+	ric_config_t *c = &st->settings;
 
 	c->enabled = rss_config_get_bool(cfg, "ircut", "enabled", true);
 
@@ -137,7 +137,7 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 {
 	ric_state_t *st = userdata;
 
-	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, st->config,
+	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, st->cfg,
 					st->config_path);
 	if (rc >= 0)
 		return rc;
@@ -162,21 +162,21 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		char val[16];
 		if (rss_json_get_str(cmd_json, "value", val, sizeof(val)) == 0) {
 			if (strcmp(val, "day") == 0) {
-				st->cfg.opmode = RIC_FORCE_DAY;
+				st->settings.opmode = RIC_FORCE_DAY;
 				ric_set_mode(st, RIC_MODE_DAY);
 			} else if (strcmp(val, "night") == 0) {
-				st->cfg.opmode = RIC_FORCE_NIGHT;
+				st->settings.opmode = RIC_FORCE_NIGHT;
 				ric_set_mode(st, RIC_MODE_NIGHT);
 			} else {
-				st->cfg.opmode = RIC_AUTO;
+				st->settings.opmode = RIC_AUTO;
 			}
-			rss_config_set_str(st->config, "ircut", "mode", val);
+			rss_config_set_str(st->cfg, "ircut", "mode", val);
 		}
 		snprintf(resp_buf, resp_buf_size,
 			 "{\"status\":\"ok\",\"mode\":\"%s\",\"state\":\"%s\"}",
-			 st->cfg.opmode == RIC_AUTO
+			 st->settings.opmode == RIC_AUTO
 				 ? "auto"
-				 : (st->cfg.opmode == RIC_FORCE_DAY ? "day" : "night"),
+				 : (st->settings.opmode == RIC_FORCE_DAY ? "day" : "night"),
 			 st->current_mode == RIC_MODE_DAY ? "day" : "night");
 		return (int)strlen(resp_buf);
 	}
@@ -189,12 +189,12 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			 "{\"status\":\"ok\",\"mode\":\"%s\",\"state\":\"%s\","
 			 "\"exposure\":%s,"
 			 "\"night_threshold\":%d,\"day_threshold\":%d}",
-			 st->cfg.opmode == RIC_AUTO
+			 st->settings.opmode == RIC_AUTO
 				 ? "auto"
-				 : (st->cfg.opmode == RIC_FORCE_DAY ? "day" : "night"),
+				 : (st->settings.opmode == RIC_FORCE_DAY ? "day" : "night"),
 			 st->current_mode == RIC_MODE_DAY ? "day" : "night",
-			 exp_resp[0] ? exp_resp : "null", st->cfg.night_threshold,
-			 st->cfg.day_threshold);
+			 exp_resp[0] ? exp_resp : "null", st->settings.night_threshold,
+			 st->settings.day_threshold);
 		return (int)strlen(resp_buf);
 	}
 
@@ -204,8 +204,8 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			      sizeof(exp_resp), 1000);
 	snprintf(resp_buf, resp_buf_size,
 		 "{\"status\":\"ok\",\"mode\":\"%s\",\"state\":\"%s\",\"exposure\":%s}",
-		 st->cfg.opmode == RIC_AUTO ? "auto"
-					    : (st->cfg.opmode == RIC_FORCE_DAY ? "day" : "night"),
+		 st->settings.opmode == RIC_AUTO ? "auto"
+					    : (st->settings.opmode == RIC_FORCE_DAY ? "day" : "night"),
 		 st->current_mode == RIC_MODE_DAY ? "day" : "night",
 		 exp_resp[0] ? exp_resp : "null");
 	return (int)strlen(resp_buf);
@@ -229,12 +229,12 @@ int main(int argc, char **argv)
 	}
 
 	ric_state_t st = {0};
-	st.config = ctx.cfg;
+	st.cfg = ctx.cfg;
 	st.config_path = ctx.config_path;
 	st.running = ctx.running;
 	st.current_mode = RIC_MODE_DAY;
 	load_config(&st);
-	load_gpio_from_thingino_json(&st.cfg);
+	load_gpio_from_thingino_json(&st.settings);
 
 	/* Wait for RVD control socket to be available */
 	RSS_DEBUG("waiting for RVD...");
@@ -252,19 +252,19 @@ int main(int argc, char **argv)
 	ric_gpio_init(&st);
 
 	/* Init ADC if trigger=adc; fall back to luma on failure */
-	if (st.cfg.trigger == RIC_TRIGGER_ADC) {
+	if (st.settings.trigger == RIC_TRIGGER_ADC) {
 		if (ric_adc_start(&st)) {
 			st.adc_initialized = true;
 		} else {
 			RSS_WARN("ADC unavailable, falling back to luma trigger");
-			st.cfg.trigger = RIC_TRIGGER_LUMA;
+			st.settings.trigger = RIC_TRIGGER_LUMA;
 		}
 	}
 
 	/* Apply initial mode */
-	if (st.cfg.opmode == RIC_FORCE_DAY)
+	if (st.settings.opmode == RIC_FORCE_DAY)
 		ric_set_mode(&st, RIC_MODE_DAY);
-	else if (st.cfg.opmode == RIC_FORCE_NIGHT)
+	else if (st.settings.opmode == RIC_FORCE_NIGHT)
 		ric_set_mode(&st, RIC_MODE_NIGHT);
 	else
 		ric_set_mode(&st, RIC_MODE_DAY); /* start in day, auto will adjust */
@@ -285,10 +285,10 @@ int main(int argc, char **argv)
 	}
 
 	RSS_INFO("ric running (mode=%s, trigger=%s, gpio_ircut=%d, gpio_ircut2=%d, gpio_irled=%d)",
-		 st.cfg.opmode == RIC_AUTO ? "auto"
-					   : (st.cfg.opmode == RIC_FORCE_DAY ? "day" : "night"),
-		 st.cfg.trigger == RIC_TRIGGER_LUMA ? "luma" : "gain", st.cfg.gpio_ircut,
-		 st.cfg.gpio_ircut2, st.cfg.gpio_irled);
+		 st.settings.opmode == RIC_AUTO ? "auto"
+					   : (st.settings.opmode == RIC_FORCE_DAY ? "day" : "night"),
+		 st.settings.trigger == RIC_TRIGGER_LUMA ? "luma" : "gain", st.settings.gpio_ircut,
+		 st.settings.gpio_ircut2, st.settings.gpio_irled);
 
 	/* Main loop: poll exposure + handle control socket */
 	while (*st.running) {
@@ -296,11 +296,11 @@ int main(int argc, char **argv)
 
 		if (epoll_fd >= 0) {
 			struct epoll_event ev;
-			int n = epoll_wait(epoll_fd, &ev, 1, st.cfg.poll_interval_ms);
+			int n = epoll_wait(epoll_fd, &ev, 1, st.settings.poll_interval_ms);
 			if (n > 0 && st.ctrl)
 				rss_ctrl_accept_and_handle(st.ctrl, ric_ctrl_handler, &st);
 		} else {
-			usleep(st.cfg.poll_interval_ms * 1000);
+			usleep(st.settings.poll_interval_ms * 1000);
 		}
 	}
 

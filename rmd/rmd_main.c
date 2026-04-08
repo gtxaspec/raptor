@@ -18,14 +18,14 @@ static const char *state_names[] = {"idle", "active", "cooldown"};
 
 static void load_config(rmd_ctx_t *ctx)
 {
-	rss_config_t *cfg = ctx->config;
+	rss_config_t *cfg = ctx->cfg;
 
-	ctx->cfg.sensitivity = rss_config_get_int(cfg, "motion", "sensitivity", 3);
-	ctx->cfg.cooldown_sec = rss_config_get_int(cfg, "motion", "cooldown_sec", 10);
-	ctx->cfg.poll_interval_ms = rss_config_get_int(cfg, "motion", "poll_interval_ms", 500);
-	ctx->cfg.record_on_motion = rss_config_get_bool(cfg, "motion", "record", true);
-	ctx->cfg.record_post_sec = rss_config_get_int(cfg, "motion", "record_post_sec", 30);
-	ctx->cfg.gpio_pin = rss_config_get_int(cfg, "motion", "gpio_pin", -1);
+	ctx->settings.sensitivity = rss_config_get_int(cfg, "motion", "sensitivity", 3);
+	ctx->settings.cooldown_sec = rss_config_get_int(cfg, "motion", "cooldown_sec", 10);
+	ctx->settings.poll_interval_ms = rss_config_get_int(cfg, "motion", "poll_interval_ms", 500);
+	ctx->settings.record_on_motion = rss_config_get_bool(cfg, "motion", "record", true);
+	ctx->settings.record_post_sec = rss_config_get_int(cfg, "motion", "record_post_sec", 30);
+	ctx->settings.gpio_pin = rss_config_get_int(cfg, "motion", "gpio_pin", -1);
 }
 
 /* Query RVD for current motion state */
@@ -52,7 +52,7 @@ static void rmd_update_state(rmd_ctx_t *ctx, bool motion)
 			ctx->state = RMD_STATE_ACTIVE;
 			ctx->last_motion_us = now;
 
-			if (ctx->cfg.record_on_motion && !ctx->recording_active) {
+			if (ctx->settings.record_on_motion && !ctx->recording_active) {
 				rmd_trigger_recording(ctx, true);
 				ctx->recording_active = true;
 			}
@@ -75,9 +75,9 @@ static void rmd_update_state(rmd_ctx_t *ctx, bool motion)
 			ctx->last_motion_us = now;
 		} else {
 			int64_t elapsed_sec = (now - ctx->cooldown_start_us) / 1000000;
-			int post_sec = ctx->cfg.record_post_sec > ctx->cfg.cooldown_sec
-					       ? ctx->cfg.record_post_sec
-					       : ctx->cfg.cooldown_sec;
+			int post_sec = ctx->settings.record_post_sec > ctx->settings.cooldown_sec
+					       ? ctx->settings.record_post_sec
+					       : ctx->settings.cooldown_sec;
 			if (elapsed_sec >= post_sec) {
 				ctx->state = RMD_STATE_IDLE;
 
@@ -99,7 +99,7 @@ static int rmd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 {
 	rmd_ctx_t *ctx = userdata;
 
-	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, ctx->config,
+	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, ctx->cfg,
 					ctx->config_path);
 	if (rc >= 0)
 		return rc;
@@ -107,7 +107,7 @@ static int rmd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	if (strstr(cmd_json, "\"sensitivity\"")) {
 		int val;
 		if (rss_json_get_int(cmd_json, "value", &val) == 0) {
-			ctx->cfg.sensitivity = val;
+			ctx->settings.sensitivity = val;
 			/* Relay to RVD */
 			char cmd[128], resp[128];
 			snprintf(cmd, sizeof(cmd), "{\"cmd\":\"ivs-set-sensitivity\",\"value\":%d}",
@@ -127,7 +127,7 @@ static int rmd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	snprintf(resp_buf, resp_buf_size,
 		 "{\"status\":\"ok\",\"state\":\"%s\",\"recording\":%s,\"sensitivity\":%d}",
 		 state_names[ctx->state], ctx->recording_active ? "true" : "false",
-		 ctx->cfg.sensitivity);
+		 ctx->settings.sensitivity);
 	return (int)strlen(resp_buf);
 }
 
@@ -147,10 +147,10 @@ int main(int argc, char **argv)
 	}
 
 	rmd_ctx_t ctx = {0};
-	ctx.config = dctx.cfg;
+	ctx.cfg = dctx.cfg;
 	ctx.config_path = dctx.config_path;
 	ctx.running = dctx.running;
-	ctx.cfg.gpio_pin = -1;
+	ctx.settings.gpio_pin = -1;
 	load_config(&ctx);
 
 	/* Wait for RVD control socket */
@@ -185,8 +185,8 @@ int main(int argc, char **argv)
 		}
 	}
 
-	RSS_INFO("rmd running (poll=%dms, cooldown=%ds, sensitivity=%d)", ctx.cfg.poll_interval_ms,
-		 ctx.cfg.cooldown_sec, ctx.cfg.sensitivity);
+	RSS_INFO("rmd running (poll=%dms, cooldown=%ds, sensitivity=%d)", ctx.settings.poll_interval_ms,
+		 ctx.settings.cooldown_sec, ctx.settings.sensitivity);
 
 	while (*ctx.running) {
 		bool motion = rmd_poll_motion();
@@ -194,14 +194,14 @@ int main(int argc, char **argv)
 
 		if (epoll_fd >= 0) {
 			struct epoll_event events[4];
-			int n = epoll_wait(epoll_fd, events, 4, ctx.cfg.poll_interval_ms);
+			int n = epoll_wait(epoll_fd, events, 4, ctx.settings.poll_interval_ms);
 			for (int i = 0; i < n; i++) {
 				if (events[i].data.fd == ctrl_fd)
 					rss_ctrl_accept_and_handle(ctx.ctrl, rmd_ctrl_handler,
 								   &ctx);
 			}
 		} else {
-			usleep(ctx.cfg.poll_interval_ms * 1000);
+			usleep(ctx.settings.poll_interval_ms * 1000);
 		}
 	}
 

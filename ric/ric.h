@@ -66,7 +66,7 @@ typedef struct {
 
 /* Global state */
 typedef struct {
-	ric_config_t cfg;
+	ric_config_t settings;
 
 	/* Current state */
 	ric_mode_t current_mode;
@@ -82,7 +82,7 @@ typedef struct {
 
 	/* Control */
 	rss_ctrl_t *ctrl;
-	rss_config_t *config;
+	rss_config_t *cfg;
 	const char *config_path;
 
 	volatile sig_atomic_t *running;
