@@ -24,6 +24,7 @@
 #include <arpa/inet.h>
 
 #include "rwd.h"
+#include <rss_http.h>
 
 /* WebRTC player page — loaded from file on first request, cached.
  * Edit the file on device and restart RWD to pick up changes. */
@@ -316,6 +317,17 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 		http_send(client_fd, "204 No Content", "text/plain", NULL, 0, NULL);
 		http_close(client_fd);
 		return;
+	}
+
+	/* Basic auth check (if configured) */
+	if (srv->auth_user[0] && srv->auth_pass[0]) {
+		if (!rss_http_check_basic_auth(buf, srv->auth_user, srv->auth_pass)) {
+			http_send(client_fd, "401 Unauthorized", "text/plain",
+				  "Unauthorized", 12,
+				  "WWW-Authenticate: Basic realm=\"Raptor WebRTC\"\r\n");
+			http_close(client_fd);
+			return;
+		}
 	}
 
 	/* GET /webrtc — serve player page */

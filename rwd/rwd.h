@@ -237,6 +237,10 @@ struct rwd_server {
 	uint16_t srflx_port;
 	bool has_srflx;
 
+	/* Basic auth (empty = no auth) */
+	char auth_user[128];
+	char auth_pass[128];
+
 	void *webtorrent; /* rwd_webtorrent_t* if active, NULL otherwise */
 
 #ifdef RSS_HAS_TLS

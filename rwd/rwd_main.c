@@ -27,6 +27,7 @@
 
 #include "rwd.h"
 #include <rss_net.h>
+#include <rss_http.h>
 
 /* ── Utility: HMAC-SHA1 via mbedTLS ── */
 
@@ -623,6 +624,16 @@ int main(int argc, char **argv)
 	srv.wire_pt = RWD_AUDIO_PT;
 	srv.wire_clock = RWD_AUDIO_CLOCK;
 	pthread_mutex_init(&srv.clients_lock, NULL);
+
+	/* Basic auth — enabled when both username and password are set */
+	const char *webrtc_user = rss_config_get_str(dctx.cfg, "webrtc", "username", "admin");
+	const char *webrtc_pass = rss_config_get_str(dctx.cfg, "webrtc", "password", "secret");
+	if (webrtc_user[0] && webrtc_pass[0]) {
+		rss_base64_init();
+		rss_strlcpy(srv.auth_user, webrtc_user, sizeof(srv.auth_user));
+		rss_strlcpy(srv.auth_pass, webrtc_pass, sizeof(srv.auth_pass));
+		RSS_INFO("WebRTC Basic auth enabled");
+	}
 
 	/* Initialize CRC32 table before any threads start */
 	rwd_crc32_init();
