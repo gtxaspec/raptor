@@ -263,11 +263,16 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 #endif
 
 	/* Read HTTP request — may need multiple reads over TLS since
-	 * headers and body can arrive in separate TLS records. */
-	char buf[RWD_HTTP_BUF_SIZE];
+	 * headers and body can arrive in separate TLS records.
+	 * Heap-allocated: 16KB on stack is too heavy for embedded. */
+	char *buf = malloc(RWD_HTTP_BUF_SIZE);
+	if (!buf) {
+		http_close(client_fd);
+		return;
+	}
 	ssize_t n = 0;
-	for (int i = 0; i < 50 && n < (ssize_t)(sizeof(buf) - 1); i++) {
-		ssize_t r = http_read(client_fd, buf + n, sizeof(buf) - 1 - n);
+	for (int i = 0; i < 50 && n < (ssize_t)(RWD_HTTP_BUF_SIZE - 1); i++) {
+		ssize_t r = http_read(client_fd, buf + n, RWD_HTTP_BUF_SIZE - 1 - n);
 		if (r > 0) {
 			n += r;
 			buf[n] = '\0';
@@ -291,32 +296,27 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 			usleep(5000);
 		}
 	}
-	if (n <= 0) {
-		http_close(client_fd);
-		return;
-	}
+	if (n <= 0)
+		goto done;
 	buf[n] = '\0';
 
 	/* Parse request line */
 	char method[16], path[256];
 	if (sscanf(buf, "%15s %255s", method, path) != 2) {
 		http_error(client_fd, "400 Bad Request");
-		http_close(client_fd);
-		return;
+		goto done;
 	}
 
 	/* Reject oversized requests */
-	if (n >= (ssize_t)(sizeof(buf) - 1)) {
+	if (n >= (ssize_t)(RWD_HTTP_BUF_SIZE - 1)) {
 		http_error(client_fd, "414 URI Too Long");
-		http_close(client_fd);
-		return;
+		goto done;
 	}
 
 	/* CORS preflight */
 	if (strcmp(method, "OPTIONS") == 0) {
 		http_send(client_fd, "204 No Content", "text/plain", NULL, 0, NULL);
-		http_close(client_fd);
-		return;
+		goto done;
 	}
 
 	/* Basic auth check (if configured) */
@@ -325,8 +325,7 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 			http_send(client_fd, "401 Unauthorized", "text/plain",
 				  "Unauthorized", 12,
 				  "WWW-Authenticate: Basic realm=\"Raptor WebRTC\"\r\n");
-			http_close(client_fd);
-			return;
+			goto done;
 		}
 	}
 
@@ -346,8 +345,7 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 		else
 			http_send(client_fd, "404 Not Found", "text/plain",
 				  "player not installed", 20, NULL);
-		http_close(client_fd);
-		return;
+		goto done;
 	}
 
 	/* POST /whip — SDP offer/answer */
@@ -366,7 +364,7 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 		if (cl) {
 			char *end;
 			long cl_val = strtol(cl + 15, &end, 10);
-			if (cl_val > 0 && cl_val < (long)sizeof(buf) && end != cl + 15)
+			if (cl_val > 0 && cl_val < (long)RWD_HTTP_BUF_SIZE && end != cl + 15)
 				content_length = (size_t)cl_val;
 		}
 
@@ -375,8 +373,7 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 		if (!body) {
 			RSS_WARN("WHIP: no body separator in request");
 			http_error(client_fd, "400 Bad Request");
-			http_close(client_fd);
-			return;
+			goto done;
 		}
 		body += 4;
 		size_t body_len = n - (body - buf);
@@ -385,11 +382,11 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 		 * Poll with a tight timeout — legitimate clients deliver
 		 * the body within milliseconds of the header. */
 		size_t need = content_length > 0 ? content_length : 0;
-		while (body_len < need && (size_t)n < sizeof(buf) - 1) {
+		while (body_len < need && (size_t)n < RWD_HTTP_BUF_SIZE - 1) {
 			struct pollfd pfd = {.fd = client_fd, .events = POLLIN};
 			if (poll(&pfd, 1, 500) <= 0)
 				break;
-			ssize_t more = http_read(client_fd, buf + n, sizeof(buf) - 1 - n);
+			ssize_t more = http_read(client_fd, buf + n, RWD_HTTP_BUF_SIZE - 1 - n);
 			if (more <= 0)
 				break;
 			n += more;
@@ -398,8 +395,7 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 		}
 
 		handle_whip_post(srv, client_fd, body, body_len, local_addr, stream_idx);
-		http_close(client_fd);
-		return;
+		goto done;
 	}
 
 	/* DELETE /whip/{session} — teardown */
@@ -407,11 +403,13 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 		const char *session_id = path + 6;
 		if (strlen(session_id) > 0) {
 			handle_whip_delete(srv, client_fd, session_id);
-			http_close(client_fd);
-			return;
+			goto done;
 		}
 	}
 
 	http_error(client_fd, "404 Not Found");
+
+done:
+	free(buf);
 	http_close(client_fd);
 }
