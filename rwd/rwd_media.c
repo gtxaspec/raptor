@@ -1011,9 +1011,11 @@ void *rwd_audio_reader_thread(void *arg)
 			} else if (opus_enc && opus_frame_size > 0) {
 				/* Decode → accumulate → encode Opus in 20ms frames.
 				 * Each Opus frame advances RTP ts by 960 (48kHz × 20ms).
-				 * Decode directly into pcm_accum to avoid a 4KB temp buffer. */
+				 * Decode directly into pcm_accum to avoid a 4KB temp buffer.
+				 * Need at least 1024 slots free: AAC decoder writes a full
+				 * frame regardless of pcm_max. */
 				int space = 2048 - pcm_accum_fill;
-				if (space > 0) {
+				if (space >= 1024) {
 					int n = rwd_decode_to_pcm(audio_codec, audio_buf, length,
 #ifdef RAPTOR_AAC
 								  aac_dec,
