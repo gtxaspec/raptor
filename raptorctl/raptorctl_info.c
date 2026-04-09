@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <rss_common.h>
@@ -269,46 +270,42 @@ void cmd_memory(void)
 	printf(MEM_HDR, "------", "-------", "------", "---", "------------", "---------", "-----");
 	printf("%-6s  %6ld KB  %6ld KB\n", "TOTAL", total_priv, total_shared);
 
-	printf("\nSHM rings:\n");
-	FILE *f = popen("ls -l /dev/shm/rss_ring_* 2>/dev/null", "r");
-	if (f) {
-		char line[512];
-		while (fgets(line, sizeof(line), f)) {
-			long sz;
-			char name[128];
-			/* ls -l: perms links owner group size date date date name */
-			if (sscanf(line, "%*s %*s %*s %*s %ld %*s %*s %*s %127s", &sz, name) == 2) {
-				const char *base = strrchr(name, '/');
-				base = base ? base + 1 : name;
-				/* strip rss_ring_ prefix */
-				const char *label = base;
-				if (strncmp(label, "rss_ring_", 9) == 0)
-					label += 9;
-				printf("  %-20s %6ld KB\n", label, sz / 1024);
-				shm_rings += sz / 1024;
-			}
-		}
-		pclose(f);
-	}
+	/* List SHM files with opendir/stat instead of popen("ls -l ...") */
+	DIR *dir = opendir("/dev/shm");
+	if (dir) {
+		struct dirent *ent;
 
-	printf("OSD buffers:\n");
-	f = popen("ls -l /dev/shm/rss_osd_* 2>/dev/null", "r");
-	if (f) {
-		char line[512];
-		while (fgets(line, sizeof(line), f)) {
-			long sz;
-			char name[128];
-			if (sscanf(line, "%*s %*s %*s %*s %ld %*s %*s %*s %127s", &sz, name) == 2) {
-				const char *base = strrchr(name, '/');
-				base = base ? base + 1 : name;
-				const char *label = base;
-				if (strncmp(label, "rss_osd_", 8) == 0)
-					label += 8;
-				printf("  %-20s %6ld KB\n", label, sz / 1024);
-				shm_osd += sz / 1024;
-			}
+		printf("\nSHM rings:\n");
+		while ((ent = readdir(dir))) {
+			if (strncmp(ent->d_name, "rss_ring_", 9) != 0)
+				continue;
+			char path[256];
+			snprintf(path, sizeof(path), "/dev/shm/%s", ent->d_name);
+			struct stat st;
+			if (stat(path, &st) != 0)
+				continue;
+			long sz = (long)st.st_size / 1024;
+			printf("  %-20s %6ld KB\n", ent->d_name + 9, sz);
+			shm_rings += sz;
 		}
-		pclose(f);
+
+		rewinddir(dir);
+
+		printf("OSD buffers:\n");
+		while ((ent = readdir(dir))) {
+			if (strncmp(ent->d_name, "rss_osd_", 8) != 0)
+				continue;
+			char path[256];
+			snprintf(path, sizeof(path), "/dev/shm/%s", ent->d_name);
+			struct stat st;
+			if (stat(path, &st) != 0)
+				continue;
+			long sz = (long)st.st_size / 1024;
+			printf("  %-20s %6ld KB\n", ent->d_name + 8, sz);
+			shm_osd += sz;
+		}
+
+		closedir(dir);
 	}
 
 	long shm_total = shm_rings + shm_osd;
