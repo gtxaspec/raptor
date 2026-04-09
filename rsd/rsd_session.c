@@ -52,11 +52,12 @@ static void rsd_bc_recv_t_on_audio(VSelf, uint8_t payload_type, uint32_t timesta
 
 	if (payload_type == 0) {
 		/* PCMU/8000 — decode to PCM16 and upsample 8kHz→16kHz.
-		 * Simple 2x interpolation: duplicate each sample. */
-		int16_t pcm[1920]; /* 960 input samples * 2 */
+		 * Simple 2x interpolation: duplicate each sample.
+		 * Max 480 input samples (60ms ptime) keeps stack under 2KB. */
+		int16_t pcm[960]; /* 480 input samples * 2 */
 		int n = (int)payload.len;
-		if (n > 960)
-			n = 960;
+		if (n > 480)
+			n = 480;
 		for (int i = 0; i < n; i++) {
 			int16_t s = ulaw_decode(payload.ptr[i]);
 			pcm[i * 2] = s;

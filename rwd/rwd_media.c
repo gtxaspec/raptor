@@ -1010,19 +1010,17 @@ void *rwd_audio_reader_thread(void *arg)
 				}
 			} else if (opus_enc && opus_frame_size > 0) {
 				/* Decode → accumulate → encode Opus in 20ms frames.
-				 * Each Opus frame advances RTP ts by 960 (48kHz × 20ms). */
-				int16_t dec_pcm[2048];
-				int n = rwd_decode_to_pcm(audio_codec, audio_buf, length,
+				 * Each Opus frame advances RTP ts by 960 (48kHz × 20ms).
+				 * Decode directly into pcm_accum to avoid a 4KB temp buffer. */
+				int space = 2048 - pcm_accum_fill;
+				if (space > 0) {
+					int n = rwd_decode_to_pcm(audio_codec, audio_buf, length,
 #ifdef RAPTOR_AAC
-							  aac_dec,
+								  aac_dec,
 #endif
-							  dec_pcm, 2048);
-				int copy = n;
-				if (pcm_accum_fill + copy > 2048)
-					copy = 2048 - pcm_accum_fill;
-				if (copy > 0) {
-					memcpy(pcm_accum + pcm_accum_fill, dec_pcm, copy * 2);
-					pcm_accum_fill += copy;
+								  pcm_accum + pcm_accum_fill, space);
+					if (n > 0)
+						pcm_accum_fill += n;
 				}
 				/* Use running timestamp — avoids gaps between
 				 * AAC frame batches (1024 vs 3×320 = 960) */
