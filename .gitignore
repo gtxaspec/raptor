@@ -24,6 +24,7 @@ rwc/rwc
 rlatency/rlatency
 rss_build_info.*
 tests/tests
+tests/sdp_parse.c
 fuzz/fuzz_sdp
 fuzz/fuzz_stun
 fuzz/fuzz_http_auth
