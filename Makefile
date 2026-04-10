@@ -277,6 +277,7 @@ clean:
 		echo "  CLEAN   $$d"; \
 		$(MAKE) -C $$d clean 2>/dev/null || true; \
 	done
+	rm -f rss_build_info.c rss_build_info.o rss_tls.o
 	rm -rf build
 
 distclean: clean
