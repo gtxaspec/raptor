@@ -279,7 +279,7 @@ void cmd_memory(void)
 		while ((ent = readdir(dir))) {
 			if (strncmp(ent->d_name, "rss_ring_", 9) != 0)
 				continue;
-			char path[256];
+			char path[280];
 			snprintf(path, sizeof(path), "/dev/shm/%s", ent->d_name);
 			struct stat st;
 			if (stat(path, &st) != 0)
@@ -295,7 +295,7 @@ void cmd_memory(void)
 		while ((ent = readdir(dir))) {
 			if (strncmp(ent->d_name, "rss_osd_", 8) != 0)
 				continue;
-			char path[256];
+			char path[280];
 			snprintf(path, sizeof(path), "/dev/shm/%s", ent->d_name);
 			struct stat st;
 			if (stat(path, &st) != 0)
