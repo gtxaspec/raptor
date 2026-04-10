@@ -222,6 +222,138 @@ TEST aac_au_odd_size(void)
 	PASS();
 }
 
+/* ── AAC 1024-sample accumulation boundary ── */
+
+/*
+ * AAC-LC encodes 1024 samples per frame. RAD accumulates PCM in a buffer
+ * and encodes when pcm_fill >= frame_samples. Test the boundary math:
+ * partial fills don't produce output, full fill produces exactly one frame.
+ */
+
+/* Simulate RAD's AAC accumulation logic */
+static int aac_accumulate(int pcm_fill, int incoming_samples, int frame_samples)
+{
+	int frames_out = 0;
+	pcm_fill += incoming_samples;
+	while (pcm_fill >= frame_samples) {
+		frames_out++;
+		pcm_fill -= frame_samples;
+	}
+	return frames_out;
+}
+
+TEST aac_accum_exact_boundary(void)
+{
+	/* Exactly 1024 samples → 1 frame */
+	ASSERT_EQ(1, aac_accumulate(0, 1024, 1024));
+	PASS();
+}
+
+TEST aac_accum_under_boundary(void)
+{
+	/* 1023 samples → 0 frames (1 short) */
+	ASSERT_EQ(0, aac_accumulate(0, 1023, 1024));
+	PASS();
+}
+
+TEST aac_accum_over_boundary(void)
+{
+	/* 1025 samples → 1 frame, 1 sample carried over */
+	ASSERT_EQ(1, aac_accumulate(0, 1025, 1024));
+	PASS();
+}
+
+TEST aac_accum_double_frame(void)
+{
+	/* 2048 samples → 2 frames */
+	ASSERT_EQ(2, aac_accumulate(0, 2048, 1024));
+	PASS();
+}
+
+TEST aac_accum_partial_fill(void)
+{
+	/* 512 + 512 = 1024 → 1 frame */
+	int fill = 512;
+	ASSERT_EQ(0, aac_accumulate(0, 512, 1024)); /* first half: no output */
+	ASSERT_EQ(1, aac_accumulate(fill, 512, 1024)); /* second half: 1 frame */
+	PASS();
+}
+
+TEST aac_accum_typical_rad(void)
+{
+	/* RAD reads 320 samples at 16kHz (20ms). 1024/320 = 3.2 frames to fill.
+	 * 3 reads = 960 (no frame), 4th read = 1280 → 1 frame, 256 carry */
+	int fill = 0;
+	int frames = 0;
+	for (int i = 0; i < 4; i++) {
+		int n = aac_accumulate(fill, 320, 1024);
+		frames += n;
+		fill += 320;
+		fill -= n * 1024;
+	}
+	ASSERT_EQ(1, frames);
+	ASSERT_EQ(256, fill); /* carry-over */
+	PASS();
+}
+
+/* ── Opus frame sizing ── */
+
+/*
+ * Opus supports frame durations: 2.5, 5, 10, 20, 40, 60 ms.
+ * RAD encodes 20ms frames. At 48kHz → 960 samples per frame.
+ * At 16kHz → 320 samples per frame.
+ * The Ogg granule position increments by decoded sample count at 48kHz.
+ */
+
+TEST opus_frame_samples_48k(void)
+{
+	/* 20ms at 48kHz = 960 samples */
+	int samples = 48000 * 20 / 1000;
+	ASSERT_EQ(960, samples);
+	PASS();
+}
+
+TEST opus_frame_samples_16k(void)
+{
+	/* 20ms at 16kHz = 320 samples */
+	int samples = 16000 * 20 / 1000;
+	ASSERT_EQ(320, samples);
+	PASS();
+}
+
+TEST opus_granule_increment(void)
+{
+	/* Ogg granule is always at 48kHz regardless of input sample rate.
+	 * For 20ms frames: granule += 960 per frame. */
+	uint64_t granule = 0;
+	for (int i = 0; i < 50; i++) /* 1 second at 50fps=20ms */
+		granule += 960;
+	ASSERT_EQ(48000ULL, granule); /* 1 second */
+	PASS();
+}
+
+TEST opus_granule_wrap(void)
+{
+	/* Granule is uint64_t — verify no overflow at large values */
+	uint64_t granule = UINT64_MAX - 960;
+	granule += 960;
+	ASSERT_EQ(UINT64_MAX, granule);
+	/* Next increment wraps */
+	granule += 960;
+	ASSERT_EQ(959ULL, granule); /* wrapped */
+	PASS();
+}
+
+TEST opus_rtp_clock(void)
+{
+	/* RFC 7587: Opus RTP clock is always 48000 Hz */
+	int rtp_clock = 48000;
+	/* 20ms at 48kHz = 960 ticks */
+	uint32_t rtp_ts = (uint32_t)((uint64_t)20000 * rtp_clock / 1000000);
+	ASSERT_EQ(960U, rtp_ts);
+	PASS();
+}
+
 SUITE(codec_suite)
 {
 	RUN_TEST(ulaw_silence);
@@ -241,4 +373,15 @@ SUITE(codec_suite)
 	RUN_TEST(aac_au_small_frame);
 	RUN_TEST(aac_au_typical_frame);
 	RUN_TEST(aac_au_odd_size);
+	RUN_TEST(aac_accum_exact_boundary);
+	RUN_TEST(aac_accum_under_boundary);
+	RUN_TEST(aac_accum_over_boundary);
+	RUN_TEST(aac_accum_double_frame);
+	RUN_TEST(aac_accum_partial_fill);
+	RUN_TEST(aac_accum_typical_rad);
+	RUN_TEST(opus_frame_samples_48k);
+	RUN_TEST(opus_frame_samples_16k);
+	RUN_TEST(opus_granule_increment);
+	RUN_TEST(opus_granule_wrap);
+	RUN_TEST(opus_rtp_clock);
 }
