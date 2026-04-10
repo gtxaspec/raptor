@@ -21,6 +21,13 @@
 
 /* ── Constants ── */
 
+/* Audio codec IDs (same as RAD/RSD ring header values) */
+#define RHD_CODEC_PCMU	    0
+#define RHD_CODEC_PCMA	    8
+#define RHD_CODEC_L16	    11
+#define RHD_CODEC_AAC	    97
+#define RHD_CODEC_OPUS	    111
+
 #define RHD_MAX_CLIENTS	    8
 #define RHD_RECV_BUF	    4096
 #define RHD_MJPEG_BOUNDARY  "raptorframe"
@@ -34,7 +41,10 @@
 
 typedef struct {
 	int fd;
-	bool is_mjpeg; /* streaming MJPEG */
+	bool is_mjpeg;		 /* streaming MJPEG */
+	bool is_audio;		 /* streaming audio */
+	uint32_t audio_page_seq; /* Ogg page sequence (Opus only) */
+	uint64_t audio_granule;	 /* Ogg granule position (Opus only) */
 	struct sockaddr_storage addr;
 	char recv_buf[RHD_RECV_BUF];
 	size_t recv_len;
@@ -65,6 +75,11 @@ typedef struct {
 	/* JPEG rings for snapshot + MJPEG streaming */
 	rss_ring_t *jpeg_rings[RHD_MAX_JPEG];
 	int jpeg_ring_count;
+
+	/* Audio ring for audio streaming */
+	rss_ring_t *audio_ring;
+	int audio_codec;       /* codec ID from ring header */
+	int audio_sample_rate; /* sample rate from ring header */
 
 	/* Snapshot read buffer (shared, single-threaded) */
 	uint8_t *snap_buf;
@@ -102,5 +117,11 @@ bool http_check_auth(const rhd_server_t *srv, const char *request);
 void http_send_mjpeg_header(rhd_client_t *c);
 int nb_write_all(rhd_client_t *c, const void *buf, size_t len);
 int http_send_mjpeg_frame(rhd_client_t *c, const uint8_t *data, uint32_t len);
+
+/* ── Audio streaming (rhd_audio.c) ── */
+
+int rhd_audio_send_header(rhd_client_t *c, int codec, int sample_rate);
+int rhd_audio_send_frame(rhd_client_t *c, int codec, int sample_rate, const uint8_t *data,
+			 uint32_t len, uint32_t page_seq, uint64_t granule);
 
 #endif /* RHD_H */

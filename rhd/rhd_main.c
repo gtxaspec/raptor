@@ -157,6 +157,15 @@ static void handle_request(rhd_server_t *srv, rhd_client_t *c)
 		http_send_mjpeg_header(c);
 		c->is_mjpeg = true;
 		return; /* keep alive */
+	} else if (strcmp(path, "/audio") == 0) {
+		if (!srv->audio_ring) {
+			http_error(c, "404 Not Found", "Audio not available");
+		} else {
+			if (rhd_audio_send_header(c, srv->audio_codec, srv->audio_sample_rate) < 0)
+				return;
+			c->is_audio = true;
+			return; /* keep alive */
+		}
 	} else if (strcmp(path, "/") == 0) {
 		if (!index_html) {
 			index_html = rss_read_file(RHD_INDEX_PATH, &index_html_len);
@@ -207,23 +216,29 @@ static int rhd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			rhd_client_t *c = srv->clients[i];
 			char addr[INET6_ADDRSTRLEN];
 			client_addr_str(&c->addr, addr, sizeof(addr));
+			const char *type = c->is_mjpeg	 ? "mjpeg"
+					   : c->is_audio ? "audio"
+							 : "snapshot";
 			n += snprintf(resp_buf + n, resp_buf_size - n,
 				      "%s{\"ip\":\"%s\",\"type\":\"%s\"}", i > 0 ? "," : "", addr,
-				      c->is_mjpeg ? "mjpeg" : "snapshot");
+				      type);
 		}
 		snprintf(resp_buf + n, resp_buf_size - n, "]}");
 		return (int)strlen(resp_buf);
 	}
 
 	/* Default: status */
-	int mjpeg = 0;
-	for (int i = 0; i < srv->client_count; i++)
+	int mjpeg = 0, audio = 0;
+	for (int i = 0; i < srv->client_count; i++) {
 		if (srv->clients[i]->is_mjpeg)
 			mjpeg++;
+		if (srv->clients[i]->is_audio)
+			audio++;
+	}
 	return rss_ctrl_resp(resp_buf, resp_buf_size,
-			     "{\"status\":\"ok\",\"clients\":%d,\"mjpeg\":%d,\"port\":%d,"
-			     "\"jpeg_rings\":%d}",
-			     srv->client_count, mjpeg, srv->port, srv->jpeg_ring_count);
+			     "{\"status\":\"ok\",\"clients\":%d,\"mjpeg\":%d,"
+			     "\"audio\":%d,\"port\":%d,\"jpeg_rings\":%d}",
+			     srv->client_count, mjpeg, audio, srv->port, srv->jpeg_ring_count);
 }
 
 static int server_init(rhd_server_t *srv)
@@ -263,6 +278,10 @@ static void server_run(rhd_server_t *srv)
 	uint64_t jpeg_last_ws[RHD_MAX_JPEG] = {0};
 	int jpeg_idle[RHD_MAX_JPEG] = {0};
 	int jpeg_reconnect_tick = 0;
+
+	/* Audio ring state */
+	uint64_t audio_read_seq = 0;
+	uint8_t audio_buf[4096];
 	uint8_t *frame_buf = NULL;
 	uint32_t frame_buf_size = 0;
 
@@ -291,6 +310,16 @@ static void server_run(rhd_server_t *srv)
 			break;
 		RSS_DEBUG("waiting for jpeg rings...");
 		sleep(1);
+	}
+
+	/* Try to open audio ring */
+	srv->audio_ring = rss_ring_open("audio");
+	if (srv->audio_ring) {
+		const rss_ring_header_t *ahdr = rss_ring_get_header(srv->audio_ring);
+		srv->audio_codec = ahdr->codec;
+		srv->audio_sample_rate = ahdr->fps_num;
+		RSS_INFO("audio ring available (codec=%d rate=%d)", srv->audio_codec,
+			 srv->audio_sample_rate);
 	}
 
 	frame_buf = malloc(frame_buf_size);
@@ -353,7 +382,59 @@ static void server_run(rhd_server_t *srv)
 			}
 		}
 
-		int timeout = has_mjpeg_clients ? 50 : 500;
+		/* Stream audio frames to audio clients */
+		bool has_audio_clients = false;
+		for (int i = 0; i < srv->client_count; i++)
+			if (srv->clients[i]->is_audio) {
+				has_audio_clients = true;
+				break;
+			}
+
+		if (has_audio_clients && srv->audio_ring) {
+			/* Drain all available audio frames — audio arrives faster
+			 * than the epoll loop period (20ms frames vs 50ms poll). */
+			for (int af = 0; af < 20; af++) {
+				uint32_t alen;
+				rss_ring_slot_t meta;
+				int ret = rss_ring_read(srv->audio_ring, &audio_read_seq, audio_buf,
+							sizeof(audio_buf), &alen, &meta);
+				if (ret == RSS_EOVERFLOW) {
+					/* Jump to latest frame */
+					const rss_ring_header_t *ahdr =
+						rss_ring_get_header(srv->audio_ring);
+					audio_read_seq =
+						ahdr->write_seq > 0 ? ahdr->write_seq - 1 : 0;
+					continue;
+				}
+				if (ret != 0 || alen == 0)
+					break; /* no more frames */
+
+				for (int i = srv->client_count - 1; i >= 0; i--) {
+					if (!srv->clients[i]->is_audio)
+						continue;
+					rhd_client_t *ac = srv->clients[i];
+					if (rhd_audio_send_frame(ac, srv->audio_codec,
+								 srv->audio_sample_rate, audio_buf,
+								 alen, ac->audio_page_seq,
+								 ac->audio_granule) < 0) {
+						remove_client(srv, i);
+						continue;
+					}
+					ac->audio_page_seq++;
+					/* Opus: 960 samples per 20ms frame at 48kHz.
+					 * PCM/G.711: bytes / 2 = samples (16-bit mono).
+					 * AAC: 1024 samples per frame. */
+					if (srv->audio_codec == RHD_CODEC_OPUS)
+						ac->audio_granule += 960;
+					else if (srv->audio_codec == RHD_CODEC_AAC)
+						ac->audio_granule += 1024;
+					else
+						ac->audio_granule += alen / 2;
+				}
+			}
+		}
+
+		int timeout = (has_mjpeg_clients || has_audio_clients) ? 50 : 500;
 		int n = epoll_wait(srv->epoll_fd, events, 16, timeout);
 
 		for (int i = 0; i < n; i++) {
@@ -464,7 +545,7 @@ static void server_run(rhd_server_t *srv)
 			if (strstr(c->recv_buf, "\r\n\r\n")) {
 				handle_request(srv, c);
 				/* Close non-streaming, non-async connections */
-				if (!c->is_mjpeg && !c->send_buf)
+				if (!c->is_mjpeg && !c->is_audio && !c->send_buf)
 					remove_client(srv, ci);
 			}
 		}
@@ -481,10 +562,11 @@ static void server_run(rhd_server_t *srv)
 			}
 		}
 
-		/* If we have MJPEG clients, wait for next frame from ring */
-		if (has_mjpeg_clients && srv->jpeg_rings[0]) {
+		/* Wait for next frame from active rings */
+		if (has_audio_clients && srv->audio_ring)
+			rss_ring_wait(srv->audio_ring, 20);
+		else if (has_mjpeg_clients && srv->jpeg_rings[0])
 			rss_ring_wait(srv->jpeg_rings[0], 100);
-		}
 
 		/* Periodic JPEG ring reconnection (~every 2s) */
 		if (++jpeg_reconnect_tick >= 20) {
@@ -544,6 +626,8 @@ static void server_run(rhd_server_t *srv)
 			rss_ring_close(srv->jpeg_rings[j]);
 		}
 	}
+	if (srv->audio_ring)
+		rss_ring_close(srv->audio_ring);
 	if (srv->ctrl)
 		rss_ctrl_destroy(srv->ctrl);
 	close(srv->listen_fd);
