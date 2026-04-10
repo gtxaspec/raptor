@@ -442,6 +442,10 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 			bc_cfg, DYN(rsd_bc_recv_t, Compy_AudioReceiver, recv));
 		RSS_INFO("client SETUP: backchannel PCMU/8000");
 	} else if (is_audio) {
+		if (!self->srv->has_audio) {
+			compy_respond(ctx, COMPY_STATUS_NOT_FOUND, "Audio not available");
+			return;
+		}
 		/* Determine PT and clock from ring metadata */
 		int apt = 0;
 		int aclk = 8000;
@@ -470,6 +474,11 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 		self->audio.rtp = Compy_RtpTransport_new(rtp_t, apt, aclk);
 		self->audio.rtcp = Compy_Rtcp_new(self->audio.rtp, rtcp_t, "raptor@camera");
 	} else {
+		/* Video SETUP — reject if this stream has no video ring */
+		if (!self->srv->video[self->stream_idx].ring) {
+			compy_respond(ctx, COMPY_STATUS_NOT_FOUND, "Video not available");
+			return;
+		}
 		self->video.rtp = Compy_RtpTransport_new(rtp_t, RSD_VIDEO_PT, RSD_VIDEO_CLOCK);
 		self->video.nal = Compy_NalTransport_new(self->video.rtp);
 		self->video.rtcp = Compy_Rtcp_new(self->video.rtp, rtcp_t, "raptor@camera");
@@ -546,7 +555,7 @@ static void rsd_client_t_play(VSelf, Compy_Context *ctx, const Compy_Request *re
 	compy_header(ctx, COMPY_HEADER_SESSION, "%" PRIu64, self->session_id);
 	compy_respond_ok(ctx);
 
-	RSS_DEBUG("client PLAY (IDR requested)");
+	RSS_DEBUG("client PLAY%s", self->video.nal ? " (IDR requested)" : " (audio only)");
 }
 
 static void rsd_client_t_pause_method(VSelf, Compy_Context *ctx, const Compy_Request *req)
