@@ -388,20 +388,21 @@ echo "=== Checking ASan output ==="
 ASAN_ERRORS=0
 for log in "$LOG_DIR"/*.log; do
     name=$(basename "$log" .log)
-    if grep -q "ERROR: AddressSanitizer\|ERROR: LeakSanitizer\|SUMMARY:.*Sanitizer" "$log" 2>/dev/null; then
+    if grep -q "ERROR: AddressSanitizer\|ERROR: LeakSanitizer\|ERROR: ThreadSanitizer\|SUMMARY:.*Sanitizer" "$log" 2>/dev/null; then
         # Filter out known acceptable leaks (e.g. one-time allocations in daemon init)
-        real_errors=$(grep -c "ERROR: AddressSanitizer" "$log" 2>/dev/null || echo 0)
+        real_errors=$(grep -cE "ERROR: (Address|Thread)Sanitizer" "$log" 2>/dev/null || true)
+        real_errors=${real_errors:-0}
         if [ "$real_errors" -gt 0 ]; then
-            fail "ASan $name" "memory errors detected (see $log)"
+            fail "sanitizer $name" "memory errors detected (see $log)"
             ASAN_ERRORS=$((ASAN_ERRORS + 1))
             if [ "$VERBOSE" = "1" ]; then
                 grep "SUMMARY:" "$log" 2>/dev/null || true
             fi
         else
-            pass "ASan $name (leaks only)"
+            pass "sanitizer $name (leaks only)"
         fi
     else
-        pass "ASan $name"
+        pass "sanitizer $name"
     fi
 done
 

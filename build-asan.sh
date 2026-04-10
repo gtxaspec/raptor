@@ -1,5 +1,5 @@
 #!/bin/sh
-# Build ALL raptor daemons for host (x86_64) with AddressSanitizer.
+# Build ALL raptor daemons for host (x86_64) with sanitizers.
 #
 # Automatically clones sibling repos (raptor-common, raptor-ipc, raptor-hal,
 # compy) into asan-out/deps/ if not already present. No manual setup needed.
@@ -8,20 +8,35 @@
 # All other daemons build natively — no HAL dependency.
 #
 # Usage:
-#   ./build-asan.sh          # build all
-#   ./build-asan.sh clean    # clean (keeps deps, use distclean to remove)
-#   ./build-asan.sh distclean # clean everything including cloned deps
+#   ./build-asan.sh              # build with ASan (memory safety)
+#   ./build-asan.sh tsan         # build with TSan (thread safety)
+#   ./build-asan.sh clean        # clean (keeps deps, use distclean to remove)
+#   ./build-asan.sh distclean    # clean everything including cloned deps
 #
 # Test:
 #   ./asan-out/create_rings &          # dummy SHM rings
 #   ./asan-out/rvd -c config/raptor.conf -f -d &
-#   ./asan-out/rsd -c config/raptor.conf -f -d &
-#   ./asan-out/rhd -c config/raptor.conf -f -d &
-#   # exercise with curl/ffprobe, Ctrl-C — ASan prints leak report on exit
+#   ./tests/test-integration.sh        # automated test suite
 
 set -e
 
 RAPTOR_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Select sanitizer
+SAN_MODE="asan"
+if [ "$1" = "tsan" ]; then
+    SAN_MODE="tsan"
+    shift
+fi
+
+if [ "$SAN_MODE" = "tsan" ]; then
+    SANITIZE="-fsanitize=thread -fno-omit-frame-pointer"
+    SAN_LABEL="TSan"
+else
+    SANITIZE="-fsanitize=address,undefined -fno-omit-frame-pointer"
+    SAN_LABEL="ASan"
+fi
+
 OUT="$RAPTOR_DIR/asan-out"
 DEPS="$OUT/deps"
 
@@ -30,6 +45,7 @@ if [ "$1" = "clean" ]; then
     rm -f "$OUT"/rvd "$OUT"/rsd "$OUT"/rad "$OUT"/rhd "$OUT"/rod "$OUT"/ric
     rm -f "$OUT"/rmd "$OUT"/rmr "$OUT"/rwc "$OUT"/rwd
     rm -f "$OUT"/raptorctl "$OUT"/ringdump "$OUT"/rac "$OUT"/create_rings
+    rm -rf "$OUT"/mbedtls-build "$OUT"/mbedtls-install "$OUT"/compy-build
     echo "Cleaned asan-out/ (deps kept, use distclean to remove)"
     exit 0
 fi
@@ -39,6 +55,8 @@ if [ "$1" = "distclean" ]; then
     echo "Cleaned asan-out/ including deps"
     exit 0
 fi
+
+echo "Building with $SAN_LABEL ($SANITIZE)"
 
 mkdir -p "$OUT" "$DEPS"
 
@@ -92,7 +110,7 @@ if [ ! -f "$MBEDTLS_PREFIX/lib/libmbedtls.a" ]; then
         "$MBEDTLS_DIR/include/mbedtls/mbedtls_config.h"
     mkdir -p "$MBEDTLS_BUILD"
     cmake -S "$MBEDTLS_DIR" -B "$MBEDTLS_BUILD" \
-        -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -O1 -g" \
+        -DCMAKE_C_FLAGS="$SANITIZE -O1 -g" \
         -DCMAKE_BUILD_TYPE=Debug \
         -DCMAKE_INSTALL_PREFIX="$MBEDTLS_PREFIX" \
         -DENABLE_TESTING=OFF -DENABLE_PROGRAMS=OFF \
@@ -110,7 +128,7 @@ if [ ! -f "$COMPY_BUILD/libcompy.a" ]; then
     echo "=== compy (cmake + mbedTLS) ==="
     mkdir -p "$COMPY_BUILD"
     cmake -S "$COMPY_DIR" -B "$COMPY_BUILD" \
-        -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -O1 -g $MBEDTLS_CFLAGS" \
+        -DCMAKE_C_FLAGS="$SANITIZE -O1 -g $MBEDTLS_CFLAGS" \
         -DCMAKE_BUILD_TYPE=Debug -DCOMPY_SHARED=OFF \
         -DCOMPY_TLS_MBEDTLS=ON \
         -DCMAKE_PREFIX_PATH="$MBEDTLS_PREFIX" \
@@ -129,7 +147,6 @@ COMPY_CFLAGS="$COMPY_CFLAGS -I$COMPY_BUILD/_deps/metalang99-src/include"
 # ── Compiler setup ──
 
 CC=gcc
-SANITIZE="-fsanitize=address,undefined -fno-omit-frame-pointer"
 CFLAGS="-Wall -Wextra -std=gnu11 -D_GNU_SOURCE -DPLATFORM_T31 -O1 -g $SANITIZE"
 CFLAGS="$CFLAGS -I$IPC_DIR/include -I$COMMON_DIR/include $MBEDTLS_CFLAGS"
 LDFLAGS="$SANITIZE -lpthread -lrt"
