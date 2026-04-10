@@ -1,12 +1,16 @@
 #!/bin/sh
 # Build ALL raptor daemons for host (x86_64) with AddressSanitizer.
 #
+# Automatically clones sibling repos (raptor-common, raptor-ipc, raptor-hal,
+# compy) into asan-out/deps/ if not already present. No manual setup needed.
+#
 # RVD/RAD use a mock HAL (tests/mock_hal.c) that stubs IMP SDK calls.
 # All other daemons build natively — no HAL dependency.
 #
 # Usage:
 #   ./build-asan.sh          # build all
-#   ./build-asan.sh clean    # clean
+#   ./build-asan.sh clean    # clean (keeps deps, use distclean to remove)
+#   ./build-asan.sh distclean # clean everything including cloned deps
 #
 # Test:
 #   ./asan-out/create_rings &          # dummy SHM rings
@@ -18,12 +22,78 @@
 set -e
 
 RAPTOR_DIR="$(cd "$(dirname "$0")" && pwd)"
-HAL_DIR="$RAPTOR_DIR/../raptor-hal"
-IPC_DIR="$RAPTOR_DIR/../raptor-ipc"
-COMMON_DIR="$RAPTOR_DIR/../raptor-common"
-COMPY_DIR="$RAPTOR_DIR/../compy"
-COMPY_BUILD="$COMPY_DIR/build"
 OUT="$RAPTOR_DIR/asan-out"
+DEPS="$OUT/deps"
+
+if [ "$1" = "clean" ]; then
+    rm -f "$OUT"/*.o "$OUT"/*.a "$OUT"/rss_build_info.c
+    rm -f "$OUT"/rvd "$OUT"/rsd "$OUT"/rad "$OUT"/rhd "$OUT"/rod "$OUT"/ric
+    rm -f "$OUT"/rmd "$OUT"/rmr "$OUT"/rwc "$OUT"/rwd
+    rm -f "$OUT"/raptorctl "$OUT"/ringdump "$OUT"/rac "$OUT"/create_rings
+    echo "Cleaned asan-out/ (deps kept, use distclean to remove)"
+    exit 0
+fi
+
+if [ "$1" = "distclean" ]; then
+    rm -rf "$OUT"
+    echo "Cleaned asan-out/ including deps"
+    exit 0
+fi
+
+mkdir -p "$OUT" "$DEPS"
+
+# ── Clone/update dependencies ──
+
+clone_or_pull() {
+    local name="$1" url="$2" dir="$DEPS/$name"
+    if [ -d "$dir/.git" ]; then
+        echo "  update  $name"
+        git -C "$dir" pull --ff-only -q 2>/dev/null || true
+    else
+        echo "  clone   $name"
+        git clone --depth 1 -q "$url" "$dir"
+    fi
+}
+
+# Use sibling repos if they exist, otherwise clone into deps/
+find_or_clone() {
+    local name="$1" url="$2" varname="$3"
+    local sibling="$RAPTOR_DIR/../$name"
+    if [ -d "$sibling" ]; then
+        eval "$varname=\"$sibling\""
+    else
+        clone_or_pull "$name" "$url"
+        eval "$varname=\"$DEPS/$name\""
+    fi
+}
+
+echo "=== Dependencies ==="
+find_or_clone raptor-common https://github.com/gtxaspec/raptor-common.git COMMON_DIR
+find_or_clone raptor-ipc    https://github.com/gtxaspec/raptor-ipc.git    IPC_DIR
+find_or_clone raptor-hal    https://github.com/gtxaspec/raptor-hal.git    HAL_DIR
+find_or_clone compy         https://github.com/gtxaspec/compy.git         COMPY_DIR
+
+# Build compy for x86 if needed
+COMPY_BUILD="$OUT/compy-build"
+if [ ! -f "$COMPY_BUILD/libcompy.a" ]; then
+    echo "=== compy (cmake) ==="
+    mkdir -p "$COMPY_BUILD"
+    cmake -S "$COMPY_DIR" -B "$COMPY_BUILD" \
+        -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -O1 -g" \
+        -DCMAKE_BUILD_TYPE=Debug -DCOMPY_SHARED=OFF \
+        > /dev/null 2>&1
+    cmake --build "$COMPY_BUILD" -j"$(nproc)" > /dev/null 2>&1
+    echo "  -> libcompy.a"
+fi
+
+# Compy include paths (fetched by cmake)
+COMPY_CFLAGS="-I$COMPY_DIR/include"
+COMPY_CFLAGS="$COMPY_CFLAGS -I$COMPY_BUILD/_deps/slice99-src"
+COMPY_CFLAGS="$COMPY_CFLAGS -I$COMPY_BUILD/_deps/datatype99-src"
+COMPY_CFLAGS="$COMPY_CFLAGS -I$COMPY_BUILD/_deps/interface99-src"
+COMPY_CFLAGS="$COMPY_CFLAGS -I$COMPY_BUILD/_deps/metalang99-src/include"
+
+# ── Compiler setup ──
 
 CC=gcc
 SANITIZE="-fsanitize=address,undefined -fno-omit-frame-pointer"
@@ -31,23 +101,7 @@ CFLAGS="-Wall -Wextra -std=gnu11 -D_GNU_SOURCE -DPLATFORM_T31 -O1 -g $SANITIZE"
 CFLAGS="$CFLAGS -I$IPC_DIR/include -I$COMMON_DIR/include"
 LDFLAGS="$SANITIZE -lpthread -lrt"
 
-# HAL include path (for RVD/RAD/ROD headers)
 HAL_CFLAGS="-I$HAL_DIR/include"
-
-# Compy include paths (for RSD)
-COMPY_CFLAGS="-I$COMPY_DIR/include"
-COMPY_CFLAGS="$COMPY_CFLAGS -I$COMPY_BUILD/_deps/slice99-src"
-COMPY_CFLAGS="$COMPY_CFLAGS -I$COMPY_BUILD/_deps/datatype99-src"
-COMPY_CFLAGS="$COMPY_CFLAGS -I$COMPY_BUILD/_deps/interface99-src"
-COMPY_CFLAGS="$COMPY_CFLAGS -I$COMPY_BUILD/_deps/metalang99-src/include"
-
-if [ "$1" = "clean" ]; then
-    rm -rf "$OUT"
-    echo "Cleaned asan-out/"
-    exit 0
-fi
-
-mkdir -p "$OUT"
 
 # ── Libraries ──
 
@@ -58,7 +112,6 @@ $CC $CFLAGS -c "$COMMON_DIR/src/rss_daemon.c" -o "$OUT/rss_daemon.o"
 $CC $CFLAGS -c "$COMMON_DIR/src/rss_util.c" -o "$OUT/rss_util.o"
 $CC $CFLAGS -c "$COMMON_DIR/src/rss_ctrl_cmds.c" -o "$OUT/rss_ctrl_common.o"
 $CC $CFLAGS -c "$COMMON_DIR/src/rss_http.c" -o "$OUT/rss_http.o"
-# Build info stub
 cat > "$OUT/rss_build_info.c" << 'BUILDEOF'
 const char *rss_build_hash = "asan";
 const char *rss_build_time = "asan-build";
@@ -84,7 +137,8 @@ LIBS_HAL="$OUT/libmock_hal.a $LIBS"
 echo "=== RHD ==="
 $CC $CFLAGS -c "$RAPTOR_DIR/rhd/rhd_main.c" -o "$OUT/rhd_main.o"
 $CC $CFLAGS -c "$RAPTOR_DIR/rhd/rhd_http.c" -o "$OUT/rhd_http.o"
-$CC -o "$OUT/rhd" "$OUT/rhd_main.o" "$OUT/rhd_http.o" $LIBS $LDFLAGS
+$CC $CFLAGS -c "$RAPTOR_DIR/rhd/rhd_audio.c" -o "$OUT/rhd_audio.o"
+$CC -o "$OUT/rhd" "$OUT/rhd_main.o" "$OUT/rhd_http.o" "$OUT/rhd_audio.o" $LIBS $LDFLAGS
 echo "  -> rhd"
 
 echo "=== RSD ==="
@@ -173,10 +227,9 @@ $CC $CFLAGS -c "$RAPTOR_DIR/rwc/rwc_main.c" -o "$OUT/rwc_main.o"
 $CC -o "$OUT/rwc" "$OUT/rwc_main.o" $LIBS $LDFLAGS
 echo "  -> rwc"
 
-# RWD is skipped in ASAN builds — requires mbedTLS with DTLS-SRTP support
-# (cross-build only via build.sh with TLS=1).
+# RWD requires mbedTLS with DTLS-SRTP — skipped in ASAN builds
 echo "=== RWD ==="
-echo "  (skipped — requires mbedTLS DTLS-SRTP, use build.sh for cross-build)"
+echo "  (skipped — requires mbedTLS DTLS-SRTP)"
 
 echo ""
 echo "Done. All binaries in asan-out/"
