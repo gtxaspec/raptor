@@ -271,8 +271,7 @@ int rsd_server_init(rsd_server_t *srv)
 		usleep(100000);
 	}
 	if (!srv->video[RSD_STREAM_MAIN].ring) {
-		RSS_FATAL("video ring not available (is RVD running?)");
-		return -1;
+		RSS_WARN("video ring not available (is RVD running?)");
 	}
 	srv->video[RSD_STREAM_MAIN].idx = RSD_STREAM_MAIN;
 	srv->video[RSD_STREAM_MAIN].ring_name = ring_names[RSD_STREAM_MAIN];
@@ -320,6 +319,19 @@ int rsd_server_init(rsd_server_t *srv)
 		RSS_INFO("audio ring available");
 	} else {
 		RSS_INFO("no audio ring (RAD not running?)");
+	}
+
+	/* Must have at least one ring to serve */
+	bool has_any_video = false;
+	for (int s = 0; s < RSD_STREAM_COUNT; s++) {
+		if (srv->video[s].ring) {
+			has_any_video = true;
+			break;
+		}
+	}
+	if (!has_any_video && !srv->has_audio) {
+		RSS_FATAL("no video or audio rings available");
+		return -1;
 	}
 
 	/* Create dual-stack IPv6 listen socket */
@@ -445,8 +457,9 @@ static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 	/* Default: status */
-	return rss_ctrl_resp(resp_buf, resp_buf_size, "{\"status\":\"ok\",\"clients\":%d,\"port\":%d}",
-			     srv->client_count, srv->port);
+	return rss_ctrl_resp(resp_buf, resp_buf_size,
+			     "{\"status\":\"ok\",\"clients\":%d,\"port\":%d}", srv->client_count,
+			     srv->port);
 }
 
 void rsd_server_run(rsd_server_t *srv)

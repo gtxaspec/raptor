@@ -353,8 +353,9 @@ void *rsd_audio_reader_thread(void *arg)
 
 				/* Gate audio on video keyframe — don't send audio
 				 * until the client has received its first video
-				 * keyframe, so both RTP timelines start together. */
-				if (c->video.playing && !c->video_ts_base_set)
+				 * keyframe, so both RTP timelines start together.
+				 * Skip gate for audio-only clients (no video SETUP). */
+				if (c->video.nal && c->video.playing && !c->video_ts_base_set)
 					continue;
 
 				if (!c->audio_ts_base_set) {

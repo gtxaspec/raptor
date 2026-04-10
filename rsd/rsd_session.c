@@ -171,13 +171,12 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 		return;
 	}
 
-	/* Check if the requested stream's ring exists */
-	if (!self->srv->video[self->stream_idx].ring) {
+	/* Check if the requested stream has video or audio available */
+	bool has_video = self->srv->video[self->stream_idx].ring != NULL;
+	if (!has_video && !self->srv->has_audio) {
 		compy_respond(ctx, COMPY_STATUS_NOT_FOUND, "Stream not available");
 		return;
 	}
-
-	const rss_ring_header_t *hdr = rss_ring_get_header(self->srv->video[self->stream_idx].ring);
 
 	char sdp[2048] = {0};
 	Compy_Writer sdp_w = compy_string_writer(sdp);
@@ -192,28 +191,36 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 	if (self->srv->session_info[0])
 		COMPY_SDP_DESCRIBE(ret, sdp_w, (COMPY_SDP_INFO, "%s", self->srv->session_info));
 
-	/* Store codec for NAL framing in ring reader */
-	self->video_codec = hdr->codec;
+	if (has_video) {
+		const rss_ring_header_t *hdr =
+			rss_ring_get_header(self->srv->video[self->stream_idx].ring);
 
-	if (hdr->codec == 1) {
-		/* H.265 / HEVC (RFC 7798) */
-		COMPY_SDP_DESCRIBE(
-			ret, sdp_w, (COMPY_SDP_MEDIA, "video 0 RTP/AVP %d", RSD_VIDEO_PT),
-			(COMPY_SDP_ATTR, "control:video"), (COMPY_SDP_ATTR, "recvonly"),
-			(COMPY_SDP_ATTR, "rtpmap:%d H265/%d", RSD_VIDEO_PT, RSD_VIDEO_CLOCK),
-			(COMPY_SDP_ATTR, "framerate:%u", hdr->fps_num));
-	} else {
-		/* H.264 / AVC (RFC 6184) */
-		uint8_t profile_idc = hdr->profile ? hdr->profile : 100;
-		uint8_t level_idc = hdr->level ? hdr->level : 40;
+		/* Store codec for NAL framing in ring reader */
+		self->video_codec = hdr->codec;
 
-		COMPY_SDP_DESCRIBE(
-			ret, sdp_w, (COMPY_SDP_MEDIA, "video 0 RTP/AVP %d", RSD_VIDEO_PT),
-			(COMPY_SDP_ATTR, "control:video"), (COMPY_SDP_ATTR, "recvonly"),
-			(COMPY_SDP_ATTR, "rtpmap:%d H264/%d", RSD_VIDEO_PT, RSD_VIDEO_CLOCK),
-			(COMPY_SDP_ATTR, "fmtp:%d packetization-mode=1;profile-level-id=%02X00%02X",
-			 RSD_VIDEO_PT, profile_idc, level_idc),
-			(COMPY_SDP_ATTR, "framerate:%u", hdr->fps_num));
+		if (hdr->codec == 1) {
+			/* H.265 / HEVC (RFC 7798) */
+			COMPY_SDP_DESCRIBE(
+				ret, sdp_w, (COMPY_SDP_MEDIA, "video 0 RTP/AVP %d", RSD_VIDEO_PT),
+				(COMPY_SDP_ATTR, "control:video"), (COMPY_SDP_ATTR, "recvonly"),
+				(COMPY_SDP_ATTR, "rtpmap:%d H265/%d", RSD_VIDEO_PT,
+				 RSD_VIDEO_CLOCK),
+				(COMPY_SDP_ATTR, "framerate:%u", hdr->fps_num));
+		} else {
+			/* H.264 / AVC (RFC 6184) */
+			uint8_t profile_idc = hdr->profile ? hdr->profile : 100;
+			uint8_t level_idc = hdr->level ? hdr->level : 40;
+
+			COMPY_SDP_DESCRIBE(
+				ret, sdp_w, (COMPY_SDP_MEDIA, "video 0 RTP/AVP %d", RSD_VIDEO_PT),
+				(COMPY_SDP_ATTR, "control:video"), (COMPY_SDP_ATTR, "recvonly"),
+				(COMPY_SDP_ATTR, "rtpmap:%d H264/%d", RSD_VIDEO_PT,
+				 RSD_VIDEO_CLOCK),
+				(COMPY_SDP_ATTR,
+				 "fmtp:%d packetization-mode=1;profile-level-id=%02X00%02X",
+				 RSD_VIDEO_PT, profile_idc, level_idc),
+				(COMPY_SDP_ATTR, "framerate:%u", hdr->fps_num));
+		}
 	}
 
 	if (self->srv->has_audio) {
@@ -505,8 +512,8 @@ static void rsd_client_t_play(VSelf, Compy_Context *ctx, const Compy_Request *re
 	if (self->audio.rtp)
 		self->audio.playing = true;
 
-	/* Request IDR from RVD so the client gets a keyframe ASAP */
-	{
+	/* Request IDR from RVD so the client gets a keyframe ASAP (video clients only) */
+	if (self->video.nal) {
 		char resp[128];
 		rss_ctrl_send_command("/var/run/rss/rvd.sock", "{\"cmd\":\"request-idr\"}", resp,
 				      sizeof(resp), 1000);
