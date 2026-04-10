@@ -149,7 +149,7 @@ COMPY_CFLAGS="$COMPY_CFLAGS -I$COMPY_BUILD/_deps/metalang99-src/include"
 CC=gcc
 CFLAGS="-Wall -Wextra -std=gnu11 -D_GNU_SOURCE -DPLATFORM_T31 -O1 -g $SANITIZE"
 CFLAGS="$CFLAGS -I$IPC_DIR/include -I$COMMON_DIR/include $MBEDTLS_CFLAGS"
-LDFLAGS="$SANITIZE -lpthread -lrt"
+LDFLAGS="$SANITIZE -lpthread -lrt -lm"
 
 HAL_CFLAGS="-I$HAL_DIR/include"
 TLS_CFLAGS="-DRSS_HAS_TLS"
@@ -163,12 +163,13 @@ $CC $CFLAGS -c "$COMMON_DIR/src/rss_daemon.c" -o "$OUT/rss_daemon.o"
 $CC $CFLAGS -c "$COMMON_DIR/src/rss_util.c" -o "$OUT/rss_util.o"
 $CC $CFLAGS -c "$COMMON_DIR/src/rss_ctrl_cmds.c" -o "$OUT/rss_ctrl_common.o"
 $CC $CFLAGS -c "$COMMON_DIR/src/rss_http.c" -o "$OUT/rss_http.o"
+$CC $CFLAGS -c "$COMMON_DIR/src/cJSON.c" -o "$OUT/cJSON.o"
 cat > "$OUT/rss_build_info.c" << 'BUILDEOF'
 const char *rss_build_hash = "asan";
 const char *rss_build_time = "asan-build";
 BUILDEOF
 $CC $CFLAGS -c "$OUT/rss_build_info.c" -o "$OUT/rss_build_info.o"
-ar rcs "$OUT/librss_common.a" "$OUT"/rss_log.o "$OUT"/rss_config.o "$OUT"/rss_daemon.o "$OUT"/rss_util.o "$OUT"/rss_ctrl_common.o "$OUT"/rss_http.o "$OUT"/rss_build_info.o
+ar rcs "$OUT/librss_common.a" "$OUT"/rss_log.o "$OUT"/rss_config.o "$OUT"/rss_daemon.o "$OUT"/rss_util.o "$OUT"/rss_ctrl_common.o "$OUT"/rss_http.o "$OUT"/cJSON.o "$OUT"/rss_build_info.o
 
 echo "=== raptor-ipc ==="
 $CC $CFLAGS -c "$IPC_DIR/src/rss_ring.c" -o "$OUT/rss_ring.o"

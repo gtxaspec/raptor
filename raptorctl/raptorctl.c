@@ -43,6 +43,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <cJSON.h>
 #include <rss_ipc.h>
 #include <rss_common.h>
 
@@ -77,44 +78,60 @@ static void print_config_entry(const char *key, const char *value, void *userdat
 	(*count)++;
 }
 
+/* JSON command helpers for building IPC requests */
+static cJSON *jcmd(const char *cmd)
+{
+	cJSON *j = cJSON_CreateObject();
+	cJSON_AddStringToObject(j, "cmd", cmd);
+	return j;
+}
+
+static void jadd_s(cJSON *j, const char *key, const char *val)
+{
+	cJSON_AddStringToObject(j, key, val);
+}
+
+static void jadd_i(cJSON *j, const char *key, const char *val)
+{
+	cJSON_AddNumberToObject(j, key, (double)strtol(val, NULL, 10));
+}
+
+static void jstr(cJSON *j, char *buf, int size)
+{
+	char *s = cJSON_PrintUnformatted(j);
+	if (s) {
+		rss_strlcpy(buf, s, (size_t)size);
+		free(s);
+	} else {
+		buf[0] = '\0';
+	}
+	cJSON_Delete(j);
+}
+
 /* Pretty-print a config-get-section JSON response as ini-style key = value.
  * Input: {"status":"ok","section":"audio","keys":{"codec":"aac","volume":"80"}}
  * Output: [audio]
  *         codec = aac
  *         volume = 80 */
-static void print_section_json(const char *section, const char *json)
+static void print_section_json(const char *section, const char *json_str)
 {
 	printf("[%s]\n", section);
-	const char *keys = strstr(json, "\"keys\":{");
-	if (!keys)
+	cJSON *root = cJSON_Parse(json_str);
+	if (!root)
 		return;
-	keys += 8; /* skip "keys":{ */
-
-	while (*keys && *keys != '}') {
-		/* Find key: "key" */
-		const char *kstart = strchr(keys, '"');
-		if (!kstart)
-			break;
-		kstart++;
-		const char *kend = strchr(kstart, '"');
-		if (!kend)
-			break;
-
-		/* Find value: "value" */
-		const char *vstart = strchr(kend + 1, '"');
-		if (!vstart)
-			break;
-		vstart++;
-		const char *vend = strchr(vstart, '"');
-		if (!vend)
-			break;
-
-		printf("%.*s = %.*s\n", (int)(kend - kstart), kstart, (int)(vend - vstart), vstart);
-
-		keys = vend + 1;
-		if (*keys == ',')
-			keys++;
+	cJSON *keys_obj = cJSON_GetObjectItemCaseSensitive(root, "keys");
+	if (!keys_obj) {
+		cJSON_Delete(root);
+		return;
 	}
+	cJSON *item = NULL;
+	cJSON_ArrayForEach(item, keys_obj)
+	{
+		const char *v = cJSON_GetStringValue(item);
+		if (v)
+			printf("%s = %s\n", item->string, v);
+	}
+	cJSON_Delete(root);
 }
 
 const struct help_entry help_entries[] = {
@@ -367,10 +384,10 @@ int main(int argc, char **argv)
 					char cmd_json[256];
 					snprintf(sock_path, sizeof(sock_path),
 						 "/var/run/rss/%s.sock", target);
-					snprintf(cmd_json, sizeof(cmd_json),
-						 "{\"cmd\":\"config-get\",\"section\":\"%s\""
-						 ",\"key\":\"%s\"}",
-						 section, key);
+					cJSON *j = jcmd("config-get");
+					jadd_s(j, "section", section);
+					jadd_s(j, "key", key);
+					jstr(j, cmd_json, sizeof(cmd_json));
 					int ret = rss_ctrl_send_command(sock_path, cmd_json, resp,
 									sizeof(resp), 2000);
 					if (ret >= 0) {
@@ -389,10 +406,9 @@ int main(int argc, char **argv)
 					char cmd_json[256];
 					snprintf(sock_path, sizeof(sock_path),
 						 "/var/run/rss/%s.sock", target);
-					snprintf(cmd_json, sizeof(cmd_json),
-						 "{\"cmd\":\"config-get-section\""
-						 ",\"section\":\"%s\"}",
-						 section);
+					cJSON *j = jcmd("config-get-section");
+					jadd_s(j, "section", section);
+					jstr(j, cmd_json, sizeof(cmd_json));
 					int ret = rss_ctrl_send_command(sock_path, cmd_json, resp,
 									sizeof(resp), 2000);
 					if (ret >= 0) {
@@ -504,26 +520,25 @@ int main(int argc, char **argv)
 		daemon = "rvd";
 
 	if (strcmp(cmd, "status") == 0) {
-		snprintf(json, sizeof(json), "{\"cmd\":\"status\"}");
+		jstr(jcmd("status"), json, sizeof(json));
 
 	} else if (strcmp(cmd, "config") == 0) {
-		snprintf(json, sizeof(json), "{\"cmd\":\"config-show\"}");
+		jstr(jcmd("config-show"), json, sizeof(json));
 
 	} else if (strcmp(cmd, "clients") == 0) {
-		snprintf(json, sizeof(json), "{\"cmd\":\"clients\"}");
+		jstr(jcmd("clients"), json, sizeof(json));
 
 	} else if (strcmp(cmd, "share-rotate") == 0) {
-		snprintf(json, sizeof(json), "{\"cmd\":\"share-rotate\"}");
+		jstr(jcmd("share-rotate"), json, sizeof(json));
 
 	} else if (strcmp(cmd, "share") == 0) {
-		snprintf(json, sizeof(json), "{\"cmd\":\"share\"}");
+		jstr(jcmd("share"), json, sizeof(json));
 
 	} else if (strcmp(cmd, "request-idr") == 0) {
+		cJSON *j = jcmd("request-idr");
 		if (argc > 3)
-			snprintf(json, sizeof(json), "{\"cmd\":\"request-idr\",\"channel\":%s}",
-				 argv[3]);
-		else
-			snprintf(json, sizeof(json), "{\"cmd\":\"request-idr\"}");
+			jadd_i(j, "channel", argv[3]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-bitrate") == 0) {
 		if (argc < 5) {
@@ -531,24 +546,30 @@ int main(int argc, char **argv)
 				daemon);
 			return 1;
 		}
-		snprintf(json, sizeof(json),
-			 "{\"cmd\":\"set-bitrate\",\"channel\":%s,\"value\":%s}", argv[3], argv[4]);
+		cJSON *j = jcmd("set-bitrate");
+		jadd_i(j, "channel", argv[3]);
+		jadd_i(j, "value", argv[4]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-gop") == 0) {
 		if (argc < 5) {
 			fprintf(stderr, "Usage: raptorctl %s set-gop <channel> <length>\n", daemon);
 			return 1;
 		}
-		snprintf(json, sizeof(json), "{\"cmd\":\"set-gop\",\"channel\":%s,\"value\":%s}",
-			 argv[3], argv[4]);
+		cJSON *j = jcmd("set-gop");
+		jadd_i(j, "channel", argv[3]);
+		jadd_i(j, "value", argv[4]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-fps") == 0) {
 		if (argc < 5) {
 			fprintf(stderr, "Usage: raptorctl %s set-fps <channel> <fps>\n", daemon);
 			return 1;
 		}
-		snprintf(json, sizeof(json), "{\"cmd\":\"set-fps\",\"channel\":%s,\"value\":%s}",
-			 argv[3], argv[4]);
+		cJSON *j = jcmd("set-fps");
+		jadd_i(j, "channel", argv[3]);
+		jadd_i(j, "value", argv[4]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-qp-bounds") == 0) {
 		if (argc < 6) {
@@ -556,9 +577,11 @@ int main(int argc, char **argv)
 				daemon);
 			return 1;
 		}
-		snprintf(json, sizeof(json),
-			 "{\"cmd\":\"set-qp-bounds\",\"channel\":%s,\"min\":%s,\"max\":%s}",
-			 argv[3], argv[4], argv[5]);
+		cJSON *j = jcmd("set-qp-bounds");
+		jadd_i(j, "channel", argv[3]);
+		jadd_i(j, "min", argv[4]);
+		jadd_i(j, "max", argv[5]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-qp-bounds-per-frame") == 0) {
 		if (argc < 8) {
@@ -568,10 +591,13 @@ int main(int argc, char **argv)
 				daemon);
 			return 1;
 		}
-		snprintf(json, sizeof(json),
-			 "{\"cmd\":\"set-qp-bounds-per-frame\",\"channel\":%s,"
-			 "\"min_i\":%s,\"max_i\":%s,\"min_p\":%s,\"max_p\":%s}",
-			 argv[3], argv[4], argv[5], argv[6], argv[7]);
+		cJSON *j = jcmd("set-qp-bounds-per-frame");
+		jadd_i(j, "channel", argv[3]);
+		jadd_i(j, "min_i", argv[4]);
+		jadd_i(j, "max_i", argv[5]);
+		jadd_i(j, "min_p", argv[6]);
+		jadd_i(j, "max_p", argv[7]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-max-pic-size") == 0) {
 		if (argc < 6) {
@@ -580,10 +606,11 @@ int main(int argc, char **argv)
 				daemon);
 			return 1;
 		}
-		snprintf(json, sizeof(json),
-			 "{\"cmd\":\"set-max-pic-size\",\"channel\":%s,"
-			 "\"i_kbits\":%s,\"p_kbits\":%s}",
-			 argv[3], argv[4], argv[5]);
+		cJSON *j = jcmd("set-max-pic-size");
+		jadd_i(j, "channel", argv[3]);
+		jadd_i(j, "i_kbits", argv[4]);
+		jadd_i(j, "p_kbits", argv[5]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-h265-trans") == 0) {
 		if (argc < 6) {
@@ -592,10 +619,11 @@ int main(int argc, char **argv)
 				daemon);
 			return 1;
 		}
-		snprintf(json, sizeof(json),
-			 "{\"cmd\":\"set-h265-trans\",\"channel\":%s,"
-			 "\"cr_offset\":%s,\"cb_offset\":%s}",
-			 argv[3], argv[4], argv[5]);
+		cJSON *j = jcmd("set-h265-trans");
+		jadd_i(j, "channel", argv[3]);
+		jadd_i(j, "cr_offset", argv[4]);
+		jadd_i(j, "cb_offset", argv[5]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-roi") == 0) {
 		if (argc < 11) {
@@ -605,18 +633,26 @@ int main(int argc, char **argv)
 				daemon);
 			return 1;
 		}
-		snprintf(json, sizeof(json),
-			 "{\"cmd\":\"set-roi\",\"channel\":%s,\"index\":%s,\"enable\":%s,"
-			 "\"x\":%s,\"y\":%s,\"w\":%s,\"h\":%s,\"qp\":%s}",
-			 argv[3], argv[4], argv[5], argv[6], argv[7], argv[8], argv[9], argv[10]);
+		cJSON *j = jcmd("set-roi");
+		jadd_i(j, "channel", argv[3]);
+		jadd_i(j, "index", argv[4]);
+		jadd_i(j, "enable", argv[5]);
+		jadd_i(j, "x", argv[6]);
+		jadd_i(j, "y", argv[7]);
+		jadd_i(j, "w", argv[8]);
+		jadd_i(j, "h", argv[9]);
+		jadd_i(j, "qp", argv[10]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "get-roi") == 0) {
 		if (argc < 5) {
 			fprintf(stderr, "Usage: raptorctl %s get-roi <ch> <index>\n", daemon);
 			return 1;
 		}
-		snprintf(json, sizeof(json), "{\"cmd\":\"get-roi\",\"channel\":%s,\"index\":%s}",
-			 argv[3], argv[4]);
+		cJSON *j = jcmd("get-roi");
+		jadd_i(j, "channel", argv[3]);
+		jadd_i(j, "index", argv[4]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-super-frame") == 0) {
 		if (argc < 7) {
@@ -627,10 +663,12 @@ int main(int argc, char **argv)
 				daemon);
 			return 1;
 		}
-		snprintf(json, sizeof(json),
-			 "{\"cmd\":\"set-super-frame\",\"channel\":%s,\"mode\":%s,"
-			 "\"i_thr\":%s,\"p_thr\":%s}",
-			 argv[3], argv[4], argv[5], argv[6]);
+		cJSON *j = jcmd("set-super-frame");
+		jadd_i(j, "channel", argv[3]);
+		jadd_i(j, "mode", argv[4]);
+		jadd_i(j, "i_thr", argv[5]);
+		jadd_i(j, "p_thr", argv[6]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-pskip") == 0) {
 		if (argc < 6) {
@@ -639,10 +677,11 @@ int main(int argc, char **argv)
 				daemon);
 			return 1;
 		}
-		snprintf(json, sizeof(json),
-			 "{\"cmd\":\"set-pskip\",\"channel\":%s,\"enable\":%s,"
-			 "\"max_frames\":%s}",
-			 argv[3], argv[4], argv[5]);
+		cJSON *j = jcmd("set-pskip");
+		jadd_i(j, "channel", argv[3]);
+		jadd_i(j, "enable", argv[4]);
+		jadd_i(j, "max_frames", argv[5]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-srd") == 0) {
 		if (argc < 6) {
@@ -650,9 +689,11 @@ int main(int argc, char **argv)
 				daemon);
 			return 1;
 		}
-		snprintf(json, sizeof(json),
-			 "{\"cmd\":\"set-srd\",\"channel\":%s,\"enable\":%s,\"level\":%s}", argv[3],
-			 argv[4], argv[5]);
+		cJSON *j = jcmd("set-srd");
+		jadd_i(j, "channel", argv[3]);
+		jadd_i(j, "enable", argv[4]);
+		jadd_i(j, "level", argv[5]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-enc-denoise") == 0) {
 		if (argc < 8) {
@@ -663,10 +704,13 @@ int main(int argc, char **argv)
 				daemon);
 			return 1;
 		}
-		snprintf(json, sizeof(json),
-			 "{\"cmd\":\"set-enc-denoise\",\"channel\":%s,\"enable\":%s,"
-			 "\"type\":%s,\"i_qp\":%s,\"p_qp\":%s}",
-			 argv[3], argv[4], argv[5], argv[6], argv[7]);
+		cJSON *j = jcmd("set-enc-denoise");
+		jadd_i(j, "channel", argv[3]);
+		jadd_i(j, "enable", argv[4]);
+		jadd_i(j, "type", argv[5]);
+		jadd_i(j, "i_qp", argv[6]);
+		jadd_i(j, "p_qp", argv[7]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-gdr") == 0) {
 		if (argc < 6) {
@@ -674,16 +718,20 @@ int main(int argc, char **argv)
 				daemon);
 			return 1;
 		}
-		snprintf(json, sizeof(json),
-			 "{\"cmd\":\"set-gdr\",\"channel\":%s,\"enable\":%s,\"cycle\":%s}", argv[3],
-			 argv[4], argv[5]);
+		cJSON *j = jcmd("set-gdr");
+		jadd_i(j, "channel", argv[3]);
+		jadd_i(j, "enable", argv[4]);
+		jadd_i(j, "cycle", argv[5]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "request-pskip") == 0) {
 		if (argc < 4) {
 			fprintf(stderr, "Usage: raptorctl %s request-pskip <channel>\n", daemon);
 			return 1;
 		}
-		snprintf(json, sizeof(json), "{\"cmd\":\"request-pskip\",\"channel\":%s}", argv[3]);
+		cJSON *j = jcmd("request-pskip");
+		jadd_i(j, "channel", argv[3]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "request-gdr") == 0) {
 		if (argc < 5) {
@@ -691,8 +739,10 @@ int main(int argc, char **argv)
 				daemon);
 			return 1;
 		}
-		snprintf(json, sizeof(json),
-			 "{\"cmd\":\"request-gdr\",\"channel\":%s,\"value\":%s}", argv[3], argv[4]);
+		cJSON *j = jcmd("request-gdr");
+		jadd_i(j, "channel", argv[3]);
+		jadd_i(j, "value", argv[4]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-enc-crop") == 0) {
 		if (argc < 9) {
@@ -702,10 +752,14 @@ int main(int argc, char **argv)
 				daemon);
 			return 1;
 		}
-		snprintf(json, sizeof(json),
-			 "{\"cmd\":\"set-enc-crop\",\"channel\":%s,\"enable\":%s,"
-			 "\"x\":%s,\"y\":%s,\"w\":%s,\"h\":%s}",
-			 argv[3], argv[4], argv[5], argv[6], argv[7], argv[8]);
+		cJSON *j = jcmd("set-enc-crop");
+		jadd_i(j, "channel", argv[3]);
+		jadd_i(j, "enable", argv[4]);
+		jadd_i(j, "x", argv[5]);
+		jadd_i(j, "y", argv[6]);
+		jadd_i(j, "w", argv[7]);
+		jadd_i(j, "h", argv[8]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-qp") == 0 || strcmp(cmd, "set-qp-ip-delta") == 0 ||
 		   strcmp(cmd, "set-gop-mode") == 0 || strcmp(cmd, "set-rc-options") == 0 ||
@@ -719,11 +773,13 @@ int main(int argc, char **argv)
 			fprintf(stderr, "Usage: raptorctl %s %s <channel> <value>\n", daemon, cmd);
 			return 1;
 		}
-		snprintf(json, sizeof(json), "{\"cmd\":\"%s\",\"channel\":%s,\"value\":%s}", cmd,
-			 argv[3], argv[4]);
+		cJSON *j = jcmd(cmd);
+		jadd_i(j, "channel", argv[3]);
+		jadd_i(j, "value", argv[4]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "get-enc-caps") == 0) {
-		snprintf(json, sizeof(json), "{\"cmd\":\"get-enc-caps\"}");
+		jstr(jcmd("get-enc-caps"), json, sizeof(json));
 
 	} else if (strcmp(cmd, "get-bitrate") == 0 || strcmp(cmd, "get-fps") == 0 ||
 		   strcmp(cmd, "get-gop") == 0 || strcmp(cmd, "get-qp-bounds") == 0 ||
@@ -741,35 +797,45 @@ int main(int argc, char **argv)
 			fprintf(stderr, "Usage: raptorctl %s %s <channel>\n", daemon, cmd);
 			return 1;
 		}
-		snprintf(json, sizeof(json), "{\"cmd\":\"%s\",\"channel\":%s}", cmd, argv[3]);
+		cJSON *j = jcmd(cmd);
+		jadd_i(j, "channel", argv[3]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-volume") == 0) {
 		if (argc < 4) {
 			fprintf(stderr, "Usage: raptorctl %s set-volume <value>\n", daemon);
 			return 1;
 		}
-		snprintf(json, sizeof(json), "{\"cmd\":\"set-volume\",\"value\":%s}", argv[3]);
+		cJSON *j = jcmd("set-volume");
+		jadd_i(j, "value", argv[3]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-gain") == 0) {
 		if (argc < 4) {
 			fprintf(stderr, "Usage: raptorctl %s set-gain <value>\n", daemon);
 			return 1;
 		}
-		snprintf(json, sizeof(json), "{\"cmd\":\"set-gain\",\"value\":%s}", argv[3]);
+		cJSON *j = jcmd("set-gain");
+		jadd_i(j, "value", argv[3]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "ao-set-volume") == 0) {
 		if (argc < 4) {
 			fprintf(stderr, "Usage: raptorctl %s ao-set-volume <value>\n", daemon);
 			return 1;
 		}
-		snprintf(json, sizeof(json), "{\"cmd\":\"ao-set-volume\",\"value\":%s}", argv[3]);
+		cJSON *j = jcmd("ao-set-volume");
+		jadd_i(j, "value", argv[3]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "ao-set-gain") == 0) {
 		if (argc < 4) {
 			fprintf(stderr, "Usage: raptorctl %s ao-set-gain <value>\n", daemon);
 			return 1;
 		}
-		snprintf(json, sizeof(json), "{\"cmd\":\"ao-set-gain\",\"value\":%s}", argv[3]);
+		cJSON *j = jcmd("ao-set-gain");
+		jadd_i(j, "value", argv[3]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-ns") == 0) {
 		if (argc < 4) {
@@ -778,19 +844,20 @@ int main(int argc, char **argv)
 				daemon);
 			return 1;
 		}
+		cJSON *j = jcmd("set-ns");
+		jadd_i(j, "value", argv[3]);
 		if (argc >= 5)
-			snprintf(json, sizeof(json),
-				 "{\"cmd\":\"set-ns\",\"value\":%s,\"level\":\"%s\"}", argv[3],
-				 argv[4]);
-		else
-			snprintf(json, sizeof(json), "{\"cmd\":\"set-ns\",\"value\":%s}", argv[3]);
+			jadd_s(j, "level", argv[4]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-hpf") == 0) {
 		if (argc < 4) {
 			fprintf(stderr, "Usage: raptorctl %s set-hpf <0|1>\n", daemon);
 			return 1;
 		}
-		snprintf(json, sizeof(json), "{\"cmd\":\"set-hpf\",\"value\":%s}", argv[3]);
+		cJSON *j = jcmd("set-hpf");
+		jadd_i(j, "value", argv[3]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-agc") == 0) {
 		if (argc < 4) {
@@ -799,45 +866,48 @@ int main(int argc, char **argv)
 				daemon);
 			return 1;
 		}
+		cJSON *j = jcmd("set-agc");
+		jadd_i(j, "value", argv[3]);
+		if (argc >= 5)
+			jadd_i(j, "target", argv[4]);
 		if (argc >= 6)
-			snprintf(json, sizeof(json),
-				 "{\"cmd\":\"set-agc\",\"value\":%s,\"target\":%s,\"compression\":%"
-				 "s}",
-				 argv[3], argv[4], argv[5]);
-		else
-			snprintf(json, sizeof(json), "{\"cmd\":\"set-agc\",\"value\":%s}", argv[3]);
+			jadd_i(j, "compression", argv[5]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "privacy") == 0) {
+		cJSON *j = jcmd("privacy");
+		if (argc > 3)
+			jadd_s(j, "value", argv[3]);
 		if (argc > 4)
-			snprintf(json, sizeof(json),
-				 "{\"cmd\":\"privacy\",\"value\":\"%s\",\"channel\":%ld}", argv[3],
-				 strtol(argv[4], NULL, 10));
-		else if (argc > 3)
-			snprintf(json, sizeof(json), "{\"cmd\":\"privacy\",\"value\":\"%s\"}",
-				 argv[3]);
-		else
-			snprintf(json, sizeof(json), "{\"cmd\":\"privacy\"}");
+			jadd_i(j, "channel", argv[4]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-text") == 0) {
 		if (argc < 4) {
 			fprintf(stderr, "Usage: raptorctl %s set-text <text>\n", daemon);
 			return 1;
 		}
-		snprintf(json, sizeof(json), "{\"cmd\":\"set-text\",\"value\":\"%s\"}", argv[3]);
+		cJSON *j = jcmd("set-text");
+		jadd_s(j, "value", argv[3]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "mode") == 0) {
 		if (argc < 4) {
 			fprintf(stderr, "Usage: raptorctl %s mode <auto|day|night>\n", daemon);
 			return 1;
 		}
-		snprintf(json, sizeof(json), "{\"cmd\":\"mode\",\"value\":\"%s\"}", argv[3]);
+		cJSON *j = jcmd("mode");
+		jadd_s(j, "value", argv[3]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "isp-mode") == 0) {
 		if (argc < 4) {
 			fprintf(stderr, "Usage: raptorctl %s isp-mode <day|night>\n", daemon);
 			return 1;
 		}
-		snprintf(json, sizeof(json), "{\"cmd\":\"isp-mode\",\"value\":\"%s\"}", argv[3]);
+		cJSON *j = jcmd("isp-mode");
+		jadd_s(j, "value", argv[3]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-rc-mode") == 0) {
 		if (argc < 5) {
@@ -847,12 +917,12 @@ int main(int argc, char **argv)
 				daemon);
 			return 1;
 		}
-		int n = snprintf(json, sizeof(json),
-				 "{\"cmd\":\"set-rc-mode\",\"channel\":%s,\"mode\":\"%s\"", argv[3],
-				 argv[4]);
+		cJSON *j = jcmd("set-rc-mode");
+		jadd_i(j, "channel", argv[3]);
+		jadd_s(j, "mode", argv[4]);
 		if (argc >= 6)
-			n += snprintf(json + n, sizeof(json) - n, ",\"bitrate\":%s", argv[5]);
-		snprintf(json + n, sizeof(json) - n, "}");
+			jadd_i(j, "bitrate", argv[5]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-wb") == 0) {
 		if (argc < 4) {
@@ -861,20 +931,22 @@ int main(int argc, char **argv)
 				daemon);
 			return 1;
 		}
-		int n = snprintf(json, sizeof(json), "{\"cmd\":\"set-wb\",\"mode\":\"%s\"",
-				 argv[3]);
+		cJSON *j = jcmd("set-wb");
+		jadd_s(j, "mode", argv[3]);
 		if (argc >= 5)
-			n += snprintf(json + n, sizeof(json) - n, ",\"r_gain\":%s", argv[4]);
+			jadd_i(j, "r_gain", argv[4]);
 		if (argc >= 6)
-			n += snprintf(json + n, sizeof(json) - n, ",\"b_gain\":%s", argv[5]);
-		snprintf(json + n, sizeof(json) - n, "}");
+			jadd_i(j, "b_gain", argv[5]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-font-color") == 0 || strcmp(cmd, "set-stroke-color") == 0) {
 		if (argc < 4) {
 			fprintf(stderr, "Usage: raptorctl %s %s <0xAARRGGBB>\n", daemon, cmd);
 			return 1;
 		}
-		snprintf(json, sizeof(json), "{\"cmd\":\"%s\",\"value\":\"%s\"}", cmd, argv[3]);
+		cJSON *j = jcmd(cmd);
+		jadd_s(j, "value", argv[3]);
+		jstr(j, json, sizeof(json));
 
 	} else if (strncmp(cmd, "set-", 4) == 0 && argc >= 4) {
 		/* Generic set-X <value> pass-through.
@@ -887,19 +959,19 @@ int main(int argc, char **argv)
 			sensor_idx = (int)strtol(argv[4], NULL, 10);
 			val_arg = argc >= 6 ? argv[5] : "0";
 		}
+		cJSON *j = jcmd(cmd);
+		jadd_i(j, "value", val_arg);
 		if (sensor_idx >= 0)
-			snprintf(json, sizeof(json), "{\"cmd\":\"%s\",\"value\":%s,\"sensor\":%d}",
-				 cmd, val_arg, sensor_idx);
-		else
-			snprintf(json, sizeof(json), "{\"cmd\":\"%s\",\"value\":%s}", cmd, val_arg);
+			cJSON_AddNumberToObject(j, "sensor", sensor_idx);
+		jstr(j, json, sizeof(json));
 
 	} else if (strncmp(cmd, "get-", 4) == 0) {
 		/* Generic get-X pass-through */
-		snprintf(json, sizeof(json), "{\"cmd\":\"%s\"}", cmd);
+		jstr(jcmd(cmd), json, sizeof(json));
 
 	} else {
 		/* Generic pass-through */
-		snprintf(json, sizeof(json), "{\"cmd\":\"%s\"}", cmd);
+		jstr(jcmd(cmd), json, sizeof(json));
 	}
 
 	return send_cmd(daemon, json);
