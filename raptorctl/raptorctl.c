@@ -58,6 +58,46 @@ static void print_config_entry(const char *key, const char *value, void *userdat
 	(*count)++;
 }
 
+/* Pretty-print a config-get-section JSON response as ini-style key = value.
+ * Input: {"status":"ok","section":"audio","keys":{"codec":"aac","volume":"80"}}
+ * Output: [audio]
+ *         codec = aac
+ *         volume = 80 */
+static void print_section_json(const char *section, const char *json)
+{
+	printf("[%s]\n", section);
+	const char *keys = strstr(json, "\"keys\":{");
+	if (!keys)
+		return;
+	keys += 8; /* skip "keys":{ */
+
+	while (*keys && *keys != '}') {
+		/* Find key: "key" */
+		const char *kstart = strchr(keys, '"');
+		if (!kstart)
+			break;
+		kstart++;
+		const char *kend = strchr(kstart, '"');
+		if (!kend)
+			break;
+
+		/* Find value: "value" */
+		const char *vstart = strchr(kend + 1, '"');
+		if (!vstart)
+			break;
+		vstart++;
+		const char *vend = strchr(vstart, '"');
+		if (!vend)
+			break;
+
+		printf("%.*s = %.*s\n", (int)(kend - kstart), kstart, (int)(vend - vstart), vstart);
+
+		keys = vend + 1;
+		if (*keys == ',')
+			keys++;
+	}
+}
+
 const struct help_entry help_entries[] = {
 	{NULL, "status                              Show daemon status"},
 	{NULL, "memory                              Show memory usage (private/shared)"},
@@ -358,7 +398,7 @@ int main(int argc, char **argv)
 					int ret = rss_ctrl_send_command(sock_path, cmd_json, resp,
 									sizeof(resp), 2000);
 					if (ret >= 0) {
-						printf("%s\n", resp);
+						print_section_json(section, resp);
 						return 0;
 					}
 				}
@@ -384,6 +424,7 @@ int main(int argc, char **argv)
 			}
 
 			/* Section dump from file */
+			printf("[%s]\n", section);
 			int count = 0;
 			rss_config_foreach(cfg, section, print_config_entry, &count);
 			if (count == 0)
