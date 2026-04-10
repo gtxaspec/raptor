@@ -73,21 +73,54 @@ find_or_clone raptor-ipc    https://github.com/gtxaspec/raptor-ipc.git    IPC_DI
 find_or_clone raptor-hal    https://github.com/gtxaspec/raptor-hal.git    HAL_DIR
 find_or_clone compy         https://github.com/gtxaspec/compy.git         COMPY_DIR
 
-# Build compy for x86 if needed
+# Build mbedTLS from source with DTLS-SRTP enabled
+MBEDTLS_VER="3.6.5"
+MBEDTLS_DIR="$DEPS/mbedtls-$MBEDTLS_VER"
+MBEDTLS_BUILD="$OUT/mbedtls-build"
+MBEDTLS_PREFIX="$OUT/mbedtls-install"
+if [ ! -f "$MBEDTLS_PREFIX/lib/libmbedtls.a" ]; then
+    if [ ! -d "$MBEDTLS_DIR" ]; then
+        echo "  fetch   mbedtls-$MBEDTLS_VER"
+        curl -sL "https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-$MBEDTLS_VER/mbedtls-$MBEDTLS_VER.tar.bz2" \
+            | tar xj -C "$DEPS"
+    fi
+    echo "=== mbedTLS $MBEDTLS_VER (cmake) ==="
+    # Enable DTLS-SRTP in the source config (idempotent)
+    sed -i 's|//#define MBEDTLS_SSL_DTLS_SRTP|#define MBEDTLS_SSL_DTLS_SRTP|' \
+        "$MBEDTLS_DIR/include/mbedtls/mbedtls_config.h"
+    sed -i 's|//#define MBEDTLS_SSL_PROTO_DTLS|#define MBEDTLS_SSL_PROTO_DTLS|' \
+        "$MBEDTLS_DIR/include/mbedtls/mbedtls_config.h"
+    mkdir -p "$MBEDTLS_BUILD"
+    cmake -S "$MBEDTLS_DIR" -B "$MBEDTLS_BUILD" \
+        -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -O1 -g" \
+        -DCMAKE_BUILD_TYPE=Debug \
+        -DCMAKE_INSTALL_PREFIX="$MBEDTLS_PREFIX" \
+        -DENABLE_TESTING=OFF -DENABLE_PROGRAMS=OFF \
+        > /dev/null 2>&1
+    cmake --build "$MBEDTLS_BUILD" -j"$(nproc)" > /dev/null 2>&1
+    cmake --install "$MBEDTLS_BUILD" > /dev/null 2>&1
+    echo "  -> libmbedtls.a (DTLS-SRTP enabled)"
+fi
+MBEDTLS_CFLAGS="-I$MBEDTLS_PREFIX/include"
+MBEDTLS_LIBS="$MBEDTLS_PREFIX/lib/libmbedtls.a $MBEDTLS_PREFIX/lib/libmbedx509.a $MBEDTLS_PREFIX/lib/libmbedcrypto.a"
+
+# Build compy for x86 with TLS
 COMPY_BUILD="$OUT/compy-build"
 if [ ! -f "$COMPY_BUILD/libcompy.a" ]; then
-    echo "=== compy (cmake) ==="
+    echo "=== compy (cmake + mbedTLS) ==="
     mkdir -p "$COMPY_BUILD"
     cmake -S "$COMPY_DIR" -B "$COMPY_BUILD" \
-        -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -O1 -g" \
+        -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -O1 -g $MBEDTLS_CFLAGS" \
         -DCMAKE_BUILD_TYPE=Debug -DCOMPY_SHARED=OFF \
+        -DCOMPY_TLS_MBEDTLS=ON \
+        -DCMAKE_PREFIX_PATH="$MBEDTLS_PREFIX" \
         > /dev/null 2>&1
     cmake --build "$COMPY_BUILD" -j"$(nproc)" > /dev/null 2>&1
-    echo "  -> libcompy.a"
+    echo "  -> libcompy.a (with TLS)"
 fi
 
 # Compy include paths (fetched by cmake)
-COMPY_CFLAGS="-I$COMPY_DIR/include"
+COMPY_CFLAGS="-I$COMPY_DIR/include -DCOMPY_HAS_TLS"
 COMPY_CFLAGS="$COMPY_CFLAGS -I$COMPY_BUILD/_deps/slice99-src"
 COMPY_CFLAGS="$COMPY_CFLAGS -I$COMPY_BUILD/_deps/datatype99-src"
 COMPY_CFLAGS="$COMPY_CFLAGS -I$COMPY_BUILD/_deps/interface99-src"
@@ -98,10 +131,11 @@ COMPY_CFLAGS="$COMPY_CFLAGS -I$COMPY_BUILD/_deps/metalang99-src/include"
 CC=gcc
 SANITIZE="-fsanitize=address,undefined -fno-omit-frame-pointer"
 CFLAGS="-Wall -Wextra -std=gnu11 -D_GNU_SOURCE -DPLATFORM_T31 -O1 -g $SANITIZE"
-CFLAGS="$CFLAGS -I$IPC_DIR/include -I$COMMON_DIR/include"
+CFLAGS="$CFLAGS -I$IPC_DIR/include -I$COMMON_DIR/include $MBEDTLS_CFLAGS"
 LDFLAGS="$SANITIZE -lpthread -lrt"
 
 HAL_CFLAGS="-I$HAL_DIR/include"
+TLS_CFLAGS="-DRSS_HAS_TLS"
 
 # ── Libraries ──
 
@@ -129,16 +163,20 @@ echo "=== mock_hal ==="
 $CC $CFLAGS $HAL_CFLAGS -c "$RAPTOR_DIR/tests/mock_hal.c" -o "$OUT/mock_hal.o"
 ar rcs "$OUT/libmock_hal.a" "$OUT/mock_hal.o"
 
+echo "=== rss_tls ==="
+$CC $CFLAGS $TLS_CFLAGS -c "$COMMON_DIR/src/rss_tls.c" -o "$OUT/rss_tls.o"
+
 LIBS="$OUT/librss_ipc.a $OUT/librss_common.a"
 LIBS_HAL="$OUT/libmock_hal.a $LIBS"
+LIBS_TLS="$OUT/rss_tls.o $MBEDTLS_LIBS"
 
 # ── Non-HAL daemons ──
 
 echo "=== RHD ==="
-$CC $CFLAGS -c "$RAPTOR_DIR/rhd/rhd_main.c" -o "$OUT/rhd_main.o"
-$CC $CFLAGS -c "$RAPTOR_DIR/rhd/rhd_http.c" -o "$OUT/rhd_http.o"
+$CC $CFLAGS $TLS_CFLAGS -c "$RAPTOR_DIR/rhd/rhd_main.c" -o "$OUT/rhd_main.o"
+$CC $CFLAGS $TLS_CFLAGS -c "$RAPTOR_DIR/rhd/rhd_http.c" -o "$OUT/rhd_http.o"
 $CC $CFLAGS -c "$RAPTOR_DIR/rhd/rhd_audio.c" -o "$OUT/rhd_audio.o"
-$CC -o "$OUT/rhd" "$OUT/rhd_main.o" "$OUT/rhd_http.o" "$OUT/rhd_audio.o" $LIBS $LDFLAGS
+$CC -o "$OUT/rhd" "$OUT/rhd_main.o" "$OUT/rhd_http.o" "$OUT/rhd_audio.o" $LIBS $LIBS_TLS $LDFLAGS
 echo "  -> rhd"
 
 echo "=== RSD ==="
@@ -146,7 +184,7 @@ $CC $CFLAGS $COMPY_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_main.c" -o "$OUT/rsd_main.o"
 $CC $CFLAGS $COMPY_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_server.c" -o "$OUT/rsd_server.o"
 $CC $CFLAGS $COMPY_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_session.c" -o "$OUT/rsd_session.o"
 $CC $CFLAGS $COMPY_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_ring_reader.c" -o "$OUT/rsd_ring_reader.o"
-$CC -o "$OUT/rsd" "$OUT"/rsd_main.o "$OUT"/rsd_server.o "$OUT"/rsd_session.o "$OUT"/rsd_ring_reader.o $LIBS "$COMPY_BUILD/libcompy.a" $LDFLAGS
+$CC -o "$OUT/rsd" "$OUT"/rsd_main.o "$OUT"/rsd_server.o "$OUT"/rsd_session.o "$OUT"/rsd_ring_reader.o $LIBS "$COMPY_BUILD/libcompy.a" $MBEDTLS_LIBS $LDFLAGS
 echo "  -> rsd"
 
 echo "=== RIC ==="
@@ -227,10 +265,20 @@ $CC $CFLAGS -c "$RAPTOR_DIR/rwc/rwc_main.c" -o "$OUT/rwc_main.o"
 $CC -o "$OUT/rwc" "$OUT/rwc_main.o" $LIBS $LDFLAGS
 echo "  -> rwc"
 
-# RWD requires mbedTLS with DTLS-SRTP — skipped in ASAN builds
 echo "=== RWD ==="
-echo "  (skipped — requires mbedTLS DTLS-SRTP)"
+RWD_CFLAGS="$CFLAGS $COMPY_CFLAGS $TLS_CFLAGS -DMBEDTLS_ALLOW_PRIVATE_ACCESS -DRAPTOR_WEBTORRENT"
+$CC $RWD_CFLAGS -c "$RAPTOR_DIR/rwd/rwd_main.c" -o "$OUT/rwd_main.o"
+$CC $RWD_CFLAGS -c "$RAPTOR_DIR/rwd/rwd_signaling.c" -o "$OUT/rwd_signaling.o"
+$CC $RWD_CFLAGS -c "$RAPTOR_DIR/rwd/rwd_sdp.c" -o "$OUT/rwd_sdp.o"
+$CC $RWD_CFLAGS -c "$RAPTOR_DIR/rwd/rwd_ice.c" -o "$OUT/rwd_ice.o"
+$CC $RWD_CFLAGS -c "$RAPTOR_DIR/rwd/rwd_dtls.c" -o "$OUT/rwd_dtls.o"
+$CC $RWD_CFLAGS -c "$RAPTOR_DIR/rwd/rwd_media.c" -o "$OUT/rwd_media.o"
+$CC $RWD_CFLAGS -c "$RAPTOR_DIR/rwd/rwd_webtorrent.c" -o "$OUT/rwd_webtorrent.o"
+$CC -o "$OUT/rwd" "$OUT"/rwd_main.o "$OUT"/rwd_signaling.o "$OUT"/rwd_sdp.o \
+    "$OUT"/rwd_ice.o "$OUT"/rwd_dtls.o "$OUT"/rwd_media.o "$OUT"/rwd_webtorrent.o \
+    $LIBS "$COMPY_BUILD/libcompy.a" $LIBS_TLS -lopus $LDFLAGS
+echo "  -> rwd"
 
 echo ""
 echo "Done. All binaries in asan-out/"
-ls -1 "$OUT"/rvd "$OUT"/rsd "$OUT"/rad "$OUT"/rhd "$OUT"/rod "$OUT"/ric "$OUT"/rmd "$OUT"/rmr "$OUT"/rwc "$OUT"/raptorctl "$OUT"/ringdump "$OUT"/rac "$OUT"/create_rings 2>/dev/null | while read f; do echo "  $(basename $f)"; done
+ls -1 "$OUT"/rvd "$OUT"/rsd "$OUT"/rad "$OUT"/rhd "$OUT"/rod "$OUT"/ric "$OUT"/rmd "$OUT"/rmr "$OUT"/rwd "$OUT"/rwc "$OUT"/raptorctl "$OUT"/ringdump "$OUT"/rac "$OUT"/create_rings 2>/dev/null | while read f; do echo "  $(basename $f)"; done
