@@ -51,6 +51,25 @@
 const char *daemons[] = {"rvd", "rsd", "rad", "rod", "rhd", "ric",
 			 "rmr", "rmd", "rwd", "rwc", NULL};
 
+static const char *find_daemon_for_section(const char *section)
+{
+	static const struct {
+		const char *section;
+		const char *daemon;
+	} map[] = {
+		{"sensor", "rvd"}, {"stream0", "rvd"},	  {"stream1", "rvd"},	{"jpeg", "rvd"},
+		{"ring", "rvd"},   {"audio", "rad"},	  {"rtsp", "rsd"},	{"http", "rhd"},
+		{"osd", "rod"},	   {"ircut", "ric"},	  {"recording", "rmr"}, {"motion", "rmd"},
+		{"webrtc", "rwd"}, {"webtorrent", "rwd"}, {"webcam", "rwc"},	{"log", "rvd"},
+		{NULL, NULL},
+	};
+	for (int i = 0; map[i].section; i++) {
+		if (strcmp(section, map[i].section) == 0)
+			return map[i].daemon;
+	}
+	return NULL;
+}
+
 static void print_config_entry(const char *key, const char *value, void *userdata)
 {
 	int *count = userdata;
@@ -298,16 +317,7 @@ int main(int argc, char **argv)
 		return 0;
 	}
 
-	/* Map config section to daemon that owns it */
-	static const struct {
-		const char *section;
-		const char *daemon;
-	} section_map[] = {
-		{"sensor", "rvd"}, {"stream0", "rvd"}, {"stream1", "rvd"},   {"jpeg", "rvd"},
-		{"ring", "rvd"},   {"audio", "rad"},   {"rtsp", "rsd"},	     {"http", "rhd"},
-		{"osd", "rod"},	   {"ircut", "ric"},   {"recording", "rmr"}, {"motion", "rmd"},
-		{"log", "rvd"},	   {NULL, NULL},
-	};
+	/* Section-to-daemon mapping is in find_daemon_for_section() */
 
 	/* raptorctl config <subcommand> */
 	if (strcmp(argv[1], "config") == 0) {
@@ -350,13 +360,7 @@ int main(int argc, char **argv)
 
 			/* Try daemon first for single-key get */
 			if (key) {
-				const char *target = NULL;
-				for (int i = 0; section_map[i].section; i++) {
-					if (strcmp(section, section_map[i].section) == 0) {
-						target = section_map[i].daemon;
-						break;
-					}
-				}
+				const char *target = find_daemon_for_section(section);
 				if (target) {
 					char sock_path[64];
 					char resp[2048];
@@ -378,13 +382,7 @@ int main(int argc, char **argv)
 
 			if (!key) {
 				/* Section dump: try daemon first */
-				const char *target = NULL;
-				for (int i = 0; section_map[i].section; i++) {
-					if (strcmp(section, section_map[i].section) == 0) {
-						target = section_map[i].daemon;
-						break;
-					}
-				}
+				const char *target = find_daemon_for_section(section);
 				if (target) {
 					char sock_path[64];
 					char resp[2048];
