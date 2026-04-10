@@ -3,7 +3,7 @@
  *
  * CLI tool for audio input/output:
  *   rac record <file|->         Record mic to file or stdout (PCM16 LE)
- *   rac play <file|->           Play audio to speaker (PCM16, MP3, AAC, Opus)
+ *   rac play <file|->           Play audio to speaker (PCM16; MP3/AAC/Opus if compiled)
  *   rac status                  Show audio daemon status
  *   rac ao-volume <val>         Set speaker volume
  *   rac ao-gain <val>           Set speaker gain
@@ -53,8 +53,19 @@ static void usage(void)
 			"  record [options] <file|->   Record mic audio as PCM16 LE\n"
 			"    -d <seconds>              Duration limit\n"
 			"    -r <rate>                 Expected sample rate (info only)\n"
-			"  play [options] <file|->     Play PCM16 LE to speaker\n"
+			"  play [options] <file|->     Play audio to speaker\n"
 			"    -r <rate>                 Sample rate (default: 16000)\n"
+			"    Supported formats: PCM16 LE"
+#ifdef RAPTOR_MP3
+			", MP3"
+#endif
+#ifdef RAPTOR_AAC
+			", AAC"
+#endif
+#ifdef RAPTOR_OPUS
+			", Opus"
+#endif
+			"\n"
 			"  status                      Show audio daemon status\n"
 			"  ao-volume <val>             Set speaker volume\n"
 			"  ao-gain <val>               Set speaker gain\n");
