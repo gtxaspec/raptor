@@ -336,11 +336,39 @@ int main(int argc, char **argv)
 				}
 			}
 
-			/* Fallback (or section dump): read from config file */
+			if (!key) {
+				/* Section dump: try daemon first */
+				const char *target = NULL;
+				for (int i = 0; section_map[i].section; i++) {
+					if (strcmp(section, section_map[i].section) == 0) {
+						target = section_map[i].daemon;
+						break;
+					}
+				}
+				if (target) {
+					char sock_path[64];
+					char resp[2048];
+					char cmd_json[256];
+					snprintf(sock_path, sizeof(sock_path),
+						 "/var/run/rss/%s.sock", target);
+					snprintf(cmd_json, sizeof(cmd_json),
+						 "{\"cmd\":\"config-get-section\""
+						 ",\"section\":\"%s\"}",
+						 section);
+					int ret = rss_ctrl_send_command(sock_path, cmd_json, resp,
+									sizeof(resp), 2000);
+					if (ret >= 0) {
+						printf("%s\n", resp);
+						return 0;
+					}
+				}
+			}
+
+			/* Fallback: read from config file */
 			const char *cfgpath = "/etc/raptor.conf";
 			rss_config_t *cfg = rss_config_load(cfgpath);
 			if (!cfg) {
-				fprintf(stderr, "Daemon not running, config not found\n");
+				fprintf(stderr, "Config not found\n");
 				return 1;
 			}
 
@@ -355,7 +383,7 @@ int main(int argc, char **argv)
 				return val ? 0 : 1;
 			}
 
-			/* Dump entire section */
+			/* Section dump from file */
 			int count = 0;
 			rss_config_foreach(cfg, section, print_config_entry, &count);
 			if (count == 0)
