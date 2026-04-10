@@ -16,6 +16,8 @@
  *   raptorctl rvd set-gop <ch> <length>    Change GOP length
  *   raptorctl rvd set-fps <ch> <fps>       Change frame rate
  *   raptorctl rvd set-qp-bounds <ch> <min> <max>  Change QP range
+ *   raptorctl rvd get-enc-caps             Show encoder capabilities
+ *   ... plus ~30 advanced encoder commands (see --help)
  *
  * RAD commands:
  *   raptorctl rad status                   Show audio status
@@ -64,7 +66,55 @@ const struct help_entry help_entries[] = {
 	{"rvd", "set-gop <ch> <length>               Change GOP length"},
 	{"rvd", "set-fps <ch> <fps>                  Change frame rate"},
 	{"rvd", "set-qp-bounds <ch> <min> <max>      Change QP range"},
+	{"rvd", "set-qp <ch> <qp>                   Set fixed QP (all frames)"},
+	{"rvd", "set-qp-ip-delta <ch> <delta>        I/P frame QP delta"},
+	{"rvd", "set-qp-bounds-per-frame <ch> ...    Per-frame QP (iMin iMax pMin pMax)"},
+	{"rvd", "set-gop-mode <ch> <0|1|2>           GOP mode (0=def 1=pyr 2=smartP)"},
+	{"rvd", "set-rc-options <ch> <bitmask>       RC options bitmask"},
+	{"rvd", "set-max-same-scene <ch> <count>     Max same-scene count"},
+	{"rvd", "set-max-pic-size <ch> <iK> <pK>     Max I/P frame size (kbits)"},
+	{"rvd", "set-color2grey <ch> <0|1>           Color to greyscale"},
+	{"rvd", "set-mbrc <ch> <0|1>                 Macroblock rate control"},
+	{"rvd", "set-entropy-mode <ch> <0|1>         0=CAVLC 1=CABAC"},
+	{"rvd", "set-resize-mode <ch> <0|1>          Resize mode"},
+	{"rvd", "set-stream-buf-size <ch> <bytes>    Stream buffer size"},
+	{"rvd", "set-qpg-mode <ch> <mode>            QPG mode"},
+	{"rvd", "set-h264-trans <ch> <offset>        H.264 chroma QP offset [-12..12]"},
+	{"rvd", "set-h265-trans <ch> <cr> <cb>       H.265 chroma QP offsets [-12..12]"},
+	{"rvd", "set-roi <ch> <idx> ...              ROI region (en x y w h qp)"},
+	{"rvd", "set-super-frame <ch> <mode> ...     Super frame (mode iThr pThr)"},
+	{"rvd", "set-pskip <ch> <en> <maxf>          P-skip (enable max_frames)"},
+	{"rvd", "set-srd <ch> <en> <level>           Static refresh (enable level)"},
+	{"rvd", "set-enc-denoise <ch> ...             Encoder denoise (en type iQP pQP)"},
+	{"rvd", "set-gdr <ch> <en> <cycle>           GDR (enable cycle)"},
+	{"rvd", "set-enc-crop <ch> <en> <x y w h>    Encoder crop"},
+	{"rvd", "set-jpeg-qp <ch> <qp>              JPEG QP"},
+	{"rvd", "get-enc-caps                        Show encoder capabilities"},
+	{"rvd", "get-gop-mode <ch>                   Show GOP mode"},
+	{"rvd", "get-rc-options <ch>                 Show RC options"},
+	{"rvd", "get-max-same-scene <ch>             Show max same-scene count"},
+	{"rvd", "get-color2grey <ch>                 Show color2grey state"},
+	{"rvd", "get-mbrc <ch>                       Show macroblock RC state"},
+	{"rvd", "get-qpg-mode <ch>                   Show QPG mode"},
+	{"rvd", "get-stream-buf-size <ch>            Show stream buffer size"},
+	{"rvd", "get-h264-trans <ch>                 Show H.264 chroma QP offset"},
+	{"rvd", "get-h265-trans <ch>                 Show H.265 chroma QP offsets"},
+	{"rvd", "get-roi <ch> <idx>                  Show ROI region"},
+	{"rvd", "get-super-frame <ch>                Show super frame config"},
+	{"rvd", "get-pskip <ch>                      Show P-skip config"},
+	{"rvd", "get-srd <ch>                        Show SRD config"},
+	{"rvd", "get-enc-denoise <ch>                Show encoder denoise config"},
+	{"rvd", "get-gdr <ch>                        Show GDR config"},
+	{"rvd", "get-enc-crop <ch>                   Show encoder crop"},
+	{"rvd", "get-jpeg-qp <ch>                    Show JPEG QP"},
+	{"rvd", "get-bitrate <ch>                    Show target + avg bitrate"},
+	{"rvd", "get-fps <ch>                        Show frame rate"},
+	{"rvd", "get-gop <ch>                        Show GOP length"},
+	{"rvd", "get-qp-bounds <ch>                  Show QP range"},
+	{"rvd", "get-rc-mode <ch>                    Show rate control mode"},
 	{"rvd", "request-idr [channel]               Request keyframe"},
+	{"rvd", "request-pskip <ch>                  Request P-skip"},
+	{"rvd", "request-gdr <ch> <frames>           Request GDR"},
 	{"rvd", "set-brightness <val>                ISP brightness (0-255)"},
 	{"rvd", "set-contrast <val>                  ISP contrast (0-255)"},
 	{"rvd", "set-saturation <val>                ISP saturation (0-255)"},
@@ -408,6 +458,189 @@ int main(int argc, char **argv)
 		snprintf(json, sizeof(json),
 			 "{\"cmd\":\"set-qp-bounds\",\"channel\":%s,\"min\":%s,\"max\":%s}",
 			 argv[3], argv[4], argv[5]);
+
+	} else if (strcmp(cmd, "set-qp-bounds-per-frame") == 0) {
+		if (argc < 8) {
+			fprintf(stderr,
+				"Usage: raptorctl %s set-qp-bounds-per-frame <ch> "
+				"<min_i> <max_i> <min_p> <max_p>\n",
+				daemon);
+			return 1;
+		}
+		snprintf(json, sizeof(json),
+			 "{\"cmd\":\"set-qp-bounds-per-frame\",\"channel\":%s,"
+			 "\"min_i\":%s,\"max_i\":%s,\"min_p\":%s,\"max_p\":%s}",
+			 argv[3], argv[4], argv[5], argv[6], argv[7]);
+
+	} else if (strcmp(cmd, "set-max-pic-size") == 0) {
+		if (argc < 6) {
+			fprintf(stderr,
+				"Usage: raptorctl %s set-max-pic-size <ch> <i_kbits> <p_kbits>\n",
+				daemon);
+			return 1;
+		}
+		snprintf(json, sizeof(json),
+			 "{\"cmd\":\"set-max-pic-size\",\"channel\":%s,"
+			 "\"i_kbits\":%s,\"p_kbits\":%s}",
+			 argv[3], argv[4], argv[5]);
+
+	} else if (strcmp(cmd, "set-h265-trans") == 0) {
+		if (argc < 6) {
+			fprintf(stderr,
+				"Usage: raptorctl %s set-h265-trans <ch> <cr_offset> <cb_offset>\n",
+				daemon);
+			return 1;
+		}
+		snprintf(json, sizeof(json),
+			 "{\"cmd\":\"set-h265-trans\",\"channel\":%s,"
+			 "\"cr_offset\":%s,\"cb_offset\":%s}",
+			 argv[3], argv[4], argv[5]);
+
+	} else if (strcmp(cmd, "set-roi") == 0) {
+		if (argc < 11) {
+			fprintf(stderr,
+				"Usage: raptorctl %s set-roi <ch> <idx> <enable> "
+				"<x> <y> <w> <h> <qp>\n",
+				daemon);
+			return 1;
+		}
+		snprintf(json, sizeof(json),
+			 "{\"cmd\":\"set-roi\",\"channel\":%s,\"index\":%s,\"enable\":%s,"
+			 "\"x\":%s,\"y\":%s,\"w\":%s,\"h\":%s,\"qp\":%s}",
+			 argv[3], argv[4], argv[5], argv[6], argv[7], argv[8], argv[9], argv[10]);
+
+	} else if (strcmp(cmd, "get-roi") == 0) {
+		if (argc < 5) {
+			fprintf(stderr, "Usage: raptorctl %s get-roi <ch> <index>\n", daemon);
+			return 1;
+		}
+		snprintf(json, sizeof(json), "{\"cmd\":\"get-roi\",\"channel\":%s,\"index\":%s}",
+			 argv[3], argv[4]);
+
+	} else if (strcmp(cmd, "set-super-frame") == 0) {
+		if (argc < 7) {
+			fprintf(stderr,
+				"Usage: raptorctl %s set-super-frame <ch> <mode> "
+				"<i_thr> <p_thr>\n"
+				"  modes: 0=none 1=discard 2=reencode\n",
+				daemon);
+			return 1;
+		}
+		snprintf(json, sizeof(json),
+			 "{\"cmd\":\"set-super-frame\",\"channel\":%s,\"mode\":%s,"
+			 "\"i_thr\":%s,\"p_thr\":%s}",
+			 argv[3], argv[4], argv[5], argv[6]);
+
+	} else if (strcmp(cmd, "set-pskip") == 0) {
+		if (argc < 6) {
+			fprintf(stderr,
+				"Usage: raptorctl %s set-pskip <ch> <enable> <max_frames>\n",
+				daemon);
+			return 1;
+		}
+		snprintf(json, sizeof(json),
+			 "{\"cmd\":\"set-pskip\",\"channel\":%s,\"enable\":%s,"
+			 "\"max_frames\":%s}",
+			 argv[3], argv[4], argv[5]);
+
+	} else if (strcmp(cmd, "set-srd") == 0) {
+		if (argc < 6) {
+			fprintf(stderr, "Usage: raptorctl %s set-srd <ch> <enable> <level>\n",
+				daemon);
+			return 1;
+		}
+		snprintf(json, sizeof(json),
+			 "{\"cmd\":\"set-srd\",\"channel\":%s,\"enable\":%s,\"level\":%s}", argv[3],
+			 argv[4], argv[5]);
+
+	} else if (strcmp(cmd, "set-enc-denoise") == 0) {
+		if (argc < 8) {
+			fprintf(stderr,
+				"Usage: raptorctl %s set-enc-denoise <ch> <enable> "
+				"<type> <i_qp> <p_qp>\n"
+				"  types: 0=off 1=I+P 2=I-only\n",
+				daemon);
+			return 1;
+		}
+		snprintf(json, sizeof(json),
+			 "{\"cmd\":\"set-enc-denoise\",\"channel\":%s,\"enable\":%s,"
+			 "\"type\":%s,\"i_qp\":%s,\"p_qp\":%s}",
+			 argv[3], argv[4], argv[5], argv[6], argv[7]);
+
+	} else if (strcmp(cmd, "set-gdr") == 0) {
+		if (argc < 6) {
+			fprintf(stderr, "Usage: raptorctl %s set-gdr <ch> <enable> <cycle>\n",
+				daemon);
+			return 1;
+		}
+		snprintf(json, sizeof(json),
+			 "{\"cmd\":\"set-gdr\",\"channel\":%s,\"enable\":%s,\"cycle\":%s}", argv[3],
+			 argv[4], argv[5]);
+
+	} else if (strcmp(cmd, "request-pskip") == 0) {
+		if (argc < 4) {
+			fprintf(stderr, "Usage: raptorctl %s request-pskip <channel>\n", daemon);
+			return 1;
+		}
+		snprintf(json, sizeof(json), "{\"cmd\":\"request-pskip\",\"channel\":%s}", argv[3]);
+
+	} else if (strcmp(cmd, "request-gdr") == 0) {
+		if (argc < 5) {
+			fprintf(stderr, "Usage: raptorctl %s request-gdr <channel> <frames>\n",
+				daemon);
+			return 1;
+		}
+		snprintf(json, sizeof(json),
+			 "{\"cmd\":\"request-gdr\",\"channel\":%s,\"value\":%s}", argv[3], argv[4]);
+
+	} else if (strcmp(cmd, "set-enc-crop") == 0) {
+		if (argc < 9) {
+			fprintf(stderr,
+				"Usage: raptorctl %s set-enc-crop <ch> <enable> "
+				"<x> <y> <w> <h>\n",
+				daemon);
+			return 1;
+		}
+		snprintf(json, sizeof(json),
+			 "{\"cmd\":\"set-enc-crop\",\"channel\":%s,\"enable\":%s,"
+			 "\"x\":%s,\"y\":%s,\"w\":%s,\"h\":%s}",
+			 argv[3], argv[4], argv[5], argv[6], argv[7], argv[8]);
+
+	} else if (strcmp(cmd, "set-qp") == 0 || strcmp(cmd, "set-qp-ip-delta") == 0 ||
+		   strcmp(cmd, "set-gop-mode") == 0 || strcmp(cmd, "set-rc-options") == 0 ||
+		   strcmp(cmd, "set-max-same-scene") == 0 || strcmp(cmd, "set-qpg-mode") == 0 ||
+		   strcmp(cmd, "set-entropy-mode") == 0 ||
+		   strcmp(cmd, "set-stream-buf-size") == 0 || strcmp(cmd, "set-jpeg-qp") == 0 ||
+		   strcmp(cmd, "set-color2grey") == 0 || strcmp(cmd, "set-mbrc") == 0 ||
+		   strcmp(cmd, "set-resize-mode") == 0 || strcmp(cmd, "set-h264-trans") == 0) {
+		/* Encoder set commands: <channel> <value> */
+		if (argc < 5) {
+			fprintf(stderr, "Usage: raptorctl %s %s <channel> <value>\n", daemon, cmd);
+			return 1;
+		}
+		snprintf(json, sizeof(json), "{\"cmd\":\"%s\",\"channel\":%s,\"value\":%s}", cmd,
+			 argv[3], argv[4]);
+
+	} else if (strcmp(cmd, "get-enc-caps") == 0) {
+		snprintf(json, sizeof(json), "{\"cmd\":\"get-enc-caps\"}");
+
+	} else if (strcmp(cmd, "get-bitrate") == 0 || strcmp(cmd, "get-fps") == 0 ||
+		   strcmp(cmd, "get-gop") == 0 || strcmp(cmd, "get-qp-bounds") == 0 ||
+		   strcmp(cmd, "get-rc-mode") == 0 || strcmp(cmd, "get-gop-mode") == 0 ||
+		   strcmp(cmd, "get-rc-options") == 0 || strcmp(cmd, "get-max-same-scene") == 0 ||
+		   strcmp(cmd, "get-color2grey") == 0 || strcmp(cmd, "get-mbrc") == 0 ||
+		   strcmp(cmd, "get-qpg-mode") == 0 || strcmp(cmd, "get-stream-buf-size") == 0 ||
+		   strcmp(cmd, "get-h264-trans") == 0 || strcmp(cmd, "get-h265-trans") == 0 ||
+		   strcmp(cmd, "get-super-frame") == 0 || strcmp(cmd, "get-pskip") == 0 ||
+		   strcmp(cmd, "get-srd") == 0 || strcmp(cmd, "get-enc-denoise") == 0 ||
+		   strcmp(cmd, "get-gdr") == 0 || strcmp(cmd, "get-enc-crop") == 0 ||
+		   strcmp(cmd, "get-jpeg-qp") == 0) {
+		/* Encoder get commands: <channel> */
+		if (argc < 4) {
+			fprintf(stderr, "Usage: raptorctl %s %s <channel>\n", daemon, cmd);
+			return 1;
+		}
+		snprintf(json, sizeof(json), "{\"cmd\":\"%s\",\"channel\":%s}", cmd, argv[3]);
 
 	} else if (strcmp(cmd, "set-volume") == 0) {
 		if (argc < 4) {

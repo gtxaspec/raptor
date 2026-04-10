@@ -205,7 +205,677 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 		return 1;
 	}
 
+	if (strstr(cmd_json, "\"get-bitrate\"")) {
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			uint32_t avg = 0;
+			RSS_HAL_CALL(st->ops, enc_get_avg_bitrate, st->hal_ctx,
+				     st->streams[chn].chn, &avg);
+			rss_ctrl_resp(resp, resp_size,
+				      "{\"status\":\"ok\",\"bitrate\":%u,\"avg_bitrate\":%u}",
+				      st->streams[chn].enc_cfg.bitrate, avg);
+		} else {
+			rss_ctrl_resp_error(resp, resp_size, "need channel");
+		}
+		return 1;
+	}
+
+	if (strstr(cmd_json, "\"get-fps\"")) {
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			uint32_t num = 0, den = 0;
+			RSS_HAL_CALL(st->ops, enc_get_fps, st->hal_ctx, st->streams[chn].chn, &num,
+				     &den);
+			rss_ctrl_resp(resp, resp_size,
+				      "{\"status\":\"ok\",\"fps_num\":%u,\"fps_den\":%u}", num,
+				      den);
+		} else {
+			rss_ctrl_resp_error(resp, resp_size, "need channel");
+		}
+		return 1;
+	}
+
+	if (strstr(cmd_json, "\"get-gop\"")) {
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			uint32_t gop = 0;
+			RSS_HAL_CALL(st->ops, enc_get_gop_attr, st->hal_ctx, st->streams[chn].chn,
+				     &gop);
+			rss_ctrl_resp(resp, resp_size, "{\"status\":\"ok\",\"gop\":%u}", gop);
+		} else {
+			rss_ctrl_resp_error(resp, resp_size, "need channel");
+		}
+		return 1;
+	}
+
+	if (strstr(cmd_json, "\"get-qp-bounds\"")) {
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			rss_ctrl_resp(
+				resp, resp_size, "{\"status\":\"ok\",\"min_qp\":%d,\"max_qp\":%d}",
+				st->streams[chn].enc_cfg.min_qp, st->streams[chn].enc_cfg.max_qp);
+		} else {
+			rss_ctrl_resp_error(resp, resp_size, "need channel");
+		}
+		return 1;
+	}
+
+	if (strstr(cmd_json, "\"get-rc-mode\"")) {
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			static const char *rc_names[] = {"fixqp", "cbr",	"vbr",
+							 "smart", "capped_vbr", "capped_quality"};
+			int mode = st->streams[chn].enc_cfg.rc_mode;
+			const char *name =
+				(mode >= 0 && mode < (int)(sizeof(rc_names) / sizeof(rc_names[0])))
+					? rc_names[mode]
+					: "unknown";
+			rss_ctrl_resp(resp, resp_size,
+				      "{\"status\":\"ok\",\"rc_mode\":\"%s\",\"rc_mode_id\":%d}",
+				      name, mode);
+		} else {
+			rss_ctrl_resp_error(resp, resp_size, "need channel");
+		}
+		return 1;
+	}
+
 	return 0; /* not an encoder command */
+}
+
+/* ── Advanced encoder commands ── */
+
+static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
+				       int resp_size)
+{
+	int chn, val, val2;
+	const rss_hal_caps_t *caps = st->ops->get_caps ? st->ops->get_caps(st->hal_ctx) : NULL;
+
+/* Simple set: channel + value → HAL call with int arg */
+#define ENC_SET_INT(name, fn)                                                                      \
+	if (strstr(cmd_json, "\"" name "\"")) {                                                    \
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&                            \
+		    rss_json_get_int(cmd_json, "value", &val) == 0 && chn >= 0 &&                  \
+		    chn < st->stream_count) {                                                      \
+			int ret =                                                                  \
+				RSS_HAL_CALL(st->ops, fn, st->hal_ctx, st->streams[chn].chn, val); \
+			fmt_hal_result(resp, resp_size, ret);                                      \
+		} else {                                                                           \
+			rss_ctrl_resp_error(resp, resp_size, "need channel and value");            \
+		}                                                                                  \
+		return 1;                                                                          \
+	}
+
+/* Simple set: channel + bool value */
+#define ENC_SET_BOOL(name, fn)                                                                     \
+	if (strstr(cmd_json, "\"" name "\"")) {                                                    \
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&                            \
+		    rss_json_get_int(cmd_json, "value", &val) == 0 && chn >= 0 &&                  \
+		    chn < st->stream_count) {                                                      \
+			int ret = RSS_HAL_CALL(st->ops, fn, st->hal_ctx, st->streams[chn].chn,     \
+					       (bool)val);                                         \
+			fmt_hal_result(resp, resp_size, ret);                                      \
+		} else {                                                                           \
+			rss_ctrl_resp_error(resp, resp_size, "need channel and value");            \
+		}                                                                                  \
+		return 1;                                                                          \
+	}
+
+/* Simple get: channel → HAL call returning uint32_t */
+#define ENC_GET_U32(name, fn, field)                                                               \
+	if (strstr(cmd_json, "\"" name "\"")) {                                                    \
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&                \
+		    chn < st->stream_count) {                                                      \
+			uint32_t out = 0;                                                          \
+			int ret = RSS_HAL_CALL(st->ops, fn, st->hal_ctx, st->streams[chn].chn,     \
+					       &out);                                              \
+			if (ret == 0)                                                              \
+				rss_ctrl_resp(resp, resp_size,                                     \
+					      "{\"status\":\"ok\",\"" field "\":%u}", out);        \
+			else                                                                       \
+				fmt_hal_result(resp, resp_size, ret);                              \
+		} else {                                                                           \
+			rss_ctrl_resp_error(resp, resp_size, "need channel");                      \
+		}                                                                                  \
+		return 1;                                                                          \
+	}
+
+/* Simple get: channel → HAL call returning int */
+#define ENC_GET_INT(name, fn, field)                                                               \
+	if (strstr(cmd_json, "\"" name "\"")) {                                                    \
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&                \
+		    chn < st->stream_count) {                                                      \
+			int out = 0;                                                               \
+			int ret = RSS_HAL_CALL(st->ops, fn, st->hal_ctx, st->streams[chn].chn,     \
+					       &out);                                              \
+			if (ret == 0)                                                              \
+				rss_ctrl_resp(resp, resp_size,                                     \
+					      "{\"status\":\"ok\",\"" field "\":%d}", out);        \
+			else                                                                       \
+				fmt_hal_result(resp, resp_size, ret);                              \
+		} else {                                                                           \
+			rss_ctrl_resp_error(resp, resp_size, "need channel");                      \
+		}                                                                                  \
+		return 1;                                                                          \
+	}
+
+/* Simple get: channel → HAL call returning bool */
+#define ENC_GET_BOOL(name, fn, field)                                                              \
+	if (strstr(cmd_json, "\"" name "\"")) {                                                    \
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&                \
+		    chn < st->stream_count) {                                                      \
+			bool out = false;                                                          \
+			int ret = RSS_HAL_CALL(st->ops, fn, st->hal_ctx, st->streams[chn].chn,     \
+					       &out);                                              \
+			if (ret == 0)                                                              \
+				rss_ctrl_resp(resp, resp_size,                                     \
+					      "{\"status\":\"ok\",\"" field "\":%s}",              \
+					      out ? "true" : "false");                             \
+			else                                                                       \
+				fmt_hal_result(resp, resp_size, ret);                              \
+		} else {                                                                           \
+			rss_ctrl_resp_error(resp, resp_size, "need channel");                      \
+		}                                                                                  \
+		return 1;                                                                          \
+	}
+
+	/* ── Simple int/bool set commands ── */
+	ENC_SET_INT("set-qp", enc_set_qp)
+	ENC_SET_INT("set-qp-ip-delta", enc_set_qp_ip_delta)
+	ENC_SET_INT("set-gop-mode", enc_set_gop_mode)
+	ENC_SET_INT("set-rc-options", enc_set_rc_options)
+	ENC_SET_INT("set-max-same-scene", enc_set_max_same_scene_cnt)
+	ENC_SET_INT("set-qpg-mode", enc_set_qpg_mode)
+	ENC_SET_INT("set-entropy-mode", enc_set_chn_entropy_mode)
+	ENC_SET_INT("set-stream-buf-size", enc_set_stream_buf_size)
+	ENC_SET_INT("set-jpeg-qp", enc_set_jpeg_qp)
+	ENC_SET_BOOL("set-color2grey", enc_set_color2grey)
+	ENC_SET_BOOL("set-mbrc", enc_set_mbrc)
+	ENC_SET_BOOL("set-resize-mode", enc_set_resize_mode)
+
+	/* ── Simple get commands ── */
+	/* gop_mode: use dedicated handler for correct enum type */
+	if (strstr(cmd_json, "\"get-gop-mode\"")) {
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			rss_gop_mode_t mode = RSS_GOP_DEFAULT;
+			int ret = RSS_HAL_CALL(st->ops, enc_get_gop_mode, st->hal_ctx,
+					       st->streams[chn].chn, &mode);
+			if (ret == 0)
+				rss_ctrl_resp(resp, resp_size,
+					      "{\"status\":\"ok\",\"gop_mode\":%d}", (int)mode);
+			else
+				fmt_hal_result(resp, resp_size, ret);
+		} else {
+			rss_ctrl_resp_error(resp, resp_size, "need channel");
+		}
+		return 1;
+	}
+	ENC_GET_U32("get-rc-options", enc_get_rc_options, "rc_options")
+	ENC_GET_U32("get-max-same-scene", enc_get_max_same_scene_cnt, "max_same_scene")
+	ENC_GET_U32("get-stream-buf-size", enc_get_stream_buf_size, "buf_size")
+	ENC_GET_INT("get-qpg-mode", enc_get_qpg_mode, "qpg_mode")
+	ENC_GET_INT("get-jpeg-qp", enc_get_jpeg_qp, "jpeg_qp")
+	ENC_GET_BOOL("get-color2grey", enc_get_color2grey, "color2grey")
+	ENC_GET_BOOL("get-mbrc", enc_get_mbrc, "mbrc")
+
+#undef ENC_SET_INT
+#undef ENC_SET_BOOL
+#undef ENC_GET_U32
+#undef ENC_GET_INT
+#undef ENC_GET_BOOL
+
+	/* ── QP bounds per frame (I/P separate) ── */
+	if (strstr(cmd_json, "\"set-qp-bounds-per-frame\"")) {
+		int min_i, max_i, min_p, max_p;
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
+		    rss_json_get_int(cmd_json, "min_i", &min_i) == 0 &&
+		    rss_json_get_int(cmd_json, "max_i", &max_i) == 0 &&
+		    rss_json_get_int(cmd_json, "min_p", &min_p) == 0 &&
+		    rss_json_get_int(cmd_json, "max_p", &max_p) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			int ret = RSS_HAL_CALL(st->ops, enc_set_qp_bounds_per_frame, st->hal_ctx,
+					       st->streams[chn].chn, min_i, max_i, min_p, max_p);
+			fmt_hal_result(resp, resp_size, ret);
+		} else {
+			rss_ctrl_resp_error(resp, resp_size,
+					    "need channel, min_i, max_i, min_p, max_p");
+		}
+		return 1;
+	}
+
+	/* ── Max picture size ── */
+	if (strstr(cmd_json, "\"set-max-pic-size\"")) {
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
+		    rss_json_get_int(cmd_json, "i_kbits", &val) == 0 &&
+		    rss_json_get_int(cmd_json, "p_kbits", &val2) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			int ret = RSS_HAL_CALL(st->ops, enc_set_max_pic_size, st->hal_ctx,
+					       st->streams[chn].chn, (uint32_t)val, (uint32_t)val2);
+			fmt_hal_result(resp, resp_size, ret);
+		} else {
+			rss_ctrl_resp_error(resp, resp_size, "need channel, i_kbits, p_kbits");
+		}
+		return 1;
+	}
+
+	/* ── H.264 transform ── */
+	if (strstr(cmd_json, "\"set-h264-trans\"")) {
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
+		    rss_json_get_int(cmd_json, "value", &val) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			rss_enc_h264_trans_t cfg = {.chroma_qp_index_offset = val};
+			int ret = RSS_HAL_CALL(st->ops, enc_set_h264_trans, st->hal_ctx,
+					       st->streams[chn].chn, &cfg);
+			fmt_hal_result(resp, resp_size, ret);
+		} else {
+			rss_ctrl_resp_error(resp, resp_size, "need channel and value");
+		}
+		return 1;
+	}
+
+	if (strstr(cmd_json, "\"get-h264-trans\"")) {
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			rss_enc_h264_trans_t cfg = {0};
+			int ret = RSS_HAL_CALL(st->ops, enc_get_h264_trans, st->hal_ctx,
+					       st->streams[chn].chn, &cfg);
+			if (ret == 0)
+				rss_ctrl_resp(resp, resp_size,
+					      "{\"status\":\"ok\",\"chroma_qp_offset\":%d}",
+					      cfg.chroma_qp_index_offset);
+			else
+				fmt_hal_result(resp, resp_size, ret);
+		} else {
+			rss_ctrl_resp_error(resp, resp_size, "need channel");
+		}
+		return 1;
+	}
+
+	/* ── H.265 transform ── */
+	if (strstr(cmd_json, "\"set-h265-trans\"")) {
+		int cr_off, cb_off;
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
+		    rss_json_get_int(cmd_json, "cr_offset", &cr_off) == 0 &&
+		    rss_json_get_int(cmd_json, "cb_offset", &cb_off) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			rss_enc_h265_trans_t cfg = {.chroma_cr_qp_offset = cr_off,
+						    .chroma_cb_qp_offset = cb_off};
+			int ret = RSS_HAL_CALL(st->ops, enc_set_h265_trans, st->hal_ctx,
+					       st->streams[chn].chn, &cfg);
+			fmt_hal_result(resp, resp_size, ret);
+		} else {
+			rss_ctrl_resp_error(resp, resp_size, "need channel, cr_offset, cb_offset");
+		}
+		return 1;
+	}
+
+	if (strstr(cmd_json, "\"get-h265-trans\"")) {
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			rss_enc_h265_trans_t cfg = {0};
+			int ret = RSS_HAL_CALL(st->ops, enc_get_h265_trans, st->hal_ctx,
+					       st->streams[chn].chn, &cfg);
+			if (ret == 0)
+				rss_ctrl_resp(resp, resp_size,
+					      "{\"status\":\"ok\",\"cr_offset\":%d,"
+					      "\"cb_offset\":%d}",
+					      cfg.chroma_cr_qp_offset, cfg.chroma_cb_qp_offset);
+			else
+				fmt_hal_result(resp, resp_size, ret);
+		} else {
+			rss_ctrl_resp_error(resp, resp_size, "need channel");
+		}
+		return 1;
+	}
+
+	/* ── ROI ── */
+	if (strstr(cmd_json, "\"set-roi\"")) {
+		int idx, enable, x, y, w, h, qp;
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
+		    rss_json_get_int(cmd_json, "index", &idx) == 0 &&
+		    rss_json_get_int(cmd_json, "enable", &enable) == 0 &&
+		    rss_json_get_int(cmd_json, "x", &x) == 0 &&
+		    rss_json_get_int(cmd_json, "y", &y) == 0 &&
+		    rss_json_get_int(cmd_json, "w", &w) == 0 &&
+		    rss_json_get_int(cmd_json, "h", &h) == 0 &&
+		    rss_json_get_int(cmd_json, "qp", &qp) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			rss_enc_roi_t roi = {.index = (uint32_t)idx,
+					     .enable = (bool)enable,
+					     .qp = qp,
+					     .x = x,
+					     .y = y,
+					     .w = w,
+					     .h = h};
+			int ret = RSS_HAL_CALL(st->ops, enc_set_roi, st->hal_ctx,
+					       st->streams[chn].chn, &roi);
+			fmt_hal_result(resp, resp_size, ret);
+		} else {
+			rss_ctrl_resp_error(resp, resp_size,
+					    "need channel, index, enable, x, y, w, h, qp");
+		}
+		return 1;
+	}
+
+	if (strstr(cmd_json, "\"get-roi\"")) {
+		int idx;
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
+		    rss_json_get_int(cmd_json, "index", &idx) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			rss_enc_roi_t roi = {0};
+			int ret = RSS_HAL_CALL(st->ops, enc_get_roi, st->hal_ctx,
+					       st->streams[chn].chn, (uint32_t)idx, &roi);
+			if (ret == 0)
+				rss_ctrl_resp(resp, resp_size,
+					      "{\"status\":\"ok\",\"index\":%u,\"enable\":%s,"
+					      "\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,\"qp\":%d}",
+					      roi.index, roi.enable ? "true" : "false", roi.x,
+					      roi.y, roi.w, roi.h, roi.qp);
+			else
+				fmt_hal_result(resp, resp_size, ret);
+		} else {
+			rss_ctrl_resp_error(resp, resp_size, "need channel and index");
+		}
+		return 1;
+	}
+
+	/* ── Super frame ── */
+	if (strstr(cmd_json, "\"set-super-frame\"")) {
+		int mode, i_thr, p_thr;
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
+		    rss_json_get_int(cmd_json, "mode", &mode) == 0 &&
+		    rss_json_get_int(cmd_json, "i_thr", &i_thr) == 0 &&
+		    rss_json_get_int(cmd_json, "p_thr", &p_thr) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			rss_super_frame_cfg_t cfg = {.mode = (rss_super_frame_mode_t)mode,
+						     .i_bits_thr = (uint32_t)i_thr,
+						     .p_bits_thr = (uint32_t)p_thr,
+						     .priority = RSS_RC_PRIO_BITRATE};
+			int ret = RSS_HAL_CALL(st->ops, enc_set_super_frame, st->hal_ctx,
+					       st->streams[chn].chn, &cfg);
+			fmt_hal_result(resp, resp_size, ret);
+		} else {
+			rss_ctrl_resp_error(resp, resp_size, "need channel, mode, i_thr, p_thr");
+		}
+		return 1;
+	}
+
+	if (strstr(cmd_json, "\"get-super-frame\"")) {
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			rss_super_frame_cfg_t cfg = {0};
+			int ret = RSS_HAL_CALL(st->ops, enc_get_super_frame, st->hal_ctx,
+					       st->streams[chn].chn, &cfg);
+			if (ret == 0)
+				rss_ctrl_resp(resp, resp_size,
+					      "{\"status\":\"ok\",\"mode\":%d,"
+					      "\"i_thr\":%u,\"p_thr\":%u,\"priority\":%d}",
+					      cfg.mode, cfg.i_bits_thr, cfg.p_bits_thr,
+					      cfg.priority);
+			else
+				fmt_hal_result(resp, resp_size, ret);
+		} else {
+			rss_ctrl_resp_error(resp, resp_size, "need channel");
+		}
+		return 1;
+	}
+
+	/* ── P-skip ── */
+	if (strstr(cmd_json, "\"set-pskip\"")) {
+		int enable, max_frames;
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
+		    rss_json_get_int(cmd_json, "enable", &enable) == 0 &&
+		    rss_json_get_int(cmd_json, "max_frames", &max_frames) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			rss_pskip_cfg_t cfg = {.enable = (bool)enable, .max_frames = max_frames};
+			int ret = RSS_HAL_CALL(st->ops, enc_set_pskip, st->hal_ctx,
+					       st->streams[chn].chn, &cfg);
+			fmt_hal_result(resp, resp_size, ret);
+		} else {
+			rss_ctrl_resp_error(resp, resp_size, "need channel, enable, max_frames");
+		}
+		return 1;
+	}
+
+	if (strstr(cmd_json, "\"get-pskip\"")) {
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			rss_pskip_cfg_t cfg = {0};
+			int ret = RSS_HAL_CALL(st->ops, enc_get_pskip, st->hal_ctx,
+					       st->streams[chn].chn, &cfg);
+			if (ret == 0)
+				rss_ctrl_resp(resp, resp_size,
+					      "{\"status\":\"ok\",\"enable\":%s,"
+					      "\"max_frames\":%d}",
+					      cfg.enable ? "true" : "false", cfg.max_frames);
+			else
+				fmt_hal_result(resp, resp_size, ret);
+		} else {
+			rss_ctrl_resp_error(resp, resp_size, "need channel");
+		}
+		return 1;
+	}
+
+	if (strstr(cmd_json, "\"request-pskip\"")) {
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			int ret = RSS_HAL_CALL(st->ops, enc_request_pskip, st->hal_ctx,
+					       st->streams[chn].chn);
+			fmt_hal_result(resp, resp_size, ret);
+		} else {
+			rss_ctrl_resp_error(resp, resp_size, "need channel");
+		}
+		return 1;
+	}
+
+	/* ── SRD (static scene refresh) ── */
+	if (strstr(cmd_json, "\"set-srd\"")) {
+		int enable, level;
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
+		    rss_json_get_int(cmd_json, "enable", &enable) == 0 &&
+		    rss_json_get_int(cmd_json, "level", &level) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			rss_srd_cfg_t cfg = {.enable = (bool)enable, .level = (uint8_t)level};
+			int ret = RSS_HAL_CALL(st->ops, enc_set_srd, st->hal_ctx,
+					       st->streams[chn].chn, &cfg);
+			fmt_hal_result(resp, resp_size, ret);
+		} else {
+			rss_ctrl_resp_error(resp, resp_size, "need channel, enable, level");
+		}
+		return 1;
+	}
+
+	if (strstr(cmd_json, "\"get-srd\"")) {
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			rss_srd_cfg_t cfg = {0};
+			int ret = RSS_HAL_CALL(st->ops, enc_get_srd, st->hal_ctx,
+					       st->streams[chn].chn, &cfg);
+			if (ret == 0)
+				rss_ctrl_resp(resp, resp_size,
+					      "{\"status\":\"ok\",\"enable\":%s,\"level\":%u}",
+					      cfg.enable ? "true" : "false", cfg.level);
+			else
+				fmt_hal_result(resp, resp_size, ret);
+		} else {
+			rss_ctrl_resp_error(resp, resp_size, "need channel");
+		}
+		return 1;
+	}
+
+	/* ── Encoder denoise ── */
+	if (strstr(cmd_json, "\"set-enc-denoise\"")) {
+		int enable, dn_type, i_qp, p_qp;
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
+		    rss_json_get_int(cmd_json, "enable", &enable) == 0 &&
+		    rss_json_get_int(cmd_json, "type", &dn_type) == 0 &&
+		    rss_json_get_int(cmd_json, "i_qp", &i_qp) == 0 &&
+		    rss_json_get_int(cmd_json, "p_qp", &p_qp) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			rss_enc_denoise_cfg_t cfg = {.enable = (bool)enable,
+						     .dn_type = dn_type,
+						     .dn_i_qp = i_qp,
+						     .dn_p_qp = p_qp};
+			int ret = RSS_HAL_CALL(st->ops, enc_set_denoise, st->hal_ctx,
+					       st->streams[chn].chn, &cfg);
+			fmt_hal_result(resp, resp_size, ret);
+		} else {
+			rss_ctrl_resp_error(resp, resp_size,
+					    "need channel, enable, type, i_qp, p_qp");
+		}
+		return 1;
+	}
+
+	if (strstr(cmd_json, "\"get-enc-denoise\"")) {
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			rss_enc_denoise_cfg_t cfg = {0};
+			int ret = RSS_HAL_CALL(st->ops, enc_get_denoise, st->hal_ctx,
+					       st->streams[chn].chn, &cfg);
+			if (ret == 0)
+				rss_ctrl_resp(resp, resp_size,
+					      "{\"status\":\"ok\",\"enable\":%s,"
+					      "\"type\":%d,\"i_qp\":%d,\"p_qp\":%d}",
+					      cfg.enable ? "true" : "false", cfg.dn_type,
+					      cfg.dn_i_qp, cfg.dn_p_qp);
+			else
+				fmt_hal_result(resp, resp_size, ret);
+		} else {
+			rss_ctrl_resp_error(resp, resp_size, "need channel");
+		}
+		return 1;
+	}
+
+	/* ── GDR (gradual decoder refresh) ── */
+	if (strstr(cmd_json, "\"set-gdr\"")) {
+		int enable, cycle;
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
+		    rss_json_get_int(cmd_json, "enable", &enable) == 0 &&
+		    rss_json_get_int(cmd_json, "cycle", &cycle) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			rss_enc_gdr_cfg_t cfg = {.enable = (bool)enable, .gdr_cycle = cycle};
+			int ret = RSS_HAL_CALL(st->ops, enc_set_gdr, st->hal_ctx,
+					       st->streams[chn].chn, &cfg);
+			fmt_hal_result(resp, resp_size, ret);
+		} else {
+			rss_ctrl_resp_error(resp, resp_size, "need channel, enable, cycle");
+		}
+		return 1;
+	}
+
+	if (strstr(cmd_json, "\"get-gdr\"")) {
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			rss_enc_gdr_cfg_t cfg = {0};
+			int ret = RSS_HAL_CALL(st->ops, enc_get_gdr, st->hal_ctx,
+					       st->streams[chn].chn, &cfg);
+			if (ret == 0)
+				rss_ctrl_resp(resp, resp_size,
+					      "{\"status\":\"ok\",\"enable\":%s,\"cycle\":%d}",
+					      cfg.enable ? "true" : "false", cfg.gdr_cycle);
+			else
+				fmt_hal_result(resp, resp_size, ret);
+		} else {
+			rss_ctrl_resp_error(resp, resp_size, "need channel");
+		}
+		return 1;
+	}
+
+	if (strstr(cmd_json, "\"request-gdr\"")) {
+		int frames;
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
+		    rss_json_get_int(cmd_json, "value", &frames) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			int ret = RSS_HAL_CALL(st->ops, enc_request_gdr, st->hal_ctx,
+					       st->streams[chn].chn, frames);
+			fmt_hal_result(resp, resp_size, ret);
+		} else {
+			rss_ctrl_resp_error(resp, resp_size, "need channel and value");
+		}
+		return 1;
+	}
+
+	/* ── Encoder crop ── */
+	if (strstr(cmd_json, "\"set-enc-crop\"")) {
+		int enable, x, y, w, h;
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
+		    rss_json_get_int(cmd_json, "enable", &enable) == 0 &&
+		    rss_json_get_int(cmd_json, "x", &x) == 0 &&
+		    rss_json_get_int(cmd_json, "y", &y) == 0 &&
+		    rss_json_get_int(cmd_json, "w", &w) == 0 &&
+		    rss_json_get_int(cmd_json, "h", &h) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			rss_enc_crop_cfg_t cfg = {.enable = (bool)enable,
+						  .x = (uint32_t)x,
+						  .y = (uint32_t)y,
+						  .w = (uint32_t)w,
+						  .h = (uint32_t)h};
+			int ret = RSS_HAL_CALL(st->ops, enc_set_crop, st->hal_ctx,
+					       st->streams[chn].chn, &cfg);
+			fmt_hal_result(resp, resp_size, ret);
+		} else {
+			rss_ctrl_resp_error(resp, resp_size, "need channel, enable, x, y, w, h");
+		}
+		return 1;
+	}
+
+	if (strstr(cmd_json, "\"get-enc-crop\"")) {
+		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
+		    chn < st->stream_count) {
+			rss_enc_crop_cfg_t cfg = {0};
+			int ret = RSS_HAL_CALL(st->ops, enc_get_crop, st->hal_ctx,
+					       st->streams[chn].chn, &cfg);
+			if (ret == 0)
+				rss_ctrl_resp(resp, resp_size,
+					      "{\"status\":\"ok\",\"enable\":%s,"
+					      "\"x\":%u,\"y\":%u,\"w\":%u,\"h\":%u}",
+					      cfg.enable ? "true" : "false", cfg.x, cfg.y, cfg.w,
+					      cfg.h);
+			else
+				fmt_hal_result(resp, resp_size, ret);
+		} else {
+			rss_ctrl_resp_error(resp, resp_size, "need channel");
+		}
+		return 1;
+	}
+
+	/* ── Encoder capabilities query ── */
+	if (strstr(cmd_json, "\"get-enc-caps\"")) {
+		if (!caps) {
+			rss_ctrl_resp_error(resp, resp_size, "caps not available");
+			return 1;
+		}
+		rss_ctrl_resp(
+			resp, resp_size,
+			"{\"status\":\"ok\""
+			",\"smartp_gop\":%s,\"rc_options\":%s"
+			",\"pskip\":%s,\"srd\":%s,\"max_pic_size\":%s"
+			",\"super_frame\":%s,\"color2grey\":%s"
+			",\"roi\":%s,\"map_roi\":%s"
+			",\"qp_bounds_per_frame\":%s,\"qpg_mode\":%s"
+			",\"mbrc\":%s,\"enc_denoise\":%s,\"gdr\":%s"
+			",\"h264_trans\":%s,\"h265_trans\":%s"
+			",\"enc_crop\":%s,\"resize_mode\":%s"
+			",\"jpeg_ql\":%s,\"jpeg_qp\":%s}",
+			caps->has_smartp_gop ? "true" : "false",
+			caps->has_rc_options ? "true" : "false", caps->has_pskip ? "true" : "false",
+			caps->has_srd ? "true" : "false", caps->has_max_pic_size ? "true" : "false",
+			caps->has_super_frame ? "true" : "false",
+			caps->has_color2grey ? "true" : "false", caps->has_roi ? "true" : "false",
+			caps->has_map_roi ? "true" : "false",
+			caps->has_qp_bounds_per_frame ? "true" : "false",
+			caps->has_qpg_mode ? "true" : "false", caps->has_mbrc ? "true" : "false",
+			caps->has_enc_denoise ? "true" : "false", caps->has_gdr ? "true" : "false",
+			caps->has_h264_trans ? "true" : "false",
+			caps->has_h265_trans ? "true" : "false",
+			caps->has_enc_crop ? "true" : "false",
+			caps->has_resize_mode ? "true" : "false",
+			caps->has_jpeg_ql ? "true" : "false", caps->has_jpeg_qp ? "true" : "false");
+		return 1;
+	}
+
+	(void)caps;
+	return 0;
 }
 
 /* ── ISP commands ── */
@@ -486,6 +1156,9 @@ int rvd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, vo
 	rvd_state_t *st = userdata;
 
 	if (handle_encoder_cmd(cmd_json, st, resp_buf, resp_buf_size))
+		CTRL_RETURN(resp_buf);
+
+	if (handle_encoder_advanced_cmd(cmd_json, st, resp_buf, resp_buf_size))
 		CTRL_RETURN(resp_buf);
 
 	if (handle_isp_cmd(cmd_json, st, resp_buf, resp_buf_size))
