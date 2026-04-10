@@ -206,6 +206,9 @@ raptorctl rsd clients                 # list RTSP clients
 raptorctl rhd clients                 # list HTTP clients
 raptorctl rwd clients                 # list WebRTC clients
 raptorctl rwd share                   # show WebTorrent share URL
+raptorctl config get audio             # show all [audio] config keys
+raptorctl config get rtsp port        # read single config value
+raptorctl config set audio codec pcmu # change config value
 raptorctl config save                 # persist running config to disk
 ```
 
