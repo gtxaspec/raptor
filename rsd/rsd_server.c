@@ -262,21 +262,31 @@ int rsd_server_init(rsd_server_t *srv)
 	static const char *ring_names[RSD_STREAM_COUNT] = {"main",   "sub",	"s1_main",
 							   "s1_sub", "s2_main", "s2_sub"};
 
-	/* Wait for main ring to appear */
-	RSS_INFO("waiting for video ring...");
-	for (int i = 0; i < 100; i++) {
-		srv->video[RSD_STREAM_MAIN].ring = rss_ring_open("main");
-		if (srv->video[RSD_STREAM_MAIN].ring)
-			break;
-		usleep(100000);
+	/* Try to open audio ring first (fast — no waiting) */
+	srv->ring_audio = rss_ring_open("audio");
+	if (srv->ring_audio) {
+		srv->has_audio = true;
+		RSS_INFO("audio ring available");
 	}
-	if (!srv->video[RSD_STREAM_MAIN].ring) {
-		RSS_WARN("video ring not available (is RVD running?)");
+
+	/* Try to open video rings. Wait up to 10s for the main ring only
+	 * if no audio is available (need at least one ring to serve). */
+	srv->video[RSD_STREAM_MAIN].ring = rss_ring_open("main");
+	if (!srv->video[RSD_STREAM_MAIN].ring && !srv->has_audio) {
+		RSS_INFO("waiting for video ring...");
+		for (int i = 0; i < 100; i++) {
+			usleep(100000);
+			srv->video[RSD_STREAM_MAIN].ring = rss_ring_open("main");
+			if (srv->video[RSD_STREAM_MAIN].ring)
+				break;
+		}
 	}
+	if (!srv->video[RSD_STREAM_MAIN].ring)
+		RSS_WARN("main video ring not available (is RVD running?)");
 	srv->video[RSD_STREAM_MAIN].idx = RSD_STREAM_MAIN;
 	srv->video[RSD_STREAM_MAIN].ring_name = ring_names[RSD_STREAM_MAIN];
 
-	/* Try to open remaining rings (all optional except main) */
+	/* Try to open remaining video rings (all optional) */
 	for (int s = 1; s < RSD_STREAM_COUNT; s++) {
 		srv->video[s].ring = rss_ring_open(ring_names[s]);
 		srv->video[s].idx = s;
@@ -285,7 +295,20 @@ int rsd_server_init(rsd_server_t *srv)
 			RSS_INFO("stream %d (%s) ring available", s, ring_names[s]);
 	}
 
-	/* Log and allocate frame buffers for each ring */
+	/* Must have at least one ring to serve */
+	bool has_any_video = false;
+	for (int s = 0; s < RSD_STREAM_COUNT; s++) {
+		if (srv->video[s].ring) {
+			has_any_video = true;
+			break;
+		}
+	}
+	if (!has_any_video && !srv->has_audio) {
+		RSS_FATAL("no video or audio rings available");
+		return -1;
+	}
+
+	/* Log and allocate frame buffers for available video rings */
 	for (int s = 0; s < RSD_STREAM_COUNT; s++) {
 		if (!srv->video[s].ring)
 			continue;
@@ -310,28 +333,6 @@ int rsd_server_init(rsd_server_t *srv)
 			RSS_FATAL("failed to allocate frame buffer for stream %d", s);
 			return -1;
 		}
-	}
-
-	/* Try to open audio ring (optional — RAD may not be running) */
-	srv->ring_audio = rss_ring_open("audio");
-	if (srv->ring_audio) {
-		srv->has_audio = true;
-		RSS_INFO("audio ring available");
-	} else {
-		RSS_INFO("no audio ring (RAD not running?)");
-	}
-
-	/* Must have at least one ring to serve */
-	bool has_any_video = false;
-	for (int s = 0; s < RSD_STREAM_COUNT; s++) {
-		if (srv->video[s].ring) {
-			has_any_video = true;
-			break;
-		}
-	}
-	if (!has_any_video && !srv->has_audio) {
-		RSS_FATAL("no video or audio rings available");
-		return -1;
 	}
 
 	/* Create dual-stack IPv6 listen socket */
