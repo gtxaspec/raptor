@@ -307,6 +307,8 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 		goto done;
 	}
 
+	RSS_DEBUG("http: %s %s", method, path);
+
 	/* Reject oversized requests */
 	if (n >= (ssize_t)(RWD_HTTP_BUF_SIZE - 1)) {
 		http_error(client_fd, "414 URI Too Long");

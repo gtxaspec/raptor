@@ -539,6 +539,11 @@ static void rwd_run(rwd_server_t *srv)
 				 * we close. WHIP clients send in one burst. */
 				fcntl(client_fd, F_SETFL, fcntl(client_fd, F_GETFL) | O_NONBLOCK);
 
+				char addrstr[INET6_ADDRSTRLEN];
+				RSS_DEBUG("http: %s:%u connected",
+					  rss_addr_str(&client_addr, addrstr, sizeof(addrstr)),
+					  rss_addr_port(&client_addr));
+
 				/* Get local address for IP detection */
 				struct sockaddr_storage local_addr;
 				socklen_t local_len = sizeof(local_addr);
