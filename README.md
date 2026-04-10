@@ -42,10 +42,10 @@ ring buffers at runtime, gracefully skipping any that don't exist.
 | Name | Binary | Description |
 |------|--------|-------------|
 | RVD  | `rvd`  | Raw Video Daemon. Initializes HAL, configures sensor and encoder channels, creates SHM ring buffers (`main`, `sub`, `jpeg0`, `jpeg1`), and runs the frame acquisition loop. Exposes ISP controls and encoder tuning via its control socket. |
-| RSD  | `rsd`  | RTSP Streaming Daemon. Reads video/audio rings and serves RTSP/RTP streams using the compy library. Supports Digest authentication and RTSPS (TLS via mbedTLS, compile with `TLS=1`). |
+| RSD  | `rsd`  | RTSP Streaming Daemon. Reads video/audio rings and serves RTSP/RTP streams using the compy library. Supports video+audio, video-only, or audio-only sessions. Supports Digest authentication and RTSPS (TLS via mbedTLS, compile with `TLS=1`). |
 | RAD  | `rad`  | Raw Audio Daemon. Captures PCM from the ISP audio input, encodes via pluggable codec (G.711 mu-law/A-law, L16, AAC, Opus), and publishes to the `audio` ring. Also handles speaker output via a `speaker` ring. Supports noise suppression, HPF, and AGC when libaudioProcess is available. Codec plugins are modular — adding a new codec requires one source file. |
 | ROD  | `rod`  | OSD Rendering Daemon. Renders timestamp, uptime, user text, and logo bitmaps into BGRA SHM double-buffers using libschrift. No HAL dependency -- RVD handles the hardware OSD regions. |
-| RHD  | `rhd`  | HTTP Streaming Daemon. Serves JPEG snapshots (`/snap.jpg`) and MJPEG streams (`/mjpeg`) from JPEG rings. Dual-stack IPv4/IPv6, Basic auth. Optional HTTPS via mbedTLS (`[http] https = true`). |
+| RHD  | `rhd`  | HTTP Streaming Daemon. Serves JPEG snapshots (`/snap`), MJPEG streams (`/mjpeg`), and audio streams (`/audio`) from SHM rings. Audio is served with proper container framing: WAV for PCM/G.711, ADTS for AAC, Ogg for Opus. Dual-stack IPv4/IPv6, Basic auth. Optional HTTPS via mbedTLS (`[http] https = true`). |
 | RIC  | `ric`  | IR-Cut Controller. Hybrid luma+gain day/night detection: ae_luma for day→night (sensor-independent), gain-ratio for night→day (auto-calibrating, prevents IR flip-flop). Auto-discovers GPIOs from `/etc/thingino.json`. Supports single and dual-GPIO IR-cut filters. |
 | RMR  | `rmr`  | Recording/Muxing Daemon. Reads H.264/H.265 + audio from rings and writes crash-safe fragmented MP4 segments to SD card. Own fMP4 muxer with zero external dependencies. |
 | RMD  | `rmd`  | Motion Detection Daemon. Queries RVD for IVS hardware motion results (configurable grid ROI), manages idle/active/cooldown state machine, triggers recording via RMR and GPIO output on motion events. |
@@ -159,13 +159,20 @@ raptorctl memory                      # per-daemon memory usage
 raptorctl cpu                         # per-daemon CPU usage (1s sample)
 raptorctl rvd                         # show RVD commands (works for any daemon)
 
-# Encoder
+# Encoder (basic)
 raptorctl rvd set-bitrate 0 3000000   # change main stream bitrate
 raptorctl rvd set-gop 0 50            # change GOP length
 raptorctl rvd set-fps 0 25            # change frame rate
 raptorctl rvd set-rc-mode 0 vbr       # rate control: fixqp/cbr/vbr/smart/capped_vbr/capped_quality
 raptorctl rvd set-qp-bounds 0 15 45   # QP range
 raptorctl rvd request-idr             # force keyframe
+
+# Encoder (advanced — 40+ commands, SoC-dependent)
+raptorctl rvd get-enc-caps            # show which features this SoC supports
+raptorctl rvd set-gop-mode 0 2        # GOP mode (0=default 1=pyramidal 2=smartP)
+raptorctl rvd set-roi 0 0 1 100 100 200 200 30  # ROI region
+raptorctl rvd set-color2grey 0 1      # greyscale mode
+raptorctl rvd get-bitrate 0           # query target + average bitrate
 
 # ISP
 raptorctl rvd set-brightness 128      # ISP brightness (0-255)
