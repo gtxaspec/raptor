@@ -5,12 +5,13 @@ COMPY_DEPS := $(wildcard ../../compy/build/_deps/*-src) \
 CFLAGS := -g -fsanitize=fuzzer,address -I../rwd -I../../raptor-common/include \
           -I../../raptor-ipc/include -I../../compy/include \
           $(addprefix -I,$(COMPY_DEPS)) -I.
-LDFLAGS := -fsanitize=fuzzer,address
+LDFLAGS := -fsanitize=fuzzer,address -lm
 
 # raptor-common sources needed by SDP/auth harnesses
 COMMON_SRCS := ../../raptor-common/src/rss_util.c \
                ../../raptor-common/src/rss_log.c \
-               ../../raptor-common/src/rss_http.c
+               ../../raptor-common/src/rss_http.c \
+               ../../raptor-common/src/cJSON.c
 
 TARGETS := fuzz_sdp fuzz_stun fuzz_http_auth
 
