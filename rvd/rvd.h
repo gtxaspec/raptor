@@ -105,6 +105,9 @@ typedef struct {
 	bool ivs_persondet; /* true = persondet/jzdl algo, false = move/base_move */
 	bool ivs_jzdl;	    /* true = standalone JZDL inference */
 	void *jzdl_handle;  /* opaque JZDL context */
+	int ivs_grid_x;	    /* move detection grid columns */
+	int ivs_grid_y;	    /* move detection grid rows */
+	int ivs_roi_count;  /* total ROI count for move detection */
 	_Atomic int ivs_person_count;
 	rss_ivs_detect_result_t ivs_detections; /* latest persondet results */
 	pthread_mutex_t ivs_det_lock;		/* protects ivs_detections */
