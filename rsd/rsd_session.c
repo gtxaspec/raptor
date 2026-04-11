@@ -209,10 +209,13 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 	ssize_t ret = 0;
 
 	COMPY_SDP_DESCRIBE(ret, sdp_w, (COMPY_SDP_VERSION, "0"),
-			   (COMPY_SDP_ORIGIN, "Raptor 1 1 IN IP4 0.0.0.0"),
+			   (COMPY_SDP_ORIGIN, "Raptor %lld 1 IN IP4 0.0.0.0",
+			    (long long)rss_timestamp_us()),
 			   (COMPY_SDP_SESSION_NAME, "%s", self->srv->session_name),
 			   (COMPY_SDP_CONNECTION, "IN IP4 0.0.0.0"), (COMPY_SDP_TIME, "0 0"),
-			   (COMPY_SDP_ATTR, "tool:Raptor RSS"), (COMPY_SDP_ATTR, "range:npt=now-"));
+			   (COMPY_SDP_ATTR, "tool:Raptor RSS"),
+			   (COMPY_SDP_ATTR, "control:*"),
+			   (COMPY_SDP_ATTR, "range:npt=now-"));
 
 	if (self->srv->session_info[0])
 		COMPY_SDP_DESCRIBE(ret, sdp_w, (COMPY_SDP_INFO, "%s", self->srv->session_info));
@@ -334,6 +337,10 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 
 	(void)ret;
 
+	/* Content-Base: tells clients how to resolve relative control URLs
+	 * (RFC 2326 Section 12.5). Must end with '/'. */
+	compy_header(ctx, COMPY_HEADER_CONTENT_BASE, "%.*s/",
+		     (int)req->start_line.uri.len, req->start_line.uri.ptr);
 	compy_header(ctx, COMPY_HEADER_CONTENT_TYPE, "application/sdp");
 	compy_body(ctx, CharSlice99_from_str(sdp));
 	compy_respond_ok(ctx);
@@ -558,28 +565,38 @@ static void rsd_client_t_play(VSelf, Compy_Context *ctx, const Compy_Request *re
 	 * timestamps and reports "No video PTS." */
 
 	/* Build RTP-Info header (RFC 2326 Section 12.33).
+	 * Use the request URI as base for stream URLs.
 	 * Per-client timestamps are zero-based, so rtptime=0. */
 	{
 		char rtp_info[512];
 		int off = 0;
 
+		/* Strip trailing '/' from base URI */
+		CharSlice99 base = req->start_line.uri;
+		while (base.len > 0 && base.ptr[base.len - 1] == '/')
+			base.len--;
+
 		if (self->video.rtp) {
 			uint16_t vseq = Compy_RtpTransport_get_seq(self->video.rtp);
 			off += snprintf(rtp_info + off, sizeof(rtp_info) - off,
-					"url=rtsp://*/video;seq=%u;rtptime=0", vseq);
+					"url=%.*s/video;seq=%u;rtptime=0",
+					(int)base.len, base.ptr, vseq);
 		}
 		if (self->audio.rtp) {
 			uint16_t aseq = Compy_RtpTransport_get_seq(self->audio.rtp);
 			if (off > 0)
 				off += snprintf(rtp_info + off, sizeof(rtp_info) - off, ",");
 			off += snprintf(rtp_info + off, sizeof(rtp_info) - off,
-					"url=rtsp://*/audio;seq=%u;rtptime=0", aseq);
+					"url=%.*s/audio;seq=%u;rtptime=0",
+					(int)base.len, base.ptr, aseq);
 		}
 
 		if (off > 0)
 			compy_header(ctx, COMPY_HEADER_RTP_INFO, "%s", rtp_info);
 	}
 
+	/* Range for live stream (RFC 2326 Section 12.29) */
+	compy_header(ctx, COMPY_HEADER_RANGE, "npt=now-");
 	compy_header(ctx, COMPY_HEADER_SESSION, "%" PRIu64, self->session_id);
 	compy_respond_ok(ctx);
 
