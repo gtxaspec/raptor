@@ -39,6 +39,7 @@ int rvd_ivs_init(rvd_state_t *st)
 
 	st->ivs_grp = IVS_GRP;
 	st->ivs_chn = IVS_CHN;
+	pthread_mutex_init(&st->ivs_det_lock, NULL);
 
 	int ret = RSS_HAL_CALL(st->ops, ivs_create_group, st->hal_ctx, IVS_GRP);
 	if (ret != 0) {
@@ -69,8 +70,21 @@ int rvd_ivs_start(rvd_state_t *st)
 	int h = st->streams[1].enc_cfg.height;
 
 	void *algo_handle = NULL;
+	st->ivs_persondet = false;
 
-	if (strcmp(algo, "base_move") == 0) {
+	if (strcmp(algo, "persondet") == 0) {
+		rss_ivs_persondet_param_t pp = {0};
+		pp.skip_frame_count = skip;
+		pp.width = w;
+		pp.height = h;
+		pp.sensitivity = sensitivity;
+		pp.det_distance = rss_config_get_int(cfg, "motion", "det_distance", 2);
+		pp.motion_trigger = rss_config_get_bool(cfg, "motion", "motion_trigger", false);
+		if (st->ops->ivs_create_persondet_interface)
+			algo_handle = st->ops->ivs_create_persondet_interface(st->hal_ctx, &pp);
+		if (algo_handle)
+			st->ivs_persondet = true;
+	} else if (strcmp(algo, "base_move") == 0) {
 		rss_ivs_base_move_param_t bp = {0};
 		bp.skip_frame_count = skip;
 		bp.sense = sensitivity > 3 ? 3 : sensitivity;
@@ -165,6 +179,7 @@ int rvd_ivs_start(rvd_state_t *st)
 
 	atomic_store(&st->ivs_motion, false);
 	atomic_store(&st->ivs_motion_ts, 0);
+	atomic_store(&st->ivs_person_count, 0);
 
 	RSS_DEBUG("IVS: %s started on %dx%d (chn=%d, sensitivity=%d, skip=%d)", algo, w, h, IVS_CHN,
 		  sensitivity, skip);
@@ -175,7 +190,9 @@ err_unreg:
 err_chn:
 	RSS_HAL_CALL(st->ops, ivs_destroy_channel, st->hal_ctx, IVS_CHN);
 err_iface:
-	if (strcmp(algo, "base_move") == 0)
+	if (st->ivs_persondet)
+		RSS_HAL_CALL(st->ops, ivs_destroy_persondet_interface, st->hal_ctx, algo_handle);
+	else if (strcmp(algo, "base_move") == 0)
 		RSS_HAL_CALL(st->ops, ivs_destroy_base_move_interface, st->hal_ctx, algo_handle);
 	else
 		RSS_HAL_CALL(st->ops, ivs_destroy_move_interface, st->hal_ctx, algo_handle);
@@ -201,7 +218,10 @@ void rvd_ivs_stop(rvd_state_t *st)
 
 	if (st->ivs_algo_handle) {
 		const char *algo = rss_config_get_str(st->cfg, "motion", "algorithm", "move");
-		if (strcmp(algo, "base_move") == 0)
+		if (st->ivs_persondet)
+			RSS_HAL_CALL(st->ops, ivs_destroy_persondet_interface, st->hal_ctx,
+				     st->ivs_algo_handle);
+		else if (strcmp(algo, "base_move") == 0)
 			RSS_HAL_CALL(st->ops, ivs_destroy_base_move_interface, st->hal_ctx,
 				     st->ivs_algo_handle);
 		else
@@ -223,54 +243,149 @@ void rvd_ivs_deinit(rvd_state_t *st)
 		return;
 
 	RSS_HAL_CALL(st->ops, ivs_destroy_group, st->hal_ctx, st->ivs_grp);
+	pthread_mutex_destroy(&st->ivs_det_lock);
 
 	st->ivs_active = false;
 	RSS_INFO("IVS: deinitialized");
+}
+
+static void ivs_process_move_result(rvd_state_t *st, void *result)
+{
+	rss_ivs_move_result_t *mr = (rss_ivs_move_result_t *)result;
+	bool motion = false;
+	for (int i = 0; i < RSS_IVS_MAX_ROI; i++) {
+		if (mr->ret_roi[i]) {
+			motion = true;
+			break;
+		}
+	}
+
+	bool prev = atomic_load(&st->ivs_motion);
+	atomic_store(&st->ivs_motion, motion);
+	if (motion)
+		atomic_store(&st->ivs_motion_ts, rss_timestamp_us());
+
+	if (motion && !prev) {
+		char zones[128] = {0};
+		int off = 0;
+		for (int i = 0; i < RSS_IVS_MAX_ROI && off < (int)sizeof(zones) - 4; i++) {
+			if (mr->ret_roi[i])
+				off += snprintf(zones + off, sizeof(zones) - off, "%s%d",
+						off > 0 ? "," : "", i);
+		}
+		RSS_DEBUG("IVS: motion detected (zones: %s)", zones);
+	} else if (!motion && prev) {
+		RSS_DEBUG("IVS: motion stopped");
+	}
+}
+
+static void ivs_process_persondet_result(rvd_state_t *st, void *result)
+{
+	/*
+	 * The SDK returns persondet_param_output_t* but we access it
+	 * through the generic rss_ivs_detect_result_t layout.  The HAL
+	 * result is opaque — we cast based on the known SDK struct layout:
+	 *   { int count, int count_move, person_info[20], int64_t ts }
+	 * where person_info = { IVSRect box, IVSRect show_box, float confidence }
+	 *
+	 * We read count + person[] fields at known offsets rather than
+	 * including the vendor header (which isn't in the standard path).
+	 */
+	const int *raw = (const int *)result;
+	int count = raw[0];
+	if (count < 0)
+		count = 0;
+	if (count > RSS_IVS_MAX_DETECTIONS)
+		count = RSS_IVS_MAX_DETECTIONS;
+
+	int64_t now = rss_timestamp_us();
+	bool prev = atomic_load(&st->ivs_motion);
+
+	if (count > 0) {
+		/* Active detection — update results and timestamp */
+		atomic_store(&st->ivs_motion, true);
+		atomic_store(&st->ivs_person_count, count);
+		atomic_store(&st->ivs_motion_ts, now);
+
+		pthread_mutex_lock(&st->ivs_det_lock);
+		st->ivs_detections.count = count;
+		st->ivs_detections.timestamp = now;
+
+		/*
+		 * persondet_param_output_t layout (from SDK header):
+		 *   offset 0:  int count
+		 *   offset 4:  int count_move
+		 *   offset 8:  person_info[20]  — each 36 bytes:
+		 *              IVSRect box (16 bytes: 4 ints)
+		 *              IVSRect show_box (16 bytes: 4 ints)
+		 *              float confidence (4 bytes)
+		 *   offset 728: int64_t timeStamp
+		 */
+		const char *base = (const char *)result + 8;
+		for (int i = 0; i < count; i++) {
+			const char *pi = base + i * 36;
+			const int *sb = (const int *)(pi + 16);
+			float conf;
+			memcpy(&conf, pi + 32, sizeof(float));
+
+			st->ivs_detections.detections[i].box = (rss_rect_t){
+				sb[0], sb[1], /* ul.x, ul.y */
+				sb[2], sb[3], /* br.x, br.y */
+			};
+			st->ivs_detections.detections[i].confidence = conf;
+			st->ivs_detections.detections[i].class_id = 0;
+		}
+		pthread_mutex_unlock(&st->ivs_det_lock);
+
+		if (!prev)
+			RSS_DEBUG("IVS: %d person(s) detected", count);
+		for (int i = 0; i < count; i++) {
+			rss_ivs_detection_t *d = &st->ivs_detections.detections[i];
+			RSS_DEBUG("IVS: person[%d] box=(%d,%d)-(%d,%d) conf=%.2f", i, d->box.p0_x,
+				  d->box.p0_y, d->box.p1_x, d->box.p1_y, (double)d->confidence);
+		}
+	} else {
+		/* No detection this frame — hold previous results for 2s
+		 * so the OSD overlay doesn't flicker on brief gaps */
+		int64_t last = atomic_load(&st->ivs_motion_ts);
+		if (prev && (now - last) > 2000000) {
+			atomic_store(&st->ivs_motion, false);
+			atomic_store(&st->ivs_person_count, 0);
+			pthread_mutex_lock(&st->ivs_det_lock);
+			st->ivs_detections.count = 0;
+			pthread_mutex_unlock(&st->ivs_det_lock);
+			RSS_DEBUG("IVS: persons cleared");
+		}
+	}
 }
 
 void *rvd_ivs_thread(void *arg)
 {
 	rvd_state_t *st = arg;
 
-	RSS_INFO("IVS poll thread started");
+	RSS_INFO("IVS poll thread started (algo=%s)", st->ivs_persondet ? "persondet" : "move");
 
+	int poll_count = 0;
 	while (*st->running) {
 		int ret = RSS_HAL_CALL(st->ops, ivs_poll_result, st->hal_ctx, st->ivs_chn, 1000);
-		if (ret != 0)
+		if (ret != 0) {
+			if (++poll_count % 10 == 0)
+				RSS_DEBUG("IVS: poll timeout (%d cycles, ret=%d)", poll_count, ret);
 			continue;
+		}
 
 		void *result = NULL;
 		ret = RSS_HAL_CALL(st->ops, ivs_get_result, st->hal_ctx, st->ivs_chn, &result);
-		if (ret != 0 || !result)
+		if (ret != 0 || !result) {
+			RSS_DEBUG("IVS: get_result failed (ret=%d, result=%p)", ret, result);
 			continue;
-
-		rss_ivs_move_result_t *mr = (rss_ivs_move_result_t *)result;
-		bool motion = false;
-		for (int i = 0; i < RSS_IVS_MAX_ROI; i++) {
-			if (mr->ret_roi[i]) {
-				motion = true;
-				break;
-			}
 		}
+		poll_count = 0;
 
-		bool prev = atomic_load(&st->ivs_motion);
-		atomic_store(&st->ivs_motion, motion);
-		if (motion)
-			atomic_store(&st->ivs_motion_ts, rss_timestamp_us());
-
-		if (motion && !prev) {
-			/* Log which zones triggered */
-			char zones[128] = {0};
-			int off = 0;
-			for (int i = 0; i < RSS_IVS_MAX_ROI && off < (int)sizeof(zones) - 4; i++) {
-				if (mr->ret_roi[i])
-					off += snprintf(zones + off, sizeof(zones) - off, "%s%d",
-							off > 0 ? "," : "", i);
-			}
-			RSS_DEBUG("IVS: motion detected (zones: %s)", zones);
-		} else if (!motion && prev) {
-			RSS_DEBUG("IVS: motion stopped");
-		}
+		if (st->ivs_persondet)
+			ivs_process_persondet_result(st, result);
+		else
+			ivs_process_move_result(st, result);
 
 		RSS_HAL_CALL(st->ops, ivs_release_result, st->hal_ctx, st->ivs_chn, result);
 	}

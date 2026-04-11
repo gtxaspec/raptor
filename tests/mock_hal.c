@@ -19,8 +19,10 @@ static const char *mock_level_str[] = {"FTL", "ERR", "WRN", "INF", "DBG"};
 
 static void mock_log_stderr(int level, const char *file, int line, const char *fmt, ...)
 {
-	if (level < 0) level = 0;
-	if (level > 4) level = 4;
+	if (level < 0)
+		level = 0;
+	if (level > 4)
+		level = 4;
 	fprintf(stderr, "[HAL %s] %s:%d: ", mock_level_str[level], file, line);
 	va_list ap;
 	va_start(ap, fmt);
@@ -61,6 +63,12 @@ static int mock_ok(void *ctx, ...)
 {
 	(void)ctx;
 	return RSS_OK;
+}
+
+static void *mock_null_ptr(void *ctx, ...)
+{
+	(void)ctx;
+	return NULL;
 }
 
 static int mock_enc_poll(void *ctx, int chn, uint32_t timeout_ms)
@@ -507,6 +515,8 @@ static const rss_hal_ops_t mock_ops = {
 	.ivs_get_param = (void *)mock_ok,
 	.ivs_set_param = (void *)mock_ok,
 	.ivs_release_data = (void *)mock_ok,
+	.ivs_create_persondet_interface = (void *)mock_null_ptr,
+	.ivs_destroy_persondet_interface = (void *)mock_ok,
 
 	/* GPIO / IR-cut */
 	.gpio_set = (void *)mock_ok,

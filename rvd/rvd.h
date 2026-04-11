@@ -5,6 +5,7 @@
 #ifndef RVD_H
 #define RVD_H
 
+#include <pthread.h>
 #include <raptor_hal.h>
 #include <rss_ipc.h>
 #include <rss_common.h>
@@ -12,7 +13,7 @@
 #define RVD_MAX_SENSORS	       3
 #define RVD_MAX_STREAMS	       (RVD_MAX_SENSORS * 4) /* main+sub+jpeg0+jpeg1 per sensor */
 #define RVD_MAX_JPEG	       (RVD_MAX_SENSORS * 2)
-#define RVD_OSD_REGIONS	       5
+#define RVD_OSD_REGIONS	       6
 #define RVD_OSD_RETRY_INTERVAL 50 /* check ticks (~5s at 10Hz) */
 
 /* OSD region roles (must match ROD naming) */
@@ -21,6 +22,7 @@
 #define RVD_OSD_TEXT	2
 #define RVD_OSD_LOGO	3
 #define RVD_OSD_PRIVACY 4
+#define RVD_OSD_DETECT	5
 
 typedef struct {
 	rss_video_config_t enc_cfg;
@@ -92,7 +94,7 @@ typedef struct {
 
 	volatile sig_atomic_t *running;
 
-	/* IVS (motion detection) */
+	/* IVS (motion / person detection) */
 	bool ivs_enabled;
 	_Atomic bool ivs_active;
 	_Atomic bool ivs_motion;
@@ -100,6 +102,10 @@ typedef struct {
 	void *ivs_algo_handle;
 	int ivs_grp;
 	int ivs_chn;
+	bool ivs_persondet; /* true = persondet algo, false = move/base_move */
+	_Atomic int ivs_person_count;
+	rss_ivs_detect_result_t ivs_detections; /* latest persondet results */
+	pthread_mutex_t ivs_det_lock;		/* protects ivs_detections */
 } rvd_state_t;
 
 /* rvd_pipeline.c */

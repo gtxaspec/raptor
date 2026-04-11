@@ -138,7 +138,7 @@ SHIM_LIB := $(if $(wildcard $(SYSROOT)/usr/lib/libmuslshim.so $(SYSROOT)/lib/lib
 # System libs for HAL-linked daemons
 # SHIM_LIB must come BEFORE Ingenic SDK libs — the dynamic linker resolves
 # symbols in DT_NEEDED order, so the shim's mmap must be loaded first.
-LDFLAGS_HAL := $(LDFLAGS_SYSROOT) $(SHIM_LIB) -limp -lalog -lsysutils -lpthread -lrt -lm -ldl -latomic
+LDFLAGS_HAL := $(LDFLAGS_SYSROOT) $(SHIM_LIB) -limp -lalog -lsysutils -lpersonDet_inf -ljzdl -lmxu_merge -lmxu_objdetect -lmxu_imgproc -lmxu_video -lmxu_contrib -lmxu_core -lpthread -lrt -lm -ldl -latomic -lstdc++
 LDFLAGS     := $(LDFLAGS_SYSROOT) $(SHIM_LIB) -lpthread -lrt -latomic
 
 # MIPS page size: Ingenic SoCs use 4KB pages but the toolchain defaults to

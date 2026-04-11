@@ -54,8 +54,8 @@ static void rmd_apply_ivs_config(rmd_ctx_t *ctx)
 			 ctx->settings.sensitivity, ctx->settings.skip_frames);
 }
 
-/* Query RVD for current motion state */
-static bool rmd_poll_motion(void)
+/* Query RVD for current motion state and person count */
+static bool rmd_poll_motion(rmd_ctx_t *ctx)
 {
 	char resp[256];
 	int ret = rss_ctrl_send_command("/var/run/rss/rvd.sock", "{\"cmd\":\"ivs-status\"}", resp,
@@ -63,7 +63,11 @@ static bool rmd_poll_motion(void)
 	if (ret < 0)
 		return false;
 
-	/* Parse {"status":"ok","active":true,"motion":true,...} */
+	/* Parse person count if available */
+	int persons = 0;
+	rss_json_get_int(resp, "persons", &persons);
+	ctx->person_count = persons > 0 ? persons : 0;
+
 	return strstr(resp, "\"motion\":true") != NULL;
 }
 
@@ -167,9 +171,10 @@ static int rmd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	/* Default: status */
 	return rss_ctrl_resp(resp_buf, resp_buf_size,
 			     "{\"status\":\"ok\",\"state\":\"%s\",\"recording\":%s,\"sensitivity\":"
-			     "%d,\"skip_frames\":%d}",
+			     "%d,\"skip_frames\":%d,\"persons\":%d}",
 			     state_names[ctx->state], ctx->recording_active ? "true" : "false",
-			     ctx->settings.sensitivity, ctx->settings.skip_frames);
+			     ctx->settings.sensitivity, ctx->settings.skip_frames,
+			     ctx->person_count);
 }
 
 int main(int argc, char **argv)
@@ -232,7 +237,7 @@ int main(int argc, char **argv)
 		 ctx.settings.skip_frames);
 
 	while (*ctx.running) {
-		bool motion = rmd_poll_motion();
+		bool motion = rmd_poll_motion(&ctx);
 		rmd_update_state(&ctx, motion);
 
 		if (epoll_fd >= 0) {

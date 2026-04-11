@@ -18,7 +18,7 @@
 
 #include "rod.h"
 
-static const char *region_names[] = {"time", "uptime", "text", "logo", "privacy"};
+static const char *region_names[] = {"time", "uptime", "text", "logo", "privacy", "detect"};
 
 /* Parse 0xAARRGGBB hex color string */
 static uint32_t parse_color(const char *s)
@@ -89,6 +89,11 @@ static void load_config(rod_state_t *st)
 			st->stream_count++;
 		}
 	}
+
+	/* Detection overlay — enabled when motion detection uses persondet */
+	st->detect_enabled =
+		rss_config_get_bool(cfg, "motion", "enabled", false) &&
+		strcmp(rss_config_get_str(cfg, "motion", "algorithm", "move"), "persondet") == 0;
 }
 
 static void create_region_shm(rod_state_t *st, int s, int role, uint32_t w, uint32_t h)
@@ -155,6 +160,12 @@ static void create_shms(rod_state_t *st)
 			if (lw > 0 && lh > 0)
 				create_region_shm(st, s, ROD_REGION_LOGO, lw, lh);
 		}
+
+		/* Detection bounding box overlay — sub-stream only.
+		 * Full sub-stream size so box coordinates map 1:1. */
+		if (s > 0 && st->detect_enabled)
+			create_region_shm(st, s, ROD_REGION_DETECT, st->stream_w[s],
+					  st->stream_h[s]);
 	}
 }
 
@@ -237,6 +248,90 @@ static void format_uptime(char *buf, size_t bufsz)
 		snprintf(buf, bufsz, "%dm %ds", mins, secs);
 }
 
+/* ── Detection bounding box overlay ── */
+
+static void render_detections(rod_state_t *st)
+{
+	if (!st->detect_enabled)
+		return;
+
+	/* Query RVD for current detections */
+	char resp[2048];
+	int ret = rss_ctrl_send_command("/var/run/rss/rvd.sock", "{\"cmd\":\"ivs-detections\"}",
+					resp, sizeof(resp), 500);
+	if (ret < 0)
+		return;
+
+	/* Parse count */
+	int count = 0;
+	rss_json_get_int(resp, "count", &count);
+	if (count < 0)
+		count = 0;
+	if (count > 20)
+		count = 20;
+
+	RSS_DEBUG("detect: count=%d", count);
+
+	/* Render on sub-streams only */
+	for (int s = 1; s < st->stream_count; s++) {
+		rod_region_t *reg = &st->regions[s][ROD_REGION_DETECT];
+		if (!reg->enabled || !reg->shm)
+			continue;
+
+		uint8_t *buf = rss_osd_get_draw_buffer(reg->shm);
+		if (!buf) {
+			RSS_DEBUG("detect: no draw buffer for stream %d", s);
+			continue;
+		}
+
+		/* Clear to fully transparent */
+		memset(buf, 0, reg->width * reg->height * 4);
+
+		if (count > 0) {
+			/* Parse detection array from JSON response.
+			 * Format: {"detections":[{"x0":N,"y0":N,"x1":N,"y1":N,...},...]} */
+			const char *p = strstr(resp, "\"detections\"");
+			if (!p)
+				goto publish;
+
+			p = strchr(p, '[');
+			if (!p)
+				goto publish;
+			p++; /* skip '[' */
+
+			for (int i = 0; i < count; i++) {
+				const char *obj = strchr(p, '{');
+				if (!obj)
+					break;
+
+				int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+				/* Simple int extraction from JSON object */
+				const char *end = strchr(obj, '}');
+				if (!end)
+					break;
+
+				sscanf(strstr(obj, "\"x0\":") ? strstr(obj, "\"x0\":") + 5 : "",
+				       "%d", &x0);
+				sscanf(strstr(obj, "\"y0\":") ? strstr(obj, "\"y0\":") + 5 : "",
+				       "%d", &y0);
+				sscanf(strstr(obj, "\"x1\":") ? strstr(obj, "\"x1\":") + 5 : "",
+				       "%d", &x1);
+				sscanf(strstr(obj, "\"y1\":") ? strstr(obj, "\"y1\":") + 5 : "",
+				       "%d", &y1);
+
+				RSS_DEBUG("detect: s%d box[%d] (%d,%d)-(%d,%d)", s, i, x0, y0, x1,
+					  y1);
+				rod_draw_rect_outline(buf, reg->width, reg->height, x0, y0, x1, y1,
+						      0xFF00FF00, 2);
+
+				p = end + 1;
+			}
+		}
+	publish:
+		rss_osd_publish(reg->shm);
+	}
+}
+
 static void render_tick(rod_state_t *st)
 {
 	/* Format timestamp */
@@ -293,8 +388,8 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 {
 	rod_state_t *st = userdata;
 
-	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, st->cfg,
-					st->config_path);
+	int rc =
+		rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, st->cfg, st->config_path);
 	if (rc >= 0)
 		return rc;
 
@@ -306,7 +401,8 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				if ((unsigned char)val[i] < 0x20)
 					val[i] = ' ';
 			}
-			rss_strlcpy(st->settings.text_string, val, sizeof(st->settings.text_string));
+			rss_strlcpy(st->settings.text_string, val,
+				    sizeof(st->settings.text_string));
 			rss_config_set_str(st->cfg, "osd", "text_string", val);
 			for (int s = 0; s < st->stream_count; s++)
 				st->regions[s][ROD_REGION_TEXT].needs_update = true;
@@ -362,24 +458,23 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 	if (strstr(cmd_json, "\"config-show\"")) {
-		return rss_ctrl_resp(resp_buf, resp_buf_size,
-				     "{\"status\":\"ok\",\"config\":{"
-				     "\"font_size\":%d,"
-				     "\"font_color\":\"0x%08X\","
-				     "\"stroke_color\":\"0x%08X\","
-				     "\"font_stroke\":%d,"
-				     "\"time_enabled\":%s,"
-				     "\"uptime_enabled\":%s,"
-				     "\"text_enabled\":%s,"
-				     "\"text_string\":\"%s\","
-				     "\"logo_enabled\":%s}}",
-				     st->settings.font_size, st->settings.font_color,
-				     st->settings.stroke_color, st->settings.font_stroke,
-				     st->settings.time_enabled ? "true" : "false",
-				     st->settings.uptime_enabled ? "true" : "false",
-				     st->settings.text_enabled ? "true" : "false",
-				     st->settings.text_string,
-				     st->settings.logo_enabled ? "true" : "false");
+		return rss_ctrl_resp(
+			resp_buf, resp_buf_size,
+			"{\"status\":\"ok\",\"config\":{"
+			"\"font_size\":%d,"
+			"\"font_color\":\"0x%08X\","
+			"\"stroke_color\":\"0x%08X\","
+			"\"font_stroke\":%d,"
+			"\"time_enabled\":%s,"
+			"\"uptime_enabled\":%s,"
+			"\"text_enabled\":%s,"
+			"\"text_string\":\"%s\","
+			"\"logo_enabled\":%s}}",
+			st->settings.font_size, st->settings.font_color, st->settings.stroke_color,
+			st->settings.font_stroke, st->settings.time_enabled ? "true" : "false",
+			st->settings.uptime_enabled ? "true" : "false",
+			st->settings.text_enabled ? "true" : "false", st->settings.text_string,
+			st->settings.logo_enabled ? "true" : "false");
 	}
 
 	/* Default: status */
@@ -438,11 +533,11 @@ int main(int argc, char **argv)
 
 	/* Load logo */
 	if (st.settings.logo_enabled) {
-		if (rod_load_logo(st.settings.logo_path, st.settings.logo_width, st.settings.logo_height,
-				  &st.logo_data) == 0) {
+		if (rod_load_logo(st.settings.logo_path, st.settings.logo_width,
+				  st.settings.logo_height, &st.logo_data) == 0) {
 			st.logo_data_size = st.settings.logo_width * st.settings.logo_height * 4;
-			RSS_DEBUG("logo loaded: %s (%dx%d)", st.settings.logo_path, st.settings.logo_width,
-				  st.settings.logo_height);
+			RSS_DEBUG("logo loaded: %s (%dx%d)", st.settings.logo_path,
+				  st.settings.logo_width, st.settings.logo_height);
 		}
 
 		/* Sub-stream logo: try smaller variant */
@@ -480,14 +575,20 @@ int main(int argc, char **argv)
 	/* Initial render of all regions */
 	render_tick(&st);
 
-	/* Main loop: 1Hz render, 100ms control socket poll */
+	/* Main loop: 1Hz text render, 500ms detection overlay, 100ms ctrl poll */
 	int64_t last_tick = rss_timestamp_us();
+	int64_t last_detect = 0;
 
 	while (*st.running) {
 		int64_t now = rss_timestamp_us();
 		if (now - last_tick >= 1000000) {
 			render_tick(&st);
 			last_tick = now;
+		}
+
+		if (st.detect_enabled && now - last_detect >= 500000) {
+			render_detections(&st);
+			last_detect = now;
 		}
 
 		if (epoll_fd >= 0) {

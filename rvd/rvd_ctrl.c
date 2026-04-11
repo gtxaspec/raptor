@@ -1027,10 +1027,34 @@ static int handle_ivs_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 	if (strstr(cmd_json, "\"ivs-status\"")) {
 		bool motion = atomic_load(&st->ivs_motion);
 		int64_t ts = atomic_load(&st->ivs_motion_ts);
-		rss_ctrl_resp(
-			resp, resp_size,
-			"{\"status\":\"ok\",\"active\":%s,\"motion\":%s,\"timestamp\":%" PRId64 "}",
-			st->ivs_active ? "true" : "false", motion ? "true" : "false", ts);
+		int persons = st->ivs_persondet ? atomic_load(&st->ivs_person_count) : -1;
+		rss_ctrl_resp(resp, resp_size,
+			      "{\"status\":\"ok\",\"active\":%s,\"motion\":%s,"
+			      "\"persondet\":%s,\"persons\":%d,\"timestamp\":%" PRId64 "}",
+			      st->ivs_active ? "true" : "false", motion ? "true" : "false",
+			      st->ivs_persondet ? "true" : "false", persons, ts);
+		return 1;
+	}
+
+	if (strstr(cmd_json, "\"ivs-detections\"")) {
+		if (!st->ivs_persondet || !st->ivs_active) {
+			rss_ctrl_resp_error(resp, resp_size, "persondet not active");
+			return 1;
+		}
+		pthread_mutex_lock(&st->ivs_det_lock);
+		int count = st->ivs_detections.count;
+		int off = snprintf(resp, resp_size,
+				   "{\"status\":\"ok\",\"count\":%d,\"detections\":[", count);
+		for (int i = 0; i < count && off < resp_size - 64; i++) {
+			rss_ivs_detection_t *d = &st->ivs_detections.detections[i];
+			off += snprintf(resp + off, resp_size - off,
+					"%s{\"x0\":%d,\"y0\":%d,\"x1\":%d,\"y1\":%d,"
+					"\"confidence\":%.2f,\"class\":%d}",
+					i > 0 ? "," : "", d->box.p0_x, d->box.p0_y, d->box.p1_x,
+					d->box.p1_y, (double)d->confidence, d->class_id);
+		}
+		pthread_mutex_unlock(&st->ivs_det_lock);
+		snprintf(resp + off, resp_size - off, "]}");
 		return 1;
 	}
 

@@ -111,7 +111,8 @@ int rod_render_init(rod_state_t *st, int stream_idx, int font_size)
 	f->text_height = (f->text_height + 1) & ~1;
 
 	RSS_DEBUG("font[%d]: %s size=%d, %d glyphs cached, text=%dx%d", stream_idx,
-		  st->settings.font_path, font_size, f->glyph_count, f->max_text_width, f->text_height);
+		  st->settings.font_path, font_size, f->glyph_count, f->max_text_width,
+		  f->text_height);
 	return 0;
 }
 
@@ -258,6 +259,66 @@ void rod_draw_text(rod_state_t *st, int stream_idx, uint8_t *buf, uint32_t buf_w
 
 	/* Main text on top */
 	draw_string(f, buf, buf_w, buf_h, pen_x, baseline, text, txt_b, txt_g, txt_r);
+}
+
+/*
+ * Draw a filled horizontal line into BGRA buffer.
+ */
+static void hline(uint8_t *buf, uint32_t buf_w, uint32_t buf_h, int x0, int x1, int y, uint8_t b,
+		  uint8_t g, uint8_t r, uint8_t a)
+{
+	if (y < 0 || y >= (int)buf_h)
+		return;
+	if (x0 < 0)
+		x0 = 0;
+	if (x1 >= (int)buf_w)
+		x1 = (int)buf_w - 1;
+	for (int x = x0; x <= x1; x++) {
+		uint8_t *dst = buf + (y * buf_w + x) * 4;
+		dst[0] = b;
+		dst[1] = g;
+		dst[2] = r;
+		dst[3] = a;
+	}
+}
+
+void rod_draw_rect_outline(uint8_t *buf, uint32_t buf_w, uint32_t buf_h, int x0, int y0, int x1,
+			   int y1, uint32_t color_bgra, int thickness)
+{
+	uint8_t b = (uint8_t)(color_bgra & 0xFF);
+	uint8_t g = (uint8_t)((color_bgra >> 8) & 0xFF);
+	uint8_t r = (uint8_t)((color_bgra >> 16) & 0xFF);
+	uint8_t a = (uint8_t)((color_bgra >> 24) & 0xFF);
+
+	/* Top and bottom edges */
+	for (int t = 0; t < thickness; t++) {
+		hline(buf, buf_w, buf_h, x0, x1, y0 + t, b, g, r, a);
+		hline(buf, buf_w, buf_h, x0, x1, y1 - t, b, g, r, a);
+	}
+
+	/* Left and right edges (between top and bottom) */
+	for (int y = y0 + thickness; y <= y1 - thickness; y++) {
+		for (int t = 0; t < thickness; t++) {
+			int lx = x0 + t;
+			int rx = x1 - t;
+			if (y >= 0 && y < (int)buf_h) {
+				if (lx >= 0 && lx < (int)buf_w) {
+					uint8_t *dst = buf + (y * buf_w + lx) * 4;
+					dst[0] = b;
+					dst[1] = g;
+					dst[2] = r;
+					dst[3] = a;
+				}
+				if (rx >= 0 && rx < (int)buf_w) {
+					uint8_t *dst = buf + (y * buf_w + rx) * 4;
+					dst[0] = b;
+					dst[1] = g;
+					dst[2] = r;
+					dst[3] = a;
+				}
+			}
+		}
+	}
 }
 
 int rod_load_logo(const char *path, int expected_w, int expected_h, uint8_t **out_data)

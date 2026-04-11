@@ -42,6 +42,7 @@ typedef struct {
 	int64_t cooldown_start_us;
 
 	bool recording_active;
+	int person_count;
 
 	rss_ctrl_t *ctrl;
 	rss_config_t *cfg;

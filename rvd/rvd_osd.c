@@ -32,7 +32,7 @@
 
 #include "rvd.h"
 
-static const char *region_names[] = {"time", "uptime", "text", "logo", "privacy"};
+static const char *region_names[] = {"time", "uptime", "text", "logo", "privacy", "detect"};
 
 /* Per-stream OSD type: ISP for mains in hybrid mode, IPU for subs */
 #define STREAM_ISP_OSD(st, s) ((st)->use_isp_osd && (st)->streams[s].fs_chn % 3 == 0)
@@ -52,7 +52,7 @@ static const char *region_names[] = {"time", "uptime", "text", "logo", "privacy"
 static const char *default_pos[] = {
 	[RVD_OSD_TIME] = "top_left",   [RVD_OSD_UPTIME] = "top_right",
 	[RVD_OSD_TEXT] = "top_center", [RVD_OSD_LOGO] = "bottom_right",
-	[RVD_OSD_PRIVACY] = "center",
+	[RVD_OSD_PRIVACY] = "center",  [RVD_OSD_DETECT] = "0,0",
 };
 
 /*
@@ -315,6 +315,16 @@ void rvd_osd_init(rvd_state_t *st)
 		/* Privacy text region (centered, hidden until privacy mode) */
 		if (create_region(st, s, RVD_OSD_PRIVACY, OSD_TIME_W, th))
 			region_count++;
+
+		/* Detection bounding box overlay — sub-stream only, full-frame.
+		 * OSD pool increased to 1MB to fit 640x360 BGRA (900KB). */
+		if (s > 0 && rss_config_get_bool(cfg, "motion", "enabled", false) &&
+		    strcmp(rss_config_get_str(cfg, "motion", "algorithm", "move"), "persondet") ==
+			    0) {
+			if (create_region(st, s, RVD_OSD_DETECT, st->streams[s].enc_cfg.width,
+					  st->streams[s].enc_cfg.height))
+				region_count++;
+		}
 
 		RSS_DEBUG("osd stream%d: %d regions created", s, region_count);
 

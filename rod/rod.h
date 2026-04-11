@@ -13,7 +13,7 @@
 #include <stdint.h>
 
 #define ROD_MAX_STREAMS	     6 /* up to 3 sensors × 2 (main+sub) */
-#define ROD_MAX_REGIONS	     5
+#define ROD_MAX_REGIONS	     6
 #define ROD_GLYPH_CACHE_SIZE 95 /* ASCII 0x20-0x7E */
 #define ROD_TIME_CHARS	     20 /* "2026-03-23 23:59:59" */
 #define ROD_UPTIME_CHARS     12 /* "12345d 23h 59m" */
@@ -25,6 +25,7 @@
 #define ROD_REGION_TEXT	   2 /* bottom-left */
 #define ROD_REGION_LOGO	   3 /* bottom-right */
 #define ROD_REGION_PRIVACY 4 /* center (hidden until privacy mode) */
+#define ROD_REGION_DETECT  5 /* full-frame detection bounding boxes */
 
 /* Cached glyph */
 typedef struct {
@@ -103,6 +104,9 @@ typedef struct {
 	int logo_sub_w;
 	int logo_sub_h;
 
+	/* Detection overlay */
+	bool detect_enabled;
+
 	/* Control */
 	rss_ctrl_t *ctrl;
 	rss_config_t *cfg;
@@ -119,5 +123,7 @@ rod_glyph_t *rod_glyph_lookup(rod_font_t *font, uint32_t codepoint);
 void rod_draw_text(rod_state_t *st, int stream_idx, uint8_t *buf, uint32_t buf_w, uint32_t buf_h,
 		   const char *text, int align);
 int rod_load_logo(const char *path, int expected_w, int expected_h, uint8_t **out_data);
+void rod_draw_rect_outline(uint8_t *buf, uint32_t buf_w, uint32_t buf_h, int x0, int y0, int x1,
+			   int y1, uint32_t color_bgra, int thickness);
 
 #endif /* ROD_H */
