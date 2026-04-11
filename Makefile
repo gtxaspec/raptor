@@ -140,10 +140,13 @@ SHIM_LIB := $(if $(wildcard $(SYSROOT)/usr/lib/libmuslshim.so $(SYSROOT)/lib/lib
 # symbols in DT_NEEDED order, so the shim's mmap must be loaded first.
 LDFLAGS_HAL := $(LDFLAGS_SYSROOT) $(SHIM_LIB) -limp -lalog -lsysutils -lpthread -lrt -lm -ldl -latomic
 
-# IVS detection libs (personDet + MXU + JZDL standalone)
-LDFLAGS_IVS := -lpersonDet_inf -ljzdl -lmxu_merge -lmxu_objdetect -lmxu_imgproc \
-               -lmxu_video -lmxu_contrib -lmxu_core -ljzdl.m -lstdc++
-LDFLAGS_HAL += $(LDFLAGS_IVS)
+# IVS detection libs — optional, no MXU needed (statically linked in .so)
+ifeq ($(IVS_DETECT),1)
+LDFLAGS_HAL += -ljzdl.m -lstdc++
+ifeq ($(PERSONDET),1)
+LDFLAGS_HAL += -lpersonDet_inf -ljzdl
+endif
+endif
 LDFLAGS     := $(LDFLAGS_SYSROOT) $(SHIM_LIB) -lpthread -lrt -latomic
 
 # MIPS page size: Ingenic SoCs use 4KB pages but the toolchain defaults to
