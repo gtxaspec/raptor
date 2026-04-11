@@ -13,6 +13,32 @@
 
 #include "rsd.h"
 
+/* Base64 encode for sprop-parameter-sets */
+static int b64_encode(const uint8_t *src, int len, char *dst, int dst_size)
+{
+	static const char t[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+	int i, o = 0;
+	for (i = 0; i + 2 < len && o + 4 < dst_size; i += 3) {
+		dst[o++] = t[(src[i] >> 2) & 0x3F];
+		dst[o++] = t[((src[i] & 0x3) << 4) | (src[i + 1] >> 4)];
+		dst[o++] = t[((src[i + 1] & 0xF) << 2) | (src[i + 2] >> 6)];
+		dst[o++] = t[src[i + 2] & 0x3F];
+	}
+	if (i < len && o + 4 < dst_size) {
+		dst[o++] = t[(src[i] >> 2) & 0x3F];
+		if (i + 1 < len) {
+			dst[o++] = t[((src[i] & 0x3) << 4) | (src[i + 1] >> 4)];
+			dst[o++] = t[(src[i + 1] & 0xF) << 2];
+		} else {
+			dst[o++] = t[(src[i] & 0x3) << 4];
+			dst[o++] = '=';
+		}
+		dst[o++] = '=';
+	}
+	dst[o] = '\0';
+	return o;
+}
+
 /* ── Backchannel audio receiver (separate type for interface99) ── */
 
 typedef struct {
@@ -210,15 +236,28 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 			/* H.264 / AVC (RFC 6184) */
 			uint8_t profile_idc = hdr->profile ? hdr->profile : 100;
 			uint8_t level_idc = hdr->level ? hdr->level : 40;
+			rsd_ring_ctx_t *rctx = &self->srv->video[self->stream_idx];
+
+			/* Build fmtp with optional sprop-parameter-sets */
+			char fmtp[1024];
+			int foff = snprintf(fmtp, sizeof(fmtp),
+					    "fmtp:%d packetization-mode=1;profile-level-id=%02X00%02X",
+					    RSD_VIDEO_PT, profile_idc, level_idc);
+
+			if (rctx->sps_len > 0 && rctx->pps_len > 0) {
+				char sps_b64[512], pps_b64[128];
+				b64_encode(rctx->sps, rctx->sps_len, sps_b64, sizeof(sps_b64));
+				b64_encode(rctx->pps, rctx->pps_len, pps_b64, sizeof(pps_b64));
+				snprintf(fmtp + foff, sizeof(fmtp) - foff,
+					 ";sprop-parameter-sets=%s,%s", sps_b64, pps_b64);
+			}
 
 			COMPY_SDP_DESCRIBE(
 				ret, sdp_w, (COMPY_SDP_MEDIA, "video 0 RTP/AVP %d", RSD_VIDEO_PT),
 				(COMPY_SDP_ATTR, "control:video"), (COMPY_SDP_ATTR, "recvonly"),
 				(COMPY_SDP_ATTR, "rtpmap:%d H264/%d", RSD_VIDEO_PT,
 				 RSD_VIDEO_CLOCK),
-				(COMPY_SDP_ATTR,
-				 "fmtp:%d packetization-mode=1;profile-level-id=%02X00%02X",
-				 RSD_VIDEO_PT, profile_idc, level_idc),
+				(COMPY_SDP_ATTR, "%s", fmtp),
 				(COMPY_SDP_ATTR, "framerate:%u", hdr->fps_num));
 		}
 	}
@@ -513,24 +552,13 @@ static void rsd_client_t_play(VSelf, Compy_Context *ctx, const Compy_Request *re
 		return;
 	}
 
-	if (self->video.nal) {
-		self->video.playing = true;
-		self->waiting_keyframe = true;
-		self->video_read_seq = 0;
-	}
-	if (self->audio.rtp)
-		self->audio.playing = true;
+	/* Build and send the PLAY response BEFORE enabling playback.
+	 * This ensures the RTP-Info header is on the TCP connection
+	 * before any RTP data — otherwise the client can't calibrate
+	 * timestamps and reports "No video PTS." */
 
-	/* Request IDR from RVD so the client gets a keyframe ASAP (video clients only) */
-	if (self->video.nal) {
-		char resp[128];
-		rss_ctrl_send_command("/var/run/rss/rvd.sock", "{\"cmd\":\"request-idr\"}", resp,
-				      sizeof(resp), 1000);
-	}
-
-	/* Build RTP-Info header (RFC 2326 Section 12.33)
-	 * Tells the client the initial seq and rtptime for each stream
-	 * so it can correctly synchronize A/V from the first packet. */
+	/* Build RTP-Info header (RFC 2326 Section 12.33).
+	 * Per-client timestamps are zero-based, so rtptime=0. */
 	{
 		char rtp_info[512];
 		int off = 0;
@@ -554,6 +582,26 @@ static void rsd_client_t_play(VSelf, Compy_Context *ctx, const Compy_Request *re
 
 	compy_header(ctx, COMPY_HEADER_SESSION, "%" PRIu64, self->session_id);
 	compy_respond_ok(ctx);
+
+	/* NOW enable playback — response is already on the wire.
+	 * Set waiting_keyframe before playing so the reader thread
+	 * never sees playing=true with waiting_keyframe=false. */
+	if (self->video.nal) {
+		self->waiting_keyframe = true;
+		self->video_ts_base_set = false;
+		self->audio_ts_base_set = false;
+		self->video.playing = true;
+		self->video_read_seq = 0;
+	}
+	if (self->audio.rtp)
+		self->audio.playing = true;
+
+	/* Request IDR from RVD so the client gets a keyframe ASAP */
+	if (self->video.nal) {
+		char resp[128];
+		rss_ctrl_send_command("/var/run/rss/rvd.sock", "{\"cmd\":\"request-idr\"}", resp,
+				      sizeof(resp), 1000);
+	}
 
 	RSS_DEBUG("client PLAY%s", self->video.nal ? " (IDR requested)" : " (audio only)");
 }

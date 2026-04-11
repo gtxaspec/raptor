@@ -100,6 +100,12 @@ typedef struct {
 	uint32_t frame_buf_size;
 	int idx;
 	const char *ring_name; /* for reconnection after RVD restart */
+
+	/* Cached SPS/PPS for SDP sprop-parameter-sets */
+	uint8_t sps[256];
+	uint8_t pps[64];
+	uint16_t sps_len;
+	uint16_t pps_len;
 } rsd_ring_ctx_t;
 
 /* Server state */

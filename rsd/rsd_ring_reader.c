@@ -15,6 +15,51 @@
 #include "rsd.h"
 
 /*
+ * Extract SPS/PPS from Annex B keyframe data and cache in ring context.
+ * Called once when the first keyframe is seen (or when SPS/PPS change).
+ */
+static void rsd_cache_sps_pps(rsd_ring_ctx_t *rctx, const uint8_t *data, uint32_t len)
+{
+	const uint8_t *p = data;
+	const uint8_t *end = data + len;
+
+	while (p < end - 4) {
+		if (!(p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] == 1)) {
+			p++;
+			continue;
+		}
+
+		const uint8_t *nalu_start = p + 4;
+		const uint8_t *nalu_end = end;
+		for (const uint8_t *q = nalu_start + 1; q < end - 3; q++) {
+			if (q[0] == 0 && q[1] == 0 && q[2] == 0 && q[3] == 1) {
+				nalu_end = q;
+				break;
+			}
+		}
+
+		uint32_t nalu_len = (uint32_t)(nalu_end - nalu_start);
+		if (nalu_len < 1) {
+			p = nalu_end;
+			continue;
+		}
+
+		uint8_t nal_type = nalu_start[0] & 0x1F;
+		if (nal_type == 7 && nalu_len <= sizeof(rctx->sps)) {
+			/* SPS */
+			memcpy(rctx->sps, nalu_start, nalu_len);
+			rctx->sps_len = (uint16_t)nalu_len;
+		} else if (nal_type == 8 && nalu_len <= sizeof(rctx->pps)) {
+			/* PPS */
+			memcpy(rctx->pps, nalu_start, nalu_len);
+			rctx->pps_len = (uint16_t)nalu_len;
+		}
+
+		p = nalu_end;
+	}
+}
+
+/*
  * Parse Annex B start codes and send each NALU via compy.
  *
  * The ring data is a concatenation of NALUs with 4-byte start codes
@@ -103,6 +148,8 @@ void *rsd_video_reader_thread(void *arg)
 	 * timestamp, same clock source as audio. Both streams share the same
 	 * timebase so inter-stream drift is zero by construction. */
 	int64_t video_ts_epoch = 0;
+	uint32_t last_rtp_ts = 0; /* enforce monotonic RTP timestamps */
+	bool has_last_rtp_ts = false;
 	uint64_t last_write_seq = 0;
 	int idle_count = 0;
 
@@ -132,6 +179,24 @@ void *rsd_video_reader_thread(void *arg)
 			last_write_seq = 0;
 			idle_count = 0;
 			video_ts_epoch = 0;
+			last_rtp_ts = 0;
+			has_last_rtp_ts = false;
+
+			/* Ring reconnected — reset all clients on this stream
+			 * so they re-sync from the next keyframe. Without this,
+			 * the epoch reset causes per-client timestamps to jump
+			 * backwards (uint32_t wrap). */
+			pthread_mutex_lock(&srv->clients_lock);
+			for (int i = 0; i < srv->client_count; i++) {
+				rsd_client_t *c = srv->clients[i];
+				if (c && c->stream_idx == stream_idx && c->video.playing) {
+					c->waiting_keyframe = true;
+					c->video_ts_base_set = false;
+					c->audio_ts_base_set = false;
+				}
+			}
+			pthread_mutex_unlock(&srv->clients_lock);
+
 			RSS_DEBUG("video reader[%d] reconnected (%s)", stream_idx, rctx->ring_name);
 		}
 
@@ -189,6 +254,20 @@ void *rsd_video_reader_thread(void *arg)
 			video_ts_epoch = meta.timestamp;
 		uint32_t rtp_ts =
 			(uint32_t)((uint64_t)(meta.timestamp - video_ts_epoch) * 90000 / 1000000);
+
+		/* Enforce monotonic RTP timestamps. The IMP encoder can
+		 * occasionally produce slightly out-of-order timestamps
+		 * (observed ~2-frame backwards jumps every ~50s on T31).
+		 * Clients (mpv/ffmpeg) reject non-monotonic DTS. */
+		if (has_last_rtp_ts && (int32_t)(rtp_ts - last_rtp_ts) <= 0) {
+			rtp_ts = last_rtp_ts + 1;
+		}
+		last_rtp_ts = rtp_ts;
+		has_last_rtp_ts = true;
+
+		/* Cache SPS/PPS from keyframes for SDP sprop-parameter-sets */
+		if (meta.is_key && rctx->sps_len == 0)
+			rsd_cache_sps_pps(rctx, rctx->frame_buf, length);
 
 		pthread_mutex_lock(&srv->clients_lock);
 		for (int i = 0; i < srv->client_count; i++) {
@@ -265,6 +344,8 @@ void *rsd_audio_reader_thread(void *arg)
 	uint32_t audio_codec = 0, rtp_clock = 0;
 	uint8_t audio_buf[4096];
 	int64_t audio_ts_epoch = 0;
+	uint32_t last_audio_rtp_ts = 0;
+	bool has_last_audio_rtp_ts = false;
 	uint64_t last_write_seq = 0;
 	int idle_count = 0;
 
@@ -295,8 +376,19 @@ void *rsd_audio_reader_thread(void *arg)
 			rtp_clock = (audio_codec == RSD_CODEC_OPUS) ? 48000 : audio_clock;
 			srv->audio_read_seq = ahdr->write_seq;
 			audio_ts_epoch = 0;
+			last_audio_rtp_ts = 0;
+			has_last_audio_rtp_ts = false;
 			last_write_seq = 0;
 			idle_count = 0;
+
+			/* Ring reconnected — reset client audio bases */
+			pthread_mutex_lock(&srv->clients_lock);
+			for (int i = 0; i < srv->client_count; i++) {
+				rsd_client_t *c = srv->clients[i];
+				if (c && c->audio.playing)
+					c->audio_ts_base_set = false;
+			}
+			pthread_mutex_unlock(&srv->clients_lock);
 
 			RSS_DEBUG("audio codec=%u clock=%u rtp_clock=%u", audio_codec, audio_clock,
 				  rtp_clock);
@@ -344,6 +436,12 @@ void *rsd_audio_reader_thread(void *arg)
 				audio_ts_epoch = meta.timestamp;
 			uint32_t rtp_ts = (uint32_t)((uint64_t)(meta.timestamp - audio_ts_epoch) *
 						     rtp_clock / 1000000);
+
+			/* Enforce monotonic audio timestamps */
+			if (has_last_audio_rtp_ts && (int32_t)(rtp_ts - last_audio_rtp_ts) <= 0)
+				rtp_ts = last_audio_rtp_ts + 1;
+			last_audio_rtp_ts = rtp_ts;
+			has_last_audio_rtp_ts = true;
 
 			pthread_mutex_lock(&srv->clients_lock);
 			for (int i = 0; i < srv->client_count; i++) {
