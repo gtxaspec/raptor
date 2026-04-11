@@ -197,8 +197,10 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 		return;
 	}
 
-	/* Check if the requested stream has video or audio available */
-	bool has_video = self->srv->video[self->stream_idx].ring != NULL;
+	/* Snapshot ring pointer — the reader thread can set it to NULL
+	 * during idle timeout. Local copy avoids TOCTOU NULL deref. */
+	rss_ring_t *vring = self->srv->video[self->stream_idx].ring;
+	bool has_video = vring != NULL;
 	if (!has_video && !self->srv->has_audio) {
 		compy_respond(ctx, COMPY_STATUS_NOT_FOUND, "Stream not available");
 		return;
@@ -221,8 +223,7 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 		COMPY_SDP_DESCRIBE(ret, sdp_w, (COMPY_SDP_INFO, "%s", self->srv->session_info));
 
 	if (has_video) {
-		const rss_ring_header_t *hdr =
-			rss_ring_get_header(self->srv->video[self->stream_idx].ring);
+		const rss_ring_header_t *hdr = rss_ring_get_header(vring);
 
 		/* Store codec for NAL framing in ring reader */
 		self->video_codec = hdr->codec;
