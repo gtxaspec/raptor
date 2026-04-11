@@ -176,6 +176,9 @@ int rvd_ivs_start(rvd_state_t *st)
 			}
 
 			mp.roi_count = gx * gy;
+			st->ivs_grid_x = gx;
+			st->ivs_grid_y = gy;
+			st->ivs_roi_count = mp.roi_count;
 			int cw = w / gx;
 			int ch = h / gy;
 			for (int row = 0; row < gy; row++) {
@@ -312,30 +315,84 @@ void rvd_ivs_deinit(rvd_state_t *st)
 static void ivs_process_move_result(rvd_state_t *st, void *result)
 {
 	rss_ivs_move_result_t *mr = (rss_ivs_move_result_t *)result;
-	bool motion = false;
-	for (int i = 0; i < RSS_IVS_MAX_ROI; i++) {
+	int gx = st->ivs_grid_x;
+	int gy = st->ivs_grid_y;
+	int total = st->ivs_roi_count;
+
+	/* No grid info — explicit ROIs or unconfigured; fall back to simple flag */
+	if (gx <= 0 || gy <= 0 || total <= 0) {
+		bool motion = false;
+		for (int i = 0; i < RSS_IVS_MAX_ROI; i++) {
+			if (mr->ret_roi[i]) {
+				motion = true;
+				break;
+			}
+		}
+		bool prev = atomic_load(&st->ivs_motion);
+		atomic_store(&st->ivs_motion, motion);
+		if (motion)
+			atomic_store(&st->ivs_motion_ts, rss_timestamp_us());
+		if (motion && !prev)
+			RSS_DEBUG("IVS: motion detected");
+		else if (!motion && prev)
+			RSS_DEBUG("IVS: motion stopped");
+		return;
+	}
+
+	/* Find bounding box of active zones in the grid */
+	int min_col = gx, max_col = -1, min_row = gy, max_row = -1;
+	for (int i = 0; i < total && i < RSS_IVS_MAX_ROI; i++) {
 		if (mr->ret_roi[i]) {
-			motion = true;
-			break;
+			int col = i % gx;
+			int row = i / gx;
+			if (col < min_col)
+				min_col = col;
+			if (col > max_col)
+				max_col = col;
+			if (row < min_row)
+				min_row = row;
+			if (row > max_row)
+				max_row = row;
 		}
 	}
 
+	bool motion = max_col >= 0;
+	int64_t now = rss_timestamp_us();
 	bool prev = atomic_load(&st->ivs_motion);
-	atomic_store(&st->ivs_motion, motion);
-	if (motion)
-		atomic_store(&st->ivs_motion_ts, rss_timestamp_us());
 
-	if (motion && !prev) {
-		char zones[128] = {0};
-		int off = 0;
-		for (int i = 0; i < RSS_IVS_MAX_ROI && off < (int)sizeof(zones) - 4; i++) {
-			if (mr->ret_roi[i])
-				off += snprintf(zones + off, sizeof(zones) - off, "%s%d",
-						off > 0 ? "," : "", i);
+	if (motion) {
+		atomic_store(&st->ivs_motion, true);
+		atomic_store(&st->ivs_motion_ts, now);
+
+		/* Convert grid cells to pixel coordinates */
+		int w = st->streams[1].enc_cfg.width;
+		int h = st->streams[1].enc_cfg.height;
+		int cw = w / gx;
+		int ch = h / gy;
+
+		pthread_mutex_lock(&st->ivs_det_lock);
+		st->ivs_detections.count = 1;
+		st->ivs_detections.timestamp = now;
+		st->ivs_detections.detections[0].box = (rss_rect_t){
+			min_col * cw,
+			min_row * ch,
+			(max_col + 1) * cw - 1,
+			(max_row + 1) * ch - 1,
+		};
+		st->ivs_detections.detections[0].confidence = 1.0f;
+		st->ivs_detections.detections[0].class_id = -1; /* motion, not classified */
+		pthread_mutex_unlock(&st->ivs_det_lock);
+
+		if (!prev)
+			RSS_DEBUG("IVS: motion detected");
+	} else {
+		if (prev && (now - atomic_load(&st->ivs_motion_ts)) > 2000000) {
+			atomic_store(&st->ivs_motion, false);
+			pthread_mutex_lock(&st->ivs_det_lock);
+			st->ivs_detections.count = 0;
+			pthread_mutex_unlock(&st->ivs_det_lock);
+			RSS_DEBUG("IVS: motion stopped");
 		}
-		RSS_DEBUG("IVS: motion detected (zones: %s)", zones);
-	} else if (!motion && prev) {
-		RSS_DEBUG("IVS: motion stopped");
 	}
 }
 

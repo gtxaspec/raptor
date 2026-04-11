@@ -1037,8 +1037,8 @@ static int handle_ivs_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 	}
 
 	if (strstr(cmd_json, "\"ivs-detections\"")) {
-		if (!st->ivs_persondet || !st->ivs_active) {
-			rss_ctrl_resp_error(resp, resp_size, "persondet not active");
+		if (!st->ivs_active) {
+			rss_ctrl_resp_error(resp, resp_size, "ivs not active");
 			return 1;
 		}
 		pthread_mutex_lock(&st->ivs_det_lock);

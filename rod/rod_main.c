@@ -90,10 +90,8 @@ static void load_config(rod_state_t *st)
 		}
 	}
 
-	/* Detection overlay — enabled for persondet or yolo algorithms */
-	const char *det_algo = rss_config_get_str(cfg, "motion", "algorithm", "move");
-	st->detect_enabled = rss_config_get_bool(cfg, "motion", "enabled", false) &&
-			     (strcmp(det_algo, "persondet") == 0 || strcmp(det_algo, "yolo") == 0);
+	/* Detection overlay — enabled when motion detection is on */
+	st->detect_enabled = rss_config_get_bool(cfg, "motion", "enabled", false);
 }
 
 static void create_region_shm(rod_state_t *st, int s, int role, uint32_t w, uint32_t h)
@@ -299,25 +297,28 @@ static void render_detections(rod_state_t *st)
 				const char *obj = strchr(p, '{');
 				if (!obj)
 					break;
-
-				int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
-				/* Simple int extraction from JSON object */
 				const char *end = strchr(obj, '}');
 				if (!end)
 					break;
 
-				sscanf(strstr(obj, "\"x0\":") ? strstr(obj, "\"x0\":") + 5 : "",
-				       "%d", &x0);
-				sscanf(strstr(obj, "\"y0\":") ? strstr(obj, "\"y0\":") + 5 : "",
-				       "%d", &y0);
-				sscanf(strstr(obj, "\"x1\":") ? strstr(obj, "\"x1\":") + 5 : "",
-				       "%d", &x1);
-				sscanf(strstr(obj, "\"y1\":") ? strstr(obj, "\"y1\":") + 5 : "",
-				       "%d", &y1);
+				/* Parse coords within this object only */
+				int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+				const char *k;
+				k = strstr(obj, "\"x0\":");
+				if (k && k < end)
+					sscanf(k + 5, "%d", &x0);
+				k = strstr(obj, "\"y0\":");
+				if (k && k < end)
+					sscanf(k + 5, "%d", &y0);
+				k = strstr(obj, "\"x1\":");
+				if (k && k < end)
+					sscanf(k + 5, "%d", &x1);
+				k = strstr(obj, "\"y1\":");
+				if (k && k < end)
+					sscanf(k + 5, "%d", &y1);
 
 				rod_draw_rect_outline(buf, reg->width, reg->height, x0, y0, x1, y1,
 						      0xFF00FF00, 2);
-
 				p = end + 1;
 			}
 		}

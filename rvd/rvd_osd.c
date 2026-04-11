@@ -318,16 +318,10 @@ void rvd_osd_init(rvd_state_t *st)
 
 		/* Detection bounding box overlay — sub-stream only, full-frame.
 		 * OSD pool increased to 1MB to fit 640x360 BGRA (900KB). */
-		{
-			const char *det_algo =
-				rss_config_get_str(cfg, "motion", "algorithm", "move");
-			if (s > 0 && rss_config_get_bool(cfg, "motion", "enabled", false) &&
-			    (strcmp(det_algo, "persondet") == 0 || strcmp(det_algo, "yolo") == 0)) {
-				if (create_region(st, s, RVD_OSD_DETECT,
-						  st->streams[s].enc_cfg.width,
-						  st->streams[s].enc_cfg.height))
-					region_count++;
-			}
+		if (s > 0 && rss_config_get_bool(cfg, "motion", "enabled", false)) {
+			if (create_region(st, s, RVD_OSD_DETECT, st->streams[s].enc_cfg.width,
+					  st->streams[s].enc_cfg.height))
+				region_count++;
 		}
 
 		RSS_DEBUG("osd stream%d: %d regions created", s, region_count);
