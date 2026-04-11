@@ -270,8 +270,6 @@ static void render_detections(rod_state_t *st)
 	if (count > 20)
 		count = 20;
 
-	RSS_DEBUG("detect: count=%d", count);
-
 	/* Render on sub-streams only */
 	for (int s = 1; s < st->stream_count; s++) {
 		rod_region_t *reg = &st->regions[s][ROD_REGION_DETECT];
@@ -279,10 +277,8 @@ static void render_detections(rod_state_t *st)
 			continue;
 
 		uint8_t *buf = rss_osd_get_draw_buffer(reg->shm);
-		if (!buf) {
-			RSS_DEBUG("detect: no draw buffer for stream %d", s);
+		if (!buf)
 			continue;
-		}
 
 		/* Clear to fully transparent */
 		memset(buf, 0, reg->width * reg->height * 4);
@@ -319,8 +315,6 @@ static void render_detections(rod_state_t *st)
 				sscanf(strstr(obj, "\"y1\":") ? strstr(obj, "\"y1\":") + 5 : "",
 				       "%d", &y1);
 
-				RSS_DEBUG("detect: s%d box[%d] (%d,%d)-(%d,%d)", s, i, x0, y0, x1,
-					  y1);
 				rod_draw_rect_outline(buf, reg->width, reg->height, x0, y0, x1, y1,
 						      0xFF00FF00, 2);
 

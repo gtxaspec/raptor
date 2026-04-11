@@ -1,8 +1,13 @@
 /*
- * rvd_ivs.c -- IVS (motion detection) pipeline management
+ * rvd_ivs.c -- IVS / JZDL detection pipeline management
  *
- * Creates an IVS group bound to the sub-stream FrameSource, runs a
- * poll thread that stores motion results atomically for RMD to query
+ * Two modes of operation:
+ *   - IVS pipeline: binds to sub-stream FrameSource via IVS group,
+ *     runs move/persondet/base_move algorithms through the SDK.
+ *   - JZDL standalone: reads NV12 frames directly from FrameSource
+ *     channel 1 and runs JZDL model inference, bypassing IVS entirely.
+ *
+ * Both modes store detection results atomically for RMD to query
  * via the RVD control socket.
  *
  * Vendor SDK init order (from T31 sample-Encoder-video-IVS-move.c):
@@ -273,10 +278,7 @@ void rvd_ivs_stop(rvd_state_t *st)
 
 	if (st->ivs_algo_handle) {
 		const char *algo = rss_config_get_str(st->cfg, "motion", "algorithm", "move");
-		if (st->ivs_jzdl)
-			RSS_HAL_CALL(st->ops, ivs_destroy_jzdl_interface, st->hal_ctx,
-				     st->ivs_algo_handle);
-		else if (st->ivs_persondet)
+		if (st->ivs_persondet)
 			RSS_HAL_CALL(st->ops, ivs_destroy_persondet_interface, st->hal_ctx,
 				     st->ivs_algo_handle);
 		else if (strcmp(algo, "base_move") == 0)
@@ -397,11 +399,6 @@ static void ivs_process_persondet_result(rvd_state_t *st, void *result)
 
 		if (!prev)
 			RSS_DEBUG("IVS: %d person(s) detected", count);
-		for (int i = 0; i < count; i++) {
-			rss_ivs_detection_t *d = &st->ivs_detections.detections[i];
-			RSS_DEBUG("IVS: person[%d] box=(%d,%d)-(%d,%d) conf=%.2f", i, d->box.p0_x,
-				  d->box.p0_y, d->box.p1_x, d->box.p1_y, (double)d->confidence);
-		}
 	} else {
 		/* No detection this frame — hold previous results for 2s
 		 * so the OSD overlay doesn't flicker on brief gaps */
@@ -430,23 +427,15 @@ static void *rvd_jzdl_thread(void *arg)
 
 	/* Enable frame depth so GetFrame works alongside encoder binding.
 	 * Must be > 0 for GetFrame to return frames. */
-	int depth_ret = IMP_FrameSource_SetFrameDepth(1, 1);
-	RSS_INFO("JZDL: SetFrameDepth(1, 1) = %d", depth_ret);
+	IMP_FrameSource_SetFrameDepth(1, 1);
 
-	int frame_count = 0;
 	while (*st->running) {
 		IMPFrameInfo *frame = NULL;
 		int ret = IMP_FrameSource_GetFrame(1, &frame);
 		if (ret != 0 || !frame) {
-			if (++frame_count % 50 == 1)
-				RSS_DEBUG("JZDL: GetFrame failed (ret=%d, attempt=%d)", ret,
-					  frame_count);
 			usleep(100000);
 			continue;
 		}
-		RSS_DEBUG("JZDL: got frame %ux%u virAddr=%p size=%u", frame->width, frame->height,
-			  (void *)(uintptr_t)frame->virAddr, frame->size);
-		frame_count = 0;
 
 		rss_ivs_detect_result_t result = {0};
 		ret = hal_jzdl_detect(st->jzdl_handle, (const uint8_t *)frame->virAddr, &result);
@@ -470,12 +459,6 @@ static void *rvd_jzdl_thread(void *arg)
 
 			if (!prev)
 				RSS_DEBUG("JZDL: %d detection(s)", result.count);
-			for (int i = 0; i < result.count; i++) {
-				rss_ivs_detection_t *d = &result.detections[i];
-				RSS_DEBUG("JZDL: [%d] class=%d box=(%d,%d)-(%d,%d) conf=%.2f", i,
-					  d->class_id, d->box.p0_x, d->box.p0_y, d->box.p1_x,
-					  d->box.p1_y, (double)d->confidence);
-			}
 		} else {
 			int64_t last = atomic_load(&st->ivs_motion_ts);
 			if (prev && (now - last) > 2000000) {
@@ -504,22 +487,15 @@ void *rvd_ivs_thread(void *arg)
 
 	RSS_INFO("IVS poll thread started (algo=%s)", st->ivs_persondet ? "persondet" : "move");
 
-	int poll_count = 0;
 	while (*st->running) {
 		int ret = RSS_HAL_CALL(st->ops, ivs_poll_result, st->hal_ctx, st->ivs_chn, 1000);
-		if (ret != 0) {
-			if (++poll_count % 10 == 0)
-				RSS_DEBUG("IVS: poll timeout (%d cycles, ret=%d)", poll_count, ret);
+		if (ret != 0)
 			continue;
-		}
 
 		void *result = NULL;
 		ret = RSS_HAL_CALL(st->ops, ivs_get_result, st->hal_ctx, st->ivs_chn, &result);
-		if (ret != 0 || !result) {
-			RSS_DEBUG("IVS: get_result failed (ret=%d, result=%p)", ret, result);
+		if (ret != 0 || !result)
 			continue;
-		}
-		poll_count = 0;
 
 		if (st->ivs_persondet)
 			ivs_process_persondet_result(st, result);
