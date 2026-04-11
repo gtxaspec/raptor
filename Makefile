@@ -142,8 +142,10 @@ LDFLAGS_HAL := $(LDFLAGS_SYSROOT) $(SHIM_LIB) -limp -lalog -lsysutils -lpthread 
 
 # IVS detection libs — optional, no MXU needed (statically linked in .so)
 ifeq ($(IVS_DETECT),1)
+CFLAGS += -DIVS_DETECT
 LDFLAGS_HAL += -ljzdl.m -lstdc++
 ifeq ($(PERSONDET),1)
+CFLAGS += -DPERSONDET
 LDFLAGS_HAL += -lpersonDet_inf -ljzdl
 endif
 endif

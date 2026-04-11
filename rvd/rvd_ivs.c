@@ -27,6 +27,7 @@
 
 #include "rvd.h"
 
+#ifdef IVS_DETECT
 /* FrameSource direct access — for JZDL standalone inference.
  * Struct layout from imp_common.h, declared here to avoid SDK header dep. */
 typedef struct {
@@ -46,6 +47,7 @@ typedef struct {
 extern int IMP_FrameSource_SetFrameDepth(int chnNum, int depth);
 extern int IMP_FrameSource_GetFrame(int chnNum, IMPFrameInfo **frame);
 extern int IMP_FrameSource_ReleaseFrame(int chnNum, IMPFrameInfo *frame);
+#endif
 
 #define IVS_GRP 0 /* IVS groups are separate from encoder groups */
 #define IVS_CHN 2 /* vendor sample uses chn 2 (0,1 used by encoder) */
@@ -97,6 +99,7 @@ int rvd_ivs_start(rvd_state_t *st)
 	void *algo_handle = NULL;
 	st->ivs_persondet = false;
 
+#ifdef IVS_DETECT
 	if (strcmp(algo, "yolo") == 0) {
 		/* JZDL standalone mode — skip IVS pipeline, use FrameSource directly */
 		rss_ivs_jzdl_param_t jp = {0};
@@ -120,7 +123,9 @@ int rvd_ivs_start(rvd_state_t *st)
 		}
 		RSS_ERROR("IVS: JZDL create failed");
 		return RSS_ERR;
-	} else if (strcmp(algo, "persondet") == 0) {
+	} else
+#endif
+	if (strcmp(algo, "persondet") == 0) {
 		rss_ivs_persondet_param_t pp = {0};
 		pp.skip_frame_count = skip;
 		pp.width = w;
@@ -263,6 +268,7 @@ void rvd_ivs_stop(rvd_state_t *st)
 	if (!st->ivs_active)
 		return;
 
+#ifdef IVS_DETECT
 	/* JZDL standalone — no IVS channel to stop */
 	if (st->ivs_jzdl) {
 		if (st->jzdl_handle) {
@@ -272,6 +278,7 @@ void rvd_ivs_stop(rvd_state_t *st)
 		RSS_INFO("IVS: JZDL stopped");
 		return;
 	}
+#endif
 
 	RSS_HAL_CALL(st->ops, ivs_stop, st->hal_ctx, st->ivs_chn);
 	usleep(500000); /* SDK needs delay after StopRecvPic (vendor sample uses sleep(1)) */
@@ -471,6 +478,7 @@ static void ivs_process_persondet_result(rvd_state_t *st, void *result)
 	}
 }
 
+#ifdef IVS_DETECT
 /*
  * JZDL standalone inference thread — reads NV12 frames directly from
  * FrameSource channel 1 (sub-stream) and runs JZDL model inference.
@@ -533,14 +541,17 @@ static void *rvd_jzdl_thread(void *arg)
 	RSS_INFO("JZDL inference thread exiting");
 	return NULL;
 }
+#endif
 
 void *rvd_ivs_thread(void *arg)
 {
 	rvd_state_t *st = arg;
 
+#ifdef IVS_DETECT
 	/* JZDL standalone mode — different thread function */
 	if (st->ivs_jzdl)
 		return rvd_jzdl_thread(arg);
+#endif
 
 	RSS_INFO("IVS poll thread started (algo=%s)", st->ivs_persondet ? "persondet" : "move");
 
