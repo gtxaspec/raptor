@@ -229,6 +229,28 @@ void rvd_osd_init(rvd_state_t *st)
 	for (int s = 0; s < st->stream_count; s++)
 		st->privacy_handles[s] = -1;
 
+	/* Calculate OSD pool size from actual region needs.
+	 * Sum largest region per stream + headroom for alignment/metadata. */
+	{
+		uint32_t pool_needed = 0;
+		for (int s = 0; s < st->stream_count; s++) {
+			if (st->streams[s].is_jpeg)
+				continue;
+			/* Standard text/logo regions: ~50KB per stream */
+			pool_needed += 64 * 1024;
+			/* Detection overlay: full sub-stream BGRA */
+			if (s > 0 && rss_config_get_bool(cfg, "motion", "enabled", false))
+				pool_needed += st->streams[s].enc_cfg.width *
+					       st->streams[s].enc_cfg.height * 4;
+		}
+		/* Minimum 512KB, round up to 64KB boundary */
+		if (pool_needed < 512 * 1024)
+			pool_needed = 512 * 1024;
+		pool_needed = (pool_needed + 0xFFFF) & ~0xFFFF;
+		RSS_HAL_CALL(st->ops, osd_set_pool_size, st->hal_ctx, pool_needed);
+		RSS_DEBUG("osd pool size: %u KB", pool_needed / 1024);
+	}
+
 	for (int s = 0; s < st->stream_count; s++) {
 		if (st->streams[s].is_jpeg)
 			continue;
