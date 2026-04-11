@@ -751,8 +751,6 @@ int main(int argc, char **argv)
 	int ret = rss_daemon_init(&dctx, "rmr", argc, argv);
 	if (ret != 0)
 		return ret < 0 ? 1 : 0;
-	RSS_BANNER("rmr");
-
 	if (!rss_config_get_bool(dctx.cfg, "recording", "enabled", false)) {
 		RSS_INFO("recording disabled in config");
 		rss_config_free(dctx.cfg);

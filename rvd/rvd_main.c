@@ -36,7 +36,6 @@ int main(int argc, char **argv)
 	int ret = rss_daemon_init(&ctx, "rvd", argc, argv);
 	if (ret != 0)
 		return ret < 0 ? 1 : 0;
-	RSS_BANNER("rvd");
 	rss_hal_set_log_func(hal_log_bridge);
 
 	/* Initialize state */

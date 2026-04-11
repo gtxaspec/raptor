@@ -134,8 +134,6 @@ int main(int argc, char **argv)
 	int ret = rss_daemon_init(&dctx, "rmd", argc, argv);
 	if (ret != 0)
 		return ret < 0 ? 1 : 0;
-	RSS_BANNER("rmd");
-
 	rmd_ctx_t ctx = {0};
 	ctx.settings.gpio_pin = -1;
 	int epoll_fd = -1;

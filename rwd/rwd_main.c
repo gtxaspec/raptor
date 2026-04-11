@@ -591,8 +591,6 @@ int main(int argc, char **argv)
 	int ret = rss_daemon_init(&dctx, "rwd", argc, argv);
 	if (ret != 0)
 		return ret < 0 ? 1 : 0;
-	RSS_BANNER("rwd");
-
 	if (!rss_config_get_bool(dctx.cfg, "webrtc", "enabled", false)) {
 		RSS_INFO("WebRTC disabled in config");
 		rss_config_free(dctx.cfg);

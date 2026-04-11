@@ -659,8 +659,6 @@ int main(int argc, char **argv)
 	ret = rss_daemon_init(&ctx, "rwc", argc, argv);
 	if (ret != 0)
 		return ret < 0 ? 1 : 0;
-	RSS_BANNER("rwc");
-
 	if (!rss_config_get_bool(ctx.cfg, "webcam", "enabled", false)) {
 		RSS_INFO("webcam disabled in config");
 		rss_config_free(ctx.cfg);

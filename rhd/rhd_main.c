@@ -642,8 +642,6 @@ int main(int argc, char **argv)
 	int ret = rss_daemon_init(&ctx, "rhd", argc, argv);
 	if (ret != 0)
 		return ret < 0 ? 1 : 0;
-	RSS_BANNER("rhd");
-
 	rss_base64_init();
 
 	if (!rss_config_get_bool(ctx.cfg, "http", "enabled", true)) {
