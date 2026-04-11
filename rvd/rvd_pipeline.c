@@ -294,7 +294,31 @@ int rvd_pipeline_init(rvd_state_t *st)
 			  multi_cfg.sensors[s].sensor_id);
 	}
 
-	/* ── 3. Init HAL (brings up ISP + sensor(s)) ── */
+	/* ── 3. OSD pool sizing — must be set before HAL init (SDK requirement).
+	 * Streams aren't configured yet, so read dimensions from config. */
+	{
+		uint32_t osd_pool = 0;
+		/* Main stream OSD: time(450x36) + uptime(280x36) + text(320x36) +
+		 * privacy(450x36) + logo(100x30) */
+		osd_pool += (450 + 280 + 320 + 450) * 36 * 4 + 100 * 30 * 4;
+		/* Sub stream OSD (if enabled): scaled text + logo */
+		if (rss_config_get_bool(cfg, "stream1", "enabled", true)) {
+			osd_pool += (240 + 150 + 170 + 450) * 20 * 4 + 100 * 30 * 4;
+			/* Detection overlay: full sub-stream BGRA */
+			if (rss_config_get_bool(cfg, "motion", "enabled", false)) {
+				int sub_w = rss_config_get_int(cfg, "stream1", "width", 640);
+				int sub_h = rss_config_get_int(cfg, "stream1", "height", 360);
+				osd_pool += (uint32_t)sub_w * sub_h * 4;
+			}
+		}
+		/* 25% headroom for SDK alignment + metadata */
+		osd_pool = osd_pool * 5 / 4;
+		osd_pool = (osd_pool + 0xFFFF) & ~0xFFFF; /* align to 64KB */
+		RSS_HAL_CALL(st->ops, osd_set_pool_size, st->hal_ctx, osd_pool);
+		RSS_DEBUG("osd pool: %u KB", osd_pool / 1024);
+	}
+
+	/* ── 4. Init HAL (brings up ISP + sensor(s)) ── */
 	ret = RSS_HAL_CALL(st->ops, init, st->hal_ctx, &multi_cfg);
 	if (ret != RSS_OK) {
 		RSS_FATAL("HAL init failed: %d", ret);
