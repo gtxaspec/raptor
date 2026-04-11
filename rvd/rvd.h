@@ -102,7 +102,9 @@ typedef struct {
 	void *ivs_algo_handle;
 	int ivs_grp;
 	int ivs_chn;
-	bool ivs_persondet; /* true = persondet algo, false = move/base_move */
+	bool ivs_persondet; /* true = persondet/jzdl algo, false = move/base_move */
+	bool ivs_jzdl;	    /* true = standalone JZDL inference */
+	void *jzdl_handle;  /* opaque JZDL context */
 	_Atomic int ivs_person_count;
 	rss_ivs_detect_result_t ivs_detections; /* latest persondet results */
 	pthread_mutex_t ivs_det_lock;		/* protects ivs_detections */

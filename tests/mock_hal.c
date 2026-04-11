@@ -517,6 +517,8 @@ static const rss_hal_ops_t mock_ops = {
 	.ivs_release_data = (void *)mock_ok,
 	.ivs_create_persondet_interface = (void *)mock_null_ptr,
 	.ivs_destroy_persondet_interface = (void *)mock_ok,
+	.ivs_create_jzdl_interface = (void *)mock_null_ptr,
+	.ivs_destroy_jzdl_interface = (void *)mock_ok,
 
 	/* GPIO / IR-cut */
 	.gpio_set = (void *)mock_ok,

@@ -22,6 +22,26 @@
 
 #include "rvd.h"
 
+/* FrameSource direct access — for JZDL standalone inference.
+ * Struct layout from imp_common.h, declared here to avoid SDK header dep. */
+typedef struct {
+	int index;
+	int pool_idx;
+	uint32_t width;
+	uint32_t height;
+	uint32_t pixfmt;
+	uint32_t size;
+	uint32_t phyAddr;
+	uint32_t virAddr;
+	int64_t timeStamp;
+	int rotate_osdflag;
+	uint32_t priv[0];
+} IMPFrameInfo;
+
+extern int IMP_FrameSource_SetFrameDepth(int chnNum, int depth);
+extern int IMP_FrameSource_GetFrame(int chnNum, IMPFrameInfo **frame);
+extern int IMP_FrameSource_ReleaseFrame(int chnNum, IMPFrameInfo *frame);
+
 #define IVS_GRP 0 /* IVS groups are separate from encoder groups */
 #define IVS_CHN 2 /* vendor sample uses chn 2 (0,1 used by encoder) */
 
@@ -72,7 +92,30 @@ int rvd_ivs_start(rvd_state_t *st)
 	void *algo_handle = NULL;
 	st->ivs_persondet = false;
 
-	if (strcmp(algo, "persondet") == 0) {
+	if (strcmp(algo, "yolo") == 0) {
+		/* JZDL standalone mode — skip IVS pipeline, use FrameSource directly */
+		rss_ivs_jzdl_param_t jp = {0};
+		rss_strlcpy(jp.model_path,
+			    rss_config_get_str(cfg, "motion", "model",
+					       "/usr/share/models/magik_model_yolov5.bin"),
+			    sizeof(jp.model_path));
+		jp.width = w;
+		jp.height = h;
+		jp.num_classes = rss_config_get_int(cfg, "motion", "num_classes", 4);
+		jp.conf_threshold =
+			rss_config_get_int(cfg, "motion", "conf_threshold", 40) / 100.0f;
+		jp.nms_threshold = rss_config_get_int(cfg, "motion", "nms_threshold", 50) / 100.0f;
+
+		st->jzdl_handle = hal_jzdl_create(&jp);
+		if (st->jzdl_handle) {
+			st->ivs_persondet = true;
+			st->ivs_jzdl = true;
+			RSS_INFO("IVS: JZDL standalone mode on %dx%d", w, h);
+			return RSS_OK; /* skip IVS channel creation */
+		}
+		RSS_ERROR("IVS: JZDL create failed");
+		return RSS_ERR;
+	} else if (strcmp(algo, "persondet") == 0) {
 		rss_ivs_persondet_param_t pp = {0};
 		pp.skip_frame_count = skip;
 		pp.width = w;
@@ -190,7 +233,9 @@ err_unreg:
 err_chn:
 	RSS_HAL_CALL(st->ops, ivs_destroy_channel, st->hal_ctx, IVS_CHN);
 err_iface:
-	if (st->ivs_persondet)
+	if (st->ivs_jzdl)
+		RSS_HAL_CALL(st->ops, ivs_destroy_jzdl_interface, st->hal_ctx, algo_handle);
+	else if (st->ivs_persondet)
 		RSS_HAL_CALL(st->ops, ivs_destroy_persondet_interface, st->hal_ctx, algo_handle);
 	else if (strcmp(algo, "base_move") == 0)
 		RSS_HAL_CALL(st->ops, ivs_destroy_base_move_interface, st->hal_ctx, algo_handle);
@@ -210,6 +255,16 @@ void rvd_ivs_stop(rvd_state_t *st)
 	if (!st->ivs_active)
 		return;
 
+	/* JZDL standalone — no IVS channel to stop */
+	if (st->ivs_jzdl) {
+		if (st->jzdl_handle) {
+			hal_jzdl_destroy(st->jzdl_handle);
+			st->jzdl_handle = NULL;
+		}
+		RSS_INFO("IVS: JZDL stopped");
+		return;
+	}
+
 	RSS_HAL_CALL(st->ops, ivs_stop, st->hal_ctx, st->ivs_chn);
 	usleep(500000); /* SDK needs delay after StopRecvPic (vendor sample uses sleep(1)) */
 
@@ -218,7 +273,10 @@ void rvd_ivs_stop(rvd_state_t *st)
 
 	if (st->ivs_algo_handle) {
 		const char *algo = rss_config_get_str(st->cfg, "motion", "algorithm", "move");
-		if (st->ivs_persondet)
+		if (st->ivs_jzdl)
+			RSS_HAL_CALL(st->ops, ivs_destroy_jzdl_interface, st->hal_ctx,
+				     st->ivs_algo_handle);
+		else if (st->ivs_persondet)
 			RSS_HAL_CALL(st->ops, ivs_destroy_persondet_interface, st->hal_ctx,
 				     st->ivs_algo_handle);
 		else if (strcmp(algo, "base_move") == 0)
@@ -359,9 +417,90 @@ static void ivs_process_persondet_result(rvd_state_t *st, void *result)
 	}
 }
 
+/*
+ * JZDL standalone inference thread — reads NV12 frames directly from
+ * FrameSource channel 1 (sub-stream) and runs JZDL model inference.
+ * Bypasses the IVS pipeline entirely.
+ */
+static void *rvd_jzdl_thread(void *arg)
+{
+	rvd_state_t *st = arg;
+
+	RSS_INFO("JZDL inference thread started");
+
+	/* Enable frame depth so GetFrame works alongside encoder binding.
+	 * Must be > 0 for GetFrame to return frames. */
+	int depth_ret = IMP_FrameSource_SetFrameDepth(1, 1);
+	RSS_INFO("JZDL: SetFrameDepth(1, 1) = %d", depth_ret);
+
+	int frame_count = 0;
+	while (*st->running) {
+		IMPFrameInfo *frame = NULL;
+		int ret = IMP_FrameSource_GetFrame(1, &frame);
+		if (ret != 0 || !frame) {
+			if (++frame_count % 50 == 1)
+				RSS_DEBUG("JZDL: GetFrame failed (ret=%d, attempt=%d)", ret,
+					  frame_count);
+			usleep(100000);
+			continue;
+		}
+		RSS_DEBUG("JZDL: got frame %ux%u virAddr=%p size=%u", frame->width, frame->height,
+			  (void *)(uintptr_t)frame->virAddr, frame->size);
+		frame_count = 0;
+
+		rss_ivs_detect_result_t result = {0};
+		ret = hal_jzdl_detect(st->jzdl_handle, (const uint8_t *)frame->virAddr, &result);
+		IMP_FrameSource_ReleaseFrame(1, frame);
+
+		if (ret != 0)
+			continue;
+
+		int64_t now = rss_timestamp_us();
+		bool prev = atomic_load(&st->ivs_motion);
+
+		if (result.count > 0) {
+			atomic_store(&st->ivs_motion, true);
+			atomic_store(&st->ivs_person_count, result.count);
+			atomic_store(&st->ivs_motion_ts, now);
+
+			pthread_mutex_lock(&st->ivs_det_lock);
+			st->ivs_detections = result;
+			st->ivs_detections.timestamp = now;
+			pthread_mutex_unlock(&st->ivs_det_lock);
+
+			if (!prev)
+				RSS_DEBUG("JZDL: %d detection(s)", result.count);
+			for (int i = 0; i < result.count; i++) {
+				rss_ivs_detection_t *d = &result.detections[i];
+				RSS_DEBUG("JZDL: [%d] class=%d box=(%d,%d)-(%d,%d) conf=%.2f", i,
+					  d->class_id, d->box.p0_x, d->box.p0_y, d->box.p1_x,
+					  d->box.p1_y, (double)d->confidence);
+			}
+		} else {
+			int64_t last = atomic_load(&st->ivs_motion_ts);
+			if (prev && (now - last) > 2000000) {
+				atomic_store(&st->ivs_motion, false);
+				atomic_store(&st->ivs_person_count, 0);
+				pthread_mutex_lock(&st->ivs_det_lock);
+				st->ivs_detections.count = 0;
+				pthread_mutex_unlock(&st->ivs_det_lock);
+				RSS_DEBUG("JZDL: detections cleared");
+			}
+		}
+	}
+
+	IMP_FrameSource_SetFrameDepth(1, 0);
+	RSS_INFO("JZDL inference thread exiting");
+	return NULL;
+}
+
 void *rvd_ivs_thread(void *arg)
 {
 	rvd_state_t *st = arg;
+
+	/* JZDL standalone mode — different thread function */
+	if (st->ivs_jzdl)
+		return rvd_jzdl_thread(arg);
 
 	RSS_INFO("IVS poll thread started (algo=%s)", st->ivs_persondet ? "persondet" : "move");
 

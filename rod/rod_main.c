@@ -90,10 +90,10 @@ static void load_config(rod_state_t *st)
 		}
 	}
 
-	/* Detection overlay — enabled when motion detection uses persondet */
-	st->detect_enabled =
-		rss_config_get_bool(cfg, "motion", "enabled", false) &&
-		strcmp(rss_config_get_str(cfg, "motion", "algorithm", "move"), "persondet") == 0;
+	/* Detection overlay — enabled for persondet or yolo algorithms */
+	const char *det_algo = rss_config_get_str(cfg, "motion", "algorithm", "move");
+	st->detect_enabled = rss_config_get_bool(cfg, "motion", "enabled", false) &&
+			     (strcmp(det_algo, "persondet") == 0 || strcmp(det_algo, "yolo") == 0);
 }
 
 static void create_region_shm(rod_state_t *st, int s, int role, uint32_t w, uint32_t h)
