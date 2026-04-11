@@ -59,7 +59,7 @@ static void *encoder_thread(void *arg)
 			/* Periodically check for crashed consumers (~10s) */
 			int64_t now_reap = rss_timestamp_us();
 			if (now_reap - last_reap >= 10000000) {
-				RSS_DEBUG("jpeg chn %d: reap check (readers=%u pids=[%u,%u,%u,%u])",
+				RSS_TRACE("jpeg chn %d: reap check (readers=%u pids=[%u,%u,%u,%u])",
 					  s->chn, rss_ring_reader_count(s->ring),
 					  rss_ring_get_header(s->ring)->reader_pids[0],
 					  rss_ring_get_header(s->ring)->reader_pids[1],
