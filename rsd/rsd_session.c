@@ -237,20 +237,30 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 				(COMPY_SDP_ATTR, "framerate:%u", hdr->fps_num));
 		} else {
 			/* H.264 / AVC (RFC 6184) */
-			uint8_t profile_idc = hdr->profile ? hdr->profile : 100;
-			uint8_t level_idc = hdr->level ? hdr->level : 40;
 			rsd_ring_ctx_t *rctx = &self->srv->video[self->stream_idx];
+			uint16_t sps_l = atomic_load_explicit(&rctx->sps_len, memory_order_acquire);
+			uint16_t pps_l = atomic_load_explicit(&rctx->pps_len, memory_order_acquire);
+
+			/* profile-level-id: read from cached SPS bytes 1-3 when
+			 * available (byte 0 is the NAL header). */
+			uint8_t profile_idc, constraint_flags, level_idc;
+			if (sps_l >= 4) {
+				profile_idc = rctx->sps[1];
+				constraint_flags = rctx->sps[2];
+				level_idc = rctx->sps[3];
+			} else {
+				profile_idc = hdr->profile ? hdr->profile : 100;
+				constraint_flags = 0;
+				level_idc = hdr->level ? hdr->level : 40;
+			}
 
 			/* Build fmtp with optional sprop-parameter-sets */
 			char fmtp[1024];
 			int foff = snprintf(fmtp, sizeof(fmtp),
-					    "fmtp:%d packetization-mode=1;profile-level-id=%02X00%02X",
-					    RSD_VIDEO_PT, profile_idc, level_idc);
+					    "fmtp:%d packetization-mode=1;profile-level-id=%02X%02X%02X",
+					    RSD_VIDEO_PT, profile_idc, constraint_flags, level_idc);
 			if (foff < 0 || foff >= (int)sizeof(fmtp))
 				foff = (int)sizeof(fmtp) - 1;
-
-			uint16_t sps_l = atomic_load_explicit(&rctx->sps_len, memory_order_acquire);
-			uint16_t pps_l = atomic_load_explicit(&rctx->pps_len, memory_order_acquire);
 			if (sps_l > 0 && pps_l > 0) {
 				char sps_b64[512], pps_b64[128];
 				b64_encode(rctx->sps, sps_l, sps_b64, sizeof(sps_b64));
