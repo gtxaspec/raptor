@@ -246,11 +246,15 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 			int foff = snprintf(fmtp, sizeof(fmtp),
 					    "fmtp:%d packetization-mode=1;profile-level-id=%02X00%02X",
 					    RSD_VIDEO_PT, profile_idc, level_idc);
+			if (foff < 0 || foff >= (int)sizeof(fmtp))
+				foff = (int)sizeof(fmtp) - 1;
 
-			if (rctx->sps_len > 0 && rctx->pps_len > 0) {
+			uint16_t sps_l = atomic_load_explicit(&rctx->sps_len, memory_order_acquire);
+			uint16_t pps_l = atomic_load_explicit(&rctx->pps_len, memory_order_acquire);
+			if (sps_l > 0 && pps_l > 0) {
 				char sps_b64[512], pps_b64[128];
-				b64_encode(rctx->sps, rctx->sps_len, sps_b64, sizeof(sps_b64));
-				b64_encode(rctx->pps, rctx->pps_len, pps_b64, sizeof(pps_b64));
+				b64_encode(rctx->sps, sps_l, sps_b64, sizeof(sps_b64));
+				b64_encode(rctx->pps, pps_l, pps_b64, sizeof(pps_b64));
 				snprintf(fmtp + foff, sizeof(fmtp) - foff,
 					 ";sprop-parameter-sets=%s,%s", sps_b64, pps_b64);
 			}
@@ -601,8 +605,9 @@ static void rsd_client_t_play(VSelf, Compy_Context *ctx, const Compy_Request *re
 	compy_respond_ok(ctx);
 
 	/* NOW enable playback — response is already on the wire.
-	 * Set waiting_keyframe before playing so the reader thread
-	 * never sees playing=true with waiting_keyframe=false. */
+	 * Hold clients_lock so the reader thread sees all flag writes
+	 * atomically (waiting_keyframe, ts_base_set, playing). */
+	pthread_mutex_lock(&self->srv->clients_lock);
 	if (self->video.nal) {
 		self->waiting_keyframe = true;
 		self->video_ts_base_set = false;
@@ -612,6 +617,7 @@ static void rsd_client_t_play(VSelf, Compy_Context *ctx, const Compy_Request *re
 	}
 	if (self->audio.rtp)
 		self->audio.playing = true;
+	pthread_mutex_unlock(&self->srv->clients_lock);
 
 	/* Request IDR from RVD so the client gets a keyframe ASAP */
 	if (self->video.nal) {

@@ -101,11 +101,14 @@ typedef struct {
 	int idx;
 	const char *ring_name; /* for reconnection after RVD restart */
 
-	/* Cached SPS/PPS for SDP sprop-parameter-sets */
+	/* Cached SPS/PPS for SDP sprop-parameter-sets.
+	 * Written by the reader thread (release), read by session thread
+	 * during DESCRIBE (acquire). Lengths are atomic to prevent torn
+	 * reads of the buffer data. */
 	uint8_t sps[256];
 	uint8_t pps[64];
-	uint16_t sps_len;
-	uint16_t pps_len;
+	_Atomic uint16_t sps_len;
+	_Atomic uint16_t pps_len;
 } rsd_ring_ctx_t;
 
 /* Server state */

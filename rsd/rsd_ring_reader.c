@@ -23,7 +23,7 @@ static void rsd_cache_sps_pps(rsd_ring_ctx_t *rctx, const uint8_t *data, uint32_
 	const uint8_t *p = data;
 	const uint8_t *end = data + len;
 
-	while (p < end - 4) {
+	while (p + 4 < end) {
 		if (!(p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] == 1)) {
 			p++;
 			continue;
@@ -31,7 +31,7 @@ static void rsd_cache_sps_pps(rsd_ring_ctx_t *rctx, const uint8_t *data, uint32_
 
 		const uint8_t *nalu_start = p + 4;
 		const uint8_t *nalu_end = end;
-		for (const uint8_t *q = nalu_start + 1; q < end - 3; q++) {
+		for (const uint8_t *q = nalu_start + 1; q + 3 < end; q++) {
 			if (q[0] == 0 && q[1] == 0 && q[2] == 0 && q[3] == 1) {
 				nalu_end = q;
 				break;
@@ -46,13 +46,13 @@ static void rsd_cache_sps_pps(rsd_ring_ctx_t *rctx, const uint8_t *data, uint32_
 
 		uint8_t nal_type = nalu_start[0] & 0x1F;
 		if (nal_type == 7 && nalu_len <= sizeof(rctx->sps)) {
-			/* SPS */
 			memcpy(rctx->sps, nalu_start, nalu_len);
-			rctx->sps_len = (uint16_t)nalu_len;
+			atomic_store_explicit(&rctx->sps_len, (uint16_t)nalu_len,
+					      memory_order_release);
 		} else if (nal_type == 8 && nalu_len <= sizeof(rctx->pps)) {
-			/* PPS */
 			memcpy(rctx->pps, nalu_start, nalu_len);
-			rctx->pps_len = (uint16_t)nalu_len;
+			atomic_store_explicit(&rctx->pps_len, (uint16_t)nalu_len,
+					      memory_order_release);
 		}
 
 		p = nalu_end;
@@ -77,7 +77,7 @@ static void rsd_send_video_frame(rsd_client_t *c, const uint8_t *data, uint32_t 
 	const uint8_t *p = data;
 	const uint8_t *end = data + len;
 
-	while (p < end - 4) {
+	while (p + 4 < end) {
 		/* Find 4-byte start code */
 		if (!(p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] == 1)) {
 			p++;
@@ -88,7 +88,7 @@ static void rsd_send_video_frame(rsd_client_t *c, const uint8_t *data, uint32_t 
 
 		/* Find next start code or end */
 		const uint8_t *nalu_end = end;
-		for (const uint8_t *q = nalu_start + 1; q < end - 3; q++) {
+		for (const uint8_t *q = nalu_start + 1; q + 3 < end; q++) {
 			if (q[0] == 0 && q[1] == 0 && q[2] == 0 && q[3] == 1) {
 				nalu_end = q;
 				break;
@@ -181,6 +181,8 @@ void *rsd_video_reader_thread(void *arg)
 			video_ts_epoch = 0;
 			last_rtp_ts = 0;
 			has_last_rtp_ts = false;
+			atomic_store_explicit(&rctx->sps_len, 0, memory_order_relaxed);
+			atomic_store_explicit(&rctx->pps_len, 0, memory_order_relaxed);
 
 			/* Ring reconnected — reset all clients on this stream
 			 * so they re-sync from the next keyframe. Without this,
@@ -266,7 +268,7 @@ void *rsd_video_reader_thread(void *arg)
 		has_last_rtp_ts = true;
 
 		/* Cache SPS/PPS from keyframes for SDP sprop-parameter-sets */
-		if (meta.is_key && rctx->sps_len == 0)
+		if (meta.is_key && atomic_load_explicit(&rctx->sps_len, memory_order_relaxed) == 0)
 			rsd_cache_sps_pps(rctx, rctx->frame_buf, length);
 
 		pthread_mutex_lock(&srv->clients_lock);
