@@ -25,6 +25,8 @@ typedef struct {
 	int cooldown_sec;
 	int poll_interval_ms;
 
+	int skip_frames;
+
 	/* Actions */
 	bool record_on_motion;
 	int record_post_sec;

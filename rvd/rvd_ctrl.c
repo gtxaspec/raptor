@@ -1054,6 +1054,24 @@ static int handle_ivs_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 		return 1;
 	}
 
+	if (strstr(cmd_json, "\"ivs-set-skip-frames\"")) {
+		int val = -1;
+		if (rss_json_get_int(cmd_json, "value", &val) == 0 && st->ivs_active && val >= 0) {
+			rss_ivs_move_param_t mp;
+			memset(&mp, 0, sizeof(mp));
+			if (RSS_HAL_CALL(st->ops, ivs_get_param, st->hal_ctx, st->ivs_chn, &mp) ==
+			    0) {
+				mp.skip_frame_count = val;
+				RSS_HAL_CALL(st->ops, ivs_set_param, st->hal_ctx, st->ivs_chn, &mp);
+			}
+			rss_ctrl_resp(resp, resp_size, "{\"status\":\"ok\",\"skip_frames\":%d}",
+				      val);
+		} else {
+			rss_ctrl_resp_error(resp, resp_size, "invalid or ivs not active");
+		}
+		return 1;
+	}
+
 	return 0;
 }
 

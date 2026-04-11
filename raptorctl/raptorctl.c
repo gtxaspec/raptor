@@ -238,6 +238,7 @@ const struct help_entry help_entries[] = {
 	{"rwd", "share                               Show WebTorrent share URL"},
 	{"rwd", "share-rotate                        Generate new share key"},
 	{"rmd", "sensitivity <0-4>                   Set motion sensitivity"},
+	{"rmd", "skip-frames <N>                      Set IVS skip frame count"},
 	{NULL, "test-motion [sec]                   Trigger clip recording (default 10s)"},
 	{NULL, NULL}};
 
@@ -946,6 +947,24 @@ int main(int argc, char **argv)
 		}
 		cJSON *j = jcmd(cmd);
 		jadd_s(j, "value", argv[3]);
+		jstr(j, json, sizeof(json));
+
+	} else if (strcmp(cmd, "sensitivity") == 0) {
+		if (argc < 4) {
+			fprintf(stderr, "Usage: raptorctl %s sensitivity <0-4>\n", daemon);
+			return 1;
+		}
+		cJSON *j = jcmd("sensitivity");
+		jadd_i(j, "value", argv[3]);
+		jstr(j, json, sizeof(json));
+
+	} else if (strcmp(cmd, "skip-frames") == 0) {
+		if (argc < 4) {
+			fprintf(stderr, "Usage: raptorctl %s skip-frames <N>\n", daemon);
+			return 1;
+		}
+		cJSON *j = jcmd("skip-frames");
+		jadd_i(j, "value", argv[3]);
 		jstr(j, json, sizeof(json));
 
 	} else if (strncmp(cmd, "set-", 4) == 0 && argc >= 4) {

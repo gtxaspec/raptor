@@ -21,11 +21,37 @@ static void load_config(rmd_ctx_t *ctx)
 	rss_config_t *cfg = ctx->cfg;
 
 	ctx->settings.sensitivity = rss_config_get_int(cfg, "motion", "sensitivity", 3);
+	ctx->settings.skip_frames = rss_config_get_int(cfg, "motion", "skip_frames", 5);
 	ctx->settings.cooldown_sec = rss_config_get_int(cfg, "motion", "cooldown_sec", 10);
 	ctx->settings.poll_interval_ms = rss_config_get_int(cfg, "motion", "poll_interval_ms", 500);
 	ctx->settings.record_on_motion = rss_config_get_bool(cfg, "motion", "record", true);
 	ctx->settings.record_post_sec = rss_config_get_int(cfg, "motion", "record_post_sec", 30);
 	ctx->settings.gpio_pin = rss_config_get_int(cfg, "motion", "gpio_pin", -1);
+}
+
+/* Send configured IVS parameters to RVD */
+static void rmd_apply_ivs_config(rmd_ctx_t *ctx)
+{
+	char cmd[128], resp[128];
+	int ok = 0;
+
+	snprintf(cmd, sizeof(cmd), "{\"cmd\":\"ivs-set-sensitivity\",\"value\":%d}",
+		 ctx->settings.sensitivity);
+	if (rss_ctrl_send_command("/var/run/rss/rvd.sock", cmd, resp, sizeof(resp), 1000) >= 0)
+		ok++;
+	else
+		RSS_WARN("failed to set RVD sensitivity");
+
+	snprintf(cmd, sizeof(cmd), "{\"cmd\":\"ivs-set-skip-frames\",\"value\":%d}",
+		 ctx->settings.skip_frames);
+	if (rss_ctrl_send_command("/var/run/rss/rvd.sock", cmd, resp, sizeof(resp), 1000) >= 0)
+		ok++;
+	else
+		RSS_WARN("failed to set RVD skip_frames");
+
+	if (ok > 0)
+		RSS_INFO("IVS config applied (sensitivity=%d, skip_frames=%d)",
+			 ctx->settings.sensitivity, ctx->settings.skip_frames);
 }
 
 /* Query RVD for current motion state */
@@ -106,9 +132,8 @@ static int rmd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 
 	if (strstr(cmd_json, "\"sensitivity\"")) {
 		int val;
-		if (rss_json_get_int(cmd_json, "value", &val) == 0) {
+		if (rss_json_get_int(cmd_json, "value", &val) == 0 && val >= 0) {
 			ctx->settings.sensitivity = val;
-			/* Relay to RVD */
 			char cmd[128], resp[128];
 			snprintf(cmd, sizeof(cmd), "{\"cmd\":\"ivs-set-sensitivity\",\"value\":%d}",
 				 val);
@@ -117,15 +142,34 @@ static int rmd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			return rss_ctrl_resp(resp_buf, resp_buf_size,
 					     "{\"status\":\"ok\",\"sensitivity\":%d}", val);
 		} else {
-			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "missing value");
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+						   "missing or invalid value");
+		}
+	}
+
+	if (strstr(cmd_json, "\"skip-frames\"")) {
+		int val;
+		if (rss_json_get_int(cmd_json, "value", &val) == 0 && val >= 0) {
+			ctx->settings.skip_frames = val;
+			char cmd[128], resp[128];
+			snprintf(cmd, sizeof(cmd), "{\"cmd\":\"ivs-set-skip-frames\",\"value\":%d}",
+				 val);
+			rss_ctrl_send_command("/var/run/rss/rvd.sock", cmd, resp, sizeof(resp),
+					      1000);
+			return rss_ctrl_resp(resp_buf, resp_buf_size,
+					     "{\"status\":\"ok\",\"skip_frames\":%d}", val);
+		} else {
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+						   "missing or invalid value");
 		}
 	}
 
 	/* Default: status */
 	return rss_ctrl_resp(resp_buf, resp_buf_size,
-			     "{\"status\":\"ok\",\"state\":\"%s\",\"recording\":%s,\"sensitivity\":%d}",
+			     "{\"status\":\"ok\",\"state\":\"%s\",\"recording\":%s,\"sensitivity\":"
+			     "%d,\"skip_frames\":%d}",
 			     state_names[ctx->state], ctx->recording_active ? "true" : "false",
-			     ctx->settings.sensitivity);
+			     ctx->settings.sensitivity, ctx->settings.skip_frames);
 }
 
 int main(int argc, char **argv)
@@ -162,6 +206,9 @@ int main(int argc, char **argv)
 		usleep(500000);
 	}
 
+	/* Apply motion config to RVD */
+	rmd_apply_ivs_config(&ctx);
+
 	/* GPIO init */
 	rmd_gpio_init(&ctx);
 
@@ -180,8 +227,9 @@ int main(int argc, char **argv)
 		}
 	}
 
-	RSS_INFO("rmd running (poll=%dms, cooldown=%ds, sensitivity=%d)", ctx.settings.poll_interval_ms,
-		 ctx.settings.cooldown_sec, ctx.settings.sensitivity);
+	RSS_INFO("rmd running (poll=%dms, cooldown=%ds, sensitivity=%d, skip=%d)",
+		 ctx.settings.poll_interval_ms, ctx.settings.cooldown_sec, ctx.settings.sensitivity,
+		 ctx.settings.skip_frames);
 
 	while (*ctx.running) {
 		bool motion = rmd_poll_motion();
