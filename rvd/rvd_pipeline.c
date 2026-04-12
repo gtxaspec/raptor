@@ -374,19 +374,45 @@ int rvd_pipeline_init(rvd_state_t *st)
 	}
 
 	/* ── 3c. ISP tuning defaults (apply to all sensors) ── */
-	RSS_HAL_CALL(st->ops, isp_set_brightness, st->hal_ctx, 128);
-	RSS_HAL_CALL(st->ops, isp_set_contrast, st->hal_ctx, 128);
-	RSS_HAL_CALL(st->ops, isp_set_saturation, st->hal_ctx, 128);
-	RSS_HAL_CALL(st->ops, isp_set_sharpness, st->hal_ctx, 128);
-	RSS_HAL_CALL(st->ops, isp_set_sinter_strength, st->hal_ctx, 128);
-	RSS_HAL_CALL(st->ops, isp_set_temper_strength, st->hal_ctx, 128);
+	const char *img = "image";
+	RSS_HAL_CALL(st->ops, isp_set_brightness, st->hal_ctx,
+		     rss_config_get_int(cfg, img, "brightness", 128));
+	RSS_HAL_CALL(st->ops, isp_set_contrast, st->hal_ctx,
+		     rss_config_get_int(cfg, img, "contrast", 128));
+	RSS_HAL_CALL(st->ops, isp_set_saturation, st->hal_ctx,
+		     rss_config_get_int(cfg, img, "saturation", 128));
+	RSS_HAL_CALL(st->ops, isp_set_sharpness, st->hal_ctx,
+		     rss_config_get_int(cfg, img, "sharpness", 128));
+	RSS_HAL_CALL(st->ops, isp_set_sinter_strength, st->hal_ctx,
+		     rss_config_get_int(cfg, img, "sinter", 128));
+	RSS_HAL_CALL(st->ops, isp_set_temper_strength, st->hal_ctx,
+		     rss_config_get_int(cfg, img, "temper", 128));
+	RSS_HAL_CALL(st->ops, isp_set_hue, st->hal_ctx, rss_config_get_int(cfg, img, "hue", 128));
+	RSS_HAL_CALL(st->ops, isp_set_ae_comp, st->hal_ctx,
+		     rss_config_get_int(cfg, img, "ae_comp", 128));
+	RSS_HAL_CALL(st->ops, isp_set_max_again, st->hal_ctx,
+		     rss_config_get_int(cfg, img, "max_again", 160));
+	RSS_HAL_CALL(st->ops, isp_set_max_dgain, st->hal_ctx,
+		     rss_config_get_int(cfg, img, "max_dgain", 80));
+	RSS_HAL_CALL(st->ops, isp_set_dpc_strength, st->hal_ctx,
+		     rss_config_get_int(cfg, img, "dpc_strength", 128));
+	RSS_HAL_CALL(st->ops, isp_set_drc_strength, st->hal_ctx,
+		     rss_config_get_int(cfg, img, "drc_strength", 128));
+	RSS_HAL_CALL(st->ops, isp_set_highlight_depress, st->hal_ctx,
+		     rss_config_get_int(cfg, img, "highlight_depress", 0));
+	RSS_HAL_CALL(st->ops, isp_set_backlight_comp, st->hal_ctx,
+		     rss_config_get_int(cfg, img, "backlight_comp", 0));
+	{
+		uint8_t dv = (uint8_t)rss_config_get_int(cfg, img, "defog_strength", 128);
+		RSS_HAL_CALL(st->ops, isp_set_defog_strength_adv, st->hal_ctx, &dv);
+	}
 	RSS_HAL_CALL(st->ops, isp_set_running_mode, st->hal_ctx, RSS_ISP_DAY);
 	ret = RSS_HAL_CALL(st->ops, isp_set_bypass, st->hal_ctx, 1);
 	RSS_DEBUG("isp_set_bypass returned %d", ret);
 	int antiflicker = rss_config_get_int(cfg, multi ? "sensor0" : "sensor", "antiflicker", 2);
 	RSS_HAL_CALL(st->ops, isp_set_antiflicker, st->hal_ctx, antiflicker);
-	RSS_HAL_CALL(st->ops, isp_set_hflip, st->hal_ctx, 0);
-	RSS_HAL_CALL(st->ops, isp_set_vflip, st->hal_ctx, 0);
+	RSS_HAL_CALL(st->ops, isp_set_hflip, st->hal_ctx, rss_config_get_int(cfg, img, "hflip", 0));
+	RSS_HAL_CALL(st->ops, isp_set_vflip, st->hal_ctx, rss_config_get_int(cfg, img, "vflip", 0));
 
 	/* Dual-sensor: read sensor attrs + disable AeFreeze + set CustomMode (prudynt pattern).
 	 * GetSensorAttr may trigger ISP to initialize the sensor pipeline. */
@@ -401,15 +427,33 @@ int rvd_pipeline_init(rvd_state_t *st)
 
 	/* Apply defaults to additional sensors */
 	for (int s = 1; s < st->sensor_count; s++) {
-		RSS_HAL_CALL(st->ops, isp_set_brightness_n, st->hal_ctx, s, 128);
-		RSS_HAL_CALL(st->ops, isp_set_contrast_n, st->hal_ctx, s, 128);
-		RSS_HAL_CALL(st->ops, isp_set_saturation_n, st->hal_ctx, s, 128);
-		RSS_HAL_CALL(st->ops, isp_set_sharpness_n, st->hal_ctx, s, 128);
-		RSS_HAL_CALL(st->ops, isp_set_sinter_strength_n, st->hal_ctx, s, 128);
-		RSS_HAL_CALL(st->ops, isp_set_temper_strength_n, st->hal_ctx, s, 128);
+		char img_sect[32];
+		snprintf(img_sect, sizeof(img_sect), "sensor%d_image", s);
+		RSS_HAL_CALL(st->ops, isp_set_brightness_n, st->hal_ctx, s,
+			     rss_config_get_int(cfg, img_sect, "brightness", 128));
+		RSS_HAL_CALL(st->ops, isp_set_contrast_n, st->hal_ctx, s,
+			     rss_config_get_int(cfg, img_sect, "contrast", 128));
+		RSS_HAL_CALL(st->ops, isp_set_saturation_n, st->hal_ctx, s,
+			     rss_config_get_int(cfg, img_sect, "saturation", 128));
+		RSS_HAL_CALL(st->ops, isp_set_sharpness_n, st->hal_ctx, s,
+			     rss_config_get_int(cfg, img_sect, "sharpness", 128));
+		RSS_HAL_CALL(st->ops, isp_set_sinter_strength_n, st->hal_ctx, s,
+			     rss_config_get_int(cfg, img_sect, "sinter", 128));
+		RSS_HAL_CALL(st->ops, isp_set_temper_strength_n, st->hal_ctx, s,
+			     rss_config_get_int(cfg, img_sect, "temper", 128));
 		RSS_HAL_CALL(st->ops, isp_set_running_mode_n, st->hal_ctx, s, RSS_ISP_DAY);
-		RSS_HAL_CALL(st->ops, isp_set_hflip_n, st->hal_ctx, s, 0);
-		RSS_HAL_CALL(st->ops, isp_set_vflip_n, st->hal_ctx, s, 0);
+		RSS_HAL_CALL(st->ops, isp_set_hflip_n, st->hal_ctx, s,
+			     rss_config_get_int(cfg, img_sect, "hflip", 0));
+		RSS_HAL_CALL(st->ops, isp_set_vflip_n, st->hal_ctx, s,
+			     rss_config_get_int(cfg, img_sect, "vflip", 0));
+		RSS_HAL_CALL(st->ops, isp_set_hue_n, st->hal_ctx, s,
+			     rss_config_get_int(cfg, img_sect, "hue", 128));
+		RSS_HAL_CALL(st->ops, isp_set_ae_comp_n, st->hal_ctx, s,
+			     rss_config_get_int(cfg, img_sect, "ae_comp", 128));
+		RSS_HAL_CALL(st->ops, isp_set_max_again_n, st->hal_ctx, s,
+			     rss_config_get_int(cfg, img_sect, "max_again", 160));
+		RSS_HAL_CALL(st->ops, isp_set_max_dgain_n, st->hal_ctx, s,
+			     rss_config_get_int(cfg, img_sect, "max_dgain", 80));
 		RSS_HAL_CALL(st->ops, isp_set_ae_freeze_n, st->hal_ctx, s, 0);
 		RSS_HAL_CALL(st->ops, isp_set_custom_mode_n, st->hal_ctx, s, 0);
 	}
