@@ -381,6 +381,8 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 	/* ── Simple int/bool set commands ── */
 	ENC_SET_INT("set-qp", enc_set_qp)
 	ENC_SET_INT("set-qp-ip-delta", enc_set_qp_ip_delta)
+	ENC_SET_INT("set-qp-pb-delta", enc_set_qp_pb_delta)
+	ENC_SET_INT("set-max-psnr", enc_set_max_psnr)
 	ENC_SET_INT("set-gop-mode", enc_set_gop_mode)
 	ENC_SET_INT("set-rc-options", enc_set_rc_options)
 	ENC_SET_INT("set-max-same-scene", enc_set_max_same_scene_cnt)

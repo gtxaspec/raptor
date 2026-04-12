@@ -104,15 +104,18 @@ static void load_stream_config(rss_config_t *cfg, const char *section, rvd_strea
 		.width = w,
 		.height = h,
 		.profile = rss_config_get_int(cfg, section, "profile", 2),
-		.rc_mode = parse_rc_mode(rss_config_get_str(cfg, section, "rc_mode", "vbr")),
+		.rc_mode = parse_rc_mode(rss_config_get_str(cfg, section, "rc_mode", "cbr")),
 		.bitrate = rss_config_get_int(cfg, section, "bitrate", default_br),
 		.max_bitrate = rss_config_get_int(cfg, section, "max_bitrate", 0),
 		.fps_num = fps,
 		.fps_den = 1,
-		.gop_length = rss_config_get_int(cfg, section, "gop", fps * 2),
+		.gop_length = rss_config_get_int(cfg, section, "gop", 30),
 		.init_qp = -1,
-		.min_qp = rss_config_get_int(cfg, section, "min_qp", 20),
-		.max_qp = rss_config_get_int(cfg, section, "max_qp", 42),
+		.min_qp = rss_config_get_int(cfg, section, "min_qp", -1),
+		.max_qp = rss_config_get_int(cfg, section, "max_qp", -1),
+		.ip_delta = rss_config_get_int(cfg, section, "ip_delta", -1),
+		.pb_delta = rss_config_get_int(cfg, section, "pb_delta", -1),
+		.max_psnr = rss_config_get_int(cfg, section, "max_psnr", 0),
 	};
 }
 
@@ -481,7 +484,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 
 		/* Main stream */
 		int si = st->stream_count;
-		load_stream_config(cfg, main_sect, &st->streams[si], def_w, def_h, 25, 2500000);
+		load_stream_config(cfg, main_sect, &st->streams[si], def_w, def_h, 25, 3000000);
 		st->streams[si].enc_cfg.ivdc = rss_config_get_bool(cfg, main_sect, "ivdc", false);
 		st->streams[si].fs_chn = fs_base;
 		st->streams[si].chn = enc_grp_counter++;
