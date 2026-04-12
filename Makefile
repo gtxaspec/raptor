@@ -30,6 +30,8 @@ STRIP  := $(CROSS_COMPILE)strip
 EXTRA_CFLAGS ?=
 CFLAGS := -Wall -Wextra -Werror=implicit-function-declaration
 CFLAGS += -std=gnu11 -D_GNU_SOURCE
+CFLAGS += -ffunction-sections -fdata-sections
+CFLAGS += -fno-asynchronous-unwind-tables -fmerge-all-constants -fno-ident
 CFLAGS += -DPLATFORM_$(PLATFORM)
 CFLAGS += -I$(CURDIR)/$(HAL_DIR)/include
 CFLAGS += -I$(CURDIR)/$(IPC_DIR)/include
@@ -106,11 +108,17 @@ COMPY_CFLAGS += -DCOMPY_HAS_TLS
 LDFLAGS_TLS := -lmbedtls -lmbedx509 -lmbedcrypto
 endif
 
-# Static libraries (absolute paths for sub-makes)
-LIB_HAL    := $(CURDIR)/$(HAL_DIR)/libraptor_hal.a
-LIB_IPC    := $(CURDIR)/$(IPC_DIR)/librss_ipc.a
-LIB_COMMON := $(CURDIR)/$(COMMON_DIR)/librss_common.a
-LIB_COMPY  := $(COMPY_BUILD)/libcompy.a
+# Library file paths (for Make dependencies and build triggers)
+LIB_HAL_FILE    := $(CURDIR)/$(HAL_DIR)/libraptor_hal.a
+LIB_IPC_FILE    := $(CURDIR)/$(IPC_DIR)/librss_ipc.so
+LIB_COMMON_FILE := $(CURDIR)/$(COMMON_DIR)/librss_common.so
+LIB_COMPY_FILE  := $(COMPY_BUILD)/libcompy.a
+
+# Library link flags (for linker command line)
+LIB_HAL    := $(LIB_HAL_FILE)
+LIB_IPC    := -L$(CURDIR)/$(IPC_DIR) -lrss_ipc
+LIB_COMMON := -L$(CURDIR)/$(COMMON_DIR) -lrss_common
+LIB_COMPY  := $(LIB_COMPY_FILE)
 
 # TLS helper (compiled separately, only linked by daemons that need it).
 # Source is in raptor-common (standalone) or sysroot (buildroot).
@@ -149,12 +157,15 @@ CFLAGS += -DPERSONDET
 LDFLAGS_HAL += -lpersonDet_inf -ljzdl
 endif
 endif
-LDFLAGS     := $(LDFLAGS_SYSROOT) $(SHIM_LIB) -lpthread -lrt -latomic
+LDFLAGS     := $(LDFLAGS_SYSROOT) -lpthread -lrt -latomic
 
 # MIPS page size: Ingenic SoCs use 4KB pages but the toolchain defaults to
 # 64KB max-page-size. Mismatched alignment causes SIGBUS on musl/uclibc.
-LDFLAGS_HAL += -Wl,-z,max-page-size=0x1000
-LDFLAGS     += -Wl,-z,max-page-size=0x1000
+LDFLAGS_HAL += -Wl,-z,max-page-size=0x1000 -Wl,--gc-sections -Wl,--as-needed -Wl,-rpath,/usr/lib
+LDFLAGS     += -Wl,-z,max-page-size=0x1000 -Wl,--gc-sections -Wl,--as-needed -Wl,-rpath,/usr/lib
+# rpath-link for local builds (finding .so at link time)
+LDFLAGS_HAL += -Wl,-rpath-link,$(CURDIR)/$(IPC_DIR) -Wl,-rpath-link,$(CURDIR)/$(COMMON_DIR)
+LDFLAGS     += -Wl,-rpath-link,$(CURDIR)/$(IPC_DIR) -Wl,-rpath-link,$(CURDIR)/$(COMMON_DIR)
 
 # Targets
 DAEMONS := rvd rsd rad rhd rod ric rmr rmd rwd rwc
@@ -169,78 +180,78 @@ phase1: libs rvd ringdump raptorctl
 
 # -- Libraries --
 
-libs: $(LIB_HAL) $(LIB_IPC) $(LIB_COMMON)
+libs: $(LIB_HAL_FILE) $(LIB_IPC_FILE) $(LIB_COMMON_FILE)
 
-$(LIB_HAL):
+$(LIB_HAL_FILE):
 	@echo "  BUILD   raptor-hal"
 	$(Q)$(MAKE) -C $(HAL_DIR) PLATFORM=$(PLATFORM) CROSS_COMPILE=$(CROSS_COMPILE) \
 		$(if $(DEBUG),DEBUG=1,)
 
-$(LIB_IPC):
+$(LIB_IPC_FILE):
 	@echo "  BUILD   raptor-ipc"
-	$(Q)$(MAKE) -C $(IPC_DIR) CC="$(CC)" AR="$(AR)"
+	$(Q)$(MAKE) -C $(IPC_DIR) CC="$(CC)"
 
-$(LIB_COMMON):
+$(LIB_COMMON_FILE):
 	@echo "  BUILD   raptor-common"
-	$(Q)$(MAKE) -C $(COMMON_DIR) CC="$(CC)" AR="$(AR)"
+	$(Q)$(MAKE) -C $(COMMON_DIR) CC="$(CC)"
 
 # -- Daemons --
 
-rvd: $(LIB_HAL) $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_OBJ)
+rvd: $(LIB_HAL_FILE) $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   rvd"
 	$(Q)$(MAKE) -C rvd CC="$(CC)" CFLAGS="$(CFLAGS)" \
 		LIBS="$(LIB_HAL) $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS_HAL)" Q="$(Q)"
 
-rsd: $(LIB_IPC) $(LIB_COMMON) $(LIB_COMPY) $(RSS_BUILD_OBJ)
+rsd: $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(LIB_COMPY_FILE) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   rsd"
 	$(Q)$(MAKE) -C rsd CC="$(CC)" CFLAGS="$(CFLAGS) $(COMPY_CFLAGS)" \
 		LIBS="$(LIB_IPC) $(LIB_COMMON) $(LIB_COMPY) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS) $(LDFLAGS_TLS)" Q="$(Q)"
 
-rad: $(LIB_HAL) $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_OBJ)
+rad: $(LIB_HAL_FILE) $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   rad"
 	$(Q)$(MAKE) -C rad CC="$(CC)" CFLAGS="$(CFLAGS)" \
 		LIBS="$(LIB_HAL) $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS_HAL) $(LDFLAGS_AAC_ENC) $(LDFLAGS_OPUS)" Q="$(Q)"
 
-rhd: $(LIB_IPC) $(LIB_COMMON) $(RSS_TLS_OBJ) $(RSS_BUILD_OBJ)
+rhd: $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_TLS_OBJ) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   rhd"
 	$(Q)$(MAKE) -C rhd CC="$(CC)" CFLAGS="$(CFLAGS) -DRSS_HAS_TLS" \
 		LIBS="$(LIB_IPC) $(LIB_COMMON) $(RSS_TLS_OBJ) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS) $(LDFLAGS_TLS)" Q="$(Q)"
 
-rod: $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_OBJ)
+rod: $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   rod"
 	$(Q)$(MAKE) -C rod CC="$(CC)" CFLAGS="$(CFLAGS)" \
 		LIBS="$(LIB_IPC) $(LIB_COMMON) -lschrift $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS)" Q="$(Q)"
 
-ric: $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_OBJ)
+ric: $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   ric"
 	$(Q)$(MAKE) -C ric CC="$(CC)" CFLAGS="$(CFLAGS)" \
 		LIBS="$(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS) -ldl" Q="$(Q)"
 
-rmr: $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_OBJ)
+rmr: $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   rmr"
 	$(Q)$(MAKE) -C rmr CC="$(CC)" CFLAGS="$(CFLAGS)" \
 		LIBS="$(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS)" Q="$(Q)"
 
-rmd: $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_OBJ)
+rmd: $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   rmd"
 	$(Q)$(MAKE) -C rmd CC="$(CC)" CFLAGS="$(CFLAGS)" \
 		LIBS="$(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS)" Q="$(Q)"
 
-rwd: $(LIB_IPC) $(LIB_COMMON) $(LIB_COMPY) $(RSS_TLS_OBJ) $(RSS_BUILD_OBJ)
+rwd: $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(LIB_COMPY_FILE) $(RSS_TLS_OBJ) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   rwd"
 	$(Q)$(MAKE) -C rwd CC="$(CC)" CFLAGS="$(CFLAGS) $(COMPY_CFLAGS) -DMBEDTLS_ALLOW_PRIVATE_ACCESS -DRSS_HAS_TLS" \
 		LIBS="$(LIB_IPC) $(LIB_COMMON) $(LIB_COMPY) $(RSS_TLS_OBJ) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS) $(LDFLAGS_TLS) -lopus $(LDFLAGS_AAC_DEC)" WEBTORRENT=$(WEBTORRENT) Q="$(Q)"
 
-rwc: $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_OBJ)
+rwc: $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   rwc"
 	$(Q)$(MAKE) -C rwc CC="$(CC)" CFLAGS="$(CFLAGS)" \
 		LIBS="$(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_LIBS)" \
@@ -248,19 +259,19 @@ rwc: $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_OBJ)
 
 # -- Tools --
 
-raptorctl: $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_OBJ)
+raptorctl: $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   raptorctl"
 	$(Q)$(MAKE) -C raptorctl CC="$(CC)" CFLAGS="$(CFLAGS)" \
 		LIBS="$(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS)" Q="$(Q)"
 
-ringdump: $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_OBJ)
+ringdump: $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   ringdump"
 	$(Q)$(MAKE) -C ringdump CC="$(CC)" CFLAGS="$(CFLAGS)" \
 		LIBS="$(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS)" Q="$(Q)"
 
-rac: $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_OBJ)
+rac: $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   rac"
 	$(Q)$(MAKE) -C rac CC="$(CC)" CFLAGS="$(CFLAGS)" \
 		LIBS="$(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_LIBS)" \
