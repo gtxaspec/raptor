@@ -109,13 +109,15 @@ LDFLAGS_TLS := -lmbedtls -lmbedx509 -lmbedcrypto
 endif
 
 # Library file paths (for Make dependencies and build triggers)
-LIB_HAL_FILE    := $(CURDIR)/$(HAL_DIR)/libraptor_hal.a
+LIB_HAL_VIDEO_FILE := $(CURDIR)/$(HAL_DIR)/libraptor_hal_video.a
+LIB_HAL_AUDIO_FILE := $(CURDIR)/$(HAL_DIR)/libraptor_hal_audio.a
 LIB_IPC_FILE    := $(CURDIR)/$(IPC_DIR)/librss_ipc.so
 LIB_COMMON_FILE := $(CURDIR)/$(COMMON_DIR)/librss_common.so
 LIB_COMPY_FILE  := $(COMPY_BUILD)/libcompy.a
 
 # Library link flags (for linker command line)
-LIB_HAL    := $(LIB_HAL_FILE)
+LIB_HAL_VIDEO := $(LIB_HAL_VIDEO_FILE)
+LIB_HAL_AUDIO := $(LIB_HAL_AUDIO_FILE)
 LIB_IPC    := -L$(CURDIR)/$(IPC_DIR) -lrss_ipc
 LIB_COMMON := -L$(CURDIR)/$(COMMON_DIR) -lrss_common
 LIB_COMPY  := $(LIB_COMPY_FILE)
@@ -180,9 +182,9 @@ phase1: libs rvd ringdump raptorctl
 
 # -- Libraries --
 
-libs: $(LIB_HAL_FILE) $(LIB_IPC_FILE) $(LIB_COMMON_FILE)
+libs: $(LIB_HAL_VIDEO_FILE) $(LIB_HAL_AUDIO_FILE) $(LIB_IPC_FILE) $(LIB_COMMON_FILE)
 
-$(LIB_HAL_FILE):
+$(LIB_HAL_VIDEO_FILE) $(LIB_HAL_AUDIO_FILE):
 	@echo "  BUILD   raptor-hal"
 	$(Q)$(MAKE) -C $(HAL_DIR) PLATFORM=$(PLATFORM) CROSS_COMPILE=$(CROSS_COMPILE) \
 		$(if $(DEBUG),DEBUG=1,)
@@ -197,10 +199,10 @@ $(LIB_COMMON_FILE):
 
 # -- Daemons --
 
-rvd: $(LIB_HAL_FILE) $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_BUILD_OBJ)
+rvd: $(LIB_HAL_VIDEO_FILE) $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   rvd"
 	$(Q)$(MAKE) -C rvd CC="$(CC)" CFLAGS="$(CFLAGS)" \
-		LIBS="$(LIB_HAL) $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_LIBS)" \
+		LIBS="$(LIB_HAL_VIDEO) $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS_HAL)" Q="$(Q)"
 
 rsd: $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(LIB_COMPY_FILE) $(RSS_BUILD_OBJ)
@@ -209,10 +211,10 @@ rsd: $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(LIB_COMPY_FILE) $(RSS_BUILD_OBJ)
 		LIBS="$(LIB_IPC) $(LIB_COMMON) $(LIB_COMPY) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS) $(LDFLAGS_TLS)" Q="$(Q)"
 
-rad: $(LIB_HAL_FILE) $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_BUILD_OBJ)
+rad: $(LIB_HAL_AUDIO_FILE) $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   rad"
 	$(Q)$(MAKE) -C rad CC="$(CC)" CFLAGS="$(CFLAGS)" \
-		LIBS="$(LIB_HAL) $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_LIBS)" \
+		LIBS="$(LIB_HAL_AUDIO) $(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS_HAL) $(LDFLAGS_AAC_ENC) $(LDFLAGS_OPUS)" Q="$(Q)"
 
 rhd: $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_TLS_OBJ) $(RSS_BUILD_OBJ)
