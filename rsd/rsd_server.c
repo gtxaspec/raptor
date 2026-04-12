@@ -281,7 +281,9 @@ int rsd_server_init(rsd_server_t *srv)
 				break;
 		}
 	}
-	if (!srv->video[RSD_STREAM_MAIN].ring)
+	if (srv->video[RSD_STREAM_MAIN].ring)
+		RSS_INFO("stream 0 (main) ring available");
+	else
 		RSS_WARN("main video ring not available (is RVD running?)");
 	srv->video[RSD_STREAM_MAIN].idx = RSD_STREAM_MAIN;
 	srv->video[RSD_STREAM_MAIN].ring_name = ring_names[RSD_STREAM_MAIN];
