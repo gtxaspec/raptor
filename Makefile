@@ -30,7 +30,7 @@ STRIP  := $(CROSS_COMPILE)strip
 EXTRA_CFLAGS ?=
 CFLAGS := -Wall -Wextra -Werror=implicit-function-declaration
 CFLAGS += -std=gnu11 -D_GNU_SOURCE
-CFLAGS += -ffunction-sections -fdata-sections
+CFLAGS += -ffunction-sections -fdata-sections -flto
 CFLAGS += -fno-asynchronous-unwind-tables -fmerge-all-constants -fno-ident
 CFLAGS += -DPLATFORM_$(PLATFORM)
 CFLAGS += -I$(CURDIR)/$(HAL_DIR)/include
@@ -161,8 +161,8 @@ LDFLAGS     := $(LDFLAGS_SYSROOT) -lpthread -lrt -latomic
 
 # MIPS page size: Ingenic SoCs use 4KB pages but the toolchain defaults to
 # 64KB max-page-size. Mismatched alignment causes SIGBUS on musl/uclibc.
-LDFLAGS_HAL += -Wl,-z,max-page-size=0x1000 -Wl,--gc-sections -Wl,--as-needed -Wl,-rpath,/usr/lib
-LDFLAGS     += -Wl,-z,max-page-size=0x1000 -Wl,--gc-sections -Wl,--as-needed -Wl,-rpath,/usr/lib
+LDFLAGS_HAL += -Wl,-z,max-page-size=0x1000 -Wl,--gc-sections -Wl,--as-needed -Wl,-rpath,/usr/lib -flto
+LDFLAGS     += -Wl,-z,max-page-size=0x1000 -Wl,--gc-sections -Wl,--as-needed -Wl,-rpath,/usr/lib -flto
 # rpath-link for local builds (finding .so at link time)
 LDFLAGS_HAL += -Wl,-rpath-link,$(CURDIR)/$(IPC_DIR) -Wl,-rpath-link,$(CURDIR)/$(COMMON_DIR)
 LDFLAGS     += -Wl,-rpath-link,$(CURDIR)/$(IPC_DIR) -Wl,-rpath-link,$(CURDIR)/$(COMMON_DIR)
