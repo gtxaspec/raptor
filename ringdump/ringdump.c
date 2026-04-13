@@ -137,6 +137,12 @@ int main(int argc, char **argv)
 		return (argc < 2) ? 1 : 0;
 	}
 
+	if (strcmp(argv[1], "-v") == 0) {
+		fprintf(stderr, "Raptor Streaming System — ringdump [%s] built %s\n",
+			rss_build_hash, rss_build_time);
+		return 0;
+	}
+
 	const char *ring_name = argv[1];
 	bool follow = false;
 	bool dump_raw = false;

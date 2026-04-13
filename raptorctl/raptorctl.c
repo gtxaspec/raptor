@@ -320,6 +320,12 @@ int main(int argc, char **argv)
 		return 0;
 	}
 
+	if (strcmp(argv[1], "-v") == 0 || strcmp(argv[1], "--version") == 0) {
+		fprintf(stderr, "Raptor Streaming System — raptorctl [%s] built %s\n",
+			rss_build_hash, rss_build_time);
+		return 0;
+	}
+
 	if (strcmp(argv[1], "status") == 0) {
 		cmd_status();
 		return 0;

@@ -78,6 +78,12 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
+	if (strcmp(argv[1], "-v") == 0 || strcmp(argv[1], "--version") == 0) {
+		fprintf(stderr, "Raptor Streaming System — rac [%s] built %s\n",
+			rss_build_hash, rss_build_time);
+		return 0;
+	}
+
 	signal(SIGINT, sighandler);
 	signal(SIGTERM, sighandler);
 	signal(SIGPIPE, SIG_IGN);
