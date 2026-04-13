@@ -237,8 +237,14 @@ static int rhd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 	return rss_ctrl_resp(resp_buf, resp_buf_size,
 			     "{\"status\":\"ok\",\"clients\":%d,\"mjpeg\":%d,"
-			     "\"audio\":%d,\"port\":%d,\"jpeg_rings\":%d}",
-			     srv->client_count, mjpeg, audio, srv->port, srv->jpeg_ring_count);
+			     "\"audio\":%d,\"port\":%d,\"jpeg_rings\":%d,\"tls\":%s}",
+			     srv->client_count, mjpeg, audio, srv->port, srv->jpeg_ring_count,
+#ifdef RSS_HAS_TLS
+			     srv->tls ? "true" : "false"
+#else
+			     "false"
+#endif
+			     );
 }
 
 static int server_init(rhd_server_t *srv)

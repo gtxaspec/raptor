@@ -451,8 +451,16 @@ static int rwd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 
 	/* Default: status */
 	return rss_ctrl_resp(resp_buf, resp_buf_size,
-			     "{\"status\":\"ok\",\"clients\":%d,\"udp_port\":%d,\"http_port\":%d}",
-			     srv->client_count, srv->udp_port, srv->http_port);
+			     "{\"status\":\"ok\",\"clients\":%d,\"udp_port\":%d,"
+			     "\"http_port\":%d,\"dtls\":%s,\"https\":%s}",
+			     srv->client_count, srv->udp_port, srv->http_port,
+			     srv->dtls ? "true" : "false",
+#ifdef RSS_HAS_TLS
+			     srv->tls ? "true" : "false"
+#else
+			     "false"
+#endif
+			     );
 }
 
 /* ── Main event loop ── */

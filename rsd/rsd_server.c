@@ -419,8 +419,14 @@ static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				     "{\"status\":\"ok\",\"config\":{"
 				     "\"port\":%d,\"clients\":%d,"
 				     "\"max_clients\":%d,"
+				     "\"tls\":%s,"
 				     "\"config_path\":\"%s\"}}",
 				     srv->port, srv->client_count, srv->max_clients,
+#ifdef COMPY_HAS_TLS
+				     srv->tls_ctx ? "true" : "false",
+#else
+				     "false",
+#endif
 				     srv->config_path);
 	}
 
@@ -461,8 +467,14 @@ static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 
 	/* Default: status */
 	return rss_ctrl_resp(resp_buf, resp_buf_size,
-			     "{\"status\":\"ok\",\"clients\":%d,\"port\":%d}", srv->client_count,
-			     srv->port);
+			     "{\"status\":\"ok\",\"clients\":%d,\"port\":%d,\"tls\":%s}",
+			     srv->client_count, srv->port,
+#ifdef COMPY_HAS_TLS
+			     srv->tls_ctx ? "true" : "false"
+#else
+			     "false"
+#endif
+			     );
 }
 
 void rsd_server_run(rsd_server_t *srv)
