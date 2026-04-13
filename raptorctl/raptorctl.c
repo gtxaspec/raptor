@@ -221,7 +221,7 @@ const struct help_entry help_entries[] = {
 	{"rad", "set-volume <val>                    Input volume"},
 	{"rad", "set-gain <val>                      Input gain"},
 	{"rad", "set-alc-gain <0-7>                  ALC gain (T21/T31 only)"},
-	{"rad", "set-ns <0|1> [level]                Noise suppression"},
+	{"rad", "set-ns <0|1> [0-3]                  Noise suppression level"},
 	{"rad", "set-hpf <0|1>                       High-pass filter"},
 	{"rad", "set-agc <0|1> [target] [comp]       Automatic gain control"},
 	{"rad", "ao-set-volume <val>                 Speaker volume"},
@@ -847,14 +847,15 @@ int main(int argc, char **argv)
 	} else if (strcmp(cmd, "set-ns") == 0) {
 		if (argc < 4) {
 			fprintf(stderr,
-				"Usage: raptorctl %s set-ns <0|1> [low|moderate|high|veryhigh]\n",
+				"Usage: raptorctl %s set-ns <0|1> [0-3]\n"
+				"  levels: 0=low 1=moderate 2=high 3=veryhigh\n",
 				daemon);
 			return 1;
 		}
 		cJSON *j = jcmd("set-ns");
 		jadd_i(j, "value", argv[3]);
 		if (argc >= 5)
-			jadd_s(j, "level", argv[4]);
+			jadd_i(j, "level", argv[4]);
 		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-hpf") == 0) {

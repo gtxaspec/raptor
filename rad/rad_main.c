@@ -117,19 +117,14 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 
 #ifdef RAPTOR_AUDIO_EFFECTS
 	if (strstr(cmd_json, "\"set-ns\"")) {
-		char level[16] = "";
-		rss_json_get_str(cmd_json, "level", level, sizeof(level));
+		int level = RSS_NS_MODERATE;
+		rss_json_get_int(cmd_json, "level", &level);
 		if (rss_json_get_int(cmd_json, "value", &val) == 0) {
 			int ret = RSS_OK;
 			if (val && !ctx->ns_enabled) {
-				rss_ns_level_t ns = RSS_NS_MODERATE;
-				if (strcasecmp(level, "low") == 0)
-					ns = RSS_NS_LOW;
-				else if (strcasecmp(level, "high") == 0)
-					ns = RSS_NS_HIGH;
-				else if (strcasecmp(level, "veryhigh") == 0)
-					ns = RSS_NS_VERYHIGH;
-				ret = RSS_HAL_CALL(ctx->ops, audio_enable_ns, ctx->hal_ctx, ns);
+				if (level < RSS_NS_LOW || level > RSS_NS_VERYHIGH)
+					level = RSS_NS_MODERATE;
+				ret = RSS_HAL_CALL(ctx->ops, audio_enable_ns, ctx->hal_ctx, (rss_ns_level_t)level);
 			} else if (!val && ctx->ns_enabled) {
 				ret = RSS_HAL_CALL(ctx->ops, audio_disable_ns, ctx->hal_ctx);
 			}
@@ -452,17 +447,12 @@ int main(int argc, char **argv)
 #ifdef RAPTOR_AUDIO_EFFECTS
 	bool ns_enabled = rss_config_get_bool(dctx.cfg, "audio", "ns_enabled", false);
 	if (ns_enabled) {
-		const char *ns_str = rss_config_get_str(dctx.cfg, "audio", "ns_level", "moderate");
-		rss_ns_level_t ns_level = RSS_NS_MODERATE;
-		if (strcasecmp(ns_str, "low") == 0)
-			ns_level = RSS_NS_LOW;
-		else if (strcasecmp(ns_str, "high") == 0)
-			ns_level = RSS_NS_HIGH;
-		else if (strcasecmp(ns_str, "veryhigh") == 0)
-			ns_level = RSS_NS_VERYHIGH;
-		ret = RSS_HAL_CALL(ops, audio_enable_ns, hal_ctx, ns_level);
+		int ns_level = rss_config_get_int(dctx.cfg, "audio", "ns_level", RSS_NS_MODERATE);
+		if (ns_level < RSS_NS_LOW || ns_level > RSS_NS_VERYHIGH)
+			ns_level = RSS_NS_MODERATE;
+		ret = RSS_HAL_CALL(ops, audio_enable_ns, hal_ctx, (rss_ns_level_t)ns_level);
 		if (ret == RSS_OK)
-			RSS_DEBUG("noise suppression: %s", ns_str);
+			RSS_DEBUG("noise suppression: level %d", ns_level);
 		else
 			RSS_WARN("noise suppression failed: %d", ret);
 	}
