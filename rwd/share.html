@@ -62,12 +62,28 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"
   integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
 <script>
+const DEBUG = new URLSearchParams(location.search).has('debug');
+function dbg(...a) { if (DEBUG) console.log('%c[RWD]', 'color:#0af', ...a); }
+function dbgSdp(label, sdp) {
+  if (!DEBUG) return;
+  console.groupCollapsed('%c[RWD]%c ' + label, 'color:#0af', 'color:#aaa');
+  const codecs = [], ice = [];
+  for (const l of sdp.split('\r\n')) {
+    if (l.startsWith('a=rtpmap:')) codecs.push(l);
+    if (l.startsWith('a=candidate:')) ice.push(l);
+  }
+  if (codecs.length) console.log('Codecs:\n' + codecs.join('\n'));
+  if (ice.length) console.log('ICE candidates:\n' + ice.join('\n'));
+  console.log(sdp);
+  console.groupEnd();
+}
+
 const TRACKERS = [
   'wss://tracker.openwebtorrent.com',
   'wss://tracker.webtorrent.dev'
 ];
 
-let pc = null, ws = null, micStream = null, micSender = null;
+let pc = null, ws = null, micStream = null, micSender = null, statsIv = null;
 
 const v        = document.getElementById('v');
 const btn      = document.getElementById('btn');
@@ -117,11 +133,29 @@ function changeKey() {
 }
 
 function setStatus(text, variant = 'secondary', spin = false) {
+  dbg('status:', text);
   st.innerHTML = spin
     ? `<span class="spinner-border spinner-border-sm me-1" role="status"></span>${text}`
     : text;
   st.className = `badge bg-${variant} ms-auto`;
 }
+
+function startStats() {
+  if (!DEBUG || statsIv) return;
+  statsIv = setInterval(async () => {
+    if (!pc) return;
+    const s = await pc.getStats();
+    s.forEach(r => {
+      if (r.type === 'inbound-rtp' && r.kind === 'video')
+        dbg('video:', r.framesPerSecond + 'fps', Math.round((r.bytesReceived || 0) * 8 / 1000) + 'kbit total', 'lost:' + r.packetsLost);
+      if (r.type === 'inbound-rtp' && r.kind === 'audio')
+        dbg('audio:', 'lost:' + r.packetsLost, 'jitter:' + r.jitter);
+      if (r.type === 'candidate-pair' && r.state === 'succeeded')
+        dbg('rtt:', r.currentRoundTripTime + 's');
+    });
+  }, 5000);
+}
+function stopStats() { clearInterval(statsIv); statsIv = null; }
 
 /* Strip SDP to only H264 video + Opus audio to reduce size.
  * Public WebTorrent trackers silently drop large messages. */
@@ -176,7 +210,9 @@ function stripSdp(sdp) {
 async function computeInfoHash() {
   const data = new TextEncoder().encode('raptor:' + shareKey);
   const hash = await crypto.subtle.digest('SHA-256', data);
-  return btoa(String.fromCharCode(...new Uint8Array(hash)));
+  const b64 = btoa(String.fromCharCode(...new Uint8Array(hash)));
+  dbg('info_hash:', b64.slice(0, 16) + '...');
+  return b64;
 }
 
 function randomId(len) {
@@ -201,7 +237,9 @@ async function start() {
   const infoHash = await computeInfoHash();
   const peerId   = randomId(20);
   const offerId  = randomId(10);
+  dbg('peerId:', peerId, 'offerId:', offerId);
 
+  dbg('creating PeerConnection (WebTorrent relay)');
   pc = new RTCPeerConnection({
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
@@ -215,37 +253,49 @@ async function start() {
     const caps = RTCRtpSender.getCapabilities('audio').codecs;
     const pcmu = caps.filter(c => c.mimeType === 'audio/PCMU');
     const opus = caps.filter(c => c.mimeType === 'audio/opus');
-    if (pcmu.length) at.setCodecPreferences([...pcmu, ...opus]);
+    if (pcmu.length) { at.setCodecPreferences([...pcmu, ...opus]); dbg('audio preference: PCMU first, then Opus'); }
   } catch (e) {}
 
   pc.ontrack = e => {
+    dbg('track received:', e.track.kind, e.track.id);
     if (!v.srcObject) v.srcObject = new MediaStream();
     v.srcObject.addTrack(e.track);
     v.muted = true;
     v.play().catch(() => {});
   };
 
+  pc.onicecandidate = e => {
+    if (e.candidate) dbg('local ICE:', e.candidate.type, e.candidate.protocol, e.candidate.address + ':' + e.candidate.port);
+  };
+
   pc.oniceconnectionstatechange = () => {
     const state = pc.iceConnectionState;
+    dbg('ICE state:', state);
     setStatus(state, state === 'connected' || state === 'completed' ? 'success' : 'secondary');
     if (state === 'connected' || state === 'completed') {
       muteBtn.classList.remove('d-none');
+      startStats();
     }
     if (state === 'failed' || state === 'disconnected') stop();
   };
 
+  pc.onsignalingstatechange = () => { dbg('signaling:', pc.signalingState); };
+
   setStatus('Gathering ICE candidates…', 'secondary', true);
   const offer = await pc.createOffer();
+  dbgSdp('Local offer', offer.sdp);
   await pc.setLocalDescription(offer);
   await new Promise(r => {
     if (pc.iceGatheringState === 'complete') r();
-    else pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === 'complete') r(); };
+    else pc.onicegatheringstatechange = () => { dbg('ICE gathering:', pc.iceGatheringState); if (pc.iceGatheringState === 'complete') r(); };
   });
+  dbgSdp('Offer (with candidates)', pc.localDescription.sdp);
 
   let connected = false;
   for (let attempt = 1; attempt <= 3 && !connected; attempt++) {
     setStatus(`Connecting to tracker (attempt ${attempt}/3)…`, 'secondary', true);
     for (const tracker of TRACKERS) {
+      dbg('trying tracker:', tracker);
       try {
         const s = new WebSocket(tracker);
         await new Promise((ok, fail) => {
@@ -256,8 +306,10 @@ async function start() {
           s.onclose = settle(fail);
           setTimeout(settle(() => { s.close(); fail(new Error('timeout')); }), 5000);
         });
-        ws = s; connected = true; break;
-      } catch (e) { continue; }
+        ws = s; connected = true;
+        dbg('connected to tracker:', tracker);
+        break;
+      } catch (e) { dbg('tracker failed:', tracker, e.message); continue; }
     }
   }
   if (!connected) {
@@ -270,13 +322,16 @@ async function start() {
   ws.onmessage = async e => {
     let msg;
     try { msg = JSON.parse(e.data); } catch { return; }
+    dbg('tracker msg:', Object.keys(msg).join(','), msg.peer_id ? 'from:' + msg.peer_id.slice(0, 8) + '...' : '');
     if (msg.answer?.sdp && pc) {
+      dbgSdp('Remote answer', msg.answer.sdp);
       await pc.setRemoteDescription({ type: 'answer', sdp: msg.answer.sdp });
-      if (msg.answer.sdp.includes('a=sendrecv')) talkBtn.classList.remove('d-none');
+      if (msg.answer.sdp.includes('a=sendrecv')) { dbg('backchannel audio available'); talkBtn.classList.remove('d-none'); }
       setStatus('Connecting…', 'secondary', true);
     }
   };
   ws.onclose = () => {
+    dbg('tracker WebSocket closed');
     if (pc && pc.iceConnectionState !== 'connected' && pc.iceConnectionState !== 'completed') {
       setStatus('Tracker disconnected', 'warning');
       stop();
@@ -284,16 +339,20 @@ async function start() {
   };
 
   const strippedSdp = stripSdp(pc.localDescription.sdp);
+  if (DEBUG) { dbgSdp('Stripped offer (sent to tracker)', strippedSdp); dbg('stripped:', pc.localDescription.sdp.length, '->', strippedSdp.length, 'bytes'); }
   const streamIdx   = document.getElementById('stream').value;
-  ws.send(JSON.stringify({
+  const announce = {
     action: 'announce', info_hash: infoHash, peer_id: peerId,
     numwant: 1, uploaded: 0, downloaded: 0, left: 1,
     offers: [{ offer_id: 's' + streamIdx + '_' + offerId, offer: { type: 'offer', sdp: strippedSdp } }]
-  }));
+  };
+  dbg('announce: stream=' + streamIdx, 'offer_id=' + announce.offers[0].offer_id);
+  ws.send(JSON.stringify(announce));
 }
 
 function stop() {
-  stopTalk();
+  dbg('stopping');
+  stopStats(); stopTalk();
   ws?.close(); ws = null;
   pc?.close(); pc = null;
   v.srcObject = null;
@@ -317,21 +376,23 @@ function toggleMute() {
 async function toggleTalk() {
   if (micStream) { stopTalk(); return; }
   try {
+    dbg('requesting microphone');
     micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     const track = micStream.getAudioTracks()[0];
+    dbg('mic track:', track.label, track.getSettings());
     const txcv  = pc.getTransceivers().find(t => t.receiver.track?.kind === 'audio');
     if (txcv) { txcv.sender.replaceTrack(track); micSender = txcv.sender; }
     else micSender = pc.addTrack(track, micStream);
     talkBtn.innerHTML = '<i class="bi bi-mic-mute-fill"></i> Stop Talk';
     talkBtn.classList.replace('btn-outline-secondary', 'btn-danger');
   } catch (e) {
+    dbg('mic error:', e);
     setStatus('Mic: ' + e.message, 'danger');
   }
 }
 
 function stopTalk() {
-  micStream?.getTracks().forEach(t => t.stop());
-  micStream = null;
+  if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; dbg('mic stopped'); }
   if (micSender && pc) { try { micSender.replaceTrack(null); } catch (e) {} }
   micSender = null;
   talkBtn.innerHTML = '<i class="bi bi-mic-fill"></i> Talk';

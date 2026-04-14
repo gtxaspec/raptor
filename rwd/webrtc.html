@@ -12,31 +12,53 @@ select{margin:10px;padding:8px;font-size:16px;background:#222;color:#fff;border:
 <video id='v' autoplay muted playsinline></video>
 <div><select id='stream'><option value='0'>Main</option><option value='1'>Sub</option></select><button id='btn' onclick='toggle()'>Connect</button><button id='mute' onclick='toggleMute()' style='display:none'>Unmute</button><button id='talk' onclick='toggleTalk()' style='display:none'>Talk</button><span id='status'></span></div>
 <script>
-let pc=null,resource=null,micStream=null,micSender=null;
+const DEBUG=new URLSearchParams(location.search).has('debug');
+function dbg(...a){if(DEBUG)console.log('%c[RWD]','color:#0af',... a)}
+function dbgSdp(label,sdp){if(!DEBUG)return;console.groupCollapsed('%c[RWD]%c '+label,'color:#0af','color:#aaa');
+  const codecs=[],ice=[];for(const l of sdp.split('\r\n')){if(l.startsWith('a=rtpmap:'))codecs.push(l);if(l.startsWith('a=candidate:'))ice.push(l)}
+  if(codecs.length)console.log('Codecs:\n'+codecs.join('\n'));if(ice.length)console.log('ICE candidates:\n'+ice.join('\n'));console.log(sdp);console.groupEnd()}
+let pc=null,resource=null,micStream=null,micSender=null,statsIv=null;
 const v=document.getElementById('v'),btn=document.getElementById('btn'),st=document.getElementById('status');
+function startStats(){if(!DEBUG||statsIv)return;statsIv=setInterval(async()=>{if(!pc)return;const s=await pc.getStats();s.forEach(r=>{
+  if(r.type==='inbound-rtp'&&r.kind==='video')dbg('video:',r.framesPerSecond+'fps',Math.round((r.bytesReceived||0)*8/1000)+'kbit total','lost:'+r.packetsLost);
+  if(r.type==='inbound-rtp'&&r.kind==='audio')dbg('audio:','lost:'+r.packetsLost,'jitter:'+r.jitter);
+  if(r.type==='candidate-pair'&&r.state==='succeeded')dbg('rtt:',r.currentRoundTripTime+'s')})},5000)}
+function stopStats(){clearInterval(statsIv);statsIv=null}
 async function start(){
   st.textContent='Connecting...';
+  dbg('creating PeerConnection (local WHIP)');
   pc=new RTCPeerConnection({iceServers:[]});
   pc.addTransceiver('video',{direction:'recvonly'});
   const at=pc.addTransceiver('audio',{direction:'sendrecv'});
-  try{const caps=RTCRtpSender.getCapabilities('audio').codecs;const pcmu=caps.filter(c=>c.mimeType==='audio/PCMU');const opus=caps.filter(c=>c.mimeType==='audio/opus');if(pcmu.length)at.setCodecPreferences([...pcmu,...opus])}catch(e){}
-  pc.ontrack=e=>{if(!v.srcObject){v.srcObject=new MediaStream()}v.srcObject.addTrack(e.track);v.muted=true;v.play().catch(()=>{})};
-  pc.oniceconnectionstatechange=()=>{st.textContent=pc.iceConnectionState;if(pc.iceConnectionState==='failed'||pc.iceConnectionState==='disconnected')stop()};
+  try{const caps=RTCRtpSender.getCapabilities('audio').codecs;const pcmu=caps.filter(c=>c.mimeType==='audio/PCMU');const opus=caps.filter(c=>c.mimeType==='audio/opus');if(pcmu.length){at.setCodecPreferences([...pcmu,...opus]);dbg('audio preference: PCMU first, then Opus')}}catch(e){}
+  pc.ontrack=e=>{dbg('track received:',e.track.kind,e.track.id);if(!v.srcObject){v.srcObject=new MediaStream()}v.srcObject.addTrack(e.track);v.muted=true;v.play().catch(()=>{})};
+  pc.onicecandidate=e=>{if(e.candidate)dbg('local ICE:',e.candidate.type,e.candidate.protocol,e.candidate.address+':'+e.candidate.port)};
+  pc.oniceconnectionstatechange=()=>{dbg('ICE state:',pc.iceConnectionState);st.textContent=pc.iceConnectionState;
+    if(pc.iceConnectionState==='connected'||pc.iceConnectionState==='completed')startStats();
+    if(pc.iceConnectionState==='failed'||pc.iceConnectionState==='disconnected')stop()};
+  pc.onsignalingstatechange=()=>{dbg('signaling:',pc.signalingState)};
+  pc.onicegatheringstatechange=()=>{dbg('ICE gathering:',pc.iceGatheringState)};
+  dbg('creating offer...');
   const offer=await pc.createOffer();
+  dbgSdp('Local offer',offer.sdp);
   await pc.setLocalDescription(offer);
-  await new Promise(r=>{if(pc.iceGatheringState==='complete')r();else pc.onicegatheringstatechange=()=>{if(pc.iceGatheringState==='complete')r()}});
+  await new Promise(r=>{if(pc.iceGatheringState==='complete')r();else pc.onicegatheringstatechange=()=>{dbg('ICE gathering:',pc.iceGatheringState);if(pc.iceGatheringState==='complete')r()}});
+  dbgSdp('Offer (with candidates)',pc.localDescription.sdp);
   const stream=document.getElementById('stream').value;
+  dbg('WHIP POST /whip?stream='+stream);
   const resp=await fetch('/whip?stream='+stream,{method:'POST',headers:{'Content-Type':'application/sdp'},body:pc.localDescription.sdp});
-  if(!resp.ok){st.textContent='Error: '+resp.status;return}
+  if(!resp.ok){dbg('WHIP error:',resp.status,resp.statusText);st.textContent='Error: '+resp.status;return}
   resource=resp.headers.get('Location');
+  dbg('WHIP resource:',resource);
   const sdp=await resp.text();
+  dbgSdp('Remote answer',sdp);
   await pc.setRemoteDescription({type:'answer',sdp});
   btn.textContent='Disconnect';document.getElementById('mute').style.display='';
-  if(sdp.includes('a=sendrecv')&&navigator.mediaDevices)document.getElementById('talk').style.display='';
+  if(sdp.includes('a=sendrecv')&&navigator.mediaDevices){dbg('backchannel audio available');document.getElementById('talk').style.display=''}
   document.getElementById('stream').disabled=true;
 }
 async function stop(){
-  stopTalk();
+  dbg('stopping');stopStats();stopTalk();
   if(resource)fetch(resource,{method:'DELETE'}).catch(()=>{});
   if(pc)pc.close();
   pc=null;resource=null;v.srcObject=null;
@@ -47,16 +69,18 @@ function toggleMute(){v.muted=!v.muted;document.getElementById('mute').textConte
 async function toggleTalk(){
   if(micStream){stopTalk();return}
   try{
+    dbg('requesting microphone');
     micStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
     const track=micStream.getAudioTracks()[0];
+    dbg('mic track:',track.label,track.getSettings());
     const txcv=pc.getTransceivers().find(t=>t.receiver.track&&t.receiver.track.kind==='audio');
     if(txcv){txcv.sender.replaceTrack(track);micSender=txcv.sender}
     else{micSender=pc.addTrack(track,micStream)}
     document.getElementById('talk').textContent='Stop Talk';document.getElementById('talk').classList.add('active');
-  }catch(e){st.textContent='Mic: '+e.message}
+  }catch(e){dbg('mic error:',e);st.textContent='Mic: '+e.message}
 }
 function stopTalk(){
-  if(micStream){micStream.getTracks().forEach(t=>t.stop());micStream=null}
+  if(micStream){micStream.getTracks().forEach(t=>t.stop());micStream=null;dbg('mic stopped')}
   if(micSender&&pc){try{micSender.replaceTrack(null)}catch(e){}micSender=null}
   document.getElementById('talk').textContent='Talk';document.getElementById('talk').classList.remove('active');
 }
