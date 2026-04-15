@@ -926,6 +926,12 @@ int main(int argc, char **argv)
 		jadd_i(j, "height", argv[5]);
 		jstr(j, json, sizeof(json));
 
+	} else if (strcmp(cmd, "osd-restart") == 0) {
+		cJSON *j = jcmd("osd-restart");
+		if (argc > 3)
+			jadd_i(j, "pool_kb", argv[3]);
+		jstr(j, json, sizeof(json));
+
 	} else if (strcmp(cmd, "set-text") == 0) {
 		if (argc < 4) {
 			fprintf(stderr, "Usage: raptorctl %s set-text <text>\n", daemon);

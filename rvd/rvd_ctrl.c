@@ -1353,6 +1353,69 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 		return 1;
 	}
 
+	if (strstr(cmd_json, "\"osd-restart\"")) {
+		int pool_kb = 0;
+		rss_json_get_int(cmd_json, "pool_kb", &pool_kb);
+
+		RSS_INFO("osd-restart: stopping all streams (pool_kb=%d)", pool_kb);
+
+		/* Count video streams (non-JPEG) */
+		int video_count = 0;
+		int video_indices[RVD_MAX_STREAMS];
+		int jpeg_indices[RVD_MAX_STREAMS];
+		int jpeg_count_local = 0;
+		for (int i = 0; i < st->stream_count; i++) {
+			if (st->streams[i].is_jpeg)
+				jpeg_indices[jpeg_count_local++] = i;
+			else
+				video_indices[video_count++] = i;
+		}
+
+		/* Stop all: JPEG first, then video (reverse of start order) */
+		for (int j = jpeg_count_local - 1; j >= 0; j--)
+			rvd_stream_stop(st, jpeg_indices[j]);
+		for (int j = video_count - 1; j >= 0; j--)
+			rvd_stream_stop(st, video_indices[j]);
+
+		/* Deinit all: JPEG first (unregister from group before destroy) */
+		for (int j = jpeg_count_local - 1; j >= 0; j--)
+			rvd_stream_deinit(st, jpeg_indices[j]);
+		for (int j = video_count - 1; j >= 0; j--)
+			rvd_stream_deinit(st, video_indices[j]);
+
+		/* All OSD groups destroyed. Try resizing the pool. */
+		if (pool_kb > 0) {
+			uint32_t new_pool = (uint32_t)pool_kb * 1024;
+			RSS_INFO("osd-restart: resizing OSD pool to %u KB", pool_kb);
+			int ret = RSS_HAL_CALL(st->ops, osd_set_pool_size, st->hal_ctx, new_pool);
+			RSS_INFO("osd-restart: osd_set_pool_size returned %d", ret);
+		}
+
+		/* Reinit all: video first, then JPEG */
+		for (int j = 0; j < video_count; j++) {
+			int ret = rvd_stream_init(st, video_indices[j]);
+			if (ret != RSS_OK)
+				RSS_ERROR("osd-restart: stream%d init failed: %d", video_indices[j],
+					  ret);
+		}
+		for (int j = 0; j < jpeg_count_local; j++) {
+			int ret = rvd_stream_init(st, jpeg_indices[j]);
+			if (ret != RSS_OK)
+				RSS_WARN("osd-restart: jpeg stream%d init failed: %d",
+					 jpeg_indices[j], ret);
+		}
+
+		/* Start all: video first, then JPEG */
+		for (int j = 0; j < video_count; j++)
+			rvd_stream_start(st, video_indices[j]);
+		for (int j = 0; j < jpeg_count_local; j++)
+			rvd_stream_start(st, jpeg_indices[j]);
+
+		RSS_INFO("osd-restart: complete");
+		rss_ctrl_resp_ok(resp, resp_size);
+		return 1;
+	}
+
 	return 0;
 }
 
