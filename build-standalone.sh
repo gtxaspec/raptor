@@ -681,8 +681,11 @@ make -j"$JOBS" \
     LIB_HAL_VIDEO="$SYSROOT_DIR/usr/lib/libraptor_hal_video.a" \
     LIB_HAL_AUDIO="$SYSROOT_DIR/usr/lib/libraptor_hal_audio.a" \
     LIB_IPC="$SYSROOT_DIR/usr/lib/librss_ipc.a" \
+    LIB_IPC_FILE="$SYSROOT_DIR/usr/lib/librss_ipc.a" \
     LIB_COMMON="$SYSROOT_DIR/usr/lib/librss_common.a" \
+    LIB_COMMON_FILE="$SYSROOT_DIR/usr/lib/librss_common.a" \
     LIB_COMPY="$SYSROOT_DIR/usr/lib/libcompy.a" \
+    LIB_COMPY_FILE="$SYSROOT_DIR/usr/lib/libcompy.a" \
     COMPY_CFLAGS="$COMPY_CFLAGS" \
     EXTRA_CFLAGS="-I$SYSROOT_DIR/usr/include" \
     ${OPT_TLS:+TLS=1 WEBTORRENT=1} \

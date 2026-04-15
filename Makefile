@@ -109,18 +109,18 @@ LDFLAGS_TLS := -lmbedtls -lmbedx509 -lmbedcrypto
 endif
 
 # Library file paths (for Make dependencies and build triggers)
-LIB_HAL_VIDEO_FILE := $(CURDIR)/$(HAL_DIR)/libraptor_hal_video.a
-LIB_HAL_AUDIO_FILE := $(CURDIR)/$(HAL_DIR)/libraptor_hal_audio.a
-LIB_IPC_FILE    := $(CURDIR)/$(IPC_DIR)/librss_ipc.so
-LIB_COMMON_FILE := $(CURDIR)/$(COMMON_DIR)/librss_common.so
-LIB_COMPY_FILE  := $(COMPY_BUILD)/libcompy.a
+LIB_HAL_VIDEO_FILE ?= $(CURDIR)/$(HAL_DIR)/libraptor_hal_video.a
+LIB_HAL_AUDIO_FILE ?= $(CURDIR)/$(HAL_DIR)/libraptor_hal_audio.a
+LIB_IPC_FILE    ?= $(CURDIR)/$(IPC_DIR)/librss_ipc.so
+LIB_COMMON_FILE ?= $(CURDIR)/$(COMMON_DIR)/librss_common.so
+LIB_COMPY_FILE  ?= $(COMPY_BUILD)/libcompy.a
 
 # Library link flags (for linker command line)
-LIB_HAL_VIDEO := $(LIB_HAL_VIDEO_FILE)
-LIB_HAL_AUDIO := $(LIB_HAL_AUDIO_FILE)
-LIB_IPC    := -L$(CURDIR)/$(IPC_DIR) -lrss_ipc
-LIB_COMMON := -L$(CURDIR)/$(COMMON_DIR) -lrss_common
-LIB_COMPY  := $(LIB_COMPY_FILE)
+LIB_HAL_VIDEO ?= $(LIB_HAL_VIDEO_FILE)
+LIB_HAL_AUDIO ?= $(LIB_HAL_AUDIO_FILE)
+LIB_IPC    ?= -L$(CURDIR)/$(IPC_DIR) -lrss_ipc
+LIB_COMMON ?= -L$(CURDIR)/$(COMMON_DIR) -lrss_common
+LIB_COMPY  ?= $(LIB_COMPY_FILE)
 
 # TLS helper (compiled separately, only linked by daemons that need it).
 # Source is in raptor-common (standalone) or sysroot (buildroot).
