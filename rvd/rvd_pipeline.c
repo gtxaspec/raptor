@@ -701,7 +701,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 		RSS_HAL_CALL(st->ops, fs_set_frame_depth, st->hal_ctx, fsc, 0);
 	}
 
-	/* ── 6. OSD pipeline (if enabled) ── */
+	/* ── 6. OSD config (pool sizing + mode selection) ── */
 	st->osd_enabled = rss_config_get_bool(cfg, "osd", "enabled", true);
 	st->use_isp_osd = rss_config_get_bool(cfg, "osd", "isp_osd", false);
 	if (st->use_isp_osd && (!caps || !caps->has_isp_osd)) {
@@ -709,135 +709,21 @@ int rvd_pipeline_init(rvd_state_t *st)
 		st->use_isp_osd = false;
 	}
 	if (st->osd_enabled && st->use_isp_osd) {
-		/* Hybrid: ISP OSD for mains, IPU OSD for subs */
 		RSS_HAL_CALL(st->ops, isp_osd_set_pool_size, st->hal_ctx, 512 * 1024);
 		RSS_HAL_CALL(st->ops, osd_set_pool_size, st->hal_ctx, 512 * 1024);
-
-		for (int i = 0; i < st->stream_count; i++) {
-			if (st->streams[i].is_jpeg)
-				continue;
-			if (st->streams[i].fs_chn % 3 == 0)
-				continue; /* main — uses ISP OSD, no group */
-			int grp = st->streams[i].chn;
-			ret = RSS_HAL_CALL(st->ops, osd_create_group, st->hal_ctx, grp);
-			if (ret != RSS_OK) {
-				RSS_WARN("osd_create_group(%d) failed: %d", grp, ret);
-				continue;
-			}
-			RSS_DEBUG("osd group %d created (sub, IPU OSD)", grp);
-		}
 		RSS_INFO("using hybrid OSD: ISP for mains, IPU for subs");
 	} else if (st->osd_enabled) {
-		/* IPU OSD only: create groups for all streams */
 		RSS_HAL_CALL(st->ops, osd_set_pool_size, st->hal_ctx, 512 * 1024);
-
-		for (int i = 0; i < st->stream_count; i++) {
-			if (st->streams[i].is_jpeg)
-				continue;
-			int grp = st->streams[i].chn;
-			ret = RSS_HAL_CALL(st->ops, osd_create_group, st->hal_ctx, grp);
-			if (ret != RSS_OK) {
-				RSS_WARN("osd_create_group(%d) failed: %d, disabling OSD", grp,
-					 ret);
-				st->osd_enabled = false;
-				break;
-			}
-			RSS_DEBUG("osd group %d created", grp);
-		}
 	}
 
-	/* ── 6b. Create OSD regions + Start (before bind, per vendor sample) ── */
-	rvd_osd_init(st);
-	/* IPU OSD: OSD_Start BEFORE bind, matching vendor SDK sample sequence:
-	 * CreateGroup → CreateRgn → Register → SetAttr → SetGrpRgnAttr → Start → Bind
-	 * ISP OSD: no start needed — regions are shown via ShowOsdRgn */
-	if (st->osd_enabled) {
-		for (int i = 0; i < st->stream_count; i++) {
-			if (st->streams[i].is_jpeg)
-				continue;
-			/* ISP OSD mains don't need osd_start */
-			if (st->use_isp_osd && st->streams[i].fs_chn % 3 == 0)
-				continue;
-			int grp = st->streams[i].chn;
-			ret = RSS_HAL_CALL(st->ops, osd_start, st->hal_ctx, grp);
-			if (ret != RSS_OK)
-				RSS_WARN("osd_start(%d) failed: %d", grp, ret);
-			else
-				RSS_DEBUG("osd_start(%d) ok", grp);
-		}
+	/* Initialize privacy state (before rvd_stream_init creates regions) */
+	for (int s = 0; s < RVD_MAX_STREAMS; s++) {
+		st->privacy_handles[s] = -1;
+		st->privacy[s] = false;
 	}
 
-	/* ── 7. Create encoder groups and channels ── */
-	/* Video streams: create group, create chn, register chn in group.
-	 * JPEG: no group (registers into group 0), uses enc chn 4+ per SDK convention. */
-	for (int i = 0; i < st->stream_count; i++) {
-		int chn = st->streams[i].chn;
-
-		if (st->streams[i].is_jpeg) {
-			/* Find parent video stream's encoder group */
-			int video_grp = 0;
-			for (int v = 0; v < st->stream_count; v++) {
-				if (!st->streams[v].is_jpeg &&
-				    st->streams[v].fs_chn == st->streams[i].fs_chn) {
-					video_grp = st->streams[v].chn;
-					break;
-				}
-			}
-
-			/* Optional buffer sharing (before CreateChn) */
-			if (rss_config_get_bool(cfg, "jpeg", "bufshare", true)) {
-				ret = RSS_HAL_CALL(st->ops, enc_set_bufshare, st->hal_ctx, chn,
-						   video_grp);
-				if (ret == RSS_OK)
-					RSS_DEBUG("jpeg bufshare chn %d -> group %d", chn,
-						  video_grp);
-				else
-					RSS_WARN("jpeg bufshare failed: %d (non-fatal)", ret);
-			}
-
-			ret = RSS_HAL_CALL(st->ops, enc_create_channel, st->hal_ctx, chn,
-					   &st->streams[i].enc_cfg);
-			if (ret != RSS_OK) {
-				RSS_FATAL("enc_create_channel(%d/JPEG) failed: %d", chn, ret);
-				return ret;
-			}
-
-			/* Register JPEG into corresponding video group */
-			ret = RSS_HAL_CALL(st->ops, enc_register_channel, st->hal_ctx, video_grp,
-					   chn);
-			if (ret != RSS_OK) {
-				RSS_FATAL("enc_register_channel(%d, %d) failed: %d", video_grp, chn,
-					  ret);
-				return ret;
-			}
-		} else {
-			ret = RSS_HAL_CALL(st->ops, enc_create_group, st->hal_ctx, chn);
-			if (ret != RSS_OK) {
-				RSS_FATAL("enc_create_group(%d) failed: %d", chn, ret);
-				return ret;
-			}
-
-			ret = RSS_HAL_CALL(st->ops, enc_create_channel, st->hal_ctx, chn,
-					   &st->streams[i].enc_cfg);
-			if (ret != RSS_OK) {
-				RSS_FATAL("enc_create_channel(%d) failed: %d", chn, ret);
-				return ret;
-			}
-
-			/* Low latency: encoder releases each frame immediately
-			 * instead of batching (saves 1-3 frame periods = 40-120ms) */
-			if (st->low_latency)
-				RSS_HAL_CALL(st->ops, enc_set_max_stream_cnt, st->hal_ctx, chn, 1);
-
-			ret = RSS_HAL_CALL(st->ops, enc_register_channel, st->hal_ctx, chn, chn);
-			if (ret != RSS_OK) {
-				RSS_FATAL("enc_register_channel(%d) failed: %d", chn, ret);
-				return ret;
-			}
-		}
-	}
-
-	/* ── 8a. IVS init (before bind — SDK requires all groups created before FS enable) ── */
+	/* ── 7-10. Create encoder, OSD, bind, rings per stream ── */
+	/* IVS init must happen before bind (SDK requires all groups created) */
 	st->ivs_enabled = rss_config_get_bool(cfg, "motion", "enabled", false);
 	if (st->ivs_enabled) {
 		int ivs_ret = rvd_ivs_init(st);
@@ -847,178 +733,38 @@ int rvd_pipeline_init(rvd_state_t *st)
 		}
 	}
 
-	/* ── 8b. Bind pipeline ── */
-	/* Build a chain of cells for each video stream and bind them sequentially.
-	 * JPEG channels share a framesource — no separate bind needed.
-	 * Chain varies by stream: FS [→ IVS] [→ OSD] → ENC */
+	/* Init all streams: video first (creates encoder groups), then JPEG
+	 * (registers into parent video's group). */
 	for (int i = 0; i < st->stream_count; i++) {
 		if (st->streams[i].is_jpeg)
 			continue;
-		int fsc = st->streams[i].fs_chn;
-		int grp = st->streams[i].chn;
-		bool insert_ivs = (fsc == 1 && st->ivs_active);
-
-		rss_cell_t chain[RVD_MAX_BIND_STAGES];
-		int chain_len = 0;
-
-		chain[chain_len++] = (rss_cell_t){RSS_DEV_FS, fsc, 0};
-		if (insert_ivs)
-			chain[chain_len++] = (rss_cell_t){RSS_DEV_IVS, 0, 0};
-		/* OSD in bind chain: always for IPU-only mode, subs only for hybrid */
-		if (st->osd_enabled && (!st->use_isp_osd || st->streams[i].fs_chn % 3 != 0))
-			chain[chain_len++] = (rss_cell_t){RSS_DEV_OSD, grp, 0};
-		chain[chain_len++] = (rss_cell_t){RSS_DEV_ENC, grp, 0};
-
-		for (int j = 0; j < chain_len - 1; j++) {
-			ret = RSS_HAL_CALL(st->ops, bind, st->hal_ctx, &chain[j], &chain[j + 1]);
-			if (ret != RSS_OK) {
-				RSS_FATAL("bind failed at step %d for stream %d: %d", j, i, ret);
-				return ret;
-			}
+		ret = rvd_stream_init(st, i);
+		if (ret != RSS_OK) {
+			RSS_FATAL("stream%d init failed: %d", i, ret);
+			return ret;
 		}
-
-		/* Store chain for unbind at deinit */
-		memcpy(st->bind_chain[i], chain, sizeof(rss_cell_t) * chain_len);
-		st->bind_chain_len[i] = chain_len;
-
-		RSS_DEBUG("stream%d bind: %d stages", i, chain_len);
+	}
+	for (int i = 0; i < st->stream_count; i++) {
+		if (!st->streams[i].is_jpeg)
+			continue;
+		ret = rvd_stream_init(st, i);
+		if (ret != RSS_OK) {
+			RSS_FATAL("stream%d (JPEG) init failed: %d", i, ret);
+			return ret;
+		}
 	}
 
 	/* IVS: create algo interface + channel + register BEFORE FS enable.
 	 * The SDK aborts if frames arrive at an IVS group with no channel. */
 	if (st->ivs_active) {
 		int ivs_ret = rvd_ivs_start(st);
-		if (ivs_ret != RSS_OK) {
+		if (ivs_ret != RSS_OK)
 			RSS_WARN("IVS start failed: %d (motion detection disabled)", ivs_ret);
-		}
 	}
 
-	/* ── 9. FS enable + encoder start deferred to rvd_stream_start()
+	/* FS enable + encoder start deferred to rvd_stream_start()
 	 * (called from rvd_frame_loop for initial startup, or from ctrl
-	 * handler for hot restart). ── */
-
-	/* ── 10. Create SHM rings ── */
-
-	/* Auto-size ring data region from bitrate and slot count.
-	 * max_frame ≈ bitrate / fps / 8 * 4 (4× headroom for I-frames).
-	 * ring_data = max_frame * slots, clamped to [256KB .. config max].
-	 * Config value of 0 = auto (recommended). Non-zero = explicit MB. */
-	int ring_main_slots = rss_config_get_int(cfg, "ring", "main_slots", 32);
-	int ring_sub_slots = rss_config_get_int(cfg, "ring", "sub_slots", 32);
-	int ring_main_cfg_mb = rss_config_get_int(cfg, "ring", "main_data_mb", 0);
-	int ring_sub_cfg_mb = rss_config_get_int(cfg, "ring", "sub_data_mb", 0);
-
-	uint32_t main_data;
-	if (ring_main_cfg_mb > 0) {
-		main_data = (uint32_t)ring_main_cfg_mb * 1024 * 1024;
-	} else {
-		uint32_t bps = st->streams[0].enc_cfg.bitrate;
-		uint32_t fps = st->streams[0].enc_cfg.fps_num;
-		if (fps == 0)
-			fps = 25;
-		uint32_t max_frame = (uint32_t)((uint64_t)bps * 4 / 8 / fps);
-		if (max_frame < 8192)
-			max_frame = 8192;
-		main_data = max_frame * (uint32_t)ring_main_slots;
-		if (main_data < 256 * 1024)
-			main_data = 256 * 1024;
-		if (main_data > 8 * 1024 * 1024)
-			main_data = 8 * 1024 * 1024;
-	}
-	RSS_DEBUG("main ring: %u slots, %u KB data", ring_main_slots, main_data / 1024);
-
-	/* Create video rings for all non-JPEG streams */
-	for (int i = 0; i < st->stream_count; i++) {
-		if (st->streams[i].is_jpeg)
-			continue;
-
-		/* Determine ring name based on sensor and local stream index */
-		int local = st->streams[i].fs_chn - fs_base_channel(st->streams[i].sensor_idx);
-		const char *type = (local == 0) ? "main" : "sub";
-		char ring_name[24];
-		get_ring_name(st->streams[i].sensor_idx, type, ring_name, sizeof(ring_name));
-
-		/* Auto-size ring from bitrate */
-		bool is_main = (local == 0);
-		int slots_cfg = is_main ? ring_main_slots : ring_sub_slots;
-		int mb_cfg = is_main ? ring_main_cfg_mb : ring_sub_cfg_mb;
-		uint32_t min_data = is_main ? (256 * 1024) : (128 * 1024);
-		uint32_t max_data = is_main ? (8 * 1024 * 1024) : (4 * 1024 * 1024);
-		uint32_t min_frame = is_main ? 8192 : 4096;
-
-		uint32_t data;
-		if (mb_cfg > 0) {
-			data = (uint32_t)mb_cfg * 1024 * 1024;
-		} else {
-			uint32_t bps = st->streams[i].enc_cfg.bitrate;
-			uint32_t fps = st->streams[i].enc_cfg.fps_num;
-			if (fps == 0)
-				fps = 25;
-			uint32_t max_frame = (uint32_t)((uint64_t)bps * 4 / 8 / fps);
-			if (max_frame < min_frame)
-				max_frame = min_frame;
-			data = max_frame * (uint32_t)slots_cfg;
-			if (data < min_data)
-				data = min_data;
-			if (data > max_data)
-				data = max_data;
-		}
-		RSS_DEBUG("%s ring: %u slots, %u KB data", ring_name, slots_cfg, data / 1024);
-
-		st->streams[i].ring = rss_ring_create(ring_name, slots_cfg, data);
-		if (!st->streams[i].ring) {
-			RSS_FATAL("failed to create %s ring", ring_name);
-			return RSS_ERR;
-		}
-		rss_ring_set_stream_info(
-			st->streams[i].ring, i, st->streams[i].enc_cfg.codec,
-			st->streams[i].enc_cfg.width, st->streams[i].enc_cfg.height,
-			st->streams[i].enc_cfg.fps_num, st->streams[i].enc_cfg.fps_den,
-			rvd_profile_idc(st->streams[i].enc_cfg.profile),
-			rvd_level_idc(st->streams[i].enc_cfg.width, st->streams[i].enc_cfg.height));
-	}
-
-	/* JPEG rings — auto-sized from resolution */
-	for (int j = 0; j < st->jpeg_count; j++) {
-		int ji = st->jpeg_streams[j];
-		if (ji < 0)
-			continue;
-		char ring_name[24];
-		char base_name[16];
-		snprintf(base_name, sizeof(base_name), "jpeg%d", j);
-		get_ring_name(st->streams[ji].sensor_idx, base_name, ring_name, sizeof(ring_name));
-		/* Estimate per-frame JPEG size with quality scaling:
-		 *   Measured: 1440p q75 ≈ 76KB, 360p q75 ≈ 6KB
-		 *   Conservative estimate with ~3x headroom over measured.
-		 *   Slots scale with fps (must be power-of-2):
-		 *     1-2 fps → 4, 3-8 fps → 8, 9+ fps → 16 */
-		uint32_t w = st->streams[ji].enc_cfg.width;
-		uint32_t h = st->streams[ji].enc_cfg.height;
-		uint32_t q = (uint32_t)st->streams[ji].enc_cfg.init_qp;
-		uint32_t fps = st->streams[ji].enc_cfg.fps_num;
-		uint32_t divisor = (q >= 90) ? 6 : (q >= 70) ? 16 : 24;
-		uint32_t slots = (fps >= 9) ? 16 : (fps >= 3) ? 8 : 4;
-		uint32_t jpeg_max = w * h / divisor;
-		if (jpeg_max < 16384)
-			jpeg_max = 16384;
-		uint32_t jpeg_data = jpeg_max * slots;
-		if (jpeg_data > 4 * 1024 * 1024)
-			jpeg_data = 4 * 1024 * 1024;
-		RSS_DEBUG("%s ring: %u slots, %u KB data (q%u, /%u, %u fps)", ring_name, slots,
-			  jpeg_data / 1024, q, divisor, fps);
-
-		st->streams[ji].ring = rss_ring_create(ring_name, slots, jpeg_data);
-		if (!st->streams[ji].ring) {
-			RSS_FATAL("failed to create %s ring", ring_name);
-			return RSS_ERR;
-		}
-		rss_ring_set_stream_info(
-			st->streams[ji].ring, 0x20 + j, RSS_CODEC_JPEG,
-			st->streams[ji].enc_cfg.width, st->streams[ji].enc_cfg.height,
-			st->streams[ji].enc_cfg.fps_num, st->streams[ji].enc_cfg.fps_den, 0, 0);
-	}
-
-	/* OSD regions already created in step 6b */
+	 * handler for hot restart). */
 
 	pthread_mutex_init(&st->osd_lock, NULL);
 
@@ -1038,6 +784,234 @@ int rvd_pipeline_init(rvd_state_t *st)
  * pipeline_init/deinit call these in loops for full init/shutdown.
  * Ctrl commands call them individually for per-stream hot restart.
  * ================================================================ */
+
+/* Find the JPEG stream paired with a video stream (same FS channel) */
+static int find_jpeg_for_video(rvd_state_t *st, int video_idx)
+{
+	int target_fs = st->streams[video_idx].fs_chn;
+	for (int j = 0; j < st->jpeg_count; j++) {
+		int ji = st->jpeg_streams[j];
+		if (ji >= 0 && st->streams[ji].fs_chn == target_fs)
+			return ji;
+	}
+	return -1;
+}
+
+/* Find the encoder group of the video stream that owns a given FS channel */
+static int find_video_group(rvd_state_t *st, int fs_chn)
+{
+	for (int v = 0; v < st->stream_count; v++) {
+		if (!st->streams[v].is_jpeg && st->streams[v].fs_chn == fs_chn)
+			return st->streams[v].chn;
+	}
+	return 0;
+}
+
+int rvd_stream_init(rvd_state_t *st, int idx)
+{
+	rvd_stream_t *s = &st->streams[idx];
+	rss_config_t *cfg = st->cfg;
+	int ret;
+
+	/* ── Encoder group + channel ── */
+	if (s->is_jpeg) {
+		int video_grp = find_video_group(st, s->fs_chn);
+
+		if (rss_config_get_bool(cfg, "jpeg", "bufshare", true)) {
+			ret = RSS_HAL_CALL(st->ops, enc_set_bufshare, st->hal_ctx, s->chn,
+					   video_grp);
+			if (ret == RSS_OK)
+				RSS_DEBUG("jpeg bufshare chn %d -> group %d", s->chn, video_grp);
+			else
+				RSS_WARN("jpeg bufshare failed: %d (non-fatal)", ret);
+		}
+
+		ret = RSS_HAL_CALL(st->ops, enc_create_channel, st->hal_ctx, s->chn, &s->enc_cfg);
+		if (ret != RSS_OK) {
+			RSS_ERROR("enc_create_channel(%d/JPEG) failed: %d", s->chn, ret);
+			return ret;
+		}
+
+		ret = RSS_HAL_CALL(st->ops, enc_register_channel, st->hal_ctx, video_grp, s->chn);
+		if (ret != RSS_OK) {
+			RSS_ERROR("enc_register_channel(%d, %d) failed: %d", video_grp, s->chn,
+				  ret);
+			RSS_HAL_CALL(st->ops, enc_destroy_channel, st->hal_ctx, s->chn);
+			return ret;
+		}
+	} else {
+		ret = RSS_HAL_CALL(st->ops, enc_create_group, st->hal_ctx, s->chn);
+		if (ret != RSS_OK) {
+			RSS_ERROR("enc_create_group(%d) failed: %d", s->chn, ret);
+			return ret;
+		}
+
+		ret = RSS_HAL_CALL(st->ops, enc_create_channel, st->hal_ctx, s->chn, &s->enc_cfg);
+		if (ret != RSS_OK) {
+			RSS_ERROR("enc_create_channel(%d) failed: %d", s->chn, ret);
+			goto fail_enc_chn;
+		}
+
+		if (st->low_latency)
+			RSS_HAL_CALL(st->ops, enc_set_max_stream_cnt, st->hal_ctx, s->chn, 1);
+
+		ret = RSS_HAL_CALL(st->ops, enc_register_channel, st->hal_ctx, s->chn, s->chn);
+		if (ret != RSS_OK) {
+			RSS_ERROR("enc_register_channel(%d) failed: %d", s->chn, ret);
+			goto fail_enc_reg;
+		}
+	}
+
+	/* ── OSD group + regions (IPU only, non-JPEG) ── */
+	if (st->osd_enabled && !s->is_jpeg && (!st->use_isp_osd || s->fs_chn % 3 != 0)) {
+		ret = RSS_HAL_CALL(st->ops, osd_create_group, st->hal_ctx, s->chn);
+		if (ret != RSS_OK)
+			RSS_WARN("osd_create_group(%d) failed: %d (non-fatal)", s->chn, ret);
+
+		pthread_mutex_lock(&st->osd_lock);
+		rvd_osd_init_stream(st, idx);
+		pthread_mutex_unlock(&st->osd_lock);
+
+		RSS_HAL_CALL(st->ops, osd_start, st->hal_ctx, s->chn);
+	} else if (st->osd_enabled && !s->is_jpeg && st->use_isp_osd) {
+		/* ISP OSD: regions only, no group/start */
+		pthread_mutex_lock(&st->osd_lock);
+		rvd_osd_init_stream(st, idx);
+		pthread_mutex_unlock(&st->osd_lock);
+	}
+
+	/* ── Bind chain: FS [→ IVS] [→ OSD] → ENC ── */
+	if (!s->is_jpeg) {
+		rss_cell_t chain[RVD_MAX_BIND_STAGES];
+		int chain_len = 0;
+
+		chain[chain_len++] = (rss_cell_t){RSS_DEV_FS, s->fs_chn, 0};
+		if (s->fs_chn == 1 && st->ivs_active)
+			chain[chain_len++] = (rss_cell_t){RSS_DEV_IVS, 0, 0};
+		if (st->osd_enabled && (!st->use_isp_osd || s->fs_chn % 3 != 0))
+			chain[chain_len++] = (rss_cell_t){RSS_DEV_OSD, s->chn, 0};
+		chain[chain_len++] = (rss_cell_t){RSS_DEV_ENC, s->chn, 0};
+
+		for (int j = 0; j < chain_len - 1; j++) {
+			ret = RSS_HAL_CALL(st->ops, bind, st->hal_ctx, &chain[j], &chain[j + 1]);
+			if (ret != RSS_OK) {
+				RSS_ERROR("bind step %d for stream%d failed: %d", j, idx, ret);
+				/* Unbind what we already bound */
+				for (int k = j - 1; k >= 0; k--)
+					RSS_HAL_CALL(st->ops, unbind, st->hal_ctx, &chain[k],
+						     &chain[k + 1]);
+				goto fail_bind;
+			}
+		}
+		memcpy(st->bind_chain[idx], chain, sizeof(rss_cell_t) * chain_len);
+		st->bind_chain_len[idx] = chain_len;
+		RSS_DEBUG("stream%d bind: %d stages", idx, chain_len);
+	}
+
+	/* ── Create ring ── */
+	{
+		int local = s->fs_chn - fs_base_channel(s->sensor_idx);
+		bool is_main = (local == 0);
+		char ring_name[24];
+
+		if (s->is_jpeg) {
+			/* Find jpeg index */
+			int jpeg_idx = 0;
+			for (int j = 0; j < st->jpeg_count; j++) {
+				if (st->jpeg_streams[j] == idx) {
+					jpeg_idx = j;
+					break;
+				}
+			}
+			char base[16];
+			snprintf(base, sizeof(base), "jpeg%d", jpeg_idx);
+			get_ring_name(s->sensor_idx, base, ring_name, sizeof(ring_name));
+
+			uint32_t w = s->enc_cfg.width;
+			uint32_t h = s->enc_cfg.height;
+			uint32_t q = (uint32_t)s->enc_cfg.init_qp;
+			uint32_t fps = s->enc_cfg.fps_num;
+			uint32_t divisor = (q >= 90) ? 6 : (q >= 70) ? 16 : 24;
+			uint32_t slots = (fps >= 9) ? 16 : (fps >= 3) ? 8 : 4;
+			uint32_t jpeg_max = w * h / divisor;
+			if (jpeg_max < 16384)
+				jpeg_max = 16384;
+			uint32_t data = jpeg_max * slots;
+			if (data > 4 * 1024 * 1024)
+				data = 4 * 1024 * 1024;
+
+			s->ring = rss_ring_create(ring_name, slots, data);
+			if (s->ring)
+				rss_ring_set_stream_info(s->ring, 0x20 + jpeg_idx, RSS_CODEC_JPEG,
+							 w, h, fps, s->enc_cfg.fps_den, 0, 0);
+		} else {
+			const char *type = is_main ? "main" : "sub";
+			get_ring_name(s->sensor_idx, type, ring_name, sizeof(ring_name));
+
+			int slots_cfg = rss_config_get_int(
+				cfg, "ring", is_main ? "main_slots" : "sub_slots", 32);
+			int mb_cfg = rss_config_get_int(
+				cfg, "ring", is_main ? "main_data_mb" : "sub_data_mb", 0);
+			uint32_t min_data = is_main ? (256 * 1024) : (128 * 1024);
+			uint32_t max_data = is_main ? (8 * 1024 * 1024) : (4 * 1024 * 1024);
+			uint32_t min_frame = is_main ? 8192 : 4096;
+
+			uint32_t data;
+			if (mb_cfg > 0) {
+				data = (uint32_t)mb_cfg * 1024 * 1024;
+			} else {
+				uint32_t bps = s->enc_cfg.bitrate;
+				uint32_t fps = s->enc_cfg.fps_num;
+				if (fps == 0)
+					fps = 25;
+				uint32_t max_frame = (uint32_t)((uint64_t)bps * 4 / 8 / fps);
+				if (max_frame < min_frame)
+					max_frame = min_frame;
+				data = max_frame * (uint32_t)slots_cfg;
+				if (data < min_data)
+					data = min_data;
+				if (data > max_data)
+					data = max_data;
+			}
+
+			s->ring = rss_ring_create(ring_name, slots_cfg, data);
+			if (s->ring)
+				rss_ring_set_stream_info(
+					s->ring, idx, s->enc_cfg.codec, s->enc_cfg.width,
+					s->enc_cfg.height, s->enc_cfg.fps_num, s->enc_cfg.fps_den,
+					rvd_profile_idc(s->enc_cfg.profile),
+					rvd_level_idc(s->enc_cfg.width, s->enc_cfg.height));
+		}
+
+		if (!s->ring) {
+			RSS_ERROR("failed to create ring %s", ring_name);
+			goto fail_ring;
+		}
+		RSS_DEBUG("stream%d ring: %s", idx, ring_name);
+	}
+
+	return RSS_OK;
+
+	/* Rollback on failure */
+fail_ring:
+fail_bind:
+	if (st->osd_enabled && !s->is_jpeg) {
+		pthread_mutex_lock(&st->osd_lock);
+		rvd_osd_deinit_stream(st, idx);
+		pthread_mutex_unlock(&st->osd_lock);
+		if (!st->use_isp_osd || s->fs_chn % 3 != 0) {
+			RSS_HAL_CALL(st->ops, osd_stop, st->hal_ctx, s->chn);
+			RSS_HAL_CALL(st->ops, osd_destroy_group, st->hal_ctx, s->chn);
+		}
+	}
+	RSS_HAL_CALL(st->ops, enc_unregister_channel, st->hal_ctx, s->chn);
+fail_enc_reg:
+	RSS_HAL_CALL(st->ops, enc_destroy_channel, st->hal_ctx, s->chn);
+fail_enc_chn:
+	if (!s->is_jpeg)
+		RSS_HAL_CALL(st->ops, enc_destroy_group, st->hal_ctx, s->chn);
+	return ret;
+}
 
 void rvd_stream_stop(rvd_state_t *st, int idx)
 {
