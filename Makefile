@@ -141,13 +141,19 @@ else
 LDFLAGS_SYSROOT :=
 endif
 
-# libc shim — link musl or uclibc shim if present in sysroot
+# libc shim — prefer static archive (eliminates .so from device), fall back to shared
+SHIM_A := $(firstword $(wildcard $(SYSROOT)/usr/lib/libmuslshim.a $(SYSROOT)/lib/libmuslshim.a \
+                                 $(SYSROOT)/usr/lib/libuclibcshim.a $(SYSROOT)/lib/libuclibcshim.a))
+ifneq ($(SHIM_A),)
+# Static link: pull all symbols (libimp.so resolves them from the executable)
+SHIM_LIB := -Wl,--whole-archive $(SHIM_A) -Wl,--no-whole-archive -Wl,--export-dynamic
+else
 SHIM_LIB := $(if $(wildcard $(SYSROOT)/usr/lib/libmuslshim.so $(SYSROOT)/lib/libmuslshim.so),-lmuslshim,\
              $(if $(wildcard $(SYSROOT)/usr/lib/libuclibcshim.so $(SYSROOT)/lib/libuclibcshim.so),-luclibcshim,))
+endif
 
 # System libs for HAL-linked daemons
-# SHIM_LIB must come BEFORE Ingenic SDK libs — the dynamic linker resolves
-# symbols in DT_NEEDED order, so the shim's mmap must be loaded first.
+# Shim must come BEFORE Ingenic SDK libs — symbols must be resolved first.
 LDFLAGS_HAL := $(LDFLAGS_SYSROOT) $(SHIM_LIB) -limp -lalog -lsysutils -lpthread -lrt -lm -ldl -latomic
 
 # IVS detection libs — optional, no MXU needed (statically linked in .so)
