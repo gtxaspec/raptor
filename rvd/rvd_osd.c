@@ -236,12 +236,17 @@ void rvd_osd_init_stream(rvd_state_t *st, int s)
 		st->osd_regions[s][r].local_buf = NULL;
 	}
 
-	/* Region sizes. For sub stream, use max of scaled size and
-	 * ROD's SHM size (which is font-size dependent). */
-	uint32_t th = OSD_TEXT_H;
-	uint32_t time_w = OSD_TIME_W;
-	uint32_t up_w = OSD_UPTIME_W;
-	uint32_t txt_w = OSD_TEXT_W;
+	/* Region sizes — scale from config font_size (base dimensions at size 24).
+	 * Must be >= ROD's SHM dimensions for that role. */
+	int font_size = rss_config_get_int(cfg, "osd", "font_size", 24);
+	if (font_size < 10)
+		font_size = 10;
+	uint32_t th = (uint32_t)(OSD_TEXT_H * font_size / 24);
+	uint32_t time_w = (uint32_t)(OSD_TIME_W * font_size / 24);
+	uint32_t up_w = (uint32_t)(OSD_UPTIME_W * font_size / 24);
+	uint32_t txt_w = (uint32_t)(OSD_TEXT_W * font_size / 24);
+	if (th < OSD_TEXT_H)
+		th = OSD_TEXT_H; /* never smaller than default */
 
 	/* Scale OSD dimensions for sub streams relative to their sensor's main */
 	int main_idx = 0;
@@ -303,7 +308,7 @@ void rvd_osd_init_stream(rvd_state_t *st, int s)
 	}
 
 	/* Privacy text region (centered, hidden until privacy mode) */
-	if (create_region(st, s, RVD_OSD_PRIVACY, OSD_TIME_W, th))
+	if (create_region(st, s, RVD_OSD_PRIVACY, time_w, th))
 		region_count++;
 
 	/* Detection bounding box overlay — sub-stream only, full-frame.

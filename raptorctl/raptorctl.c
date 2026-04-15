@@ -234,6 +234,7 @@ const struct help_entry help_entries[] = {
 	{"rod", "set-font-color <0xAARRGGBB>         Text color"},
 	{"rod", "set-stroke-color <0xAARRGGBB>       Stroke color"},
 	{"rod", "set-stroke-size <0-5>               Stroke width"},
+	{"rod", "set-font-size <10-72>               Font size (triggers OSD restart)"},
 	{"ric", "mode <auto|day|night>               Set day/night mode (GPIO + ISP)"},
 	{"ric", "isp-mode <day|night>                Set ISP mode only (no GPIO)"},
 	{"rhd", "clients                             List connected clients"},
@@ -996,6 +997,15 @@ int main(int argc, char **argv)
 		}
 		cJSON *j = jcmd(cmd);
 		jadd_s(j, "value", argv[3]);
+		jstr(j, json, sizeof(json));
+
+	} else if (strcmp(cmd, "set-font-size") == 0 || strcmp(cmd, "set-stroke-size") == 0) {
+		if (argc < 4) {
+			fprintf(stderr, "Usage: raptorctl %s %s <value>\n", daemon, cmd);
+			return 1;
+		}
+		cJSON *j = jcmd(cmd);
+		jadd_i(j, "value", argv[3]);
 		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "sensitivity") == 0) {

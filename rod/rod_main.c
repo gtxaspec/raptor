@@ -452,6 +452,103 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		}
 	}
 
+	if (strstr(cmd_json, "\"set-font-size\"")) {
+		int val;
+		if (rss_json_get_int(cmd_json, "value", &val) != 0 || val < 10 || val > 72)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value 10-72");
+
+		RSS_INFO("set-font-size: %d → %d", st->settings.font_size, val);
+
+		/* Re-rasterize glyphs at new size per stream */
+		for (int s = 0; s < st->stream_count; s++) {
+			int fs = val;
+			if (s > 0) {
+				fs = fs * st->stream_h[s] / st->stream_h[0];
+				if (fs < 12)
+					fs = 12;
+			}
+			rod_render_deinit(st, s);
+			if (rod_render_init(st, s, fs) < 0) {
+				RSS_ERROR("font re-init failed for stream %d", s);
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+							   "font init failed");
+			}
+		}
+
+		/* Destroy text SHM regions (inode change triggers RVD reopen) */
+		for (int s = 0; s < st->stream_count; s++) {
+			for (int r = 0; r < ROD_MAX_REGIONS; r++) {
+				if (r == ROD_REGION_LOGO || r == ROD_REGION_DETECT)
+					continue; /* not font-dependent */
+				if (st->regions[s][r].shm) {
+					rss_osd_destroy(st->regions[s][r].shm);
+					st->regions[s][r].shm = NULL;
+					st->regions[s][r].enabled = false;
+				}
+			}
+		}
+
+		/* Recreate text SHM regions with new font dimensions */
+		for (int s = 0; s < st->stream_count; s++) {
+			rod_font_t *f = &st->fonts[s];
+			int adv = f->max_text_width / 24;
+			if (adv < 10)
+				adv = 10;
+			int pad = st->settings.font_stroke > 0 ? st->settings.font_stroke * 2 : 0;
+
+			if (st->settings.time_enabled)
+				create_region_shm(st, s, ROD_REGION_TIME,
+						  ROD_TIME_CHARS * adv + pad, f->text_height);
+			if (st->settings.uptime_enabled)
+				create_region_shm(st, s, ROD_REGION_UPTIME,
+						  ROD_UPTIME_CHARS * adv + pad, f->text_height);
+			if (st->settings.text_enabled)
+				create_region_shm(st, s, ROD_REGION_TEXT,
+						  ROD_TEXT_CHARS * adv + pad, f->text_height);
+			create_region_shm(st, s, ROD_REGION_PRIVACY, ROD_TIME_CHARS * adv + pad,
+					  f->text_height);
+		}
+
+		/* Persist after success */
+		st->settings.font_size = val;
+		rss_config_set_int(st->cfg, "osd", "font_size", val);
+
+		/* Tell RVD to restart OSD with resized pool.
+		 * Calculate pool: worst case per-stream region bytes. */
+		{
+			rod_font_t *f0 = &st->fonts[0];
+			int adv = f0->max_text_width / 24;
+			if (adv < 10)
+				adv = 10;
+			int pad = st->settings.font_stroke > 0 ? st->settings.font_stroke * 2 : 0;
+			uint32_t main_bytes = ((uint32_t)(ROD_TIME_CHARS + ROD_UPTIME_CHARS +
+							  ROD_TEXT_CHARS + ROD_TIME_CHARS) *
+						       adv +
+					       pad * 4) *
+					      f0->text_height * 4;
+			main_bytes += 100 * 30 * 4;	 /* logo */
+			uint32_t total = main_bytes * 2; /* main + sub estimate */
+			total = total * 5 / 4;		 /* 25% headroom */
+			uint32_t pool_kb = (total + 1023) / 1024;
+			if (pool_kb < 448)
+				pool_kb = 448; /* minimum */
+
+			char cmd[96];
+			snprintf(cmd, sizeof(cmd),
+				 "{\"cmd\":\"osd-restart\",\"pool_kb\":%u,\"font_size\":%d}",
+				 pool_kb, val);
+			char rvd_resp[256];
+			int ret = rss_ctrl_send_command("/var/run/rss/rvd.sock", cmd, rvd_resp,
+							sizeof(rvd_resp), 5000);
+			if (ret < 0)
+				RSS_WARN("failed to notify RVD for OSD restart");
+			else
+				RSS_INFO("RVD osd-restart: pool_kb=%u resp=%s", pool_kb, rvd_resp);
+		}
+
+		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+	}
+
 	if (strstr(cmd_json, "\"config-show\"")) {
 		return rss_ctrl_resp(
 			resp_buf, resp_buf_size,

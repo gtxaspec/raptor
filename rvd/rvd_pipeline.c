@@ -298,15 +298,28 @@ int rvd_pipeline_init(rvd_state_t *st)
 	}
 
 	/* ── 3. OSD pool sizing — must be set before HAL init (SDK requirement).
-	 * Streams aren't configured yet, so read dimensions from config. */
+	 * Streams aren't configured yet, so read dimensions from config.
+	 * Scale with font_size (base values at font_size=24). */
 	{
+		int font_size = rss_config_get_int(cfg, "osd", "font_size", 24);
+		if (font_size < 10)
+			font_size = 10;
+		uint32_t tw = (uint32_t)(450 * font_size / 24);
+		uint32_t uw = (uint32_t)(280 * font_size / 24);
+		uint32_t xw = (uint32_t)(320 * font_size / 24);
+		uint32_t th = (uint32_t)(36 * font_size / 24);
+		if (th < 36)
+			th = 36;
+
 		uint32_t osd_pool = 0;
-		/* Main stream OSD: time(450x36) + uptime(280x36) + text(320x36) +
-		 * privacy(450x36) + logo(100x30) */
-		osd_pool += (450 + 280 + 320 + 450) * 36 * 4 + 100 * 30 * 4;
+		/* Main stream OSD: time + uptime + text + privacy + logo */
+		osd_pool += (tw + uw + xw + tw) * th * 4 + 100 * 30 * 4;
 		/* Sub stream OSD (if enabled): scaled text + logo */
 		if (rss_config_get_bool(cfg, "stream1", "enabled", true)) {
-			osd_pool += (240 + 150 + 170 + 450) * 20 * 4 + 100 * 30 * 4;
+			uint32_t sub_th = th / 2;
+			if (sub_th < 20)
+				sub_th = 20;
+			osd_pool += (240 + 150 + 170 + tw) * sub_th * 4 + 100 * 30 * 4;
 			/* Detection overlay: full sub-stream BGRA */
 			if (rss_config_get_bool(cfg, "motion", "enabled", false)) {
 				int sub_w = rss_config_get_int(cfg, "stream1", "width", 640);
@@ -318,7 +331,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 		osd_pool = osd_pool * 5 / 4;
 		osd_pool = (osd_pool + 0xFFFF) & ~0xFFFF; /* align to 64KB */
 		RSS_HAL_CALL(st->ops, osd_set_pool_size, st->hal_ctx, osd_pool);
-		RSS_DEBUG("osd pool: %u KB", osd_pool / 1024);
+		RSS_DEBUG("osd pool: %u KB (font_size=%d)", osd_pool / 1024, font_size);
 	}
 
 	/* ── 4. Init HAL (brings up ISP + sensor(s)) ── */

@@ -1355,7 +1355,16 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 
 	if (strstr(cmd_json, "\"osd-restart\"")) {
 		int pool_kb = 0;
+		int font_size = 0;
 		rss_json_get_int(cmd_json, "pool_kb", &pool_kb);
+		rss_json_get_int(cmd_json, "font_size", &font_size);
+
+		/* Update font_size in running config so rvd_osd_init_stream
+		 * calculates correct region dimensions on reinit. */
+		if (font_size > 0) {
+			rss_config_set_int(st->cfg, "osd", "font_size", font_size);
+			RSS_INFO("osd-restart: font_size=%d", font_size);
+		}
 
 		RSS_INFO("osd-restart: stopping all streams (pool_kb=%d)", pool_kb);
 
