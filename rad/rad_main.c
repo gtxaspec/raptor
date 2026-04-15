@@ -377,7 +377,17 @@ static void hal_log_bridge(int level, const char *file, int line, const char *fm
 int main(int argc, char **argv)
 {
 	rss_daemon_ctx_t dctx;
-	int ret = rss_daemon_init(&dctx, "rad", argc, argv);
+	int ret = rss_daemon_init(&dctx, "rad", argc, argv, ""
+#ifdef RAPTOR_AAC
+		" aac"
+#endif
+#ifdef RAPTOR_OPUS
+		" opus"
+#endif
+#ifdef RAPTOR_AUDIO_EFFECTS
+		" effects"
+#endif
+	);
 	if (ret != 0)
 		return ret < 0 ? 1 : 0;
 	rss_hal_set_log_func(hal_log_bridge);

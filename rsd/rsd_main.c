@@ -42,7 +42,11 @@ int main(int argc, char **argv)
 	srand(time(NULL));
 
 	rss_daemon_ctx_t dctx;
-	int ret = rss_daemon_init(&dctx, "rsd", argc, argv);
+	int ret = rss_daemon_init(&dctx, "rsd", argc, argv, ""
+#ifdef COMPY_HAS_TLS
+		" tls"
+#endif
+	);
 	if (ret != 0)
 		return ret < 0 ? 1 : 0;
 	if (!rss_config_get_bool(dctx.cfg, "rtsp", "enabled", true)) {

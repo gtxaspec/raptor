@@ -596,7 +596,14 @@ static void rwd_run(rwd_server_t *srv)
 int main(int argc, char **argv)
 {
 	rss_daemon_ctx_t dctx;
-	int ret = rss_daemon_init(&dctx, "rwd", argc, argv);
+	int ret = rss_daemon_init(&dctx, "rwd", argc, argv, ""
+#ifdef RAPTOR_WEBTORRENT
+		" webtorrent"
+#endif
+#ifdef RAPTOR_AAC
+		" aac"
+#endif
+	);
 	if (ret != 0)
 		return ret < 0 ? 1 : 0;
 	if (!rss_config_get_bool(dctx.cfg, "webrtc", "enabled", false)) {

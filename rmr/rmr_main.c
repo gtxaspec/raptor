@@ -748,7 +748,7 @@ static uint32_t next_pow2(uint32_t n)
 int main(int argc, char **argv)
 {
 	rss_daemon_ctx_t dctx;
-	int ret = rss_daemon_init(&dctx, "rmr", argc, argv);
+	int ret = rss_daemon_init(&dctx, "rmr", argc, argv, NULL);
 	if (ret != 0)
 		return ret < 0 ? 1 : 0;
 	if (!rss_config_get_bool(dctx.cfg, "recording", "enabled", false)) {

@@ -797,7 +797,7 @@ static void server_run(rhd_server_t *srv)
 int main(int argc, char **argv)
 {
 	rss_daemon_ctx_t ctx;
-	int ret = rss_daemon_init(&ctx, "rhd", argc, argv);
+	int ret = rss_daemon_init(&ctx, "rhd", argc, argv, NULL);
 	if (ret != 0)
 		return ret < 0 ? 1 : 0;
 	rss_base64_init();

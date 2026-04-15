@@ -180,7 +180,7 @@ static int rmd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 int main(int argc, char **argv)
 {
 	rss_daemon_ctx_t dctx;
-	int ret = rss_daemon_init(&dctx, "rmd", argc, argv);
+	int ret = rss_daemon_init(&dctx, "rmd", argc, argv, NULL);
 	if (ret != 0)
 		return ret < 0 ? 1 : 0;
 	rmd_ctx_t ctx = {0};

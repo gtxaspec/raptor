@@ -213,7 +213,7 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 int main(int argc, char **argv)
 {
 	rss_daemon_ctx_t ctx;
-	int ret = rss_daemon_init(&ctx, "ric", argc, argv);
+	int ret = rss_daemon_init(&ctx, "ric", argc, argv, NULL);
 	if (ret != 0)
 		return ret < 0 ? 1 : 0;
 	ric_state_t st = {0};

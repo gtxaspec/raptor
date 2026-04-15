@@ -656,7 +656,7 @@ int main(int argc, char **argv)
 	rss_daemon_ctx_t ctx;
 	int ret;
 
-	ret = rss_daemon_init(&ctx, "rwc", argc, argv);
+	ret = rss_daemon_init(&ctx, "rwc", argc, argv, NULL);
 	if (ret != 0)
 		return ret < 0 ? 1 : 0;
 	if (!rss_config_get_bool(ctx.cfg, "webcam", "enabled", false)) {

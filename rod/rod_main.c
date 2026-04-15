@@ -489,7 +489,7 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 int main(int argc, char **argv)
 {
 	rss_daemon_ctx_t ctx;
-	int ret = rss_daemon_init(&ctx, "rod", argc, argv);
+	int ret = rss_daemon_init(&ctx, "rod", argc, argv, NULL);
 	if (ret != 0)
 		return ret < 0 ? 1 : 0;
 	/* Early exit if OSD disabled */
