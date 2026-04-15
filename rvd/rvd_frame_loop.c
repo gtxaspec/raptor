@@ -33,14 +33,9 @@ static uint16_t primary_nal_type(const rss_frame_t *frame)
 
 /* ── Per-channel encoder thread ── */
 
-typedef struct {
-	rvd_state_t *st;
-	int idx;
-} enc_thread_arg_t;
-
-static void *encoder_thread(void *arg)
+void *rvd_encoder_thread(void *arg)
 {
-	enc_thread_arg_t *a = arg;
+	rvd_enc_thread_arg_t *a = arg;
 	rvd_state_t *st = a->st;
 	int idx = a->idx;
 	rvd_stream_t *s = &st->streams[idx];
@@ -53,7 +48,7 @@ static void *encoder_thread(void *arg)
 	int64_t last_stats = rss_timestamp_us();
 	int64_t last_reap = last_stats;
 
-	while (*st->running) {
+	while (*st->running && atomic_load(&st->stream_active[idx])) {
 		/* JPEG on-demand: start/stop encoder based on ring consumers */
 		if (s->is_jpeg && s->jpeg_idle && s->ring) {
 			/* Periodically check for crashed consumers (~10s) */
@@ -109,8 +104,8 @@ static void *encoder_thread(void *arg)
 		rss_frame_t frame;
 		ret = RSS_HAL_CALL(st->ops, enc_get_frame, st->hal_ctx, s->chn, &frame);
 		if (ret != RSS_OK) {
-			RSS_WARN("stream%d: enc_get_frame failed (chn %d, ret=%d)", idx,
-				 s->chn, ret);
+			RSS_WARN("stream%d: enc_get_frame failed (chn %d, ret=%d)", idx, s->chn,
+				 ret);
 			continue;
 		}
 
@@ -148,23 +143,10 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running)
 	st->running = running;
 
 	/* Start per-channel encoder threads */
-	pthread_t enc_tids[RVD_MAX_STREAMS];
-	enc_thread_arg_t enc_args[RVD_MAX_STREAMS];
+	for (int i = 0; i < st->stream_count; i++)
+		rvd_stream_start(st, i);
 
-	pthread_attr_t attr;
-	pthread_attr_init(&attr);
-	pthread_attr_setstacksize(&attr, 128 * 1024);
-
-	for (int i = 0; i < st->stream_count; i++) {
-		enc_args[i] = (enc_thread_arg_t){.st = st, .idx = i};
-		pthread_create(&enc_tids[i], &attr, encoder_thread, &enc_args[i]);
-	}
-	pthread_attr_destroy(&attr);
-
-	/* OSD update thread — runs HAL OSD calls in isolation to avoid
-	 * interfering with the encoder/ring path. IMP_OSD_UpdateRgnAttrData
-	 * shares internal SDK state with the encoder and can block the
-	 * futex wake that ring consumers depend on. */
+	/* OSD update thread */
 	pthread_t osd_tid = 0;
 	if (st->osd_enabled) {
 		pthread_attr_t osd_attr;
@@ -175,12 +157,11 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running)
 	}
 
 	/* IVS poll thread */
-	pthread_t ivs_tid = 0;
 	if (st->ivs_active) {
 		pthread_attr_t ivs_attr;
 		pthread_attr_init(&ivs_attr);
 		pthread_attr_setstacksize(&ivs_attr, 64 * 1024);
-		pthread_create(&ivs_tid, &ivs_attr, rvd_ivs_thread, st);
+		pthread_create(&st->ivs_tid, &ivs_attr, rvd_ivs_thread, st);
 		pthread_attr_destroy(&ivs_attr);
 	}
 
@@ -211,15 +192,17 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running)
 		}
 	}
 
-	/* Wait for encoder threads */
+	/* Stop all encoder threads + disable FS + stop enc */
 	for (int i = 0; i < st->stream_count; i++)
-		pthread_join(enc_tids[i], NULL);
+		rvd_stream_stop(st, i);
 
 	if (osd_tid)
 		pthread_join(osd_tid, NULL);
 
-	if (ivs_tid)
-		pthread_join(ivs_tid, NULL);
+	if (st->ivs_tid) {
+		pthread_join(st->ivs_tid, NULL);
+		st->ivs_tid = 0;
+	}
 
 	if (epoll_fd >= 0)
 		close(epoll_fd);

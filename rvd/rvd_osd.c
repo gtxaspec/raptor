@@ -218,152 +218,151 @@ static bool create_region(rvd_state_t *st, int s, int r, uint32_t w, uint32_t h)
  * Create all OSD regions during pipeline init.
  * Must be called BEFORE osd_start and fs_enable.
  */
+void rvd_osd_init_stream(rvd_state_t *st, int s)
+{
+	rss_config_t *cfg = st->cfg;
+
+	if (st->streams[s].is_jpeg)
+		return;
+	if (!rss_config_get_bool(cfg, st->streams[s].cfg_sect, "osd_enabled", true)) {
+		RSS_INFO("osd stream%d: disabled by [%s] osd_enabled", s, st->streams[s].cfg_sect);
+		return;
+	}
+
+	for (int r = 0; r < RVD_OSD_REGIONS; r++) {
+		st->osd_regions[s][r].shm = NULL;
+		st->osd_regions[s][r].hal_handle = -1;
+		st->osd_regions[s][r].active = false;
+		st->osd_regions[s][r].local_buf = NULL;
+	}
+
+	/* Region sizes. For sub stream, use max of scaled size and
+	 * ROD's SHM size (which is font-size dependent). */
+	uint32_t th = OSD_TEXT_H;
+	uint32_t time_w = OSD_TIME_W;
+	uint32_t up_w = OSD_UPTIME_W;
+	uint32_t txt_w = OSD_TEXT_W;
+
+	/* Scale OSD dimensions for sub streams relative to their sensor's main */
+	int main_idx = 0;
+	for (int m = 0; m < st->stream_count; m++) {
+		if (!st->streams[m].is_jpeg &&
+		    st->streams[m].sensor_idx == st->streams[s].sensor_idx &&
+		    st->streams[m].fs_chn % 3 == 0) {
+			main_idx = m;
+			break;
+		}
+	}
+	if (s != main_idx) {
+		int sw = st->streams[s].enc_cfg.width;
+		int mw = st->streams[main_idx].enc_cfg.width;
+		int sh = st->streams[s].enc_cfg.height;
+		int mh = st->streams[main_idx].enc_cfg.height;
+		if (mh > 0)
+			th = th * sh / mh;
+		if (th < 20)
+			th = 20;
+		/* Scale widths but clamp to min 240 (covers ROD sub output) */
+		if (mw > 0) {
+			time_w = time_w * sw / mw;
+			up_w = up_w * sw / mw;
+			txt_w = txt_w * sw / mw;
+		}
+		if (time_w < 240)
+			time_w = 240;
+		if (up_w < 150)
+			up_w = 150;
+		if (txt_w < 170)
+			txt_w = 170;
+	}
+
+	int region_count = 0;
+
+	if (rss_config_get_bool(cfg, "osd", "time_enabled", true)) {
+		if (create_region(st, s, RVD_OSD_TIME, time_w, th))
+			region_count++;
+	}
+
+	if (rss_config_get_bool(cfg, "osd", "uptime_enabled", true)) {
+		if (create_region(st, s, RVD_OSD_UPTIME, up_w, th))
+			region_count++;
+	}
+
+	if (rss_config_get_bool(cfg, "osd", "text_enabled", true)) {
+		if (create_region(st, s, RVD_OSD_TEXT, txt_w, th))
+			region_count++;
+	}
+
+	/* Logo region: created with config dimensions, starts transparent.
+	 * ROD pushes actual logo data via SHM when it starts. */
+	if (rss_config_get_bool(cfg, "osd", "logo_enabled", true)) {
+		uint32_t lw = rss_config_get_int(cfg, "osd", "logo_width", OSD_LOGO_W);
+		uint32_t lh = rss_config_get_int(cfg, "osd", "logo_height", OSD_LOGO_H);
+		if (create_region(st, s, RVD_OSD_LOGO, lw, lh))
+			region_count++;
+	}
+
+	/* Privacy text region (centered, hidden until privacy mode) */
+	if (create_region(st, s, RVD_OSD_PRIVACY, OSD_TIME_W, th))
+		region_count++;
+
+	/* Detection bounding box overlay — sub-stream only, full-frame.
+	 * OSD pool increased to 1MB to fit 640x360 BGRA (900KB). */
+	if (s > 0 && rss_config_get_bool(cfg, "motion", "enabled", false)) {
+		if (create_region(st, s, RVD_OSD_DETECT, st->streams[s].enc_cfg.width,
+				  st->streams[s].enc_cfg.height))
+			region_count++;
+	}
+
+	RSS_DEBUG("osd stream%d: %d regions created", s, region_count);
+
+	/* Privacy cover region (full-frame, initially hidden).
+	 * ISP OSD: allocated lazily in rvd_osd_set_privacy() to avoid
+	 *   wasting ~8MB per stream at startup.
+	 * IPU OSD: native cover type (just a color, no bitmap). */
+	if (STREAM_ISP_OSD(st, s)) {
+		st->privacy_handles[s] = -1;
+	} else {
+		int stream_w = st->streams[s].enc_cfg.width;
+		int stream_h = st->streams[s].enc_cfg.height;
+		uint32_t pcol = (uint32_t)strtoul(
+			rss_config_get_str(st->cfg, "osd", "privacy_color", "0xFF000000"), NULL, 0);
+		rss_osd_region_t cover = {
+			.type = RSS_OSD_COVER,
+			.x = 0,
+			.y = 0,
+			.width = stream_w,
+			.height = stream_h,
+			.cover_color = pcol,
+			.bitmap_fmt = RSS_PIXFMT_BGRA,
+			.layer = 0,
+		};
+		int ph = -1;
+		int pret = RSS_HAL_CALL(st->ops, osd_create_region, st->hal_ctx, &ph, &cover);
+		if (pret == RSS_OK) {
+			int grp = st->streams[s].chn;
+			RSS_HAL_CALL(st->ops, osd_register_region, st->hal_ctx, ph, grp);
+			RSS_HAL_CALL(st->ops, osd_set_region_attr, st->hal_ctx, ph, &cover);
+			RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, ph, grp, 0, 0);
+			st->privacy_handles[s] = ph;
+			RSS_DEBUG("privacy cover region stream%d handle=%d", s, ph);
+		} else {
+			st->privacy_handles[s] = -1;
+		}
+	}
+}
+
 void rvd_osd_init(rvd_state_t *st)
 {
 	if (!st->osd_enabled)
 		return;
 
-	rss_config_t *cfg = st->cfg;
-
 	/* Initialize privacy handles for all streams (including skipped ones) */
 	for (int s = 0; s < st->stream_count; s++)
 		st->privacy_handles[s] = -1;
 
-	for (int s = 0; s < st->stream_count; s++) {
-		if (st->streams[s].is_jpeg)
-			continue;
-		/* Per-stream OSD enable/disable from config */
-		if (!rss_config_get_bool(cfg, st->streams[s].cfg_sect, "osd_enabled", true)) {
-			RSS_INFO("osd stream%d: disabled by [%s] osd_enabled", s,
-				 st->streams[s].cfg_sect);
-			continue;
-		}
-
-		for (int r = 0; r < RVD_OSD_REGIONS; r++) {
-			st->osd_regions[s][r].shm = NULL;
-			st->osd_regions[s][r].hal_handle = -1;
-			st->osd_regions[s][r].active = false;
-			st->osd_regions[s][r].local_buf = NULL;
-		}
-
-		/* Region sizes. For sub stream, use max of scaled size and
-		 * ROD's SHM size (which is font-size dependent). */
-		uint32_t th = OSD_TEXT_H;
-		uint32_t time_w = OSD_TIME_W;
-		uint32_t up_w = OSD_UPTIME_W;
-		uint32_t txt_w = OSD_TEXT_W;
-
-		/* Scale OSD dimensions for sub streams relative to their sensor's main */
-		int main_idx = 0;
-		for (int m = 0; m < st->stream_count; m++) {
-			if (!st->streams[m].is_jpeg &&
-			    st->streams[m].sensor_idx == st->streams[s].sensor_idx &&
-			    st->streams[m].fs_chn % 3 == 0) {
-				main_idx = m;
-				break;
-			}
-		}
-		if (s != main_idx) {
-			int sw = st->streams[s].enc_cfg.width;
-			int mw = st->streams[main_idx].enc_cfg.width;
-			int sh = st->streams[s].enc_cfg.height;
-			int mh = st->streams[main_idx].enc_cfg.height;
-			if (mh > 0)
-				th = th * sh / mh;
-			if (th < 20)
-				th = 20;
-			/* Scale widths but clamp to min 240 (covers ROD sub output) */
-			if (mw > 0) {
-				time_w = time_w * sw / mw;
-				up_w = up_w * sw / mw;
-				txt_w = txt_w * sw / mw;
-			}
-			if (time_w < 240)
-				time_w = 240;
-			if (up_w < 150)
-				up_w = 150;
-			if (txt_w < 170)
-				txt_w = 170;
-		}
-
-		int region_count = 0;
-
-		if (rss_config_get_bool(cfg, "osd", "time_enabled", true)) {
-			if (create_region(st, s, RVD_OSD_TIME, time_w, th))
-				region_count++;
-		}
-
-		if (rss_config_get_bool(cfg, "osd", "uptime_enabled", true)) {
-			if (create_region(st, s, RVD_OSD_UPTIME, up_w, th))
-				region_count++;
-		}
-
-		if (rss_config_get_bool(cfg, "osd", "text_enabled", true)) {
-			if (create_region(st, s, RVD_OSD_TEXT, txt_w, th))
-				region_count++;
-		}
-
-		/* Logo region: created with config dimensions, starts transparent.
-		 * ROD pushes actual logo data via SHM when it starts. */
-		if (rss_config_get_bool(cfg, "osd", "logo_enabled", true)) {
-			uint32_t lw = rss_config_get_int(cfg, "osd", "logo_width", OSD_LOGO_W);
-			uint32_t lh = rss_config_get_int(cfg, "osd", "logo_height", OSD_LOGO_H);
-			if (create_region(st, s, RVD_OSD_LOGO, lw, lh))
-				region_count++;
-		}
-
-		/* Privacy text region (centered, hidden until privacy mode) */
-		if (create_region(st, s, RVD_OSD_PRIVACY, OSD_TIME_W, th))
-			region_count++;
-
-		/* Detection bounding box overlay — sub-stream only, full-frame.
-		 * OSD pool increased to 1MB to fit 640x360 BGRA (900KB). */
-		if (s > 0 && rss_config_get_bool(cfg, "motion", "enabled", false)) {
-			if (create_region(st, s, RVD_OSD_DETECT, st->streams[s].enc_cfg.width,
-					  st->streams[s].enc_cfg.height))
-				region_count++;
-		}
-
-		RSS_DEBUG("osd stream%d: %d regions created", s, region_count);
-
-		/* Privacy cover region (full-frame, initially hidden).
-		 * ISP OSD: allocated lazily in rvd_osd_set_privacy() to avoid
-		 *   wasting ~8MB per stream at startup.
-		 * IPU OSD: native cover type (just a color, no bitmap). */
-		if (STREAM_ISP_OSD(st, s)) {
-			st->privacy_handles[s] = -1;
-
-		} else {
-			int stream_w = st->streams[s].enc_cfg.width;
-			int stream_h = st->streams[s].enc_cfg.height;
-			uint32_t pcol = (uint32_t)strtoul(
-				rss_config_get_str(st->cfg, "osd", "privacy_color", "0xFF000000"),
-				NULL, 0);
-			rss_osd_region_t cover = {
-				.type = RSS_OSD_COVER,
-				.x = 0,
-				.y = 0,
-				.width = stream_w,
-				.height = stream_h,
-				.cover_color = pcol,
-				.bitmap_fmt = RSS_PIXFMT_BGRA,
-				.layer = 0,
-			};
-			int ph = -1;
-			int pret =
-				RSS_HAL_CALL(st->ops, osd_create_region, st->hal_ctx, &ph, &cover);
-			if (pret == RSS_OK) {
-				int grp = st->streams[s].chn;
-				RSS_HAL_CALL(st->ops, osd_register_region, st->hal_ctx, ph, grp);
-				RSS_HAL_CALL(st->ops, osd_set_region_attr, st->hal_ctx, ph, &cover);
-				RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, ph, grp, 0, 0);
-				st->privacy_handles[s] = ph;
-				RSS_DEBUG("privacy cover region stream%d handle=%d", s, ph);
-			} else {
-				st->privacy_handles[s] = -1;
-			}
-		}
-	}
+	for (int s = 0; s < st->stream_count; s++)
+		rvd_osd_init_stream(st, s);
 
 	for (int s = 0; s < st->stream_count; s++)
 		st->privacy[s] = false;
@@ -489,6 +488,8 @@ void rvd_osd_check(rvd_state_t *st)
 	if (!st->osd_enabled)
 		return;
 
+	pthread_mutex_lock(&st->osd_lock);
+
 	/* Staleness check + lazy SHM open retry */
 	st->osd_retry_counter++;
 	if (st->osd_retry_counter >= RVD_OSD_RETRY_INTERVAL) {
@@ -602,6 +603,8 @@ push_updates:
 			rss_osd_clear_dirty(reg->shm);
 		}
 	}
+
+	pthread_mutex_unlock(&st->osd_lock);
 }
 
 /* Set privacy for a single stream index */
@@ -730,71 +733,65 @@ void *rvd_osd_thread(void *arg)
 	return NULL;
 }
 
+void rvd_osd_deinit_stream(rvd_state_t *st, int s)
+{
+	if (st->streams[s].is_jpeg)
+		return;
+
+	for (int r = 0; r < RVD_OSD_REGIONS; r++) {
+		rvd_osd_region_t *reg = &st->osd_regions[s][r];
+		if (reg->active && reg->hal_handle >= 0) {
+			if (STREAM_ISP_OSD(st, s)) {
+				int sensor = st->streams[s].sensor_idx;
+				RSS_HAL_CALL(st->ops, isp_osd_show_region, st->hal_ctx, sensor,
+					     reg->hal_handle, 0);
+				RSS_HAL_CALL(st->ops, isp_osd_destroy_region, st->hal_ctx, sensor,
+					     reg->hal_handle);
+			} else {
+				int grp = st->streams[s].chn;
+				RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, reg->hal_handle,
+					     grp, 0, r + 1);
+				RSS_HAL_CALL(st->ops, osd_unregister_region, st->hal_ctx,
+					     reg->hal_handle, grp);
+				RSS_HAL_CALL(st->ops, osd_destroy_region, st->hal_ctx,
+					     reg->hal_handle);
+			}
+		}
+		if (reg->shm) {
+			rss_osd_close(reg->shm);
+			reg->shm = NULL;
+		}
+		free(reg->local_buf);
+		reg->local_buf = NULL;
+		reg->active = false;
+		reg->hal_handle = -1;
+		reg->shown = false;
+	}
+
+	/* Clean up privacy cover region */
+	if (STREAM_ISP_OSD(st, s) && st->privacy[s]) {
+		int sensor = st->streams[s].sensor_idx;
+		int chx = st->streams[s].fs_chn % 3;
+		RSS_HAL_CALL(st->ops, isp_osd_set_mask, st->hal_ctx, sensor, chx, 0, 0, 0, 0, 0, 0,
+			     0);
+	}
+	int ph = st->privacy_handles[s];
+	if (ph >= 0) {
+		if (!STREAM_ISP_OSD(st, s)) {
+			int grp = st->streams[s].chn;
+			RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, ph, grp, 0, 0);
+			RSS_HAL_CALL(st->ops, osd_unregister_region, st->hal_ctx, ph, grp);
+			RSS_HAL_CALL(st->ops, osd_destroy_region, st->hal_ctx, ph);
+		}
+		st->privacy_handles[s] = -1;
+	}
+}
+
 void rvd_osd_deinit(rvd_state_t *st)
 {
 	if (!st->osd_enabled)
 		return;
 
-	for (int s = 0; s < st->stream_count; s++) {
-		if (st->streams[s].is_jpeg)
-			continue;
-		if (STREAM_ISP_OSD(st, s) && s > 0 &&
-		    st->streams[s].sensor_idx == st->streams[s - 1].sensor_idx)
-			continue;
-
-		if (!STREAM_ISP_OSD(st, s)) {
-			int grp = st->streams[s].chn;
-			RSS_HAL_CALL(st->ops, osd_stop, st->hal_ctx, grp);
-		}
-
-		for (int r = 0; r < RVD_OSD_REGIONS; r++) {
-			rvd_osd_region_t *reg = &st->osd_regions[s][r];
-			if (reg->active && reg->hal_handle >= 0) {
-				if (STREAM_ISP_OSD(st, s)) {
-					int sensor = st->streams[s].sensor_idx;
-					RSS_HAL_CALL(st->ops, isp_osd_show_region, st->hal_ctx,
-						     sensor, reg->hal_handle, 0);
-					RSS_HAL_CALL(st->ops, isp_osd_destroy_region, st->hal_ctx,
-						     sensor, reg->hal_handle);
-				} else {
-					int grp = st->streams[s].chn;
-					RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx,
-						     reg->hal_handle, grp, 0, r + 1);
-					RSS_HAL_CALL(st->ops, osd_unregister_region, st->hal_ctx,
-						     reg->hal_handle, grp);
-					RSS_HAL_CALL(st->ops, osd_destroy_region, st->hal_ctx,
-						     reg->hal_handle);
-				}
-			}
-			if (reg->shm) {
-				rss_osd_close(reg->shm);
-				reg->shm = NULL;
-			}
-			free(reg->local_buf);
-			reg->local_buf = NULL;
-			reg->active = false;
-			reg->hal_handle = -1;
-		}
-
-		/* Clean up privacy cover region */
-		if (STREAM_ISP_OSD(st, s) && st->privacy[s]) {
-			/* Disable ISP mask block */
-			int sensor = st->streams[s].sensor_idx;
-			int chx = st->streams[s].fs_chn % 3;
-			RSS_HAL_CALL(st->ops, isp_osd_set_mask, st->hal_ctx, sensor, chx, 0, 0, 0,
-				     0, 0, 0, 0);
-		}
-		int ph = st->privacy_handles[s];
-		if (ph >= 0) {
-			if (STREAM_ISP_OSD(st, s)) {
-				/* No handle to destroy — mask blocks are stateless */
-			} else {
-				int grp = st->streams[s].chn;
-				RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, ph, grp, 0, 0);
-				RSS_HAL_CALL(st->ops, osd_unregister_region, st->hal_ctx, ph, grp);
-				RSS_HAL_CALL(st->ops, osd_destroy_region, st->hal_ctx, ph);
-			}
-			st->privacy_handles[s] = -1;
-		}
-	}
+	for (int s = 0; s < st->stream_count; s++)
+		rvd_osd_deinit_stream(st, s);
 }

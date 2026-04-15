@@ -893,51 +893,9 @@ int rvd_pipeline_init(rvd_state_t *st)
 		}
 	}
 
-	/* ── 9. Enable framesource, start encoder ── */
-	for (int i = 0; i < st->stream_count; i++) {
-		int fsc = st->streams[i].fs_chn;
-		int chn = st->streams[i].chn;
-
-		/* JPEG shares framesource — don't enable twice */
-		if (!st->streams[i].is_jpeg) {
-			ret = RSS_HAL_CALL(st->ops, fs_enable_channel, st->hal_ctx, fsc);
-			if (ret != RSS_OK) {
-				RSS_FATAL("fs_enable_channel(%d) failed: %d", fsc, ret);
-				return ret;
-			}
-		}
-
-		/* JPEG channels start on-demand (when a ring consumer connects)
-		 * to avoid VPU overhead that halves H.264 FPS on shared groups. */
-		if (st->streams[i].is_jpeg && st->streams[i].jpeg_idle) {
-			st->streams[i].enabled = false;
-			RSS_INFO("stream%d: %ux%u JPEG @ %u fps, quality %d (on-demand)", i,
-				 st->streams[i].enc_cfg.width, st->streams[i].enc_cfg.height,
-				 st->streams[i].enc_cfg.fps_num, st->streams[i].enc_cfg.init_qp);
-		} else {
-			ret = RSS_HAL_CALL(st->ops, enc_start, st->hal_ctx, chn);
-			if (ret != RSS_OK) {
-				RSS_FATAL("enc_start(%d) failed: %d", i, ret);
-				return ret;
-			}
-			st->streams[i].enabled = true;
-			if (st->streams[i].is_jpeg) {
-				RSS_INFO("stream%d: %ux%u JPEG @ %u fps, quality %d (always-on)", i,
-					 st->streams[i].enc_cfg.width,
-					 st->streams[i].enc_cfg.height,
-					 st->streams[i].enc_cfg.fps_num,
-					 st->streams[i].enc_cfg.init_qp);
-			} else {
-				RSS_INFO("stream%d: %ux%u %s @ %u fps, %u bps", i,
-					 st->streams[i].enc_cfg.width,
-					 st->streams[i].enc_cfg.height,
-					 st->streams[i].enc_cfg.codec == RSS_CODEC_H265 ? "H.265"
-											: "H.264",
-					 st->streams[i].enc_cfg.fps_num,
-					 st->streams[i].enc_cfg.bitrate);
-			}
-		}
-	}
+	/* ── 9. FS enable + encoder start deferred to rvd_stream_start()
+	 * (called from rvd_frame_loop for initial startup, or from ctrl
+	 * handler for hot restart). ── */
 
 	/* ── 10. Create SHM rings ── */
 
@@ -1062,8 +1020,121 @@ int rvd_pipeline_init(rvd_state_t *st)
 
 	/* OSD regions already created in step 6b */
 
+	pthread_mutex_init(&st->osd_lock, NULL);
+
 	st->pipeline_ready = true;
 	RSS_INFO("pipeline ready: %d streams", st->stream_count);
+	return RSS_OK;
+}
+
+/* ================================================================
+ * Per-stream lifecycle — hot restart primitives
+ *
+ * rvd_stream_stop:   stop encoder thread + disable FS  (Layer 3)
+ * rvd_stream_deinit: unbind + destroy enc/OSD/ring     (Layer 2)
+ * rvd_stream_init:   create enc/OSD + bind + ring      (Layer 2)
+ * rvd_stream_start:  enable FS + start encoder + thread (Layer 3)
+ *
+ * pipeline_init/deinit call these in loops for full init/shutdown.
+ * Ctrl commands call them individually for per-stream hot restart.
+ * ================================================================ */
+
+void rvd_stream_stop(rvd_state_t *st, int idx)
+{
+	rvd_stream_t *s = &st->streams[idx];
+
+	/* Signal encoder thread to exit and join */
+	atomic_store(&st->stream_active[idx], false);
+	if (st->enc_tids[idx]) {
+		pthread_join(st->enc_tids[idx], NULL);
+		st->enc_tids[idx] = 0;
+	}
+
+	/* Stop encoder */
+	if (s->enabled) {
+		RSS_HAL_CALL(st->ops, enc_stop, st->hal_ctx, s->chn);
+		s->enabled = false;
+	}
+
+	/* Disable framesource (JPEG shares FS, caller handles ordering) */
+	if (!s->is_jpeg)
+		RSS_HAL_CALL(st->ops, fs_disable_channel, st->hal_ctx, s->fs_chn);
+
+	RSS_DEBUG("stream%d stopped", idx);
+}
+
+void rvd_stream_deinit(rvd_state_t *st, int idx)
+{
+	rvd_stream_t *s = &st->streams[idx];
+
+	/* Unbind chain in reverse */
+	if (!s->is_jpeg) {
+		int len = st->bind_chain_len[idx];
+		for (int j = len - 1; j > 0; j--)
+			RSS_HAL_CALL(st->ops, unbind, st->hal_ctx, &st->bind_chain[idx][j - 1],
+				     &st->bind_chain[idx][j]);
+		st->bind_chain_len[idx] = 0;
+	}
+
+	/* OSD region teardown (under lock — OSD thread may be running) */
+	if (st->osd_enabled && !s->is_jpeg) {
+		pthread_mutex_lock(&st->osd_lock);
+		rvd_osd_deinit_stream(st, idx);
+		pthread_mutex_unlock(&st->osd_lock);
+	}
+
+	/* OSD group teardown (IPU only, non-JPEG) */
+	if (st->osd_enabled && !s->is_jpeg && (!st->use_isp_osd || s->fs_chn % 3 != 0)) {
+		RSS_HAL_CALL(st->ops, osd_stop, st->hal_ctx, s->chn);
+		RSS_HAL_CALL(st->ops, osd_destroy_group, st->hal_ctx, s->chn);
+	}
+
+	/* Encoder teardown */
+	RSS_HAL_CALL(st->ops, enc_unregister_channel, st->hal_ctx, s->chn);
+	RSS_HAL_CALL(st->ops, enc_destroy_channel, st->hal_ctx, s->chn);
+	if (!s->is_jpeg)
+		RSS_HAL_CALL(st->ops, enc_destroy_group, st->hal_ctx, s->chn);
+
+	/* Destroy ring */
+	if (s->ring) {
+		rss_ring_destroy(s->ring);
+		s->ring = NULL;
+	}
+
+	RSS_DEBUG("stream%d deinit complete", idx);
+}
+
+int rvd_stream_start(rvd_state_t *st, int idx)
+{
+	rvd_stream_t *s = &st->streams[idx];
+
+	/* JPEG on-demand: don't enable FS (shares with video) or start
+	 * encoder here — the encoder thread handles start/stop based on
+	 * ring consumer count. */
+	if (s->is_jpeg && s->jpeg_idle) {
+		s->enabled = false;
+	} else {
+		if (!s->is_jpeg)
+			RSS_HAL_CALL(st->ops, fs_enable_channel, st->hal_ctx, s->fs_chn);
+		RSS_HAL_CALL(st->ops, enc_start, st->hal_ctx, s->chn);
+		s->enabled = true;
+	}
+
+	/* Launch encoder thread */
+	atomic_store(&st->stream_active[idx], true);
+	st->enc_args[idx] = (rvd_enc_thread_arg_t){.st = st, .idx = idx};
+
+	pthread_attr_t attr;
+	pthread_attr_init(&attr);
+	pthread_attr_setstacksize(&attr, 128 * 1024);
+	pthread_create(&st->enc_tids[idx], &attr, rvd_encoder_thread, &st->enc_args[idx]);
+	pthread_attr_destroy(&attr);
+
+	RSS_INFO("stream%d: %ux%u %s @ %u fps %s", idx, s->enc_cfg.width, s->enc_cfg.height,
+		 s->is_jpeg			      ? "JPEG"
+		 : s->enc_cfg.codec == RSS_CODEC_H265 ? "H.265"
+						      : "H.264",
+		 s->enc_cfg.fps_num, (s->is_jpeg && s->jpeg_idle) ? "(on-demand)" : "");
 	return RSS_OK;
 }
 
@@ -1073,50 +1144,26 @@ void rvd_pipeline_deinit(rvd_state_t *st)
 	if (st->ivs_active)
 		rvd_ivs_stop(st);
 
-	rvd_osd_deinit(st);
-
-	for (int i = st->stream_count - 1; i >= 0; i--) {
-		if (!st->streams[i].enabled)
-			continue;
-		int chn = st->streams[i].chn;
-		int fsc = st->streams[i].fs_chn;
-
-		RSS_HAL_CALL(st->ops, enc_stop, st->hal_ctx, chn);
-
-		if (!st->streams[i].is_jpeg) {
-			RSS_HAL_CALL(st->ops, fs_disable_channel, st->hal_ctx, fsc);
-
-			/* Unbind: walk the stored chain in reverse */
-			int len = st->bind_chain_len[i];
-			for (int j = len - 1; j > 0; j--)
-				RSS_HAL_CALL(st->ops, unbind, st->hal_ctx,
-					     &st->bind_chain[i][j - 1], &st->bind_chain[i][j]);
-		}
-
-		RSS_HAL_CALL(st->ops, enc_unregister_channel, st->hal_ctx, chn);
-		RSS_HAL_CALL(st->ops, enc_destroy_channel, st->hal_ctx, chn);
-		if (!st->streams[i].is_jpeg) {
-			RSS_HAL_CALL(st->ops, enc_destroy_group, st->hal_ctx, chn);
-			if (st->osd_enabled && (!st->use_isp_osd || st->streams[i].fs_chn % 3 != 0))
-				RSS_HAL_CALL(st->ops, osd_destroy_group, st->hal_ctx, chn);
-			RSS_HAL_CALL(st->ops, fs_destroy_channel, st->hal_ctx, fsc);
-		}
-
-		if (st->streams[i].ring) {
-			rss_ring_destroy(st->streams[i].ring);
-			st->streams[i].ring = NULL;
-		}
-	}
+	/* Tear down all streams in reverse order */
+	for (int i = st->stream_count - 1; i >= 0; i--)
+		rvd_stream_deinit(st, i);
 
 	/* IVS group destroy — after unbind (SDK requirement) */
 	if (st->ivs_active)
 		rvd_ivs_deinit(st);
+
+	/* Destroy framesource channels (Layer 1 — only on full shutdown) */
+	for (int i = st->stream_count - 1; i >= 0; i--) {
+		if (!st->streams[i].is_jpeg)
+			RSS_HAL_CALL(st->ops, fs_destroy_channel, st->hal_ctx,
+				     st->streams[i].fs_chn);
+	}
+
+	pthread_mutex_destroy(&st->osd_lock);
 
 	if (st->hal_ctx) {
 		RSS_HAL_CALL(st->ops, deinit, st->hal_ctx);
 		rss_hal_destroy(st->hal_ctx);
 		st->hal_ctx = NULL;
 	}
-
-	/* Scratch buffers freed in rvd_frame_loop */
 }
