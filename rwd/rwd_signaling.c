@@ -357,11 +357,10 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 
 	/* POST /whip — SDP offer/answer */
 	if (strcmp(method, "POST") == 0 && strncmp(path, "/whip", 5) == 0) {
-		/* Parse ?stream=N from query string */
+		/* Parse ?stream=N from query string (qs was saved before NUL) */
 		int stream_idx = 0;
-		const char *qs = strchr(path, '?');
 		if (qs) {
-			const char *sp = strstr(qs, "stream=");
+			const char *sp = strstr(qs + 1, "stream=");
 			if (sp)
 				stream_idx = (sp[7] == '1') ? 1 : 0;
 		}
