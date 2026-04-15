@@ -48,6 +48,38 @@ typedef struct {
 	atomic_bool playing;
 } rsd_stream_t;
 
+/* Per-client send queue — decouples ring reader from network I/O.
+ * Video entries point directly into the ring context's frame_buf
+ * (zero-copy). An atomic barrier on the ring context prevents the
+ * reader from overwriting frame_buf while send threads are using it.
+ * Audio entries hold a malloc'd copy (small, <4KB). */
+#define RSD_SENDQ_SLOTS	 8
+#define RSD_FRAME_VIDEO	 0
+#define RSD_FRAME_AUDIO	 1
+#define RSD_SENDQ_OK	 0
+#define RSD_SENDQ_DROPPED 1
+
+typedef struct {
+	_Atomic int *barrier;	     /* non-NULL: video, decrement when done */
+	pthread_mutex_t *barrier_mtx; /* for condvar signal on last release */
+	pthread_cond_t *barrier_cv;   /* signaled when barrier hits 0 */
+	uint8_t *data;		      /* frame_buf (video) or malloc'd (audio) */
+	uint32_t len;
+	uint32_t rtp_ts;
+	uint8_t type;	/* RSD_FRAME_VIDEO or RSD_FRAME_AUDIO */
+	uint32_t codec; /* audio codec (RSD_FRAME_AUDIO only) */
+} rsd_sendq_entry_t;
+
+typedef struct {
+	rsd_sendq_entry_t entries[RSD_SENDQ_SLOTS];
+	int head;
+	int tail;
+	int count;
+	pthread_mutex_t lock;
+	pthread_cond_t cond;
+	bool shutdown;
+} rsd_sendq_t;
+
 /* Per-client state */
 typedef struct rsd_client {
 	struct rsd_server *srv; /* back-pointer to server (set once at accept) */
@@ -90,6 +122,11 @@ typedef struct rsd_client {
 
 	/* Connection tracking */
 	int64_t last_activity; /* monotonic timestamp (us) */
+
+	/* Send queue (per-client, decouples reader from I/O) */
+	rsd_sendq_t sendq;
+	pthread_t send_tid;
+	bool send_thread_running;
 } rsd_client_t;
 
 /* Per-ring reader state */
@@ -98,6 +135,9 @@ typedef struct {
 	uint64_t read_seq;
 	uint8_t *frame_buf;
 	uint32_t frame_buf_size;
+	_Atomic int frame_readers;    /* barrier: send threads using frame_buf */
+	pthread_mutex_t frame_mtx;    /* protects frame_done condvar */
+	pthread_cond_t frame_done;    /* signaled when frame_readers hits 0 */
 	int idx;
 	const char *ring_name; /* for reconnection after RVD restart */
 
@@ -168,5 +208,8 @@ void rsd_handle_rtsp_data(rsd_client_t *client, const char *data, size_t len);
 void rsd_set_server_for_readers(rsd_server_t *srv);
 void *rsd_video_reader_thread(void *arg);
 void *rsd_audio_reader_thread(void *arg);
+int rsd_sendq_init(rsd_sendq_t *q);
+void rsd_sendq_destroy(rsd_sendq_t *q);
+void *rsd_client_send_thread(void *arg);
 
 #endif /* RSD_H */

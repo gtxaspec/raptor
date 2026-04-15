@@ -77,6 +77,149 @@ static bool handle_snapshot(rhd_client_t *c, int epoll_fd, rss_ring_t *ring, uin
 	return true; /* keep alive — epoll will drain and close */
 }
 
+/* ── Per-client send queue ── */
+
+static int rhd_sendq_init(rhd_sendq_t *q)
+{
+	memset(q, 0, sizeof(*q));
+	if (pthread_mutex_init(&q->lock, NULL) != 0)
+		return -1;
+	if (pthread_cond_init(&q->cond, NULL) != 0) {
+		pthread_mutex_destroy(&q->lock);
+		return -1;
+	}
+	return 0;
+}
+
+static void rhd_sendq_destroy(rhd_sendq_t *q)
+{
+	while (q->count > 0) {
+		free(q->entries[q->tail].data);
+		q->tail = (q->tail + 1) % RHD_SENDQ_SLOTS;
+		q->count--;
+	}
+	pthread_cond_destroy(&q->cond);
+	pthread_mutex_destroy(&q->lock);
+}
+
+static void rhd_sendq_flush_locked(rhd_sendq_t *q)
+{
+	while (q->count > 0) {
+		free(q->entries[q->tail].data);
+		q->tail = (q->tail + 1) % RHD_SENDQ_SLOTS;
+		q->count--;
+	}
+	q->head = 0;
+	q->tail = 0;
+}
+
+static int rhd_sendq_push(rhd_sendq_t *q, uint8_t type, const uint8_t *data,
+			   uint32_t len, int codec, int sample_rate)
+{
+	pthread_mutex_lock(&q->lock);
+	if (q->shutdown) {
+		pthread_mutex_unlock(&q->lock);
+		return -1;
+	}
+
+	if (q->count >= RHD_SENDQ_SLOTS) {
+		rhd_sendq_flush_locked(q);
+		/* For MJPEG, dropping is fine — each frame is independent */
+	}
+
+	uint8_t *copy = malloc(len);
+	if (!copy) {
+		pthread_mutex_unlock(&q->lock);
+		return -1;
+	}
+	memcpy(copy, data, len);
+
+	rhd_sendq_entry_t *slot = &q->entries[q->head];
+	slot->data = copy;
+	slot->len = len;
+	slot->type = type;
+	slot->codec = codec;
+	slot->sample_rate = sample_rate;
+
+	q->head = (q->head + 1) % RHD_SENDQ_SLOTS;
+	q->count++;
+
+	pthread_cond_signal(&q->cond);
+	pthread_mutex_unlock(&q->lock);
+	return RHD_SENDQ_OK;
+}
+
+/* Per-client send thread — drains sendq through blocking HTTP writes.
+ * On send error, sets q->shutdown so the main loop removes the client. */
+static void *rhd_client_send_thread(void *arg)
+{
+	rhd_client_t *c = arg;
+	rhd_sendq_t *q = &c->sendq;
+
+	while (1) {
+		pthread_mutex_lock(&q->lock);
+		while (q->count == 0 && !q->shutdown)
+			pthread_cond_wait(&q->cond, &q->lock);
+
+		if (q->shutdown) {
+			pthread_mutex_unlock(&q->lock);
+			break;
+		}
+
+		rhd_sendq_entry_t entry = q->entries[q->tail];
+		q->entries[q->tail].data = NULL;
+		q->tail = (q->tail + 1) % RHD_SENDQ_SLOTS;
+		q->count--;
+		pthread_mutex_unlock(&q->lock);
+
+		int ret = 0;
+		if (entry.type == RHD_FRAME_MJPEG) {
+			ret = http_send_mjpeg_frame(c, entry.data, entry.len);
+		} else {
+			ret = rhd_audio_send_frame(c, entry.codec, entry.sample_rate,
+						   entry.data, entry.len,
+						   c->audio_page_seq, c->audio_granule);
+			if (ret >= 0) {
+				c->audio_page_seq++;
+				if (entry.codec == RHD_CODEC_OPUS)
+					c->audio_granule += 960;
+				else if (entry.codec == RHD_CODEC_AAC)
+					c->audio_granule += 1024;
+				else
+					c->audio_granule += entry.len / 2;
+			}
+		}
+
+		free(entry.data);
+
+		if (ret < 0) {
+			/* Send failed — mark for shutdown, main loop will remove.
+			 * Don't try to send more frames on a dead connection. */
+			pthread_mutex_lock(&q->lock);
+			q->shutdown = true;
+			pthread_mutex_unlock(&q->lock);
+			break;
+		}
+	}
+
+	return NULL;
+}
+
+static void rhd_start_send_thread(rhd_client_t *c)
+{
+	if (rhd_sendq_init(&c->sendq) != 0)
+		return;
+	pthread_attr_t sa;
+	pthread_attr_init(&sa);
+	pthread_attr_setstacksize(&sa, 128 * 1024);
+	if (pthread_create(&c->send_tid, &sa, rhd_client_send_thread, c) == 0) {
+		c->send_thread_running = true;
+	} else {
+		rhd_sendq_destroy(&c->sendq);
+	}
+	pthread_attr_destroy(&sa);
+}
+
 /* ── Client management ── */
 
 static void remove_client(rhd_server_t *srv, int idx)
@@ -85,6 +228,19 @@ static void remove_client(rhd_server_t *srv, int idx)
 	char addrstr[INET6_ADDRSTRLEN];
 	RSS_INFO("client %s:%u disconnected%s", client_addr_str(&c->addr, addrstr, sizeof(addrstr)),
 		 client_port(&c->addr), c->is_mjpeg ? " (mjpeg)" : "");
+
+	/* Stop send thread before closing fd/TLS */
+	if (c->send_thread_running) {
+		pthread_mutex_lock(&c->sendq.lock);
+		c->sendq.shutdown = true;
+		pthread_cond_signal(&c->sendq.cond);
+		pthread_mutex_unlock(&c->sendq.lock);
+		shutdown(c->fd, SHUT_WR);
+		pthread_join(c->send_tid, NULL);
+		c->send_thread_running = false;
+		rhd_sendq_destroy(&c->sendq);
+	}
+
 	epoll_ctl(srv->epoll_fd, EPOLL_CTL_DEL, c->fd, NULL);
 #ifdef RSS_HAS_TLS
 	rss_tls_close(c->tls);
@@ -156,6 +312,7 @@ static void handle_request(rhd_server_t *srv, rhd_client_t *c)
 		/* Start MJPEG stream — don't close connection */
 		http_send_mjpeg_header(c);
 		c->is_mjpeg = true;
+		rhd_start_send_thread(c);
 		return; /* keep alive */
 	} else if (strcmp(path, "/audio") == 0) {
 		if (!srv->audio_ring) {
@@ -164,6 +321,7 @@ static void handle_request(rhd_server_t *srv, rhd_client_t *c)
 			if (rhd_audio_send_header(c, srv->audio_codec, srv->audio_sample_rate) < 0)
 				return;
 			c->is_audio = true;
+			rhd_start_send_thread(c);
 			return; /* keep alive */
 		}
 	} else if (strcmp(path, "/") == 0) {
@@ -188,9 +346,15 @@ static void handle_request(rhd_server_t *srv, rhd_client_t *c)
 static void stream_mjpeg_frame(rhd_server_t *srv, const uint8_t *data, uint32_t len)
 {
 	for (int i = srv->client_count - 1; i >= 0; i--) {
-		if (!srv->clients[i]->is_mjpeg)
+		rhd_client_t *c = srv->clients[i];
+		if (!c->is_mjpeg)
 			continue;
-		if (http_send_mjpeg_frame(srv->clients[i], data, len) < 0)
+		if (!c->send_thread_running) {
+			remove_client(srv, i);
+			continue;
+		}
+		/* Push returns -1 if shutdown — send thread flagged an error */
+		if (rhd_sendq_push(&c->sendq, RHD_FRAME_MJPEG, data, len, 0, 0) < 0)
 			remove_client(srv, i);
 	}
 }
@@ -416,26 +580,14 @@ static void server_run(rhd_server_t *srv)
 					break; /* no more frames */
 
 				for (int i = srv->client_count - 1; i >= 0; i--) {
-					if (!srv->clients[i]->is_audio)
-						continue;
 					rhd_client_t *ac = srv->clients[i];
-					if (rhd_audio_send_frame(ac, srv->audio_codec,
-								 srv->audio_sample_rate, audio_buf,
-								 alen, ac->audio_page_seq,
-								 ac->audio_granule) < 0) {
-						remove_client(srv, i);
+					if (!ac->is_audio)
 						continue;
-					}
-					ac->audio_page_seq++;
-					/* Opus: 960 samples per 20ms frame at 48kHz.
-					 * PCM/G.711: bytes / 2 = samples (16-bit mono).
-					 * AAC: 1024 samples per frame. */
-					if (srv->audio_codec == RHD_CODEC_OPUS)
-						ac->audio_granule += 960;
-					else if (srv->audio_codec == RHD_CODEC_AAC)
-						ac->audio_granule += 1024;
-					else
-						ac->audio_granule += alen / 2;
+					if (!ac->send_thread_running ||
+					    rhd_sendq_push(&ac->sendq, RHD_FRAME_AUDIO,
+							   audio_buf, alen, srv->audio_codec,
+							   srv->audio_sample_rate) < 0)
+						remove_client(srv, i);
 				}
 			}
 		}

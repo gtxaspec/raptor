@@ -8,6 +8,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <signal.h>
+#include <pthread.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 
@@ -37,6 +38,32 @@
 /* Index page — loaded from file on first request, cached */
 #define RHD_INDEX_PATH "/usr/share/raptor/index.html"
 
+/* ── Per-client send queue (decouples main loop from blocking writes) ── */
+
+#define RHD_SENDQ_SLOTS	 4
+#define RHD_FRAME_MJPEG	 0
+#define RHD_FRAME_AUDIO	 1
+#define RHD_SENDQ_OK	 0
+#define RHD_SENDQ_DROPPED 1
+
+typedef struct {
+	uint8_t *data;
+	uint32_t len;
+	uint8_t type;
+	uint32_t codec;
+	int sample_rate;
+} rhd_sendq_entry_t;
+
+typedef struct {
+	rhd_sendq_entry_t entries[RHD_SENDQ_SLOTS];
+	int head;
+	int tail;
+	int count;
+	pthread_mutex_t lock;
+	pthread_cond_t cond;
+	bool shutdown;
+} rhd_sendq_t;
+
 /* ── Types ── */
 
 typedef struct {
@@ -59,6 +86,11 @@ typedef struct {
 	rss_tls_conn_t *tls;
 	rss_tls_ctx_t *srv_tls; /* server TLS context for lazy handshake */
 #endif
+
+	/* Send queue (streaming clients only) */
+	rhd_sendq_t sendq;
+	pthread_t send_tid;
+	bool send_thread_running;
 } rhd_client_t;
 
 typedef struct {

@@ -65,7 +65,25 @@ static void remove_client(rsd_server_t *srv, rsd_client_t *client)
 	}
 	pthread_mutex_unlock(&srv->clients_lock);
 
-	/* Step 2: Now safe to free transports — ring readers won't touch them */
+	/* Step 2: Stop send thread — must complete before freeing transports.
+	 * After step 1, the ring readers won't enqueue new frames (client is
+	 * removed from list and playing=false). The send thread may be blocked
+	 * on a TLS write — signal shutdown and wait for it to finish. */
+	if (client->send_thread_running) {
+		pthread_mutex_lock(&client->sendq.lock);
+		client->sendq.shutdown = true;
+		pthread_cond_signal(&client->sendq.cond);
+		pthread_mutex_unlock(&client->sendq.lock);
+		/* Unblock any in-progress TLS write so the send thread
+		 * can observe shutdown promptly instead of waiting for
+		 * TCP retransmit timeout on a dead connection. */
+		shutdown(client->fd, SHUT_WR);
+		pthread_join(client->send_tid, NULL);
+		client->send_thread_running = false;
+	}
+	rsd_sendq_destroy(&client->sendq);
+
+	/* Step 3: Now safe to free transports — ring readers and send thread are done */
 
 	/* Send RTCP BYE */
 	if (client->video.rtcp) {
@@ -211,6 +229,40 @@ static void accept_client(rsd_server_t *srv)
 		free(client);
 		return;
 	}
+
+	/* Initialize send queue and thread AFTER all fallible checks above,
+	 * so error paths don't need to tear down a running thread. */
+	if (rsd_sendq_init(&client->sendq) != 0) {
+		pthread_mutex_unlock(&srv->clients_lock);
+		epoll_ctl(srv->epoll_fd, EPOLL_CTL_DEL, fd, NULL);
+#ifdef COMPY_HAS_TLS
+		if (client->tls)
+			Compy_TlsConn_free(client->tls);
+#endif
+		close(fd);
+		free(client);
+		return;
+	}
+	{
+		pthread_attr_t sa;
+		pthread_attr_init(&sa);
+		pthread_attr_setstacksize(&sa, 128 * 1024);
+		if (pthread_create(&client->send_tid, &sa, rsd_client_send_thread, client) != 0) {
+			pthread_attr_destroy(&sa);
+			rsd_sendq_destroy(&client->sendq);
+			pthread_mutex_unlock(&srv->clients_lock);
+			epoll_ctl(srv->epoll_fd, EPOLL_CTL_DEL, fd, NULL);
+#ifdef COMPY_HAS_TLS
+			if (client->tls)
+				Compy_TlsConn_free(client->tls);
+#endif
+			close(fd);
+			free(client);
+			return;
+		}
+		pthread_attr_destroy(&sa);
+		client->send_thread_running = true;
+	}
 	srv->clients[srv->client_count++] = client;
 	pthread_mutex_unlock(&srv->clients_lock);
 
@@ -308,6 +360,13 @@ int rsd_server_init(rsd_server_t *srv)
 	if (!has_any_video && !srv->has_audio) {
 		RSS_FATAL("no video or audio rings available");
 		return -1;
+	}
+
+	/* Initialize barrier primitives for all ring contexts unconditionally.
+	 * Rings may be opened later via reconnect and need valid mutex/condvar. */
+	for (int s = 0; s < RSD_STREAM_COUNT; s++) {
+		pthread_mutex_init(&srv->video[s].frame_mtx, NULL);
+		pthread_cond_init(&srv->video[s].frame_done, NULL);
 	}
 
 	/* Log and allocate frame buffers for available video rings */
@@ -593,6 +652,8 @@ void rsd_server_deinit(rsd_server_t *srv)
 		if (srv->video[s].ring)
 			rss_ring_close(srv->video[s].ring);
 		free(srv->video[s].frame_buf);
+		pthread_mutex_destroy(&srv->video[s].frame_mtx);
+		pthread_cond_destroy(&srv->video[s].frame_done);
 	}
 	if (srv->ring_audio)
 		rss_ring_close(srv->ring_audio);

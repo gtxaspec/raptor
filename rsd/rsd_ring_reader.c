@@ -14,6 +14,12 @@
 
 #include "rsd.h"
 
+/* Forward declarations — called by send thread, defined below */
+static void rsd_send_video_frame(rsd_client_t *c, const uint8_t *data, uint32_t len,
+				 uint32_t rtp_ts);
+static void rsd_send_audio_frame(rsd_client_t *c, uint32_t codec, const uint8_t *data,
+				 uint32_t len, uint32_t rtp_ts);
+
 /*
  * Extract SPS/PPS from Annex B keyframe data and cache in ring context.
  * Called once when the first keyframe is seen (or when SPS/PPS change).
@@ -130,6 +136,179 @@ static void rsd_send_video_frame(rsd_client_t *c, const uint8_t *data, uint32_t 
 	}
 }
 
+/* ── Per-client send queue ── */
+
+int rsd_sendq_init(rsd_sendq_t *q)
+{
+	memset(q, 0, sizeof(*q));
+	if (pthread_mutex_init(&q->lock, NULL) != 0)
+		return -1;
+	if (pthread_cond_init(&q->cond, NULL) != 0) {
+		pthread_mutex_destroy(&q->lock);
+		return -1;
+	}
+	return 0;
+}
+
+static void sendq_release_entry(rsd_sendq_entry_t *e)
+{
+	if (e->barrier) {
+		/* Video: release frame_buf hold. If we're the last reader,
+		 * signal the condvar so the ring reader wakes immediately
+		 * instead of spinning in usleep. */
+		if (atomic_fetch_sub(e->barrier, 1) == 1) {
+			pthread_mutex_lock(e->barrier_mtx);
+			pthread_cond_signal(e->barrier_cv);
+			pthread_mutex_unlock(e->barrier_mtx);
+		}
+	} else {
+		free(e->data); /* audio: free malloc'd copy */
+	}
+	e->barrier = NULL;
+	e->data = NULL;
+}
+
+void rsd_sendq_destroy(rsd_sendq_t *q)
+{
+	while (q->count > 0) {
+		sendq_release_entry(&q->entries[q->tail]);
+		q->tail = (q->tail + 1) % RSD_SENDQ_SLOTS;
+		q->count--;
+	}
+	pthread_cond_destroy(&q->cond);
+	pthread_mutex_destroy(&q->lock);
+}
+
+static void sendq_flush_locked(rsd_sendq_t *q)
+{
+	while (q->count > 0) {
+		sendq_release_entry(&q->entries[q->tail]);
+		q->tail = (q->tail + 1) % RSD_SENDQ_SLOTS;
+		q->count--;
+	}
+	q->head = 0;
+	q->tail = 0;
+}
+
+/*
+ * Push a video frame (zero-copy — points directly into frame_buf).
+ * Caller must have already incremented *barrier for this client.
+ */
+static int rsd_sendq_push_video(rsd_sendq_t *q, uint8_t *data, uint32_t len,
+				uint32_t rtp_ts, _Atomic int *barrier,
+				pthread_mutex_t *mtx, pthread_cond_t *cv)
+{
+	pthread_mutex_lock(&q->lock);
+	if (q->shutdown) {
+		pthread_mutex_unlock(&q->lock);
+		/* Release barrier and signal in case reader is waiting */
+		if (atomic_fetch_sub(barrier, 1) == 1) {
+			pthread_mutex_lock(mtx);
+			pthread_cond_signal(cv);
+			pthread_mutex_unlock(mtx);
+		}
+		return -1;
+	}
+
+	bool dropped = false;
+	if (q->count >= RSD_SENDQ_SLOTS) {
+		sendq_flush_locked(q);
+		dropped = true;
+	}
+
+	rsd_sendq_entry_t *slot = &q->entries[q->head];
+	slot->barrier = barrier;
+	slot->barrier_mtx = mtx;
+	slot->barrier_cv = cv;
+	slot->data = data;
+	slot->len = len;
+	slot->rtp_ts = rtp_ts;
+	slot->type = RSD_FRAME_VIDEO;
+	slot->codec = 0;
+
+	q->head = (q->head + 1) % RSD_SENDQ_SLOTS;
+	q->count++;
+
+	pthread_cond_signal(&q->cond);
+	pthread_mutex_unlock(&q->lock);
+	return dropped ? RSD_SENDQ_DROPPED : RSD_SENDQ_OK;
+}
+
+/* Push an audio frame (small malloc copy).
+ * Audio uses a burst loop (up to 16 frames) that's incompatible with
+ * the shared-buffer barrier — each frame needs its own independent copy. */
+static int rsd_sendq_push_audio(rsd_sendq_t *q, const uint8_t *data,
+				uint32_t len, uint32_t rtp_ts, uint32_t codec)
+{
+	pthread_mutex_lock(&q->lock);
+	if (q->shutdown) {
+		pthread_mutex_unlock(&q->lock);
+		return -1;
+	}
+
+	if (q->count >= RSD_SENDQ_SLOTS)
+		sendq_flush_locked(q);
+
+	uint8_t *copy = malloc(len);
+	if (!copy) {
+		pthread_mutex_unlock(&q->lock);
+		return -1;
+	}
+	memcpy(copy, data, len);
+
+	rsd_sendq_entry_t *slot = &q->entries[q->head];
+	slot->barrier = NULL;
+	slot->barrier_mtx = NULL;
+	slot->barrier_cv = NULL;
+	slot->data = copy;
+	slot->len = len;
+	slot->rtp_ts = rtp_ts;
+	slot->type = RSD_FRAME_AUDIO;
+	slot->codec = codec;
+
+	q->head = (q->head + 1) % RSD_SENDQ_SLOTS;
+	q->count++;
+
+	pthread_cond_signal(&q->cond);
+	pthread_mutex_unlock(&q->lock);
+	return RSD_SENDQ_OK;
+}
+
+/* Per-client send thread — drains sendq through compy (blocking I/O) */
+void *rsd_client_send_thread(void *arg)
+{
+	rsd_client_t *c = arg;
+	rsd_sendq_t *q = &c->sendq;
+
+	while (1) {
+		pthread_mutex_lock(&q->lock);
+		while (q->count == 0 && !q->shutdown)
+			pthread_cond_wait(&q->cond, &q->lock);
+
+		if (q->shutdown) {
+			pthread_mutex_unlock(&q->lock);
+			break;
+		}
+
+		rsd_sendq_entry_t entry = q->entries[q->tail];
+		q->entries[q->tail].barrier = NULL;
+		q->entries[q->tail].data = NULL;
+		q->tail = (q->tail + 1) % RSD_SENDQ_SLOTS;
+		q->count--;
+		pthread_mutex_unlock(&q->lock);
+
+		if (entry.type == RSD_FRAME_VIDEO)
+			rsd_send_video_frame(c, entry.data, entry.len, entry.rtp_ts);
+		else
+			rsd_send_audio_frame(c, entry.codec, entry.data, entry.len,
+					     entry.rtp_ts);
+
+		sendq_release_entry(&entry);
+	}
+
+	return NULL;
+}
+
 /* Global server pointer (set in rsd_server_run before threads start) */
 static rsd_server_t *g_srv_for_readers = NULL;
 
@@ -164,6 +343,15 @@ void *rsd_video_reader_thread(void *arg)
 			}
 			const rss_ring_header_t *h = rss_ring_get_header(rctx->ring);
 			if (rctx->frame_buf_size < h->data_size) {
+				/* Wait for send threads to release old frame_buf
+				 * before freeing it (prevents use-after-free). */
+				if (atomic_load(&rctx->frame_readers) > 0) {
+					pthread_mutex_lock(&rctx->frame_mtx);
+					while (atomic_load(&rctx->frame_readers) > 0)
+						pthread_cond_wait(&rctx->frame_done,
+								  &rctx->frame_mtx);
+					pthread_mutex_unlock(&rctx->frame_mtx);
+				}
 				uint8_t *new_buf = malloc(h->data_size);
 				if (!new_buf) {
 					rss_ring_close(rctx->ring);
@@ -240,6 +428,17 @@ void *rsd_video_reader_thread(void *arg)
 			rss_ring_request_idr(rctx->ring);
 		}
 
+		/* Barrier: wait for all send threads to finish with frame_buf
+		 * before overwriting it. At 25fps the send threads have ~40ms
+		 * to complete — this almost never waits. Last consumer signals
+		 * the condvar for zero-latency wakeup (no usleep spin). */
+		if (atomic_load(&rctx->frame_readers) > 0) {
+			pthread_mutex_lock(&rctx->frame_mtx);
+			while (atomic_load(&rctx->frame_readers) > 0)
+				pthread_cond_wait(&rctx->frame_done, &rctx->frame_mtx);
+			pthread_mutex_unlock(&rctx->frame_mtx);
+		}
+
 		ret = rss_ring_read(rctx->ring, &read_seq, rctx->frame_buf, rctx->frame_buf_size,
 				    &length, &meta);
 		if (ret == RSS_EOVERFLOW) {
@@ -290,7 +489,17 @@ void *rsd_video_reader_thread(void *arg)
 			}
 
 			uint32_t client_ts = rtp_ts - c->video_ts_offset;
-			rsd_send_video_frame(c, rctx->frame_buf, length, client_ts);
+			atomic_fetch_add(&rctx->frame_readers, 1);
+			int qret = rsd_sendq_push_video(&c->sendq, rctx->frame_buf, length,
+							client_ts, &rctx->frame_readers,
+							&rctx->frame_mtx, &rctx->frame_done);
+			if (qret == RSD_SENDQ_DROPPED) {
+				c->waiting_keyframe = true;
+				c->audio_ts_base_set = false;
+				rss_ring_request_idr(rctx->ring);
+				RSS_DEBUG("client[%d] sendq full, waiting for IDR",
+					  stream_idx);
+			}
 		}
 		pthread_mutex_unlock(&srv->clients_lock);
 	}
@@ -463,7 +672,8 @@ void *rsd_audio_reader_thread(void *arg)
 					c->audio_ts_base_set = true;
 				}
 				uint32_t client_ts = rtp_ts - c->audio_ts_offset;
-				rsd_send_audio_frame(c, audio_codec, audio_buf, length, client_ts);
+				rsd_sendq_push_audio(&c->sendq, audio_buf, length,
+						     client_ts, audio_codec);
 			}
 			pthread_mutex_unlock(&srv->clients_lock);
 		}

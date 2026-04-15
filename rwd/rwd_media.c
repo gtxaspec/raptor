@@ -581,6 +581,22 @@ void *rwd_video_reader_thread(void *arg)
 			if (!srv->video_rings[s] || !srv->video_bufs[s])
 				continue;
 
+			/* Skip rings with no active clients — polling an
+			 * unwatched ring wastes the timeout and causes the
+			 * reader to fall behind on rings that DO have clients. */
+			bool has_clients = false;
+			pthread_mutex_lock(&srv->clients_lock);
+			for (int i = 0; i < RWD_MAX_CLIENTS; i++) {
+				if (srv->clients[i] && srv->clients[i]->sending &&
+				    srv->clients[i]->stream_idx == s) {
+					has_clients = true;
+					break;
+				}
+			}
+			pthread_mutex_unlock(&srv->clients_lock);
+			if (!has_clients)
+				continue;
+
 			int ret = rss_ring_wait(srv->video_rings[s], 50);
 			if (ret != 0) {
 				const rss_ring_header_t *h =
@@ -607,13 +623,15 @@ void *rwd_video_reader_thread(void *arg)
 			uint64_t read_seq = srv->video_read_seq[s];
 
 			/* Skip to latest frame to minimize latency.
-			 * No IDR request here — the client will resync at the
-			 * next natural GOP keyframe. Only true ring overflow
-			 * (below) warrants an IDR request. */
+			 * Request IDR since we skipped reference frames —
+			 * without it, the decoder shows pixelation until
+			 * the next natural GOP keyframe. */
 			const rss_ring_header_t *vhdr = rss_ring_get_header(srv->video_rings[s]);
 			uint64_t ws = vhdr->write_seq;
-			if (ws > read_seq + 1 && read_seq > 0)
+			if (ws > read_seq + 1 && read_seq > 0) {
 				read_seq = ws - 1;
+				rss_ring_request_idr(srv->video_rings[s]);
+			}
 
 			ret = rss_ring_read(srv->video_rings[s], &read_seq, srv->video_bufs[s],
 					    srv->video_buf_sizes[s], &length, &meta);
