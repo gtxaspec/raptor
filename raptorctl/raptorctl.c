@@ -198,6 +198,8 @@ const struct help_entry help_entries[] = {
 	{"rvd", "get-rc-mode <ch>                    Show rate control mode"},
 	{"rvd", "request-idr [channel]               Request keyframe"},
 	{"rvd", "stream-restart <ch>                 Restart stream pipeline"},
+	{"rvd", "set-codec <ch> <h264|h265>          Change codec (requires restart)"},
+	{"rvd", "set-resolution <ch> <w> <h>         Change resolution (requires restart)"},
 	{"rvd", "request-pskip <ch>                  Request P-skip"},
 	{"rvd", "request-gdr <ch> <frames>           Request GDR"},
 	{"rvd", "set-brightness <val>                ISP brightness (0-255)"},
@@ -898,6 +900,30 @@ int main(int argc, char **argv)
 		}
 		cJSON *j = jcmd("stream-restart");
 		jadd_i(j, "channel", argv[3]);
+		jstr(j, json, sizeof(json));
+
+	} else if (strcmp(cmd, "set-codec") == 0) {
+		if (argc < 5) {
+			fprintf(stderr, "Usage: raptorctl %s set-codec <channel> <h264|h265>\n",
+				daemon);
+			return 1;
+		}
+		cJSON *j = jcmd("set-codec");
+		jadd_i(j, "channel", argv[3]);
+		jadd_s(j, "value", argv[4]);
+		jstr(j, json, sizeof(json));
+
+	} else if (strcmp(cmd, "set-resolution") == 0) {
+		if (argc < 6) {
+			fprintf(stderr,
+				"Usage: raptorctl %s set-resolution <channel> <width> <height>\n",
+				daemon);
+			return 1;
+		}
+		cJSON *j = jcmd("set-resolution");
+		jadd_i(j, "channel", argv[3]);
+		jadd_i(j, "width", argv[4]);
+		jadd_i(j, "height", argv[5]);
 		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-text") == 0) {

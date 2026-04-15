@@ -1115,23 +1115,185 @@ static int find_jpeg_for_video_ctrl(rvd_state_t *st, int video_idx)
 	return -1;
 }
 
+/*
+ * Core restart sequence for a video stream + its paired JPEG.
+ * Called after config has been updated. Returns 0 on success.
+ */
+static int do_stream_restart(rvd_state_t *st, int chn, char *resp, int resp_size)
+{
+	int jpeg = find_jpeg_for_video_ctrl(st, chn);
+	bool has_ivs = (st->streams[chn].fs_chn == 1 && st->ivs_active);
+
+	RSS_INFO("stream-restart: channel %d (jpeg=%d ivs=%d)", chn, jpeg, has_ivs);
+
+	/* Stop: IVS → JPEG → video */
+	if (has_ivs) {
+		if (st->ivs_tid) {
+			pthread_join(st->ivs_tid, NULL);
+			st->ivs_tid = 0;
+		}
+		rvd_ivs_stop(st);
+	}
+	if (jpeg >= 0)
+		rvd_stream_stop(st, jpeg);
+	rvd_stream_stop(st, chn);
+
+	/* Deinit: JPEG → video (unregister before group destroy) */
+	if (jpeg >= 0)
+		rvd_stream_deinit(st, jpeg);
+	rvd_stream_deinit(st, chn);
+	if (has_ivs)
+		rvd_ivs_deinit(st);
+
+	/* Reinit: IVS → video → JPEG */
+	if (has_ivs)
+		rvd_ivs_init(st);
+
+	int ret = rvd_stream_init(st, chn);
+	if (ret != RSS_OK) {
+		RSS_ERROR("stream-restart: init stream %d failed: %d", chn, ret);
+		if (resp)
+			rss_ctrl_resp_error(resp, resp_size, "init failed");
+		return -1;
+	}
+	if (jpeg >= 0) {
+		/* JPEG inherits parent video's resolution */
+		st->streams[jpeg].enc_cfg.width = st->streams[chn].enc_cfg.width;
+		st->streams[jpeg].enc_cfg.height = st->streams[chn].enc_cfg.height;
+		ret = rvd_stream_init(st, jpeg);
+		if (ret != RSS_OK)
+			RSS_WARN("stream-restart: jpeg init failed: %d (non-fatal)", ret);
+	}
+
+	/* Start: video → JPEG → IVS */
+	if (has_ivs)
+		rvd_ivs_start(st);
+
+	rvd_stream_start(st, chn);
+	if (jpeg >= 0 && st->streams[jpeg].ring)
+		rvd_stream_start(st, jpeg);
+
+	/* IVS thread relaunch */
+	if (has_ivs) {
+		pthread_attr_t ivs_attr;
+		pthread_attr_init(&ivs_attr);
+		pthread_attr_setstacksize(&ivs_attr, 64 * 1024);
+		pthread_create(&st->ivs_tid, &ivs_attr, rvd_ivs_thread, st);
+		pthread_attr_destroy(&ivs_attr);
+	}
+
+	RSS_INFO("stream-restart: channel %d complete", chn);
+	return 0;
+}
+
+static int validate_video_channel(rvd_state_t *st, const char *cmd_json, int *out_chn, char *resp,
+				  int resp_size)
+{
+	if (rss_json_get_int(cmd_json, "channel", out_chn) != 0 || *out_chn < 0 ||
+	    *out_chn >= st->stream_count || st->streams[*out_chn].is_jpeg) {
+		rss_ctrl_resp_error(resp, resp_size, "need valid video channel");
+		return -1;
+	}
+	return 0;
+}
+
 static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int resp_size)
 {
 	int chn;
 
 	if (strstr(cmd_json, "\"stream-restart\"")) {
-		if (rss_json_get_int(cmd_json, "channel", &chn) != 0 || chn < 0 ||
-		    chn >= st->stream_count || st->streams[chn].is_jpeg) {
-			rss_ctrl_resp_error(resp, resp_size, "need valid video channel");
+		if (validate_video_channel(st, cmd_json, &chn, resp, resp_size) < 0)
+			return 1;
+		if (do_stream_restart(st, chn, resp, resp_size) < 0)
+			return 1;
+		rss_ctrl_resp_ok(resp, resp_size);
+		return 1;
+	}
+
+	if (strstr(cmd_json, "\"set-codec\"")) {
+		char val[8];
+		if (validate_video_channel(st, cmd_json, &chn, resp, resp_size) < 0)
+			return 1;
+		if (rss_json_get_str(cmd_json, "value", val, sizeof(val)) != 0) {
+			rss_ctrl_resp_error(resp, resp_size, "need value (h264|h265)");
 			return 1;
 		}
 
+		rss_codec_t codec;
+		if (strcasecmp(val, "h265") == 0 || strcasecmp(val, "hevc") == 0)
+			codec = RSS_CODEC_H265;
+		else if (strcasecmp(val, "h264") == 0 || strcasecmp(val, "avc") == 0)
+			codec = RSS_CODEC_H264;
+		else {
+			rss_ctrl_resp_error(resp, resp_size, "unknown codec");
+			return 1;
+		}
+
+		/* Check H.265 capability */
+		const rss_hal_caps_t *caps =
+			st->ops->get_caps ? st->ops->get_caps(st->hal_ctx) : NULL;
+		if (codec == RSS_CODEC_H265 && caps && !caps->has_h265) {
+			rss_ctrl_resp_error(resp, resp_size, "h265 not supported");
+			return 1;
+		}
+
+		if (st->streams[chn].enc_cfg.codec == codec) {
+			rss_ctrl_resp_ok(resp, resp_size); /* already set */
+			return 1;
+		}
+
+		/* Update config before restart (stream is stopped first inside) */
+		st->streams[chn].enc_cfg.codec = codec;
+		rss_config_set_str(st->cfg, st->streams[chn].cfg_sect, "codec", val);
+		RSS_INFO("set-codec: channel %d → %s", chn, val);
+
+		if (do_stream_restart(st, chn, resp, resp_size) < 0)
+			return 1;
+		rss_ctrl_resp_ok(resp, resp_size);
+		return 1;
+	}
+
+	if (strstr(cmd_json, "\"set-resolution\"")) {
+		int w, h;
+		if (validate_video_channel(st, cmd_json, &chn, resp, resp_size) < 0)
+			return 1;
+		if (rss_json_get_int(cmd_json, "width", &w) != 0 ||
+		    rss_json_get_int(cmd_json, "height", &h) != 0 || w < 32 || h < 32 || w > 4096 ||
+		    h > 4096) {
+			rss_ctrl_resp_error(resp, resp_size, "need width and height (32-4096)");
+			return 1;
+		}
+
+		/* Even dimensions required by encoder */
+		w = (w + 1) & ~1;
+		h = (h + 1) & ~1;
+
+		if ((int)st->streams[chn].enc_cfg.width == w &&
+		    (int)st->streams[chn].enc_cfg.height == h) {
+			rss_ctrl_resp_ok(resp, resp_size);
+			return 1;
+		}
+
+		/* Update encoder + framesource config */
+		st->streams[chn].enc_cfg.width = w;
+		st->streams[chn].enc_cfg.height = h;
+		st->streams[chn].fs_cfg.width = w;
+		st->streams[chn].fs_cfg.height = h;
+		if (st->streams[chn].fs_cfg.scaler.enable) {
+			st->streams[chn].fs_cfg.scaler.out_width = w;
+			st->streams[chn].fs_cfg.scaler.out_height = h;
+		}
+		rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, "width", w);
+		rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, "height", h);
+		RSS_INFO("set-resolution: channel %d → %dx%d", chn, w, h);
+
+		/* Reconfigure FS scaler while channel is disabled.
+		 * do_stream_restart stops+deinits first, but we need FS
+		 * reconfigured before reinit. Do it manually. */
 		int jpeg = find_jpeg_for_video_ctrl(st, chn);
 		bool has_ivs = (st->streams[chn].fs_chn == 1 && st->ivs_active);
 
-		RSS_INFO("stream-restart: channel %d (jpeg=%d ivs=%d)", chn, jpeg, has_ivs);
-
-		/* Stop: IVS → JPEG → video */
+		/* Stop */
 		if (has_ivs) {
 			if (st->ivs_tid) {
 				pthread_join(st->ivs_tid, NULL);
@@ -1143,38 +1305,41 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 			rvd_stream_stop(st, jpeg);
 		rvd_stream_stop(st, chn);
 
-		/* Deinit: JPEG → video (unregister before group destroy) */
+		/* Deinit */
 		if (jpeg >= 0)
 			rvd_stream_deinit(st, jpeg);
 		rvd_stream_deinit(st, chn);
 		if (has_ivs)
 			rvd_ivs_deinit(st);
 
-		/* Reinit: IVS → video → JPEG */
+		/* Reconfigure FS scaler (channel disabled, not destroyed) */
+		RSS_HAL_CALL(st->ops, fs_set_channel_attr, st->hal_ctx, st->streams[chn].fs_chn,
+			     &st->streams[chn].fs_cfg);
+
+		/* Reinit */
 		if (has_ivs)
 			rvd_ivs_init(st);
 
 		int ret = rvd_stream_init(st, chn);
 		if (ret != RSS_OK) {
-			RSS_ERROR("stream-restart: init stream %d failed: %d", chn, ret);
+			RSS_ERROR("set-resolution: init failed: %d", ret);
 			rss_ctrl_resp_error(resp, resp_size, "init failed");
 			return 1;
 		}
 		if (jpeg >= 0) {
+			st->streams[jpeg].enc_cfg.width = w;
+			st->streams[jpeg].enc_cfg.height = h;
 			ret = rvd_stream_init(st, jpeg);
 			if (ret != RSS_OK)
-				RSS_WARN("stream-restart: jpeg init failed: %d (non-fatal)", ret);
+				RSS_WARN("set-resolution: jpeg init failed: %d", ret);
 		}
 
-		/* Start: video → JPEG → IVS */
+		/* Start */
 		if (has_ivs)
 			rvd_ivs_start(st);
-
 		rvd_stream_start(st, chn);
 		if (jpeg >= 0 && st->streams[jpeg].ring)
 			rvd_stream_start(st, jpeg);
-
-		/* IVS thread relaunch */
 		if (has_ivs) {
 			pthread_attr_t ivs_attr;
 			pthread_attr_init(&ivs_attr);
@@ -1183,7 +1348,7 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 			pthread_attr_destroy(&ivs_attr);
 		}
 
-		RSS_INFO("stream-restart: channel %d complete", chn);
+		RSS_INFO("set-resolution: channel %d → %dx%d complete", chn, w, h);
 		rss_ctrl_resp_ok(resp, resp_size);
 		return 1;
 	}
