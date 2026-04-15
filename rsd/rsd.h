@@ -53,14 +53,14 @@ typedef struct {
  * (zero-copy). An atomic barrier on the ring context prevents the
  * reader from overwriting frame_buf while send threads are using it.
  * Audio entries hold a malloc'd copy (small, <4KB). */
-#define RSD_SENDQ_SLOTS	 8
-#define RSD_FRAME_VIDEO	 0
-#define RSD_FRAME_AUDIO	 1
-#define RSD_SENDQ_OK	 0
+#define RSD_SENDQ_SLOTS	  8
+#define RSD_FRAME_VIDEO	  0
+#define RSD_FRAME_AUDIO	  1
+#define RSD_SENDQ_OK	  0
 #define RSD_SENDQ_DROPPED 1
 
 typedef struct {
-	_Atomic int *barrier;	     /* non-NULL: video, decrement when done */
+	_Atomic int *barrier;	      /* non-NULL: video, decrement when done */
 	pthread_mutex_t *barrier_mtx; /* for condvar signal on last release */
 	pthread_cond_t *barrier_cv;   /* signaled when barrier hits 0 */
 	uint8_t *data;		      /* frame_buf (video) or malloc'd (audio) */
@@ -135,11 +135,16 @@ typedef struct {
 	uint64_t read_seq;
 	uint8_t *frame_buf;
 	uint32_t frame_buf_size;
-	_Atomic int frame_readers;    /* barrier: send threads using frame_buf */
-	pthread_mutex_t frame_mtx;    /* protects frame_done condvar */
-	pthread_cond_t frame_done;    /* signaled when frame_readers hits 0 */
+	_Atomic int frame_readers; /* barrier: send threads using frame_buf */
+	pthread_mutex_t frame_mtx; /* protects frame_done condvar */
+	pthread_cond_t frame_done; /* signaled when frame_readers hits 0 */
 	int idx;
 	const char *ring_name; /* for reconnection after RVD restart */
+
+	/* Cached codec/resolution — detect changes on ring reconnect */
+	uint32_t last_codec;
+	uint32_t last_width;
+	uint32_t last_height;
 
 	/* Cached SPS/PPS for SDP sprop-parameter-sets.
 	 * Written by the reader thread (release), read by session thread

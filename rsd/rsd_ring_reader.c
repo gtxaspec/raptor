@@ -17,8 +17,8 @@
 /* Forward declarations — called by send thread, defined below */
 static void rsd_send_video_frame(rsd_client_t *c, const uint8_t *data, uint32_t len,
 				 uint32_t rtp_ts);
-static void rsd_send_audio_frame(rsd_client_t *c, uint32_t codec, const uint8_t *data,
-				 uint32_t len, uint32_t rtp_ts);
+static void rsd_send_audio_frame(rsd_client_t *c, uint32_t codec, const uint8_t *data, uint32_t len,
+				 uint32_t rtp_ts);
 
 /*
  * Extract SPS/PPS from Annex B keyframe data and cache in ring context.
@@ -194,9 +194,8 @@ static void sendq_flush_locked(rsd_sendq_t *q)
  * Push a video frame (zero-copy — points directly into frame_buf).
  * Caller must have already incremented *barrier for this client.
  */
-static int rsd_sendq_push_video(rsd_sendq_t *q, uint8_t *data, uint32_t len,
-				uint32_t rtp_ts, _Atomic int *barrier,
-				pthread_mutex_t *mtx, pthread_cond_t *cv)
+static int rsd_sendq_push_video(rsd_sendq_t *q, uint8_t *data, uint32_t len, uint32_t rtp_ts,
+				_Atomic int *barrier, pthread_mutex_t *mtx, pthread_cond_t *cv)
 {
 	pthread_mutex_lock(&q->lock);
 	if (q->shutdown) {
@@ -237,8 +236,8 @@ static int rsd_sendq_push_video(rsd_sendq_t *q, uint8_t *data, uint32_t len,
 /* Push an audio frame (small malloc copy).
  * Audio uses a burst loop (up to 16 frames) that's incompatible with
  * the shared-buffer barrier — each frame needs its own independent copy. */
-static int rsd_sendq_push_audio(rsd_sendq_t *q, const uint8_t *data,
-				uint32_t len, uint32_t rtp_ts, uint32_t codec)
+static int rsd_sendq_push_audio(rsd_sendq_t *q, const uint8_t *data, uint32_t len, uint32_t rtp_ts,
+				uint32_t codec)
 {
 	pthread_mutex_lock(&q->lock);
 	if (q->shutdown) {
@@ -300,8 +299,7 @@ void *rsd_client_send_thread(void *arg)
 		if (entry.type == RSD_FRAME_VIDEO)
 			rsd_send_video_frame(c, entry.data, entry.len, entry.rtp_ts);
 		else
-			rsd_send_audio_frame(c, entry.codec, entry.data, entry.len,
-					     entry.rtp_ts);
+			rsd_send_audio_frame(c, entry.codec, entry.data, entry.len, entry.rtp_ts);
 
 		sendq_release_entry(&entry);
 	}
@@ -372,22 +370,37 @@ void *rsd_video_reader_thread(void *arg)
 			atomic_store_explicit(&rctx->sps_len, 0, memory_order_relaxed);
 			atomic_store_explicit(&rctx->pps_len, 0, memory_order_relaxed);
 
+			/* Check if codec/resolution changed (hot restart) */
+			const rss_ring_header_t *new_hdr = rss_ring_get_header(rctx->ring);
+			bool codec_changed = (new_hdr->codec != rctx->last_codec);
+			rctx->last_codec = new_hdr->codec;
+			rctx->last_width = new_hdr->width;
+			rctx->last_height = new_hdr->height;
+
 			/* Ring reconnected — reset all clients on this stream
-			 * so they re-sync from the next keyframe. Without this,
-			 * the epoch reset causes per-client timestamps to jump
-			 * backwards (uint32_t wrap). */
+			 * so they re-sync from the next keyframe. If codec changed,
+			 * disconnect existing clients (RTSP can't renegotiate SDP
+			 * mid-session — clients must reconnect for new codec). */
 			pthread_mutex_lock(&srv->clients_lock);
 			for (int i = 0; i < srv->client_count; i++) {
 				rsd_client_t *c = srv->clients[i];
 				if (c && c->stream_idx == stream_idx && c->video.playing) {
-					c->waiting_keyframe = true;
-					c->video_ts_base_set = false;
-					c->audio_ts_base_set = false;
+					if (codec_changed) {
+						shutdown(c->fd, SHUT_RDWR);
+						RSS_INFO("disconnecting client on stream %d (codec "
+							 "changed)",
+							 stream_idx);
+					} else {
+						c->waiting_keyframe = true;
+						c->video_ts_base_set = false;
+						c->audio_ts_base_set = false;
+					}
 				}
 			}
 			pthread_mutex_unlock(&srv->clients_lock);
 
-			RSS_DEBUG("video reader[%d] reconnected (%s)", stream_idx, rctx->ring_name);
+			RSS_INFO("video reader[%d] reconnected (%s%s)", stream_idx, rctx->ring_name,
+				 codec_changed ? ", codec changed" : "");
 		}
 
 		int ret = rss_ring_wait(rctx->ring, 100);
@@ -497,8 +510,7 @@ void *rsd_video_reader_thread(void *arg)
 				c->waiting_keyframe = true;
 				c->audio_ts_base_set = false;
 				rss_ring_request_idr(rctx->ring);
-				RSS_DEBUG("client[%d] sendq full, waiting for IDR",
-					  stream_idx);
+				RSS_DEBUG("client[%d] sendq full, waiting for IDR", stream_idx);
 			}
 		}
 		pthread_mutex_unlock(&srv->clients_lock);
@@ -672,8 +684,8 @@ void *rsd_audio_reader_thread(void *arg)
 					c->audio_ts_base_set = true;
 				}
 				uint32_t client_ts = rtp_ts - c->audio_ts_offset;
-				rsd_sendq_push_audio(&c->sendq, audio_buf, length,
-						     client_ts, audio_codec);
+				rsd_sendq_push_audio(&c->sendq, audio_buf, length, client_ts,
+						     audio_codec);
 			}
 			pthread_mutex_unlock(&srv->clients_lock);
 		}

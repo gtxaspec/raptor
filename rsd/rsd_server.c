@@ -383,6 +383,9 @@ int rsd_server_init(rsd_server_t *srv)
 		}
 		RSS_INFO("ring[%d]: %s %ux%u @ %u/%u fps", s, hdr->codec == 0 ? "H.264" : "H.265",
 			 hdr->width, hdr->height, hdr->fps_num, hdr->fps_den);
+		srv->video[s].last_codec = hdr->codec;
+		srv->video[s].last_width = hdr->width;
+		srv->video[s].last_height = hdr->height;
 
 		/* Frame buffer: sized to largest possible slot payload.
 		 * data_size / slot_count = max bytes per frame in the ring. */
@@ -533,7 +536,7 @@ static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 #else
 			     "false"
 #endif
-			     );
+	);
 }
 
 void rsd_server_run(rsd_server_t *srv)
