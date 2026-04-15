@@ -539,6 +539,7 @@ void *rwd_video_reader_thread(void *arg)
 			continue;
 		}
 		srv->video_read_seq[s] = vhdr->write_seq;
+		srv->video_last_codec[s] = vhdr->codec;
 		RSS_DEBUG("media: video reader[%d] started", s);
 	}
 
@@ -574,8 +575,32 @@ void *rwd_video_reader_thread(void *arg)
 					last_ws[s] = 0;
 					idle[s] = 0;
 					video_ts_epoch[s] = 0;
-					RSS_DEBUG("media: video reader[%d] reconnected (%s)", s,
-						  ring_names[s]);
+
+					/* Detect codec change — disconnect clients
+					 * if codec switched (WebRTC can't renegotiate
+					 * mid-session, and H.265 isn't supported). */
+					bool codec_changed = (h->codec != srv->video_last_codec[s]);
+					srv->video_last_codec[s] = h->codec;
+					if (codec_changed) {
+						pthread_mutex_lock(&srv->clients_lock);
+						for (int i = 0; i < RWD_MAX_CLIENTS; i++) {
+							rwd_client_t *c = srv->clients[i];
+							if (c && c->sending && c->stream_idx == s) {
+								c->sending = false;
+								RSS_INFO("media: disconnecting "
+									 "WebRTC client on "
+									 "stream %d "
+									 "(codec changed)",
+									 s);
+							}
+						}
+						pthread_mutex_unlock(&srv->clients_lock);
+					}
+
+					RSS_INFO("media: video reader[%d] reconnected "
+						 "(%s%s)",
+						 s, ring_names[s],
+						 codec_changed ? ", codec changed" : "");
 				}
 			}
 			if (!srv->video_rings[s] || !srv->video_bufs[s])
@@ -1039,7 +1064,8 @@ void *rwd_audio_reader_thread(void *arg)
 #ifdef RAPTOR_AAC
 								  aac_dec,
 #endif
-								  pcm_accum + pcm_accum_fill, space);
+								  pcm_accum + pcm_accum_fill,
+								  space);
 					if (n > 0)
 						pcm_accum_fill += n;
 				}

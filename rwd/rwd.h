@@ -214,6 +214,7 @@ struct rwd_server {
 	uint64_t video_read_seq[RWD_STREAM_COUNT];
 	uint8_t *video_bufs[RWD_STREAM_COUNT];
 	uint32_t video_buf_sizes[RWD_STREAM_COUNT];
+	uint32_t video_last_codec[RWD_STREAM_COUNT]; /* detect codec change on reconnect */
 
 	/* Audio ring */
 	rss_ring_t *audio_ring;
