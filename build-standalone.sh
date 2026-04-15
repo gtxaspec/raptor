@@ -117,6 +117,7 @@ OPT_CLEAN=0
 OPT_CLEAN_ALL=0
 OPT_DEPS_ONLY=0
 OPT_STATIC=0
+OPT_LOCAL=0
 JOBS="${JOBS:-$(nproc)}"
 
 usage() {
@@ -132,6 +133,7 @@ usage() {
     echo "  --clean        Clean build artifacts (keep downloaded deps)"
     echo "  --clean-all    Remove everything (.deps/ + build/)"
     echo "  --deps-only    Only build dependencies"
+    echo "  --local        Use sibling repos instead of cloning (for development)"
     echo "  --libc=TYPE    uclibc (default), musl, or glibc"
     exit 1
 }
@@ -144,6 +146,7 @@ for arg in "$@"; do
         --no-opus)   OPT_OPUS=0 ;;
         --no-mp3)    OPT_MP3=0 ;;
         --static)    OPT_STATIC=1 ;;
+        --local)     OPT_LOCAL=1 ;;
         --clean)     OPT_CLEAN=1 ;;
         --clean-all) OPT_CLEAN_ALL=1 ;;
         --deps-only) OPT_DEPS_ONLY=1 ;;
@@ -256,6 +259,23 @@ setup_toolchain() {
 clone_repo() {
     local name="$1" url="$2" version="$3" submodules="${4:-}"
     local dir="$DEPS_DIR/$name"
+
+    # --local: symlink from sibling directory instead of cloning
+    if [ "$OPT_LOCAL" = 1 ]; then
+        local sibling="$SCRIPT_DIR/../$name"
+        if [ -d "$sibling" ]; then
+            if [ -L "$dir" ]; then
+                return  # already linked
+            elif [ -d "$dir" ]; then
+                rm -rf "$dir"  # remove cloned copy, use local
+            fi
+            ln -sf "$(cd "$sibling" && pwd)" "$dir"
+            echo "Using local $name → $sibling"
+            return
+        else
+            echo "WARNING: --local but $sibling not found, cloning instead"
+        fi
+    fi
 
     if [ ! -d "$dir/.git" ]; then
         echo "Cloning $name..."
@@ -617,7 +637,7 @@ build_compy() {
 
 echo "=== Raptor standalone build ==="
 echo "Platform:  $PLATFORM_UPPER (SDK $SDK_VERSION)"
-echo "Features:  TLS=$OPT_TLS AAC=$OPT_AAC OPUS=$OPT_OPUS MP3=$OPT_MP3 STATIC=$OPT_STATIC"
+echo "Features:  TLS=$OPT_TLS AAC=$OPT_AAC OPUS=$OPT_OPUS MP3=$OPT_MP3 STATIC=$OPT_STATIC LOCAL=$OPT_LOCAL"
 echo "Deps dir:  $DEPS_DIR"
 echo ""
 
