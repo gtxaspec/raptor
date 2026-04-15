@@ -331,6 +331,11 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 		}
 	}
 
+	/* Strip query string for path matching */
+	char *qs = strchr(path, '?');
+	if (qs)
+		*qs = '\0';
+
 	/* GET /webrtc — serve player page */
 	if (strcmp(method, "GET") == 0 && strcmp(path, "/webrtc") == 0) {
 		if (!webrtc_html) {

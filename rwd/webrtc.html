@@ -46,7 +46,8 @@ async function start(){
   dbgSdp('Offer (with candidates)',pc.localDescription.sdp);
   const stream=document.getElementById('stream').value;
   dbg('WHIP POST /whip?stream='+stream);
-  const resp=await fetch('/whip?stream='+stream,{method:'POST',headers:{'Content-Type':'application/sdp'},body:pc.localDescription.sdp});
+  const whipUrl=new URL('/whip?stream='+stream,location.href);whipUrl.username='';whipUrl.password='';
+  const resp=await fetch(whipUrl.href,{method:'POST',headers:{'Content-Type':'application/sdp'},body:pc.localDescription.sdp});
   if(!resp.ok){dbg('WHIP error:',resp.status,resp.statusText);st.textContent='Error: '+resp.status;return}
   resource=resp.headers.get('Location');
   dbg('WHIP resource:',resource);
@@ -59,7 +60,7 @@ async function start(){
 }
 async function stop(){
   dbg('stopping');stopStats();stopTalk();
-  if(resource)fetch(resource,{method:'DELETE'}).catch(()=>{});
+  if(resource){const u=new URL(resource,location.href);u.username='';u.password='';fetch(u.href,{method:'DELETE'}).catch(()=>{})}
   if(pc)pc.close();
   pc=null;resource=null;v.srcObject=null;
   btn.textContent='Connect';st.textContent='';document.getElementById('mute').style.display='none';document.getElementById('talk').style.display='none';document.getElementById('stream').disabled=false;
