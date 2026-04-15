@@ -561,7 +561,7 @@ build_raptor_ipc() {
 
 build_raptor_hal() {
     local src="$DEPS_DIR/raptor-hal"
-    [ -f "$SYSROOT_DIR/usr/lib/libraptor_hal.a" ] && return
+    [ -f "$SYSROOT_DIR/usr/lib/libraptor_hal_video.a" ] && return
 
     echo "Building raptor-hal ($PLATFORM_UPPER)..."
     make -C "$src" clean 2>/dev/null || true
@@ -570,7 +570,8 @@ build_raptor_hal() {
         CROSS_COMPILE="$CROSS_COMPILE" \
         INGENIC_HEADERS="$src/ingenic-headers" \
         -j"$JOBS"
-    cp -f "$src/libraptor_hal.a" "$SYSROOT_DIR/usr/lib/"
+    cp -f "$src/libraptor_hal_video.a" "$SYSROOT_DIR/usr/lib/"
+    cp -f "$src/libraptor_hal_audio.a" "$SYSROOT_DIR/usr/lib/"
     cp -f "$src/include/raptor_hal.h" "$SYSROOT_DIR/usr/include/"
 }
 
@@ -677,7 +678,8 @@ make -j"$JOBS" \
     PLATFORM="$PLATFORM_UPPER" \
     CROSS_COMPILE="$CROSS_COMPILE" \
     SYSROOT="$SYSROOT_DIR" \
-    LIB_HAL="$SYSROOT_DIR/usr/lib/libraptor_hal.a" \
+    LIB_HAL_VIDEO="$SYSROOT_DIR/usr/lib/libraptor_hal_video.a" \
+    LIB_HAL_AUDIO="$SYSROOT_DIR/usr/lib/libraptor_hal_audio.a" \
     LIB_IPC="$SYSROOT_DIR/usr/lib/librss_ipc.a" \
     LIB_COMMON="$SYSROOT_DIR/usr/lib/librss_common.a" \
     LIB_COMPY="$SYSROOT_DIR/usr/lib/libcompy.a" \
