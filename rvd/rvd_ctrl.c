@@ -1101,6 +1101,96 @@ static int handle_ivs_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 	return 0;
 }
 
+/* ── Pipeline lifecycle commands ── */
+
+/* Find the JPEG stream paired with a video stream (same FS channel) */
+static int find_jpeg_for_video_ctrl(rvd_state_t *st, int video_idx)
+{
+	int target_fs = st->streams[video_idx].fs_chn;
+	for (int j = 0; j < st->jpeg_count; j++) {
+		int ji = st->jpeg_streams[j];
+		if (ji >= 0 && st->streams[ji].fs_chn == target_fs)
+			return ji;
+	}
+	return -1;
+}
+
+static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int resp_size)
+{
+	int chn;
+
+	if (strstr(cmd_json, "\"stream-restart\"")) {
+		if (rss_json_get_int(cmd_json, "channel", &chn) != 0 || chn < 0 ||
+		    chn >= st->stream_count || st->streams[chn].is_jpeg) {
+			rss_ctrl_resp_error(resp, resp_size, "need valid video channel");
+			return 1;
+		}
+
+		int jpeg = find_jpeg_for_video_ctrl(st, chn);
+		bool has_ivs = (st->streams[chn].fs_chn == 1 && st->ivs_active);
+
+		RSS_INFO("stream-restart: channel %d (jpeg=%d ivs=%d)", chn, jpeg, has_ivs);
+
+		/* Stop: IVS → JPEG → video */
+		if (has_ivs) {
+			if (st->ivs_tid) {
+				pthread_join(st->ivs_tid, NULL);
+				st->ivs_tid = 0;
+			}
+			rvd_ivs_stop(st);
+		}
+		if (jpeg >= 0)
+			rvd_stream_stop(st, jpeg);
+		rvd_stream_stop(st, chn);
+
+		/* Deinit: JPEG → video (unregister before group destroy) */
+		if (jpeg >= 0)
+			rvd_stream_deinit(st, jpeg);
+		rvd_stream_deinit(st, chn);
+		if (has_ivs)
+			rvd_ivs_deinit(st);
+
+		/* Reinit: IVS → video → JPEG */
+		if (has_ivs)
+			rvd_ivs_init(st);
+
+		int ret = rvd_stream_init(st, chn);
+		if (ret != RSS_OK) {
+			RSS_ERROR("stream-restart: init stream %d failed: %d", chn, ret);
+			rss_ctrl_resp_error(resp, resp_size, "init failed");
+			return 1;
+		}
+		if (jpeg >= 0) {
+			ret = rvd_stream_init(st, jpeg);
+			if (ret != RSS_OK)
+				RSS_WARN("stream-restart: jpeg init failed: %d (non-fatal)", ret);
+		}
+
+		/* Start: video → JPEG → IVS */
+		if (has_ivs)
+			rvd_ivs_start(st);
+
+		rvd_stream_start(st, chn);
+		if (jpeg >= 0 && st->streams[jpeg].ring)
+			rvd_stream_start(st, jpeg);
+
+		/* IVS thread relaunch */
+		if (has_ivs) {
+			pthread_attr_t ivs_attr;
+			pthread_attr_init(&ivs_attr);
+			pthread_attr_setstacksize(&ivs_attr, 64 * 1024);
+			pthread_create(&st->ivs_tid, &ivs_attr, rvd_ivs_thread, st);
+			pthread_attr_destroy(&ivs_attr);
+		}
+
+		RSS_INFO("stream-restart: channel %d complete", chn);
+		rss_ctrl_resp_ok(resp, resp_size);
+		return 1;
+	}
+
+	return 0;
+}
+
 /* ── Config and status commands ── */
 
 static int handle_config_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int resp_size)
@@ -1209,6 +1299,9 @@ int rvd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, vo
 		CTRL_RETURN(resp_buf);
 
 	if (handle_ivs_cmd(cmd_json, st, resp_buf, resp_buf_size))
+		CTRL_RETURN(resp_buf);
+
+	if (handle_pipeline_cmd(cmd_json, st, resp_buf, resp_buf_size))
 		CTRL_RETURN(resp_buf);
 
 	if (handle_config_cmd(cmd_json, st, resp_buf, resp_buf_size))

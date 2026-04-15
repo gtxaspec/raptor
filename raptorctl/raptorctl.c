@@ -197,6 +197,7 @@ const struct help_entry help_entries[] = {
 	{"rvd", "get-qp-bounds <ch>                  Show QP range"},
 	{"rvd", "get-rc-mode <ch>                    Show rate control mode"},
 	{"rvd", "request-idr [channel]               Request keyframe"},
+	{"rvd", "stream-restart <ch>                 Restart stream pipeline"},
 	{"rvd", "request-pskip <ch>                  Request P-skip"},
 	{"rvd", "request-gdr <ch> <frames>           Request GDR"},
 	{"rvd", "set-brightness <val>                ISP brightness (0-255)"},
@@ -888,6 +889,15 @@ int main(int argc, char **argv)
 			jadd_s(j, "value", argv[3]);
 		if (argc > 4)
 			jadd_i(j, "channel", argv[4]);
+		jstr(j, json, sizeof(json));
+
+	} else if (strcmp(cmd, "stream-restart") == 0) {
+		if (argc < 4) {
+			fprintf(stderr, "Usage: raptorctl %s stream-restart <channel>\n", daemon);
+			return 1;
+		}
+		cJSON *j = jcmd("stream-restart");
+		jadd_i(j, "channel", argv[3]);
 		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-text") == 0) {
