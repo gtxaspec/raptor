@@ -43,6 +43,7 @@ typedef struct {
 	bool ao_enabled;
 	int ao_volume;
 	int ao_gain;
+	_Atomic int *ao_flush;
 #ifdef RAPTOR_AUDIO_EFFECTS
 	bool ns_enabled;
 	bool hpf_enabled;
@@ -211,6 +212,12 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 					   ctx->ao_enabled ? "need value" : "ao disabled");
 	}
 
+	if (strstr(cmd_json, "\"ao-flush\"")) {
+		if (ctx->ao_flush)
+			atomic_store(ctx->ao_flush, 1);
+		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+	}
+
 	if (strstr(cmd_json, "\"config-show\"")) {
 		return rss_ctrl_resp(resp_buf, resp_buf_size,
 				     "{\"status\":\"ok\",\"config\":{"
@@ -251,99 +258,103 @@ typedef struct {
 	const rss_hal_ops_t *ops;
 	rss_hal_ctx_t *hal_ctx;
 	volatile sig_atomic_t *running;
+	_Atomic int flush;
 } ao_thread_ctx_t;
 
 static void *ao_playback_thread(void *arg)
 {
 	ao_thread_ctx_t *ctx = arg;
-
-	RSS_DEBUG("ao playback thread started, waiting for speaker ring...");
-
-	/* Poll for speaker ring (created by rac play) */
 	rss_ring_t *ring = NULL;
-	while (*ctx->running) {
-		ring = rss_ring_open("speaker");
-		if (ring)
-			break;
-		usleep(500000);
-	}
-	if (!ring) {
-		RSS_DEBUG("ao playback thread exiting (no ring)");
-		return NULL;
-	}
+	uint8_t *buf = NULL;
 
-	const rss_ring_header_t *hdr = rss_ring_get_header(ring);
-	uint8_t *buf = malloc(hdr->data_size);
-	if (!buf) {
-		RSS_FATAL("ao thread: malloc failed");
-		rss_ring_close(ring);
-		return NULL;
-	}
-
-	uint64_t read_seq = 0;
-	uint64_t last_write_seq = atomic_load(&hdr->write_seq);
-	int idle_count = 0;
-	RSS_DEBUG("speaker ring connected");
+	RSS_DEBUG("ao playback thread started");
 
 	while (*ctx->running) {
-		int ret = rss_ring_wait(ring, 200);
-		if (ret != 0) {
-			uint64_t ws = atomic_load(&hdr->write_seq);
-			if (ws == last_write_seq)
-				idle_count++;
-			else
-				idle_count = 0;
-			last_write_seq = ws;
-
-			/* After ~1s of no new data, close and wait for fresh ring */
-			if (idle_count >= 5) {
-				idle_count = 0;
-				free(buf);
-				rss_ring_close(ring);
-				ring = NULL;
-				buf = NULL;
-				RSS_DEBUG("speaker idle, waiting for new ring...");
-				while (*ctx->running) {
-					ring = rss_ring_open("speaker");
-					if (ring) {
-						hdr = rss_ring_get_header(ring);
-						buf = malloc(hdr->data_size);
-						if (!buf) {
-							rss_ring_close(ring);
-							ring = NULL;
-							break;
-						}
-						read_seq = 0;
-						last_write_seq = atomic_load(&hdr->write_seq);
-						RSS_DEBUG("speaker ring reconnected");
-						break;
-					}
-					usleep(100000);
-				}
-				if (!ring || !buf)
-					break;
+		/* ── Phase 1: wait for speaker ring ── */
+		while (*ctx->running && !ring) {
+			if (atomic_exchange(&ctx->flush, 0)) {
+				RSS_HAL_CALL(ctx->ops, ao_clear_buf, ctx->hal_ctx);
+				RSS_DEBUG("ao: flushed hardware buffer");
 			}
-			continue;
+			ring = rss_ring_open("speaker");
+			if (!ring)
+				usleep(50000);
 		}
-		idle_count = 0;
+		if (!ring)
+			break;
 
-		uint32_t length = 0;
-		rss_ring_slot_t meta;
-		ret = rss_ring_read(ring, &read_seq, buf, hdr->data_size, &length, &meta);
-		if (ret != 0) {
-			RSS_DEBUG("ao ring_read failed: %d seq=%llu", ret,
-				  (unsigned long long)read_seq);
-			continue;
+		/* Clear hardware buffer — prevents stale audio from previous
+		 * playback bleeding into the new file */
+		RSS_HAL_CALL(ctx->ops, ao_clear_buf, ctx->hal_ctx);
+		rss_ring_acquire(ring);
+
+		const rss_ring_header_t *hdr = rss_ring_get_header(ring);
+		buf = malloc(hdr->data_size);
+		if (!buf) {
+			RSS_FATAL("ao thread: malloc failed");
+			rss_ring_release(ring);
+			rss_ring_close(ring);
+			ring = NULL;
+			break;
 		}
 
-		RSS_DEBUG("ao send_frame len=%u", length);
-		RSS_HAL_CALL(ctx->ops, ao_send_frame, ctx->hal_ctx, (const int16_t *)buf, length,
-			     true);
+		uint64_t read_seq = 0;
+		uint64_t last_write_seq = atomic_load(&hdr->write_seq);
+		int idle_count = 0;
+		RSS_DEBUG("speaker ring connected");
+
+		/* ── Phase 2: read and play frames ── */
+		while (*ctx->running) {
+			if (atomic_exchange(&ctx->flush, 0)) {
+				RSS_HAL_CALL(ctx->ops, ao_clear_buf, ctx->hal_ctx);
+				RSS_DEBUG("ao: flush requested, dropping ring");
+				break;
+			}
+
+			int ret = rss_ring_wait(ring, 50);
+			if (ret != 0) {
+				uint64_t ws = atomic_load(&hdr->write_seq);
+				if (ws == last_write_seq)
+					idle_count++;
+				else
+					idle_count = 0;
+				last_write_seq = ws;
+
+				/* ~500ms idle (10 × 50ms) — close and wait for fresh ring */
+				if (idle_count >= 10) {
+					RSS_DEBUG("speaker idle, closing ring");
+					break;
+				}
+				continue;
+			}
+			idle_count = 0;
+
+			uint32_t length = 0;
+			rss_ring_slot_t meta;
+			ret = rss_ring_read(ring, &read_seq, buf, hdr->data_size, &length, &meta);
+			if (ret != 0) {
+				RSS_DEBUG("ao ring_read: %d seq=%llu", ret,
+					  (unsigned long long)read_seq);
+				continue;
+			}
+
+			RSS_HAL_CALL(ctx->ops, ao_send_frame, ctx->hal_ctx, (const int16_t *)buf,
+				     length, true);
+		}
+
+		/* Cleanup ring before looping back to Phase 1 */
+		free(buf);
+		buf = NULL;
+		rss_ring_release(ring);
+		rss_ring_close(ring);
+		ring = NULL;
 	}
 
 	free(buf);
-	if (ring)
+	if (ring) {
+		rss_ring_release(ring);
 		rss_ring_close(ring);
+	}
 	RSS_DEBUG("ao playback thread exiting");
 	return NULL;
 }
@@ -564,6 +575,7 @@ int main(int argc, char **argv)
 		.ao_enabled = ao_enabled,
 		.ao_volume = rss_config_get_int(dctx.cfg, "audio", "ao_volume", 80),
 		.ao_gain = rss_config_get_int(dctx.cfg, "audio", "ao_gain", 25),
+		.ao_flush = ao_enabled ? &ao_ctx.flush : NULL,
 #ifdef RAPTOR_AUDIO_EFFECTS
 		.ns_enabled = ns_enabled,
 		.hpf_enabled = hpf_enabled,

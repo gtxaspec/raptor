@@ -151,6 +151,13 @@ int cmd_play(const char *src, int sample_rate)
 	if (peek_len > 0)
 		fseek(in, 0, SEEK_SET);
 
+	/* Tell RAD to flush stale hardware audio and prepare for new playback */
+	{
+		char resp[256];
+		rss_ctrl_send_command("/var/run/rss/rad.sock", "{\"cmd\":\"ao-flush\"}",
+				      resp, sizeof(resp), 500);
+	}
+
 	/* Create speaker ring */
 	rss_ring_t *ring = rss_ring_create("speaker", 16, 64 * 1024);
 	if (!ring) {
@@ -160,6 +167,13 @@ int cmd_play(const char *src, int sample_rate)
 		return 1;
 	}
 	rss_ring_set_stream_info(ring, 0x11, 0, 0, 0, sample_rate, 1, 0, 0);
+
+	/* Wait for AO thread to attach — prevents beginning cutoff */
+	for (int i = 0; i < 40 && g_running; i++) {
+		if (rss_ring_reader_count(ring) > 0)
+			break;
+		usleep(5000);
+	}
 
 	int ret = 0;
 	int64_t start_time = rss_timestamp_us();
