@@ -350,7 +350,11 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 {
 	rmr_state_t *st = userdata;
 
-	if (strstr(cmd_json, "\"start\"")) {
+	char cmd[64];
+	if (rss_json_get_str(cmd_json, "cmd", cmd, sizeof(cmd)) != 0)
+		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "missing cmd");
+
+	if (strcmp(cmd, "start") == 0) {
 		if (st->mode == RMR_MODE_MOTION)
 			atomic_store(&st->recording, true);
 		if (st->mode == RMR_MODE_BOTH)
@@ -359,7 +363,7 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return (int)strlen(resp_buf);
 	}
 
-	if (strstr(cmd_json, "\"stop\"")) {
+	if (strcmp(cmd, "stop") == 0) {
 		if (st->mode == RMR_MODE_MOTION)
 			atomic_store(&st->recording, false);
 		if (st->mode == RMR_MODE_BOTH)
@@ -368,7 +372,7 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return (int)strlen(resp_buf);
 	}
 
-	if (strstr(cmd_json, "\"status\"")) {
+	if (strcmp(cmd, "status") == 0) {
 		snprintf(resp_buf, resp_buf_size,
 			 "{\"recording\":%s,\"clip\":%s,\"mode\":%d,"
 			 "\"file\":\"%s\",\"frames\":%" PRIu64 ",\"dropped\":%" PRIu64

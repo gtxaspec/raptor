@@ -134,7 +134,11 @@ static int rmd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	if (rc >= 0)
 		return rc;
 
-	if (strstr(cmd_json, "\"sensitivity\"")) {
+	char cmd[64];
+	if (rss_json_get_str(cmd_json, "cmd", cmd, sizeof(cmd)) != 0)
+		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "missing cmd");
+
+	if (strcmp(cmd, "sensitivity") == 0) {
 		int val;
 		if (rss_json_get_int(cmd_json, "value", &val) == 0 && val >= 0) {
 			ctx->settings.sensitivity = val;
@@ -151,7 +155,7 @@ static int rmd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		}
 	}
 
-	if (strstr(cmd_json, "\"skip-frames\"")) {
+	if (strcmp(cmd, "skip-frames") == 0) {
 		int val;
 		if (rss_json_get_int(cmd_json, "value", &val) == 0 && val >= 0) {
 			ctx->settings.skip_frames = val;

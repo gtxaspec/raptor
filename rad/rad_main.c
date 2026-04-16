@@ -78,7 +78,11 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	if (rc >= 0)
 		return rc;
 
-	if (strstr(cmd_json, "\"set-volume\"")) {
+	char cmd[64];
+	if (rss_json_get_str(cmd_json, "cmd", cmd, sizeof(cmd)) != 0)
+		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "missing cmd");
+
+	if (strcmp(cmd, "set-volume") == 0) {
 		if (rss_json_get_int(cmd_json, "value", &val) == 0) {
 			int ret = RSS_HAL_CALL(ctx->ops, audio_set_volume, ctx->hal_ctx,
 					       ctx->ai_dev, 0, val);
@@ -92,7 +96,7 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value");
 	}
 
-	if (strstr(cmd_json, "\"set-gain\"")) {
+	if (strcmp(cmd, "set-gain") == 0) {
 		if (rss_json_get_int(cmd_json, "value", &val) == 0) {
 			int ret = RSS_HAL_CALL(ctx->ops, audio_set_gain, ctx->hal_ctx, ctx->ai_dev,
 					       0, val);
@@ -106,7 +110,7 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value");
 	}
 
-	if (strstr(cmd_json, "\"set-alc-gain\"")) {
+	if (strcmp(cmd, "set-alc-gain") == 0) {
 		if (rss_json_get_int(cmd_json, "value", &val) == 0) {
 			int ret = RSS_HAL_CALL(ctx->ops, audio_set_alc_gain, ctx->hal_ctx,
 					       ctx->ai_dev, 0, val);
@@ -123,7 +127,7 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 #ifdef RAPTOR_AUDIO_EFFECTS
-	if (strstr(cmd_json, "\"set-ns\"")) {
+	if (strcmp(cmd, "set-ns") == 0) {
 		int level = RSS_NS_MODERATE;
 		rss_json_get_int(cmd_json, "level", &level);
 		if (rss_json_get_int(cmd_json, "value", &val) == 0) {
@@ -148,7 +152,7 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value (0/1)");
 	}
 
-	if (strstr(cmd_json, "\"set-hpf\"")) {
+	if (strcmp(cmd, "set-hpf") == 0) {
 		if (rss_json_get_int(cmd_json, "value", &val) == 0) {
 			int ret = RSS_OK;
 			if (val && !ctx->hpf_enabled)
@@ -168,7 +172,7 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value (0/1)");
 	}
 
-	if (strstr(cmd_json, "\"set-agc\"")) {
+	if (strcmp(cmd, "set-agc") == 0) {
 		if (rss_json_get_int(cmd_json, "value", &val) == 0) {
 			int ret = RSS_OK;
 			if (val) {
@@ -198,7 +202,7 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 #endif /* RAPTOR_AUDIO_EFFECTS */
 
-	if (strstr(cmd_json, "\"ao-set-volume\"")) {
+	if (strcmp(cmd, "ao-set-volume") == 0) {
 		if (rss_json_get_int(cmd_json, "value", &val) == 0 && ctx->ao_enabled) {
 			RSS_HAL_CALL(ctx->ops, ao_set_volume, ctx->hal_ctx, val);
 			ctx->ao_volume = val;
@@ -208,7 +212,7 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 					   ctx->ao_enabled ? "need value" : "ao disabled");
 	}
 
-	if (strstr(cmd_json, "\"ao-set-gain\"")) {
+	if (strcmp(cmd, "ao-set-gain") == 0) {
 		if (rss_json_get_int(cmd_json, "value", &val) == 0 && ctx->ao_enabled) {
 			RSS_HAL_CALL(ctx->ops, ao_set_gain, ctx->hal_ctx, val);
 			ctx->ao_gain = val;
@@ -218,7 +222,7 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 					   ctx->ao_enabled ? "need value" : "ao disabled");
 	}
 
-	if (strstr(cmd_json, "\"ao-flush\"")) {
+	if (strcmp(cmd, "ao-flush") == 0) {
 		if (ctx->ao_flush)
 			atomic_store(ctx->ao_flush, 1);
 		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
@@ -226,7 +230,7 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 
 	/* ── Audio pipeline restart (codec/sample-rate change) ── */
 
-	if (strstr(cmd_json, "\"set-codec\"") || strstr(cmd_json, "\"audio-restart\"")) {
+	if (strcmp(cmd, "set-codec") == 0 || strcmp(cmd, "audio-restart") == 0) {
 		char new_codec_str[16] = "";
 		rss_json_get_str(cmd_json, "value", new_codec_str, sizeof(new_codec_str));
 
@@ -369,7 +373,7 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
 	}
 
-	if (strstr(cmd_json, "\"config-show\"")) {
+	if (strcmp(cmd, "config-show") == 0) {
 		return rss_ctrl_resp(resp_buf, resp_buf_size,
 				     "{\"status\":\"ok\",\"config\":{"
 				     "\"codec\":\"%s\",\"sample_rate\":%d,"
@@ -379,7 +383,7 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				     ctx->ai_dev, ctx->config_path);
 	}
 
-	if (strstr(cmd_json, "\"status\"")) {
+	if (strcmp(cmd, "status") == 0) {
 		int n = snprintf(resp_buf, resp_buf_size,
 				 "{\"status\":\"ok\",\"codec\":\"%s\","
 				 "\"sample_rate\":%d,\"volume\":%d,\"gain\":%d,"

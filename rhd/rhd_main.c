@@ -372,7 +372,11 @@ static int rhd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	if (rc >= 0)
 		return rc;
 
-	if (strstr(cmd_json, "\"clients\"")) {
+	char cmd[64];
+	if (rss_json_get_str(cmd_json, "cmd", cmd, sizeof(cmd)) != 0)
+		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "missing cmd");
+
+	if (strcmp(cmd, "clients") == 0) {
 		int n = snprintf(resp_buf, resp_buf_size,
 				 "{\"status\":\"ok\",\"count\":%d,\"max_clients\":%d,\"clients\":[",
 				 srv->client_count, srv->max_clients);

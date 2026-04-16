@@ -427,7 +427,11 @@ static int rwd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	if (rc >= 0)
 		return rc;
 
-	if (strstr(cmd_json, "\"clients\"")) {
+	char cmd[64];
+	if (rss_json_get_str(cmd_json, "cmd", cmd, sizeof(cmd)) != 0)
+		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "missing cmd");
+
+	if (strcmp(cmd, "clients") == 0) {
 		int n = snprintf(resp_buf, resp_buf_size,
 				 "{\"status\":\"ok\",\"count\":%d,\"max_clients\":%d,\"clients\":[",
 				 srv->client_count, srv->max_clients);
@@ -456,7 +460,7 @@ static int rwd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return (int)strlen(resp_buf);
 	}
 
-	if (strstr(cmd_json, "\"share-rotate\"")) {
+	if (strcmp(cmd, "share-rotate") == 0) {
 		if (srv->webtorrent) {
 			rwd_webtorrent_t *wt = srv->webtorrent;
 			rwd_webtorrent_rotate_key(wt);
@@ -468,7 +472,7 @@ static int rwd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "webtorrent not enabled");
 	}
 
-	if (strstr(cmd_json, "\"share\"")) {
+	if (strcmp(cmd, "share") == 0) {
 		if (srv->webtorrent) {
 			rwd_webtorrent_t *wt = srv->webtorrent;
 			return rss_ctrl_resp(resp_buf, resp_buf_size,

@@ -406,7 +406,11 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	if (rc >= 0)
 		return rc;
 
-	if (strstr(cmd_json, "\"set-text\"")) {
+	char cmd[64];
+	if (rss_json_get_str(cmd_json, "cmd", cmd, sizeof(cmd)) != 0)
+		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "missing cmd");
+
+	if (strcmp(cmd, "set-text") == 0) {
 		char val[128];
 		if (rss_json_get_str(cmd_json, "value", val, sizeof(val)) == 0) {
 			/* Sanitize: strip control characters */
@@ -425,7 +429,7 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		}
 	}
 
-	if (strstr(cmd_json, "\"set-font-color\"")) {
+	if (strcmp(cmd, "set-font-color") == 0) {
 		char val[16];
 		if (rss_json_get_str(cmd_json, "value", val, sizeof(val)) == 0) {
 			st->settings.font_color = parse_color(val);
@@ -440,7 +444,7 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		}
 	}
 
-	if (strstr(cmd_json, "\"set-stroke-color\"")) {
+	if (strcmp(cmd, "set-stroke-color") == 0) {
 		char val[16];
 		if (rss_json_get_str(cmd_json, "value", val, sizeof(val)) == 0) {
 			st->settings.stroke_color = parse_color(val);
@@ -455,7 +459,7 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		}
 	}
 
-	if (strstr(cmd_json, "\"set-stroke-size\"")) {
+	if (strcmp(cmd, "set-stroke-size") == 0) {
 		int val;
 		if (rss_json_get_int(cmd_json, "value", &val) == 0 && val >= 0 && val <= 5) {
 			st->settings.font_stroke = val;
@@ -471,7 +475,7 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 	/* ── Element positioning — lightweight, no pipeline restart ── */
-	if (strstr(cmd_json, "\"set-position\"")) {
+	if (strcmp(cmd, "set-position") == 0) {
 		char element[16] = "", pos[32] = "";
 		rss_json_get_str(cmd_json, "element", element, sizeof(element));
 		rss_json_get_str(cmd_json, "pos", pos, sizeof(pos));
@@ -500,8 +504,8 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 	/* ── Element show/hide — lightweight, no pipeline restart ── */
-	if (strstr(cmd_json, "\"enable-time\"") || strstr(cmd_json, "\"enable-uptime\"") ||
-	    strstr(cmd_json, "\"enable-text\"") || strstr(cmd_json, "\"enable-logo\"")) {
+	if (strcmp(cmd, "enable-time") == 0 || strcmp(cmd, "enable-uptime") == 0 ||
+	    strcmp(cmd, "enable-text") == 0 || strcmp(cmd, "enable-logo") == 0) {
 		int val;
 		if (rss_json_get_int(cmd_json, "value", &val) != 0)
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value (0/1)");
@@ -511,15 +515,15 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		bool *setting;
 		const char *key;
 
-		if (strstr(cmd_json, "\"enable-time\"")) {
+		if (strcmp(cmd, "enable-time") == 0) {
 			region_name = "time";
 			setting = &st->settings.time_enabled;
 			key = "time_enabled";
-		} else if (strstr(cmd_json, "\"enable-uptime\"")) {
+		} else if (strcmp(cmd, "enable-uptime") == 0) {
 			region_name = "uptime";
 			setting = &st->settings.uptime_enabled;
 			key = "uptime_enabled";
-		} else if (strstr(cmd_json, "\"enable-logo\"")) {
+		} else if (strcmp(cmd, "enable-logo") == 0) {
 			region_name = "logo";
 			setting = &st->settings.logo_enabled;
 			key = "logo_enabled";
@@ -560,9 +564,9 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 	/* Per-element font size — check before global (substring match) */
-	if (strstr(cmd_json, "\"set-time-font-size\"") ||
-	    strstr(cmd_json, "\"set-uptime-font-size\"") ||
-	    strstr(cmd_json, "\"set-text-font-size\"")) {
+	if (strcmp(cmd, "set-time-font-size") == 0 ||
+	    strcmp(cmd, "set-uptime-font-size") == 0 ||
+	    strcmp(cmd, "set-text-font-size") == 0) {
 		int val;
 		if (rss_json_get_int(cmd_json, "value", &val) != 0 || val < 10 || val > 72)
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value 10-72");
@@ -570,11 +574,11 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		int fi;
 		const char *key;
 		int *setting;
-		if (strstr(cmd_json, "\"set-time-font-size\"")) {
+		if (strcmp(cmd, "set-time-font-size") == 0) {
 			fi = ROD_FONT_TIME;
 			key = "time_font_size";
 			setting = &st->settings.time_font_size;
-		} else if (strstr(cmd_json, "\"set-uptime-font-size\"")) {
+		} else if (strcmp(cmd, "set-uptime-font-size") == 0) {
 			fi = ROD_FONT_UPTIME;
 			key = "uptime_font_size";
 			setting = &st->settings.uptime_font_size;
@@ -639,7 +643,7 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
 	}
 
-	if (strstr(cmd_json, "\"set-font-size\"")) {
+	if (strcmp(cmd, "set-font-size") == 0) {
 		int val;
 		if (rss_json_get_int(cmd_json, "value", &val) != 0 || val < 10 || val > 72)
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value 10-72");
@@ -738,7 +742,7 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
 	}
 
-	if (strstr(cmd_json, "\"config-show\"")) {
+	if (strcmp(cmd, "config-show") == 0) {
 		return rss_ctrl_resp(
 			resp_buf, resp_buf_size,
 			"{\"status\":\"ok\",\"config\":{"

@@ -71,11 +71,11 @@ static int fmt_hal_result(char *buf, int bufsz, int ret)
 
 /* ── Encoder commands ── */
 
-static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int resp_size)
+static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st, char *resp, int resp_size)
 {
 	int chn, val, val2;
 
-	if (strstr(cmd_json, "\"request-idr\"")) {
+	if (strcmp(cmd, "request-idr") == 0) {
 		int target = -1;
 		rss_json_get_int(cmd_json, "channel", &target);
 		for (int i = 0; i < st->stream_count; i++) {
@@ -87,7 +87,7 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"set-rc-mode\"")) {
+	if (strcmp(cmd, "set-rc-mode") == 0) {
 		char mode_str[20] = "";
 		rss_json_get_str(cmd_json, "mode", mode_str, sizeof(mode_str));
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
@@ -129,7 +129,7 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"set-bitrate\"")) {
+	if (strcmp(cmd, "set-bitrate") == 0) {
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
 		    rss_json_get_int(cmd_json, "value", &val) == 0 && chn >= 0 &&
 		    chn < st->stream_count) {
@@ -147,7 +147,7 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"set-gop\"")) {
+	if (strcmp(cmd, "set-gop") == 0) {
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
 		    rss_json_get_int(cmd_json, "value", &val) == 0 && chn >= 0 &&
 		    chn < st->stream_count) {
@@ -164,7 +164,7 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"set-fps\"")) {
+	if (strcmp(cmd, "set-fps") == 0) {
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
 		    rss_json_get_int(cmd_json, "value", &val) == 0 && chn >= 0 &&
 		    chn < st->stream_count) {
@@ -181,7 +181,7 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"set-qp-bounds\"")) {
+	if (strcmp(cmd, "set-qp-bounds") == 0) {
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
 		    rss_json_get_int(cmd_json, "min", &val) == 0 &&
 		    rss_json_get_int(cmd_json, "max", &val2) == 0 && chn >= 0 &&
@@ -203,7 +203,7 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"get-bitrate\"")) {
+	if (strcmp(cmd, "get-bitrate") == 0) {
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
 		    chn < st->stream_count) {
 			uint32_t avg = 0;
@@ -218,7 +218,7 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"get-fps\"")) {
+	if (strcmp(cmd, "get-fps") == 0) {
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
 		    chn < st->stream_count) {
 			uint32_t num = 0, den = 0;
@@ -233,7 +233,7 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"get-gop\"")) {
+	if (strcmp(cmd, "get-gop") == 0) {
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
 		    chn < st->stream_count) {
 			uint32_t gop = 0;
@@ -246,7 +246,7 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"get-qp-bounds\"")) {
+	if (strcmp(cmd, "get-qp-bounds") == 0) {
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
 		    chn < st->stream_count) {
 			rss_ctrl_resp(
@@ -258,7 +258,7 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"get-rc-mode\"")) {
+	if (strcmp(cmd, "get-rc-mode") == 0) {
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
 		    chn < st->stream_count) {
 			static const char *rc_names[] = {"fixqp", "cbr",	"vbr",
@@ -282,7 +282,7 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 
 /* ── Advanced encoder commands ── */
 
-static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
+static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st, char *resp,
 				       int resp_size)
 {
 	int chn, val, val2;
@@ -290,7 +290,7 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 
 /* Simple set: channel + value → HAL call with int arg */
 #define ENC_SET_INT(name, fn)                                                                      \
-	if (strstr(cmd_json, "\"" name "\"")) {                                                    \
+	if (strcmp(cmd, name) == 0) {                                                              \
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&                            \
 		    rss_json_get_int(cmd_json, "value", &val) == 0 && chn >= 0 &&                  \
 		    chn < st->stream_count) {                                                      \
@@ -305,7 +305,7 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 
 /* Simple set: channel + bool value */
 #define ENC_SET_BOOL(name, fn)                                                                     \
-	if (strstr(cmd_json, "\"" name "\"")) {                                                    \
+	if (strcmp(cmd, name) == 0) {                                                              \
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&                            \
 		    rss_json_get_int(cmd_json, "value", &val) == 0 && chn >= 0 &&                  \
 		    chn < st->stream_count) {                                                      \
@@ -320,7 +320,7 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 
 /* Simple get: channel → HAL call returning uint32_t */
 #define ENC_GET_U32(name, fn, field)                                                               \
-	if (strstr(cmd_json, "\"" name "\"")) {                                                    \
+	if (strcmp(cmd, name) == 0) {                                                              \
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&                \
 		    chn < st->stream_count) {                                                      \
 			uint32_t out = 0;                                                          \
@@ -339,7 +339,7 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 
 /* Simple get: channel → HAL call returning int */
 #define ENC_GET_INT(name, fn, field)                                                               \
-	if (strstr(cmd_json, "\"" name "\"")) {                                                    \
+	if (strcmp(cmd, name) == 0) {                                                              \
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&                \
 		    chn < st->stream_count) {                                                      \
 			int out = 0;                                                               \
@@ -358,7 +358,7 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 
 /* Simple get: channel → HAL call returning bool */
 #define ENC_GET_BOOL(name, fn, field)                                                              \
-	if (strstr(cmd_json, "\"" name "\"")) {                                                    \
+	if (strcmp(cmd, name) == 0) {                                                              \
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&                \
 		    chn < st->stream_count) {                                                      \
 			bool out = false;                                                          \
@@ -394,7 +394,7 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 
 	/* ── Simple get commands ── */
 	/* gop_mode: use dedicated handler for correct enum type */
-	if (strstr(cmd_json, "\"get-gop-mode\"")) {
+	if (strcmp(cmd, "get-gop-mode") == 0) {
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
 		    chn < st->stream_count) {
 			rss_gop_mode_t mode = RSS_GOP_DEFAULT;
@@ -425,7 +425,7 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 #undef ENC_GET_BOOL
 
 	/* ── QP bounds per frame (I/P separate) ── */
-	if (strstr(cmd_json, "\"set-qp-bounds-per-frame\"")) {
+	if (strcmp(cmd, "set-qp-bounds-per-frame") == 0) {
 		int min_i, max_i, min_p, max_p;
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
 		    rss_json_get_int(cmd_json, "min_i", &min_i) == 0 &&
@@ -444,7 +444,7 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 	}
 
 	/* ── Max picture size ── */
-	if (strstr(cmd_json, "\"set-max-pic-size\"")) {
+	if (strcmp(cmd, "set-max-pic-size") == 0) {
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
 		    rss_json_get_int(cmd_json, "i_kbits", &val) == 0 &&
 		    rss_json_get_int(cmd_json, "p_kbits", &val2) == 0 && chn >= 0 &&
@@ -459,7 +459,7 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 	}
 
 	/* ── H.264 transform ── */
-	if (strstr(cmd_json, "\"set-h264-trans\"")) {
+	if (strcmp(cmd, "set-h264-trans") == 0) {
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
 		    rss_json_get_int(cmd_json, "value", &val) == 0 && chn >= 0 &&
 		    chn < st->stream_count) {
@@ -473,7 +473,7 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"get-h264-trans\"")) {
+	if (strcmp(cmd, "get-h264-trans") == 0) {
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
 		    chn < st->stream_count) {
 			rss_enc_h264_trans_t cfg = {0};
@@ -492,7 +492,7 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 	}
 
 	/* ── H.265 transform ── */
-	if (strstr(cmd_json, "\"set-h265-trans\"")) {
+	if (strcmp(cmd, "set-h265-trans") == 0) {
 		int cr_off, cb_off;
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
 		    rss_json_get_int(cmd_json, "cr_offset", &cr_off) == 0 &&
@@ -509,7 +509,7 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"get-h265-trans\"")) {
+	if (strcmp(cmd, "get-h265-trans") == 0) {
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
 		    chn < st->stream_count) {
 			rss_enc_h265_trans_t cfg = {0};
@@ -529,7 +529,7 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 	}
 
 	/* ── ROI ── */
-	if (strstr(cmd_json, "\"set-roi\"")) {
+	if (strcmp(cmd, "set-roi") == 0) {
 		int idx, enable, x, y, w, h, qp;
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
 		    rss_json_get_int(cmd_json, "index", &idx) == 0 &&
@@ -557,7 +557,7 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"get-roi\"")) {
+	if (strcmp(cmd, "get-roi") == 0) {
 		int idx;
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
 		    rss_json_get_int(cmd_json, "index", &idx) == 0 && chn >= 0 &&
@@ -580,7 +580,7 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 	}
 
 	/* ── Super frame ── */
-	if (strstr(cmd_json, "\"set-super-frame\"")) {
+	if (strcmp(cmd, "set-super-frame") == 0) {
 		int mode, i_thr, p_thr;
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
 		    rss_json_get_int(cmd_json, "mode", &mode) == 0 &&
@@ -600,7 +600,7 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"get-super-frame\"")) {
+	if (strcmp(cmd, "get-super-frame") == 0) {
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
 		    chn < st->stream_count) {
 			rss_super_frame_cfg_t cfg = {0};
@@ -621,7 +621,7 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 	}
 
 	/* ── P-skip ── */
-	if (strstr(cmd_json, "\"set-pskip\"")) {
+	if (strcmp(cmd, "set-pskip") == 0) {
 		int enable, max_frames;
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
 		    rss_json_get_int(cmd_json, "enable", &enable) == 0 &&
@@ -637,7 +637,7 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"get-pskip\"")) {
+	if (strcmp(cmd, "get-pskip") == 0) {
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
 		    chn < st->stream_count) {
 			rss_pskip_cfg_t cfg = {0};
@@ -656,7 +656,7 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"request-pskip\"")) {
+	if (strcmp(cmd, "request-pskip") == 0) {
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
 		    chn < st->stream_count) {
 			int ret = RSS_HAL_CALL(st->ops, enc_request_pskip, st->hal_ctx,
@@ -669,7 +669,7 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 	}
 
 	/* ── SRD (static scene refresh) ── */
-	if (strstr(cmd_json, "\"set-srd\"")) {
+	if (strcmp(cmd, "set-srd") == 0) {
 		int enable, level;
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
 		    rss_json_get_int(cmd_json, "enable", &enable) == 0 &&
@@ -685,7 +685,7 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"get-srd\"")) {
+	if (strcmp(cmd, "get-srd") == 0) {
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
 		    chn < st->stream_count) {
 			rss_srd_cfg_t cfg = {0};
@@ -704,7 +704,7 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 	}
 
 	/* ── Encoder denoise ── */
-	if (strstr(cmd_json, "\"set-enc-denoise\"")) {
+	if (strcmp(cmd, "set-enc-denoise") == 0) {
 		int enable, dn_type, i_qp, p_qp;
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
 		    rss_json_get_int(cmd_json, "enable", &enable) == 0 &&
@@ -726,7 +726,7 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"get-enc-denoise\"")) {
+	if (strcmp(cmd, "get-enc-denoise") == 0) {
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
 		    chn < st->stream_count) {
 			rss_enc_denoise_cfg_t cfg = {0};
@@ -747,7 +747,7 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 	}
 
 	/* ── GDR (gradual decoder refresh) ── */
-	if (strstr(cmd_json, "\"set-gdr\"")) {
+	if (strcmp(cmd, "set-gdr") == 0) {
 		int enable, cycle;
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
 		    rss_json_get_int(cmd_json, "enable", &enable) == 0 &&
@@ -763,7 +763,7 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"get-gdr\"")) {
+	if (strcmp(cmd, "get-gdr") == 0) {
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
 		    chn < st->stream_count) {
 			rss_enc_gdr_cfg_t cfg = {0};
@@ -781,7 +781,7 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"request-gdr\"")) {
+	if (strcmp(cmd, "request-gdr") == 0) {
 		int frames;
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
 		    rss_json_get_int(cmd_json, "value", &frames) == 0 && chn >= 0 &&
@@ -796,7 +796,7 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 	}
 
 	/* ── Encoder crop ── */
-	if (strstr(cmd_json, "\"set-enc-crop\"")) {
+	if (strcmp(cmd, "set-enc-crop") == 0) {
 		int enable, x, y, w, h;
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
 		    rss_json_get_int(cmd_json, "enable", &enable) == 0 &&
@@ -819,7 +819,7 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"get-enc-crop\"")) {
+	if (strcmp(cmd, "get-enc-crop") == 0) {
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
 		    chn < st->stream_count) {
 			rss_enc_crop_cfg_t cfg = {0};
@@ -840,7 +840,7 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 	}
 
 	/* ── Encoder capabilities query ── */
-	if (strstr(cmd_json, "\"get-enc-caps\"")) {
+	if (strcmp(cmd, "get-enc-caps") == 0) {
 		if (!caps) {
 			rss_ctrl_resp_error(resp, resp_size, "caps not available");
 			return 1;
@@ -880,7 +880,7 @@ static int handle_encoder_advanced_cmd(const char *cmd_json, rvd_state_t *st, ch
 
 /* ── ISP commands ── */
 
-static int handle_isp_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int resp_size)
+static int handle_isp_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st, char *resp, int resp_size)
 {
 	int val;
 	int sensor_idx = -1;
@@ -888,7 +888,7 @@ static int handle_isp_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 
 /* ISP_SET_N: supports --sensor N via _n variant */
 #define ISP_SET_N(name, fn)                                                                        \
-	if (strstr(cmd_json, "\"" name "\"")) {                                                    \
+	if (strcmp(cmd, name) == 0) {                                                              \
 		if (rss_json_get_int(cmd_json, "value", &val) == 0) {                              \
 			int ret;                                                                   \
 			if (sensor_idx >= 0)                                                       \
@@ -904,7 +904,7 @@ static int handle_isp_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 
 /* ISP_SET: single-sensor only (no _n variant) */
 #define ISP_SET(name, fn)                                                                          \
-	if (strstr(cmd_json, "\"" name "\"")) {                                                    \
+	if (strcmp(cmd, name) == 0) {                                                              \
 		if (rss_json_get_int(cmd_json, "value", &val) == 0) {                              \
 			int ret = RSS_HAL_CALL(st->ops, fn, st->hal_ctx, val);                     \
 			fmt_hal_result(resp, resp_size, ret);                                      \
@@ -935,7 +935,7 @@ static int handle_isp_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 #undef ISP_SET_N
 #undef ISP_SET
 
-	if (strstr(cmd_json, "\"set-wb\"")) {
+	if (strcmp(cmd, "set-wb") == 0) {
 		rss_wb_config_t wb = {0};
 		RSS_HAL_CALL(st->ops, isp_get_wb, st->hal_ctx, &wb);
 		char mode_str[20] = "";
@@ -955,7 +955,7 @@ static int handle_isp_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"get-wb\"")) {
+	if (strcmp(cmd, "get-wb") == 0) {
 		rss_wb_config_t wb = {0};
 		RSS_HAL_CALL(st->ops, isp_get_wb, st->hal_ctx, &wb);
 		rss_ctrl_resp(resp, resp_size,
@@ -965,7 +965,7 @@ static int handle_isp_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"get-isp\"")) {
+	if (strcmp(cmd, "get-isp") == 0) {
 		uint8_t bri = 0, con = 0, sat = 0, shp = 0, hue = 0, sin = 0, tem = 0;
 		int hf = 0, vf = 0, ae = 0;
 		uint32_t again = 0, dgain = 0;
@@ -995,7 +995,7 @@ static int handle_isp_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"get-exposure\"")) {
+	if (strcmp(cmd, "get-exposure") == 0) {
 		rss_exposure_t exp = {0};
 		RSS_HAL_CALL(st->ops, isp_get_exposure, st->hal_ctx, &exp);
 		rss_ctrl_resp(resp, resp_size,
@@ -1004,7 +1004,7 @@ static int handle_isp_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"set-running-mode\"")) {
+	if (strcmp(cmd, "set-running-mode") == 0) {
 		char mode_str[8];
 		if (rss_json_get_str(cmd_json, "value", mode_str, sizeof(mode_str)) == 0) {
 			int mode = (strcmp(mode_str, "night") == 0) ? 1 : 0;
@@ -1022,9 +1022,9 @@ static int handle_isp_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 
 /* ── IVS commands ── */
 
-static int handle_ivs_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int resp_size)
+static int handle_ivs_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st, char *resp, int resp_size)
 {
-	if (strstr(cmd_json, "\"ivs-status\"")) {
+	if (strcmp(cmd, "ivs-status") == 0) {
 		bool motion = atomic_load(&st->ivs_motion);
 		int64_t ts = atomic_load(&st->ivs_motion_ts);
 		int persons = st->ivs_persondet ? atomic_load(&st->ivs_person_count) : -1;
@@ -1036,7 +1036,7 @@ static int handle_ivs_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"ivs-detections\"")) {
+	if (strcmp(cmd, "ivs-detections") == 0) {
 		if (!st->ivs_active) {
 			rss_ctrl_resp_error(resp, resp_size, "ivs not active");
 			return 1;
@@ -1058,7 +1058,7 @@ static int handle_ivs_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"ivs-set-sensitivity\"")) {
+	if (strcmp(cmd, "ivs-set-sensitivity") == 0) {
 		int sens = -1;
 		if (rss_json_get_int(cmd_json, "value", &sens) == 0 && st->ivs_active &&
 		    sens >= 0) {
@@ -1078,7 +1078,7 @@ static int handle_ivs_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"ivs-set-skip-frames\"")) {
+	if (strcmp(cmd, "ivs-set-skip-frames") == 0) {
 		int val = -1;
 		if (rss_json_get_int(cmd_json, "value", &val) == 0 && st->ivs_active && val >= 0) {
 			rss_ivs_move_param_t mp;
@@ -1194,11 +1194,11 @@ static int validate_video_channel(rvd_state_t *st, const char *cmd_json, int *ou
 	return 0;
 }
 
-static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int resp_size)
+static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st, char *resp, int resp_size)
 {
 	int chn;
 
-	if (strstr(cmd_json, "\"stream-restart\"")) {
+	if (strcmp(cmd, "stream-restart") == 0) {
 		if (validate_video_channel(st, cmd_json, &chn, resp, resp_size) < 0)
 			return 1;
 		if (do_stream_restart(st, chn, resp, resp_size) < 0)
@@ -1207,7 +1207,7 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"set-codec\"")) {
+	if (strcmp(cmd, "set-codec") == 0) {
 		char val[8];
 		if (validate_video_channel(st, cmd_json, &chn, resp, resp_size) < 0)
 			return 1;
@@ -1253,7 +1253,7 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"set-resolution\"")) {
+	if (strcmp(cmd, "set-resolution") == 0) {
 		int w, h;
 		if (validate_video_channel(st, cmd_json, &chn, resp, resp_size) < 0)
 			return 1;
@@ -1374,7 +1374,7 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"osd-show\"")) {
+	if (strcmp(cmd, "osd-show") == 0) {
 		int stream = -1, show = -1;
 		char region[16] = "";
 		rss_json_get_int(cmd_json, "stream", &stream);
@@ -1425,7 +1425,7 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"osd-position\"")) {
+	if (strcmp(cmd, "osd-position") == 0) {
 		int stream = -1;
 		char region[16] = "", pos[32] = "";
 		rss_json_get_int(cmd_json, "stream", &stream);
@@ -1493,7 +1493,7 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"osd-restart\"")) {
+	if (strcmp(cmd, "osd-restart") == 0) {
 		int pool_kb = 0;
 		int font_size = 0;
 		rss_json_get_int(cmd_json, "pool_kb", &pool_kb);
@@ -1611,13 +1611,9 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 
 /* ── Config and status commands ── */
 
-static int handle_config_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int resp_size)
+static int handle_config_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st, char *resp, int resp_size)
 {
-	int rc = rss_ctrl_handle_common(cmd_json, resp, resp_size, st->cfg, st->config_path);
-	if (rc >= 0)
-		return 1;
-
-	if (strstr(cmd_json, "\"config-show\"")) {
+	if (strcmp(cmd, "config-show") == 0) {
 		int off = snprintf(resp, resp_size, "{\"status\":\"ok\",\"config\":{\"streams\":[");
 		for (int i = 0; i < st->stream_count && off < resp_size; i++) {
 			rvd_stream_t *s = &st->streams[i];
@@ -1642,7 +1638,7 @@ static int handle_config_cmd(const char *cmd_json, rvd_state_t *st, char *resp, 
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"privacy\"")) {
+	if (strcmp(cmd, "privacy") == 0) {
 		char val_str[8];
 		int channel = -1;
 		rss_json_get_int(cmd_json, "channel", &channel);
@@ -1675,7 +1671,7 @@ static int handle_config_cmd(const char *cmd_json, rvd_state_t *st, char *resp, 
 		return 1;
 	}
 
-	if (strstr(cmd_json, "\"status\"")) {
+	if (strcmp(cmd, "status") == 0) {
 		int off = snprintf(resp, resp_size, "{\"status\":\"ok\",\"streams\":[");
 		for (int i = 0; i < st->stream_count && off < resp_size; i++) {
 			uint32_t avg_br = 0;
@@ -1707,22 +1703,30 @@ int rvd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, vo
 {
 	rvd_state_t *st = userdata;
 
-	if (handle_encoder_cmd(cmd_json, st, resp_buf, resp_buf_size))
+	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, st->cfg, st->config_path);
+	if (rc >= 0)
 		CTRL_RETURN(resp_buf);
 
-	if (handle_encoder_advanced_cmd(cmd_json, st, resp_buf, resp_buf_size))
+	char cmd[64];
+	if (rss_json_get_str(cmd_json, "cmd", cmd, sizeof(cmd)) != 0)
+		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "missing cmd");
+
+	if (handle_encoder_cmd(cmd, cmd_json, st, resp_buf, resp_buf_size))
 		CTRL_RETURN(resp_buf);
 
-	if (handle_isp_cmd(cmd_json, st, resp_buf, resp_buf_size))
+	if (handle_encoder_advanced_cmd(cmd, cmd_json, st, resp_buf, resp_buf_size))
 		CTRL_RETURN(resp_buf);
 
-	if (handle_ivs_cmd(cmd_json, st, resp_buf, resp_buf_size))
+	if (handle_isp_cmd(cmd, cmd_json, st, resp_buf, resp_buf_size))
 		CTRL_RETURN(resp_buf);
 
-	if (handle_pipeline_cmd(cmd_json, st, resp_buf, resp_buf_size))
+	if (handle_ivs_cmd(cmd, cmd_json, st, resp_buf, resp_buf_size))
 		CTRL_RETURN(resp_buf);
 
-	if (handle_config_cmd(cmd_json, st, resp_buf, resp_buf_size))
+	if (handle_pipeline_cmd(cmd, cmd_json, st, resp_buf, resp_buf_size))
+		CTRL_RETURN(resp_buf);
+
+	if (handle_config_cmd(cmd, cmd_json, st, resp_buf, resp_buf_size))
 		CTRL_RETURN(resp_buf);
 
 	return rss_ctrl_resp_error(resp_buf, resp_buf_size, "unknown command");

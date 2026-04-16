@@ -142,7 +142,11 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	if (rc >= 0)
 		return rc;
 
-	if (strstr(cmd_json, "\"isp-mode\"")) {
+	char cmd[64];
+	if (rss_json_get_str(cmd_json, "cmd", cmd, sizeof(cmd)) != 0)
+		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "missing cmd");
+
+	if (strcmp(cmd, "isp-mode") == 0) {
 		/* ISP running mode only — no GPIO/IR-cut toggling */
 		char val[16];
 		const char *isp_state = "day";
@@ -157,7 +161,7 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				     isp_state, st->current_mode == RIC_MODE_DAY ? "day" : "night");
 	}
 
-	if (strstr(cmd_json, "\"mode\"")) {
+	if (strcmp(cmd, "mode") == 0) {
 		char val[16];
 		if (rss_json_get_str(cmd_json, "value", val, sizeof(val)) == 0) {
 			if (strcmp(val, "day") == 0) {
@@ -179,7 +183,7 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			st->current_mode == RIC_MODE_DAY ? "day" : "night");
 	}
 
-	if (strstr(cmd_json, "\"config-show\"")) {
+	if (strcmp(cmd, "config-show") == 0) {
 		char exp_resp[256] = {0};
 		rss_ctrl_send_command("/var/run/rss/rvd.sock", "{\"cmd\":\"get-exposure\"}",
 				      exp_resp, sizeof(exp_resp), 1000);
