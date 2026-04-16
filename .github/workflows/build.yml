@@ -29,7 +29,10 @@ jobs:
           restore-keys: ${{ matrix.platform }}-uclibc-deps-
 
       - name: Build
-        run: ./build-standalone.sh --static ${{ matrix.platform }}
+        run: |
+          ./build-standalone.sh --static ${{ matrix.platform }}
+          cp config/raptor.conf build/
+          cp rwd/webrtc.html rwd/share.html build/
 
       - name: Upload binaries
         uses: actions/upload-artifact@v7
