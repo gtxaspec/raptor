@@ -1,0 +1,35 @@
+name: Build T31 (uclibc static)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install host dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            build-essential cmake git curl \
+            autoconf automake libtool \
+            meson ninja-build python3
+
+      - name: Cache toolchain and deps
+        uses: actions/cache@v4
+        with:
+          path: .deps
+          key: t31-uclibc-deps-${{ hashFiles('build-standalone.sh') }}
+          restore-keys: t31-uclibc-deps-
+
+      - name: Build
+        run: ./build-standalone.sh --static t31
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: raptor-t31-uclibc-static
+          path: build/
+          retention-days: 14
