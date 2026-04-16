@@ -550,6 +550,7 @@ void *rwd_video_reader_thread(void *arg)
 
 	while (*srv->running) {
 		/* Poll all rings (short timeout so we alternate quickly) */
+		bool any_polled = false;
 		for (int s = 0; s < RWD_STREAM_COUNT; s++) {
 			/* Reconnect closed rings */
 			if (!srv->video_rings[s] && srv->video_bufs[s]) {
@@ -624,6 +625,7 @@ void *rwd_video_reader_thread(void *arg)
 			if (!has_clients)
 				continue;
 
+			any_polled = true;
 			int ret = rss_ring_wait(srv->video_rings[s], 50);
 			if (ret != 0) {
 				const rss_ring_header_t *h =
@@ -699,6 +701,10 @@ void *rwd_video_reader_thread(void *arg)
 			}
 			pthread_mutex_unlock(&srv->clients_lock);
 		}
+
+		/* No clients connected — sleep to avoid busy-wait */
+		if (!any_polled)
+			usleep(100000);
 	}
 
 	for (int s = 0; s < RWD_STREAM_COUNT; s++) {
