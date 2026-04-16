@@ -68,7 +68,9 @@ static bool rmd_poll_motion(rmd_ctx_t *ctx)
 	rss_json_get_int(resp, "persons", &persons);
 	ctx->person_count = persons > 0 ? persons : 0;
 
-	return strstr(resp, "\"motion\":true") != NULL;
+	int motion = 0;
+	rss_json_get_int(resp, "motion", &motion);
+	return motion != 0;
 }
 
 static void rmd_update_state(rmd_ctx_t *ctx, bool motion)
