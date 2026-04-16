@@ -211,6 +211,7 @@ struct rwd_server {
 	rwd_client_t *clients[RWD_MAX_CLIENTS];
 	int client_count;
 	pthread_mutex_t clients_lock;
+	pthread_cond_t clients_cond; /* signaled when a client starts sending */
 
 	/* Video ring readers (0=main, 1=sub, 2+=multi-sensor) */
 #define RWD_STREAM_COUNT 6

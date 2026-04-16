@@ -607,7 +607,8 @@ static void rwd_run(rwd_server_t *srv)
 		}
 	}
 
-	/* Shutdown */
+	/* Shutdown — wake reader threads so they see *running == false */
+	pthread_cond_broadcast(&srv->clients_cond);
 	pthread_join(video_tid, NULL);
 	pthread_join(audio_tid, NULL);
 
@@ -678,6 +679,7 @@ int main(int argc, char **argv)
 	srv.wire_pt = RWD_AUDIO_PT;
 	srv.wire_clock = RWD_AUDIO_CLOCK;
 	pthread_mutex_init(&srv.clients_lock, NULL);
+	pthread_cond_init(&srv.clients_cond, NULL);
 
 	/* Basic auth — enabled when both username and password are set */
 	const char *webrtc_user = rss_config_get_str(dctx.cfg, "webrtc", "username", "admin");
@@ -805,6 +807,7 @@ cleanup:
 	rss_tls_free(srv.tls);
 #endif
 	rwd_signaling_cleanup();
+	pthread_cond_destroy(&srv.clients_cond);
 	pthread_mutex_destroy(&srv.clients_lock);
 	rss_config_free(dctx.cfg);
 	rss_daemon_cleanup("rwd");

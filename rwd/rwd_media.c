@@ -277,6 +277,9 @@ int rwd_media_setup(rwd_client_t *c)
 	c->sending = true;
 	c->waiting_keyframe = true;
 
+	/* Wake reader threads so they start polling rings immediately */
+	pthread_cond_broadcast(&srv->clients_cond);
+
 	/* Request IDR so we get a keyframe quickly */
 	int si = c->stream_idx;
 	if (si >= 0 && si < RWD_STREAM_COUNT && srv->video_rings[si])
@@ -702,9 +705,15 @@ void *rwd_video_reader_thread(void *arg)
 			pthread_mutex_unlock(&srv->clients_lock);
 		}
 
-		/* No clients connected — sleep to avoid busy-wait */
-		if (!any_polled)
-			usleep(100000);
+		/* No clients — block on condvar until a client starts sending */
+		if (!any_polled) {
+			pthread_mutex_lock(&srv->clients_lock);
+			struct timespec ts;
+			clock_gettime(CLOCK_REALTIME, &ts);
+			ts.tv_sec += 1;
+			pthread_cond_timedwait(&srv->clients_cond, &srv->clients_lock, &ts);
+			pthread_mutex_unlock(&srv->clients_lock);
+		}
 	}
 
 	for (int s = 0; s < RWD_STREAM_COUNT; s++) {
@@ -975,6 +984,25 @@ void *rwd_audio_reader_thread(void *arg)
 			else
 				RSS_INFO("media: audio %s passthrough", codec_name);
 		}
+
+		/* Skip ring polling when no clients are sending */
+		bool has_audio_clients = false;
+		pthread_mutex_lock(&srv->clients_lock);
+		for (int i = 0; i < RWD_MAX_CLIENTS; i++) {
+			if (srv->clients[i] && srv->clients[i]->sending) {
+				has_audio_clients = true;
+				break;
+			}
+		}
+		if (!has_audio_clients) {
+			struct timespec ats;
+			clock_gettime(CLOCK_REALTIME, &ats);
+			ats.tv_sec += 1;
+			pthread_cond_timedwait(&srv->clients_cond, &srv->clients_lock, &ats);
+			pthread_mutex_unlock(&srv->clients_lock);
+			continue;
+		}
+		pthread_mutex_unlock(&srv->clients_lock);
 
 		int ret = rss_ring_wait(srv->audio_ring, 100);
 		if (ret != 0) {
