@@ -1,4 +1,4 @@
-name: Build T31 (uclibc static)
+name: Build (uclibc static)
 
 on:
   workflow_dispatch:
@@ -6,6 +6,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [t20, t21, t23, t30, t31, t32, t40, t41]
     steps:
       - uses: actions/checkout@v4
 
@@ -21,15 +25,15 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .deps
-          key: t31-uclibc-deps-${{ hashFiles('build-standalone.sh') }}
-          restore-keys: t31-uclibc-deps-
+          key: ${{ matrix.platform }}-uclibc-deps-${{ hashFiles('build-standalone.sh') }}
+          restore-keys: ${{ matrix.platform }}-uclibc-deps-
 
       - name: Build
-        run: ./build-standalone.sh --static t31
+        run: ./build-standalone.sh --static ${{ matrix.platform }}
 
       - name: Upload binaries
         uses: actions/upload-artifact@v4
         with:
-          name: raptor-t31-uclibc-static
+          name: raptor-${{ matrix.platform }}-uclibc-static
           path: build/
           retention-days: 14
