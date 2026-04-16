@@ -52,12 +52,11 @@ static rss_wb_mode_t wb_mode_from_str(const char *s)
 /* ── Helpers ── */
 
 /*
- * Control handler return convention: return value = response length.
- * The IPC layer uses it as the number of bytes to send back.
+ * Sub-handler return convention:
+ *   > 0  = handled, return value is response byte count
+ *   0    = not my command, try next handler
+ *   < 0  = error
  */
-/* Guard against compiler misoptimization — LTO on MIPS can clobber
- * the resp_buf register across large function call chains. */
-#define CTRL_RETURN(buf) return (buf) ? (int)strlen(buf) : 0
 
 /* Format HAL return code into JSON error response */
 static int fmt_hal_result(char *buf, int bufsz, int ret)
@@ -85,8 +84,7 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 				continue;
 			RSS_HAL_CALL(st->ops, enc_request_idr, st->hal_ctx, st->streams[i].chn);
 		}
-		rss_ctrl_resp_ok(resp, resp_size);
-		return 1;
+		return rss_ctrl_resp_ok(resp, resp_size);
 	}
 
 	if (strcmp(cmd, "set-rc-mode") == 0) {
@@ -128,7 +126,7 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "need channel and mode");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	if (strcmp(cmd, "set-bitrate") == 0) {
@@ -146,7 +144,7 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "need channel and value");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	if (strcmp(cmd, "set-gop") == 0) {
@@ -163,7 +161,7 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "need channel and value");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	if (strcmp(cmd, "set-fps") == 0) {
@@ -180,7 +178,7 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "need channel and value");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	if (strcmp(cmd, "set-qp-bounds") == 0) {
@@ -202,7 +200,7 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "need channel, min, max");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	if (strcmp(cmd, "get-bitrate") == 0) {
@@ -217,7 +215,7 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "need channel");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	if (strcmp(cmd, "get-fps") == 0) {
@@ -232,7 +230,7 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "need channel");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	if (strcmp(cmd, "get-gop") == 0) {
@@ -245,7 +243,7 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "need channel");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	if (strcmp(cmd, "get-qp-bounds") == 0) {
@@ -257,7 +255,7 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "need channel");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	if (strcmp(cmd, "get-rc-mode") == 0) {
@@ -276,7 +274,7 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "need channel");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	return 0; /* not an encoder command */
@@ -302,7 +300,7 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		} else {                                                                           \
 			rss_ctrl_resp_error(resp, resp_size, "need channel and value");            \
 		}                                                                                  \
-		return 1;                                                                          \
+		return (int)strlen(resp);                                                          \
 	}
 
 /* Simple set: channel + bool value */
@@ -317,7 +315,7 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		} else {                                                                           \
 			rss_ctrl_resp_error(resp, resp_size, "need channel and value");            \
 		}                                                                                  \
-		return 1;                                                                          \
+		return (int)strlen(resp);                                                          \
 	}
 
 /* Simple get: channel → HAL call returning uint32_t */
@@ -336,7 +334,7 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		} else {                                                                           \
 			rss_ctrl_resp_error(resp, resp_size, "need channel");                      \
 		}                                                                                  \
-		return 1;                                                                          \
+		return (int)strlen(resp);                                                          \
 	}
 
 /* Simple get: channel → HAL call returning int */
@@ -355,7 +353,7 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		} else {                                                                           \
 			rss_ctrl_resp_error(resp, resp_size, "need channel");                      \
 		}                                                                                  \
-		return 1;                                                                          \
+		return (int)strlen(resp);                                                          \
 	}
 
 /* Simple get: channel → HAL call returning bool */
@@ -375,7 +373,7 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		} else {                                                                           \
 			rss_ctrl_resp_error(resp, resp_size, "need channel");                      \
 		}                                                                                  \
-		return 1;                                                                          \
+		return (int)strlen(resp);                                                          \
 	}
 
 	/* ── Simple int/bool set commands ── */
@@ -410,7 +408,7 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "need channel");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 	ENC_GET_U32("get-rc-options", enc_get_rc_options, "rc_options")
 	ENC_GET_U32("get-max-same-scene", enc_get_max_same_scene_cnt, "max_same_scene")
@@ -442,7 +440,7 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 			rss_ctrl_resp_error(resp, resp_size,
 					    "need channel, min_i, max_i, min_p, max_p");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	/* ── Max picture size ── */
@@ -457,7 +455,7 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "need channel, i_kbits, p_kbits");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	/* ── H.264 transform ── */
@@ -472,7 +470,7 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "need channel and value");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	if (strcmp(cmd, "get-h264-trans") == 0) {
@@ -490,7 +488,7 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "need channel");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	/* ── H.265 transform ── */
@@ -508,7 +506,7 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "need channel, cr_offset, cb_offset");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	if (strcmp(cmd, "get-h265-trans") == 0) {
@@ -527,7 +525,7 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "need channel");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	/* ── ROI ── */
@@ -556,7 +554,7 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 			rss_ctrl_resp_error(resp, resp_size,
 					    "need channel, index, enable, x, y, w, h, qp");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	if (strcmp(cmd, "get-roi") == 0) {
@@ -578,7 +576,7 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "need channel and index");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	/* ── Super frame ── */
@@ -599,7 +597,7 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "need channel, mode, i_thr, p_thr");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	if (strcmp(cmd, "get-super-frame") == 0) {
@@ -619,7 +617,7 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "need channel");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	/* ── P-skip ── */
@@ -636,7 +634,7 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "need channel, enable, max_frames");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	if (strcmp(cmd, "get-pskip") == 0) {
@@ -655,7 +653,7 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "need channel");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	if (strcmp(cmd, "request-pskip") == 0) {
@@ -667,7 +665,7 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "need channel");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	/* ── SRD (static scene refresh) ── */
@@ -684,7 +682,7 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "need channel, enable, level");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	if (strcmp(cmd, "get-srd") == 0) {
@@ -702,7 +700,7 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "need channel");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	/* ── Encoder denoise ── */
@@ -725,7 +723,7 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 			rss_ctrl_resp_error(resp, resp_size,
 					    "need channel, enable, type, i_qp, p_qp");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	if (strcmp(cmd, "get-enc-denoise") == 0) {
@@ -745,7 +743,7 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "need channel");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	/* ── GDR (gradual decoder refresh) ── */
@@ -762,7 +760,7 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "need channel, enable, cycle");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	if (strcmp(cmd, "get-gdr") == 0) {
@@ -780,7 +778,7 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "need channel");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	if (strcmp(cmd, "request-gdr") == 0) {
@@ -794,7 +792,7 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "need channel and value");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	/* ── Encoder crop ── */
@@ -818,7 +816,7 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "need channel, enable, x, y, w, h");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	if (strcmp(cmd, "get-enc-crop") == 0) {
@@ -838,16 +836,15 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "need channel");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	/* ── Encoder capabilities query ── */
 	if (strcmp(cmd, "get-enc-caps") == 0) {
 		if (!caps) {
-			rss_ctrl_resp_error(resp, resp_size, "caps not available");
-			return 1;
+			return rss_ctrl_resp_error(resp, resp_size, "caps not available");
 		}
-		rss_ctrl_resp(
+		return rss_ctrl_resp(
 			resp, resp_size,
 			"{\"status\":\"ok\""
 			",\"smartp_gop\":%s,\"rc_options\":%s"
@@ -873,7 +870,6 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 			caps->has_enc_crop ? "true" : "false",
 			caps->has_resize_mode ? "true" : "false",
 			caps->has_jpeg_ql ? "true" : "false", caps->has_jpeg_qp ? "true" : "false");
-		return 1;
 	}
 
 	(void)caps;
@@ -901,7 +897,7 @@ static int handle_isp_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 		} else {                                                                           \
 			rss_ctrl_resp_error(resp, resp_size, "need value");                        \
 		}                                                                                  \
-		return 1;                                                                          \
+		return (int)strlen(resp);                                                          \
 	}
 
 /* ISP_SET: single-sensor only (no _n variant) */
@@ -913,7 +909,7 @@ static int handle_isp_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 		} else {                                                                           \
 			rss_ctrl_resp_error(resp, resp_size, "need value");                        \
 		}                                                                                  \
-		return 1;                                                                          \
+		return (int)strlen(resp);                                                          \
 	}
 
 	ISP_SET_N("set-brightness", isp_set_brightness)
@@ -950,21 +946,19 @@ static int handle_isp_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 		if (rss_json_get_int(cmd_json, "b_gain", &b_gain) == 0)
 			wb.b_gain = (uint16_t)b_gain;
 		int ret = RSS_HAL_CALL(st->ops, isp_set_wb, st->hal_ctx, &wb);
-		rss_ctrl_resp(resp, resp_size,
+		return rss_ctrl_resp(resp, resp_size,
 			      "{\"status\":\"%s\",\"mode\":\"%s\",\"r_gain\":%u,\"b_gain\":%u}",
 			      ret == 0 ? "ok" : "error", wb_mode_str(wb.mode), wb.r_gain,
 			      wb.b_gain);
-		return 1;
 	}
 
 	if (strcmp(cmd, "get-wb") == 0) {
 		rss_wb_config_t wb = {0};
 		RSS_HAL_CALL(st->ops, isp_get_wb, st->hal_ctx, &wb);
-		rss_ctrl_resp(resp, resp_size,
+		return rss_ctrl_resp(resp, resp_size,
 			      "{\"status\":\"ok\",\"mode\":\"%s\",\"r_gain\":%u,\"g_gain\":%u,"
 			      "\"b_gain\":%u}",
 			      wb_mode_str(wb.mode), wb.r_gain, wb.g_gain, wb.b_gain);
-		return 1;
 	}
 
 	if (strcmp(cmd, "get-isp") == 0) {
@@ -984,7 +978,7 @@ static int handle_isp_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 		RSS_HAL_CALL(st->ops, isp_get_max_dgain, st->hal_ctx, &dgain);
 		rss_wb_config_t wb = {0};
 		RSS_HAL_CALL(st->ops, isp_get_wb, st->hal_ctx, &wb);
-		rss_ctrl_resp(resp, resp_size,
+		return rss_ctrl_resp(resp, resp_size,
 			      "{\"status\":\"ok\","
 			      "\"brightness\":%u,\"contrast\":%u,\"saturation\":%u,"
 			      "\"sharpness\":%u,\"hue\":%u,\"sinter\":%u,\"temper\":%u,"
@@ -994,16 +988,14 @@ static int handle_isp_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 			      bri, con, sat, shp, hue, sin, tem, hf, vf, ae, again, dgain,
 			      wb.mode == RSS_WB_MANUAL ? "manual" : "auto", wb.r_gain, wb.g_gain,
 			      wb.b_gain);
-		return 1;
 	}
 
 	if (strcmp(cmd, "get-exposure") == 0) {
 		rss_exposure_t exp = {0};
 		RSS_HAL_CALL(st->ops, isp_get_exposure, st->hal_ctx, &exp);
-		rss_ctrl_resp(resp, resp_size,
+		return rss_ctrl_resp(resp, resp_size,
 			      "{\"total_gain\":%u,\"exposure_us\":%u,\"ae_luma\":%u}",
 			      exp.total_gain, exp.exposure_time, exp.ae_luma);
-		return 1;
 	}
 
 	if (strcmp(cmd, "set-running-mode") == 0) {
@@ -1016,7 +1008,7 @@ static int handle_isp_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 		} else {
 			rss_ctrl_resp(resp, resp_size, "{\"status\":\"error\"}");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	return 0;
@@ -1030,18 +1022,16 @@ static int handle_ivs_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 		bool motion = atomic_load(&st->ivs_motion);
 		int64_t ts = atomic_load(&st->ivs_motion_ts);
 		int persons = st->ivs_persondet ? atomic_load(&st->ivs_person_count) : -1;
-		rss_ctrl_resp(resp, resp_size,
+		return rss_ctrl_resp(resp, resp_size,
 			      "{\"status\":\"ok\",\"active\":%s,\"motion\":%s,"
 			      "\"persondet\":%s,\"persons\":%d,\"timestamp\":%" PRId64 "}",
 			      st->ivs_active ? "true" : "false", motion ? "true" : "false",
 			      st->ivs_persondet ? "true" : "false", persons, ts);
-		return 1;
 	}
 
 	if (strcmp(cmd, "ivs-detections") == 0) {
 		if (!st->ivs_active) {
-			rss_ctrl_resp_error(resp, resp_size, "ivs not active");
-			return 1;
+			return rss_ctrl_resp_error(resp, resp_size, "ivs not active");
 		}
 		pthread_mutex_lock(&st->ivs_det_lock);
 		int count = st->ivs_detections.count;
@@ -1057,7 +1047,7 @@ static int handle_ivs_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 		}
 		pthread_mutex_unlock(&st->ivs_det_lock);
 		snprintf(resp + off, resp_size - off, "]}");
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	if (strcmp(cmd, "ivs-set-sensitivity") == 0) {
@@ -1077,7 +1067,7 @@ static int handle_ivs_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "invalid or ivs not active");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	if (strcmp(cmd, "ivs-set-skip-frames") == 0) {
@@ -1095,7 +1085,7 @@ static int handle_ivs_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 		} else {
 			rss_ctrl_resp_error(resp, resp_size, "invalid or ivs not active");
 		}
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	return 0;
@@ -1202,20 +1192,18 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 
 	if (strcmp(cmd, "stream-restart") == 0) {
 		if (validate_video_channel(st, cmd_json, &chn, resp, resp_size) < 0)
-			return 1;
+			return (int)strlen(resp);
 		if (do_stream_restart(st, chn, resp, resp_size) < 0)
-			return 1;
-		rss_ctrl_resp_ok(resp, resp_size);
-		return 1;
+			return (int)strlen(resp);
+		return rss_ctrl_resp_ok(resp, resp_size);
 	}
 
 	if (strcmp(cmd, "set-codec") == 0) {
 		char val[8];
 		if (validate_video_channel(st, cmd_json, &chn, resp, resp_size) < 0)
-			return 1;
+			return (int)strlen(resp);
 		if (rss_json_get_str(cmd_json, "value", val, sizeof(val)) != 0) {
-			rss_ctrl_resp_error(resp, resp_size, "need value (h264|h265)");
-			return 1;
+			return rss_ctrl_resp_error(resp, resp_size, "need value (h264|h265)");
 		}
 
 		rss_codec_t codec;
@@ -1224,21 +1212,19 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		else if (strcasecmp(val, "h264") == 0 || strcasecmp(val, "avc") == 0)
 			codec = RSS_CODEC_H264;
 		else {
-			rss_ctrl_resp_error(resp, resp_size, "unknown codec");
-			return 1;
+			return rss_ctrl_resp_error(resp, resp_size, "unknown codec");
 		}
 
 		/* Check H.265 capability */
 		const rss_hal_caps_t *caps =
 			st->ops->get_caps ? st->ops->get_caps(st->hal_ctx) : NULL;
 		if (codec == RSS_CODEC_H265 && caps && !caps->has_h265) {
-			rss_ctrl_resp_error(resp, resp_size, "h265 not supported");
-			return 1;
+			return rss_ctrl_resp_error(resp, resp_size, "h265 not supported");
 		}
 
 		if (st->streams[chn].enc_cfg.codec == codec) {
 			rss_ctrl_resp_ok(resp, resp_size); /* already set */
-			return 1;
+			return (int)strlen(resp);
 		}
 
 		/* Save old codec, update, restart, restore on failure */
@@ -1248,22 +1234,20 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 
 		if (do_stream_restart(st, chn, resp, resp_size) < 0) {
 			st->streams[chn].enc_cfg.codec = old_codec;
-			return 1;
+			return (int)strlen(resp);
 		}
 		rss_config_set_str(st->cfg, st->streams[chn].cfg_sect, "codec", val);
-		rss_ctrl_resp_ok(resp, resp_size);
-		return 1;
+		return rss_ctrl_resp_ok(resp, resp_size);
 	}
 
 	if (strcmp(cmd, "set-resolution") == 0) {
 		int w, h;
 		if (validate_video_channel(st, cmd_json, &chn, resp, resp_size) < 0)
-			return 1;
+			return (int)strlen(resp);
 		if (rss_json_get_int(cmd_json, "width", &w) != 0 ||
 		    rss_json_get_int(cmd_json, "height", &h) != 0 || w < 32 || h < 32 || w > 4096 ||
 		    h > 4096) {
-			rss_ctrl_resp_error(resp, resp_size, "need width and height (32-4096)");
-			return 1;
+			return rss_ctrl_resp_error(resp, resp_size, "need width and height (32-4096)");
 		}
 
 		/* Even dimensions required by encoder */
@@ -1272,8 +1256,7 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 
 		if ((int)st->streams[chn].enc_cfg.width == w &&
 		    (int)st->streams[chn].enc_cfg.height == h) {
-			rss_ctrl_resp_ok(resp, resp_size);
-			return 1;
+			return rss_ctrl_resp_ok(resp, resp_size);
 		}
 
 		/* Save old config for rollback */
@@ -1343,8 +1326,7 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 				rvd_stream_start(st, chn);
 			if (has_ivs)
 				atomic_store(&st->ivs_active, false);
-			rss_ctrl_resp_error(resp, resp_size, "init failed");
-			return 1;
+			return rss_ctrl_resp_error(resp, resp_size, "init failed");
 		}
 		if (jpeg >= 0) {
 			st->streams[jpeg].enc_cfg.width = w;
@@ -1372,8 +1354,7 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, "width", w);
 		rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, "height", h);
 		RSS_INFO("set-resolution: channel %d → %dx%d complete", chn, w, h);
-		rss_ctrl_resp_ok(resp, resp_size);
-		return 1;
+		return rss_ctrl_resp_ok(resp, resp_size);
 	}
 
 	if (strcmp(cmd, "osd-show") == 0) {
@@ -1384,8 +1365,7 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		rss_json_get_str(cmd_json, "region", region, sizeof(region));
 
 		if (stream < 0 || stream >= st->stream_count || show < 0 || !region[0]) {
-			rss_ctrl_resp_error(resp, resp_size, "need stream, region, show");
-			return 1;
+			return rss_ctrl_resp_error(resp, resp_size, "need stream, region, show");
 		}
 
 		/* Map region name to index */
@@ -1399,14 +1379,12 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 			}
 		}
 		if (r < 0) {
-			rss_ctrl_resp_error(resp, resp_size, "unknown region");
-			return 1;
+			return rss_ctrl_resp_error(resp, resp_size, "unknown region");
 		}
 
 		rvd_osd_region_t *reg = &st->osd_regions[stream][r];
 		if (!reg->active || reg->hal_handle < 0) {
-			rss_ctrl_resp_error(resp, resp_size, "region not active");
-			return 1;
+			return rss_ctrl_resp_error(resp, resp_size, "region not active");
 		}
 
 		pthread_mutex_lock(&st->osd_lock);
@@ -1423,8 +1401,7 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		pthread_mutex_unlock(&st->osd_lock);
 
 		RSS_DEBUG("osd-show: stream %d %s %s", stream, region, show ? "on" : "off");
-		rss_ctrl_resp_ok(resp, resp_size);
-		return 1;
+		return rss_ctrl_resp_ok(resp, resp_size);
 	}
 
 	if (strcmp(cmd, "osd-position") == 0) {
@@ -1435,8 +1412,7 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		rss_json_get_str(cmd_json, "pos", pos, sizeof(pos));
 
 		if (stream < 0 || stream >= st->stream_count || !region[0] || !pos[0]) {
-			rss_ctrl_resp_error(resp, resp_size, "need stream, region, pos");
-			return 1;
+			return rss_ctrl_resp_error(resp, resp_size, "need stream, region, pos");
 		}
 
 		static const char *names[] = {"time", "uptime",	 "text",
@@ -1449,14 +1425,12 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 			}
 		}
 		if (r < 0) {
-			rss_ctrl_resp_error(resp, resp_size, "unknown region");
-			return 1;
+			return rss_ctrl_resp_error(resp, resp_size, "unknown region");
 		}
 
 		rvd_osd_region_t *reg = &st->osd_regions[stream][r];
 		if (!reg->active || reg->hal_handle < 0) {
-			rss_ctrl_resp_error(resp, resp_size, "region not active");
-			return 1;
+			return rss_ctrl_resp_error(resp, resp_size, "region not active");
 		}
 
 		int stream_w = st->streams[stream].enc_cfg.width;
@@ -1491,8 +1465,7 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		pthread_mutex_unlock(&st->osd_lock);
 
 		RSS_DEBUG("osd-position: stream %d %s → %s (%d,%d)", stream, names[r], pos, x, y);
-		rss_ctrl_resp_ok(resp, resp_size);
-		return 1;
+		return rss_ctrl_resp_ok(resp, resp_size);
 	}
 
 	if (strcmp(cmd, "osd-restart") == 0) {
@@ -1604,8 +1577,7 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		}
 
 		RSS_INFO("osd-restart: complete");
-		rss_ctrl_resp_ok(resp, resp_size);
-		return 1;
+		return rss_ctrl_resp_ok(resp, resp_size);
 	}
 
 	return 0;
@@ -1637,7 +1609,7 @@ static int handle_config_cmd(const char *cmd, const char *cmd_json, rvd_state_t 
 		if (off < resp_size)
 			snprintf(resp + off, resp_size - off, "],\"config_path\":\"%s\"}}",
 				 st->config_path);
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	if (strcmp(cmd, "privacy") == 0) {
@@ -1670,7 +1642,7 @@ static int handle_config_cmd(const char *cmd, const char *cmd_json, rvd_state_t 
 			snprintf(resp + n, resp_size - n, "]}");
 		else
 			resp[resp_size - 1] = '\0';
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	if (strcmp(cmd, "status") == 0) {
@@ -1693,7 +1665,7 @@ static int handle_config_cmd(const char *cmd, const char *cmd_json, rvd_state_t 
 		}
 		if (off < resp_size)
 			snprintf(resp + off, resp_size - off, "]}");
-		return 1;
+		return (int)strlen(resp);
 	}
 
 	return 0;
@@ -1704,32 +1676,28 @@ static int handle_config_cmd(const char *cmd, const char *cmd_json, rvd_state_t 
 int rvd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, void *userdata)
 {
 	rvd_state_t *st = userdata;
+	int len;
 
 	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, st->cfg, st->config_path);
 	if (rc >= 0)
-		CTRL_RETURN(resp_buf);
+		return rc;
 
 	char cmd[64];
 	if (rss_json_get_str(cmd_json, "cmd", cmd, sizeof(cmd)) != 0)
 		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "missing cmd");
 
-	if (handle_encoder_cmd(cmd, cmd_json, st, resp_buf, resp_buf_size))
-		CTRL_RETURN(resp_buf);
-
-	if (handle_encoder_advanced_cmd(cmd, cmd_json, st, resp_buf, resp_buf_size))
-		CTRL_RETURN(resp_buf);
-
-	if (handle_isp_cmd(cmd, cmd_json, st, resp_buf, resp_buf_size))
-		CTRL_RETURN(resp_buf);
-
-	if (handle_ivs_cmd(cmd, cmd_json, st, resp_buf, resp_buf_size))
-		CTRL_RETURN(resp_buf);
-
-	if (handle_pipeline_cmd(cmd, cmd_json, st, resp_buf, resp_buf_size))
-		CTRL_RETURN(resp_buf);
-
-	if (handle_config_cmd(cmd, cmd_json, st, resp_buf, resp_buf_size))
-		CTRL_RETURN(resp_buf);
+	if ((len = handle_encoder_cmd(cmd, cmd_json, st, resp_buf, resp_buf_size)) > 0)
+		return len;
+	if ((len = handle_encoder_advanced_cmd(cmd, cmd_json, st, resp_buf, resp_buf_size)) > 0)
+		return len;
+	if ((len = handle_isp_cmd(cmd, cmd_json, st, resp_buf, resp_buf_size)) > 0)
+		return len;
+	if ((len = handle_ivs_cmd(cmd, cmd_json, st, resp_buf, resp_buf_size)) > 0)
+		return len;
+	if ((len = handle_pipeline_cmd(cmd, cmd_json, st, resp_buf, resp_buf_size)) > 0)
+		return len;
+	if ((len = handle_config_cmd(cmd, cmd_json, st, resp_buf, resp_buf_size)) > 0)
+		return len;
 
 	return rss_ctrl_resp_error(resp_buf, resp_buf_size, "unknown command");
 }
