@@ -196,7 +196,7 @@ case "$PLATFORM" in
     t31)     SDK_VERSION=1.1.6;  GCC_VER=5.4.0 ;;
     t32)     SDK_VERSION=1.0.6;  GCC_VER=5.4.0 ;;
     t40)     SDK_VERSION=1.3.1;  GCC_VER=7.2.0 ;;
-    t41)     SDK_VERSION=1.2.0;  GCC_VER=7.2.0 ;;
+    t41)     SDK_VERSION=1.2.5;  GCC_VER=7.2.0 ;;
 esac
 
 # ── Toolchain ──
