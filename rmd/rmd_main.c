@@ -68,9 +68,10 @@ static bool rmd_poll_motion(rmd_ctx_t *ctx)
 	rss_json_get_int(resp, "persons", &persons);
 	ctx->person_count = persons > 0 ? persons : 0;
 
-	int motion = 0;
-	rss_json_get_int(resp, "motion", &motion);
-	return motion != 0;
+	/* RVD sends "motion":true/false (JSON boolean). strstr is correct
+	 * here — rss_json_get_int/get_str don't handle JSON booleans.
+	 * Trusted peer (RVD), not external input. */
+	return strstr(resp, "\"motion\":true") != NULL;
 }
 
 static void rmd_update_state(rmd_ctx_t *ctx, bool motion)
