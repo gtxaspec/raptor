@@ -101,7 +101,9 @@ static void http_close(int fd)
 static void generate_session_id(char *out, size_t out_size)
 {
 	uint8_t bytes[RWD_SESSION_ID_LEN];
+	memset(bytes, 0, sizeof(bytes));
 	if (rwd_random_bytes(bytes, sizeof(bytes)) != 0) {
+		/* Fallback: timestamp + zero padding (no uninitialized stack leak) */
 		uint64_t ts = rss_timestamp_us();
 		memcpy(bytes, &ts, sizeof(ts) < sizeof(bytes) ? sizeof(ts) : sizeof(bytes));
 	}

@@ -564,9 +564,11 @@ static void rwd_run(rwd_server_t *srv)
 				if (client_fd < 0)
 					continue;
 
-				/* Non-blocking to prevent slow-loris: if a
-				 * complete request isn't available immediately,
-				 * we close. WHIP clients send in one burst. */
+				/* Non-blocking socket — the read loop in
+				 * rwd_signaling_handle still retries for up to
+				 * ~250ms (50 × 5ms) plus TLS handshake time.
+				 * Blocks the main loop during signaling, which
+				 * is acceptable for ≤4 WebRTC clients. */
 				fcntl(client_fd, F_SETFL, fcntl(client_fd, F_GETFL) | O_NONBLOCK);
 
 				char addrstr[INET6_ADDRSTRLEN];
