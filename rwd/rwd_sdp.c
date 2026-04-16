@@ -311,8 +311,8 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 	APPEND("a=ssrc:%u cname:raptor", c->video_ssrc);
 	APPEND("a=candidate:1 1 UDP 2130706431 %s %d typ host", srv->local_ip, srv->udp_port);
 	if (srv->has_srflx)
-		APPEND("a=candidate:2 1 UDP ICE_PRIORITY_SRFLX %s %u typ srflx raddr %s rport %d",
-		       srv->srflx_ip, srv->srflx_port, srv->local_ip, srv->udp_port);
+		APPEND("a=candidate:2 1 UDP %u %s %u typ srflx raddr %s rport %d",
+		       ICE_PRIORITY_SRFLX, srv->srflx_ip, srv->srflx_port, srv->local_ip, srv->udp_port);
 
 	/* Audio m-line — use wire_codec, but only if the browser offered it.
 	 * Fall back to Opus (always offered by WebRTC clients) if not. */
@@ -353,8 +353,8 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 		APPEND("a=candidate:1 1 UDP 2130706431 %s %d typ host", srv->local_ip,
 		       srv->udp_port);
 		if (srv->has_srflx)
-			APPEND("a=candidate:2 1 UDP ICE_PRIORITY_SRFLX %s %u typ srflx raddr %s rport %d",
-			       srv->srflx_ip, srv->srflx_port, srv->local_ip, srv->udp_port);
+			APPEND("a=candidate:2 1 UDP %u %s %u typ srflx raddr %s rport %d",
+			       ICE_PRIORITY_SRFLX, srv->srflx_ip, srv->srflx_port, srv->local_ip, srv->udp_port);
 	}
 
 #undef APPEND
