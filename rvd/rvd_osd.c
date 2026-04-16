@@ -236,8 +236,8 @@ void rvd_osd_init_stream(rvd_state_t *st, int s)
 		st->osd_regions[s][r].local_buf = NULL;
 	}
 
-	/* Region sizes — scale from config font_size (base dimensions at size 24).
-	 * Must be >= ROD's SHM dimensions for that role. */
+	/* Region sizes — probe ROD's SHM for actual dimensions if available
+	 * (font-size dependent), otherwise fall back to scaled estimates. */
 	int font_size = rss_config_get_int(cfg, "osd", "font_size", 24);
 	if (font_size < 10)
 		font_size = 10;
@@ -246,7 +246,32 @@ void rvd_osd_init_stream(rvd_state_t *st, int s)
 	uint32_t up_w = (uint32_t)(OSD_UPTIME_W * font_size / 24);
 	uint32_t txt_w = (uint32_t)(OSD_TEXT_W * font_size / 24);
 	if (th < OSD_TEXT_H)
-		th = OSD_TEXT_H; /* never smaller than default */
+		th = OSD_TEXT_H;
+
+	/* Probe ROD's SHM to get exact dimensions (avoids position drift
+	 * from scaled estimates not matching actual glyph metrics). */
+	{
+		static const char *probe_names[] = {"time", "uptime", "text"};
+		uint32_t *w_ptrs[] = {&time_w, &up_w, &txt_w};
+		bool got_height = false;
+		for (int p = 0; p < 3; p++) {
+			char name[64];
+			snprintf(name, sizeof(name), "osd_%d_%s", s, probe_names[p]);
+			rss_osd_shm_t *probe = rss_osd_open(name);
+			if (probe) {
+				uint32_t pw, ph;
+				rss_osd_get_active_buffer(probe, &pw, &ph);
+				if (pw > 0 && ph > 0) {
+					*w_ptrs[p] = pw;
+					if (!got_height) {
+						th = ph;
+						got_height = true;
+					}
+				}
+				rss_osd_close(probe);
+			}
+		}
+	}
 
 	/* Scale OSD dimensions for sub streams relative to their sensor's main */
 	int main_idx = 0;
@@ -447,11 +472,11 @@ static void read_shm_and_push(rvd_state_t *st, int s, int r)
 	if (w == reg->width && h == reg->height) {
 		memcpy(reg->local_buf, bitmap, w * h * 4);
 	} else {
-		uint32_t x_off = (reg->width - w) / 2;
+		/* Left/top align — ROD handles text alignment within
+		 * its buffer. Centering here would double the offset. */
 		memset(reg->local_buf, 0, reg->width * reg->height * 4);
 		for (uint32_t row = 0; row < h; row++)
-			memcpy(reg->local_buf + (row * reg->width + x_off) * 4,
-			       bitmap + row * w * 4, w * 4);
+			memcpy(reg->local_buf + row * reg->width * 4, bitmap + row * w * 4, w * 4);
 	}
 	push_region(st, s, r);
 }
@@ -481,11 +506,107 @@ static void try_open_shm(rvd_state_t *st, int s, int r)
 		return;
 	RSS_DEBUG("opened osd shm %s", name);
 
+	/* Check if SHM dimensions differ from HAL region (font size change
+	 * or initial boot where RVD created regions before ROD started).
+	 * Resize the HAL region to match so positions are correct. */
+	{
+		uint32_t shm_w, shm_h;
+		rss_osd_get_active_buffer(reg->shm, &shm_w, &shm_h);
+		if (shm_w > 0 && shm_h > 0 && (shm_w != reg->width || shm_h != reg->height)) {
+			uint32_t new_w = (shm_w + 1) & ~1;
+			uint32_t new_h = (shm_h + 1) & ~1;
+			uint8_t *new_buf = calloc(1, new_w * new_h * 4);
+			if (new_buf) {
+				free(reg->local_buf);
+				reg->local_buf = new_buf;
+				reg->width = new_w;
+				reg->height = new_h;
+
+				/* Recalculate position and update HAL region */
+				int stream_w = st->streams[s].enc_cfg.width;
+				int stream_h = st->streams[s].enc_cfg.height;
+				char pos_key[32];
+				snprintf(pos_key, sizeof(pos_key), "stream%d_%s_pos", s,
+					 region_names[r]);
+				const char *pos_str =
+					rss_config_get_str(st->cfg, "osd", pos_key, default_pos[r]);
+				int x, y;
+				calc_position(stream_w, stream_h, (int)new_w, (int)new_h, pos_str,
+					      &x, &y);
+
+				rss_osd_region_t attr = {
+					.type = RSS_OSD_PIC,
+					.x = x,
+					.y = y,
+					.width = (int)new_w,
+					.height = (int)new_h,
+					.bitmap_data = reg->local_buf,
+					.bitmap_fmt = RSS_PIXFMT_BGRA,
+					.global_alpha_en = true,
+					.fg_alpha = 255,
+					.bg_alpha = 0,
+					.layer = r,
+				};
+				if (STREAM_ISP_OSD(st, s)) {
+					int sensor = st->streams[s].sensor_idx;
+					int chx = st->streams[s].fs_chn % 3;
+					RSS_HAL_CALL(st->ops, isp_osd_set_region_attr, st->hal_ctx,
+						     sensor, reg->hal_handle, chx, &attr);
+				} else {
+					RSS_HAL_CALL(st->ops, osd_set_region_attr, st->hal_ctx,
+						     reg->hal_handle, &attr);
+				}
+				RSS_DEBUG("osd %s: resized %ux%u → %ux%u at (%d,%d)", name,
+					  reg->width, reg->height, new_w, new_h, x, y);
+			}
+		}
+	}
+
 	/* Read and push current buffer immediately — dirty flag may have
 	 * been cleared by a previous RVD instance, but content is valid. */
 	reg->no_update_ticks = 0;
 	read_shm_and_push(st, s, r);
 	rss_osd_clear_dirty(reg->shm);
+
+	/* Show if not yet visible (new regions from osd-restart) */
+	/* Privacy region stays hidden until privacy mode is activated */
+	if (!reg->shown && r == RVD_OSD_PRIVACY && !st->privacy[s])
+		return;
+
+	if (!reg->shown) {
+		if (STREAM_ISP_OSD(st, s)) {
+			int sensor = st->streams[s].sensor_idx;
+			int stream_w = st->streams[s].enc_cfg.width;
+			int stream_h = st->streams[s].enc_cfg.height;
+			char pos_key[32];
+			snprintf(pos_key, sizeof(pos_key), "stream%d_%s_pos", s, region_names[r]);
+			const char *pos_str =
+				rss_config_get_str(st->cfg, "osd", pos_key, default_pos[r]);
+			int x, y;
+			calc_position(stream_w, stream_h, (int)reg->width, (int)reg->height,
+				      pos_str, &x, &y);
+			rss_osd_region_t attr = {
+				.type = RSS_OSD_PIC,
+				.x = x,
+				.y = y,
+				.width = (int)reg->width,
+				.height = (int)reg->height,
+				.bitmap_data = reg->local_buf,
+				.bitmap_fmt = RSS_PIXFMT_BGRA,
+			};
+			int chx = st->streams[s].fs_chn % 3;
+			RSS_HAL_CALL(st->ops, isp_osd_set_region_attr, st->hal_ctx, sensor,
+				     reg->hal_handle, chx, &attr);
+			RSS_HAL_CALL(st->ops, isp_osd_show_region, st->hal_ctx, sensor,
+				     reg->hal_handle, 1);
+		} else {
+			int grp = st->streams[s].chn;
+			RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, reg->hal_handle, grp, 1,
+				     r + 1);
+		}
+		reg->shown = true;
+		RSS_DEBUG("osd %d/%s: shown on open", s, region_names[r]);
+	}
 }
 
 void rvd_osd_check(rvd_state_t *st)
@@ -606,6 +727,10 @@ push_updates:
 			reg->no_update_ticks = 0;
 			read_shm_and_push(st, s, r);
 			rss_osd_clear_dirty(reg->shm);
+
+			/* Privacy stays hidden unless active */
+			if (!reg->shown && r == RVD_OSD_PRIVACY && !st->privacy[s])
+				continue;
 
 			/* Show region if not yet visible (new regions from
 			 * osd-restart are created hidden, need first show) */
