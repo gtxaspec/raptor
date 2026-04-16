@@ -66,6 +66,10 @@
 #define STUN_ATTR_FINGERPRINT	    0x8028
 #define STUN_FINGERPRINT_XOR	    0x5354554E
 
+/* RFC 8445 §5.1.2.1: (2^24 * type_pref) + (2^8 * local_pref) + (256 - component_id)
+ * srflx: type_pref=100, local_pref=65535, component_id=1 (RTP) */
+#define ICE_PRIORITY_SRFLX	    ((100 << 24) | (65535 << 8) | 255)
+
 /* ── DTLS server context (shared by all clients) ── */
 
 typedef struct {

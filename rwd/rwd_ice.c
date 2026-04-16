@@ -244,12 +244,24 @@ static int stun_send_response(rwd_server_t *srv, const uint8_t *request,
 
 int rwd_ice_send_check(rwd_server_t *srv, rwd_client_t *c, const char *dest_ip, uint16_t dest_port)
 {
-	struct sockaddr_in dest;
+	struct sockaddr_storage dest;
+	socklen_t dest_len;
 	memset(&dest, 0, sizeof(dest));
-	dest.sin_family = AF_INET;
-	dest.sin_port = htons(dest_port);
-	if (inet_pton(AF_INET, dest_ip, &dest.sin_addr) != 1)
+
+	struct sockaddr_in *d4 = (struct sockaddr_in *)&dest;
+	struct sockaddr_in6 *d6 = (struct sockaddr_in6 *)&dest;
+
+	if (inet_pton(AF_INET, dest_ip, &d4->sin_addr) == 1) {
+		d4->sin_family = AF_INET;
+		d4->sin_port = htons(dest_port);
+		dest_len = sizeof(struct sockaddr_in);
+	} else if (inet_pton(AF_INET6, dest_ip, &d6->sin6_addr) == 1) {
+		d6->sin6_family = AF_INET6;
+		d6->sin6_port = htons(dest_port);
+		dest_len = sizeof(struct sockaddr_in6);
+	} else {
 		return -1;
+	}
 
 	uint8_t msg[256];
 	size_t off = 0;
@@ -297,7 +309,7 @@ int rwd_ice_send_check(rwd_server_t *srv, rwd_client_t *c, const char *dest_ip, 
 	off += 2;
 	wr16(msg + off, 4);
 	off += 2;
-	wr32(msg + off, 1694498815);
+	wr32(msg + off, ICE_PRIORITY_SRFLX);
 	off += 4;
 
 	/* MESSAGE-INTEGRITY */
@@ -329,7 +341,7 @@ int rwd_ice_send_check(rwd_server_t *srv, rwd_client_t *c, const char *dest_ip, 
 	/* Final length */
 	wr16(msg + 2, (uint16_t)(off - STUN_HEADER_SIZE));
 
-	ssize_t sent = sendto(srv->udp_fd, msg, off, 0, (struct sockaddr *)&dest, sizeof(dest));
+	ssize_t sent = sendto(srv->udp_fd, msg, off, 0, (struct sockaddr *)&dest, dest_len);
 	RSS_DEBUG("ICE: sent check to %s:%u (%zd bytes)", dest_ip, dest_port, sent);
 	return sent > 0 ? 0 : -1;
 }
