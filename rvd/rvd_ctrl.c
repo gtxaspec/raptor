@@ -55,7 +55,9 @@ static rss_wb_mode_t wb_mode_from_str(const char *s)
  * Control handler return convention: return value = response length.
  * The IPC layer uses it as the number of bytes to send back.
  */
-#define CTRL_RETURN(buf) return (int)strlen(buf)
+/* Guard against compiler misoptimization — LTO on MIPS can clobber
+ * the resp_buf register across large function call chains. */
+#define CTRL_RETURN(buf) return (buf) ? (int)strlen(buf) : 0
 
 /* Format HAL return code into JSON error response */
 static int fmt_hal_result(char *buf, int bufsz, int ret)
