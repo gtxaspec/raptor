@@ -802,18 +802,6 @@ int rvd_pipeline_init(rvd_state_t *st)
  * Ctrl commands call them individually for per-stream hot restart.
  * ================================================================ */
 
-/* Find the JPEG stream paired with a video stream (same FS channel) */
-static int find_jpeg_for_video(rvd_state_t *st, int video_idx)
-{
-	int target_fs = st->streams[video_idx].fs_chn;
-	for (int j = 0; j < st->jpeg_count; j++) {
-		int ji = st->jpeg_streams[j];
-		if (ji >= 0 && st->streams[ji].fs_chn == target_fs)
-			return ji;
-	}
-	return -1;
-}
-
 /* Find the encoder group of the video stream that owns a given FS channel */
 static int find_video_group(rvd_state_t *st, int fs_chn)
 {
