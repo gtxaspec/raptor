@@ -74,8 +74,10 @@ static int compute_cert_fingerprint(const mbedtls_x509_crt *cert, char *buf, siz
 		return -1;
 
 	/* Format: "sha-256 AA:BB:CC:DD:..." */
+	if (buf_size < 4)
+		return -1;
 	int off = snprintf(buf, buf_size, "sha-256 ");
-	for (int i = 0; i < 32 && (size_t)off < buf_size - 3; i++) {
+	for (int i = 0; i < 32 && (size_t)off + 3 < buf_size; i++) {
 		if (i > 0)
 			buf[off++] = ':';
 		off += snprintf(buf + off, buf_size - off, "%02X", hash[i]);
@@ -318,16 +320,19 @@ int rwd_dtls_handshake_step(rwd_client_t *c)
 	const mbedtls_x509_crt *peer_cert = mbedtls_ssl_get_peer_cert(&c->ssl);
 	if (peer_cert && c->offer.fingerprint[0]) {
 		char peer_fp[128];
-		if (compute_cert_fingerprint(peer_cert, peer_fp, sizeof(peer_fp)) == 0) {
-			if (strcasecmp(peer_fp, c->offer.fingerprint) != 0) {
-				RSS_ERROR("DTLS: peer fingerprint mismatch");
-				RSS_ERROR("  expected: %s", c->offer.fingerprint);
-				RSS_ERROR("  got:      %s", peer_fp);
-				c->dtls_state = RWD_DTLS_FAILED;
-				return -1;
-			}
-			RSS_DEBUG("DTLS: peer fingerprint verified");
+		if (compute_cert_fingerprint(peer_cert, peer_fp, sizeof(peer_fp)) != 0) {
+			RSS_ERROR("DTLS: failed to compute peer fingerprint");
+			c->dtls_state = RWD_DTLS_FAILED;
+			return -1;
 		}
+		if (strcasecmp(peer_fp, c->offer.fingerprint) != 0) {
+			RSS_ERROR("DTLS: peer fingerprint mismatch");
+			RSS_ERROR("  expected: %s", c->offer.fingerprint);
+			RSS_ERROR("  got:      %s", peer_fp);
+			c->dtls_state = RWD_DTLS_FAILED;
+			return -1;
+		}
+		RSS_DEBUG("DTLS: peer fingerprint verified");
 	}
 
 	/* Handshake complete — verify SRTP profile was negotiated */
