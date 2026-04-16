@@ -238,6 +238,7 @@ const struct help_entry help_entries[] = {
 	{"rod", "enable-time <0|1>                   Show/hide timestamp"},
 	{"rod", "enable-uptime <0|1>                 Show/hide uptime"},
 	{"rod", "enable-text <0|1>                   Show/hide camera text"},
+	{"rod", "enable-logo <0|1>                   Show/hide logo"},
 	{"rod", "set-font-size <10-72>               Font size (all elements)"},
 	{"rod", "set-time-font-size <10-72>          Time font size"},
 	{"rod", "set-uptime-font-size <10-72>        Uptime font size"},
@@ -1021,7 +1022,7 @@ int main(int argc, char **argv)
 		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "enable-time") == 0 || strcmp(cmd, "enable-uptime") == 0 ||
-		   strcmp(cmd, "enable-text") == 0) {
+		   strcmp(cmd, "enable-text") == 0 || strcmp(cmd, "enable-logo") == 0) {
 		if (argc < 4) {
 			fprintf(stderr, "Usage: raptorctl %s %s <0|1>\n", daemon, cmd);
 			return 1;

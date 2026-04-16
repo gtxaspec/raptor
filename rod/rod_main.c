@@ -470,34 +470,34 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		}
 	}
 
-	/* ── Element enable/disable ── */
+	/* ── Element show/hide — lightweight, no pipeline restart ── */
 	if (strstr(cmd_json, "\"enable-time\"") || strstr(cmd_json, "\"enable-uptime\"") ||
-	    strstr(cmd_json, "\"enable-text\"")) {
+	    strstr(cmd_json, "\"enable-text\"") || strstr(cmd_json, "\"enable-logo\"")) {
 		int val;
 		if (rss_json_get_int(cmd_json, "value", &val) != 0)
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value (0/1)");
 
 		bool enable = !!val;
-		int role;
+		const char *region_name;
 		bool *setting;
 		const char *key;
-		int fi;
 
 		if (strstr(cmd_json, "\"enable-time\"")) {
-			role = ROD_REGION_TIME;
+			region_name = "time";
 			setting = &st->settings.time_enabled;
 			key = "time_enabled";
-			fi = ROD_FONT_TIME;
 		} else if (strstr(cmd_json, "\"enable-uptime\"")) {
-			role = ROD_REGION_UPTIME;
+			region_name = "uptime";
 			setting = &st->settings.uptime_enabled;
 			key = "uptime_enabled";
-			fi = ROD_FONT_UPTIME;
+		} else if (strstr(cmd_json, "\"enable-logo\"")) {
+			region_name = "logo";
+			setting = &st->settings.logo_enabled;
+			key = "logo_enabled";
 		} else {
-			role = ROD_REGION_TEXT;
+			region_name = "text";
 			setting = &st->settings.text_enabled;
 			key = "text_enabled";
-			fi = ROD_FONT_TEXT;
 		}
 
 		if (*setting == enable)
@@ -506,32 +506,17 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		*setting = enable;
 		rss_config_set_str(st->cfg, "osd", key, enable ? "true" : "false");
 
+		/* Tell RVD to show/hide the HAL region (single HAL call, no restart) */
 		for (int s = 0; s < st->stream_count; s++) {
-			if (enable) {
-				/* Create SHM region */
-				int chars = (role == ROD_REGION_UPTIME) ? ROD_UPTIME_CHARS
-					    : (role == ROD_REGION_TEXT) ? ROD_TEXT_CHARS
-									: ROD_TIME_CHARS;
-				uint32_t w, h;
-				font_region_dims(&st->fonts[s][fi], chars, st->settings.font_stroke,
-						 &w, &h);
-				create_region_shm(st, s, role, w, h);
-			} else {
-				/* Destroy SHM region */
-				if (st->regions[s][role].shm) {
-					rss_osd_destroy(st->regions[s][role].shm);
-					st->regions[s][role].shm = NULL;
-					st->regions[s][role].enabled = false;
-				}
-			}
+			char cmd[128];
+			snprintf(cmd, sizeof(cmd),
+				 "{\"cmd\":\"osd-show\",\"stream\":%d,\"region\":\"%s\","
+				 "\"show\":%d}",
+				 s, region_name, enable ? 1 : 0);
+			char rvd_resp[256];
+			rss_ctrl_send_command("/var/run/rss/rvd.sock", cmd, rvd_resp,
+					      sizeof(rvd_resp), 1000);
 		}
-
-		/* Notify RVD to pick up the change */
-		char cmd[64];
-		snprintf(cmd, sizeof(cmd), "{\"cmd\":\"osd-restart\",\"pool_kb\":0}");
-		char rvd_resp[256];
-		rss_ctrl_send_command("/var/run/rss/rvd.sock", cmd, rvd_resp, sizeof(rvd_resp),
-				      5000);
 
 		RSS_INFO("%s: %s", key, enable ? "on" : "off");
 		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);

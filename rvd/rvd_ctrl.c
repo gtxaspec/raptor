@@ -1374,6 +1374,57 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 		return 1;
 	}
 
+	if (strstr(cmd_json, "\"osd-show\"")) {
+		int stream = -1, show = -1;
+		char region[16] = "";
+		rss_json_get_int(cmd_json, "stream", &stream);
+		rss_json_get_int(cmd_json, "show", &show);
+		rss_json_get_str(cmd_json, "region", region, sizeof(region));
+
+		if (stream < 0 || stream >= st->stream_count || show < 0 || !region[0]) {
+			rss_ctrl_resp_error(resp, resp_size, "need stream, region, show");
+			return 1;
+		}
+
+		/* Map region name to index */
+		static const char *names[] = {"time", "uptime",	 "text",
+					      "logo", "privacy", "detect"};
+		int r = -1;
+		for (int i = 0; i < 6; i++) {
+			if (strcmp(region, names[i]) == 0) {
+				r = i;
+				break;
+			}
+		}
+		if (r < 0) {
+			rss_ctrl_resp_error(resp, resp_size, "unknown region");
+			return 1;
+		}
+
+		rvd_osd_region_t *reg = &st->osd_regions[stream][r];
+		if (!reg->active || reg->hal_handle < 0) {
+			rss_ctrl_resp_error(resp, resp_size, "region not active");
+			return 1;
+		}
+
+		pthread_mutex_lock(&st->osd_lock);
+		if (st->use_isp_osd && st->streams[stream].fs_chn % 3 == 0) {
+			int sensor = st->streams[stream].sensor_idx;
+			RSS_HAL_CALL(st->ops, isp_osd_show_region, st->hal_ctx, sensor,
+				     reg->hal_handle, show);
+		} else {
+			int grp = st->streams[stream].chn;
+			RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, reg->hal_handle, grp,
+				     show, r + 1);
+		}
+		reg->shown = !!show;
+		pthread_mutex_unlock(&st->osd_lock);
+
+		RSS_DEBUG("osd-show: stream %d %s %s", stream, region, show ? "on" : "off");
+		rss_ctrl_resp_ok(resp, resp_size);
+		return 1;
+	}
+
 	if (strstr(cmd_json, "\"osd-restart\"")) {
 		int pool_kb = 0;
 		int font_size = 0;
