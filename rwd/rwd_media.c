@@ -314,7 +314,9 @@ void rwd_media_teardown(rwd_client_t *c)
 	memset(&c->srtp_video, 0, sizeof(c->srtp_video));
 	memset(&c->srtp_audio, 0, sizeof(c->srtp_audio));
 
-	/* Backchannel cleanup */
+	/* Backchannel cleanup.  Compy DYN() is a non-owning trait reference —
+	 * Backchannel_drop frees compy's internal state, rwd_bc_recv_t_drop
+	 * cleans up the opus decoder, and we free the struct. No double-free. */
 	if (c->backchannel) {
 		VCALL(DYN(Compy_Backchannel, Compy_Droppable, c->backchannel), drop);
 		c->backchannel = NULL;
@@ -362,13 +364,13 @@ void rwd_media_feed_rtp(rwd_client_t *c, uint8_t *data, size_t len)
  * start code length (3 or 4). Returns NULL if no start code found. */
 static const uint8_t *find_start_code(const uint8_t *p, const uint8_t *end, int *sc_len)
 {
-	while (p < end - 3) {
+	while (p + 3 <= end) {
 		if (p[0] == 0 && p[1] == 0) {
 			if (p[2] == 1) {
 				*sc_len = 3;
 				return p + 3;
 			}
-			if (p[2] == 0 && p + 3 < end && p[3] == 1) {
+			if (p + 4 <= end && p[2] == 0 && p[3] == 1) {
 				*sc_len = 4;
 				return p + 4;
 			}
@@ -382,9 +384,9 @@ static const uint8_t *find_start_code(const uint8_t *p, const uint8_t *end, int 
 static const uint8_t *find_nalu_end(const uint8_t *nalu_start, const uint8_t *end)
 {
 	const uint8_t *p = nalu_start;
-	while (p < end - 3) {
+	while (p + 3 <= end) {
 		if (p[0] == 0 && p[1] == 0 &&
-		    (p[2] == 1 || (p[2] == 0 && p + 3 < end && p[3] == 1)))
+		    (p[2] == 1 || (p + 4 <= end && p[2] == 0 && p[3] == 1)))
 			return p;
 		p++;
 	}
