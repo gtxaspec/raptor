@@ -606,6 +606,45 @@ push_updates:
 			reg->no_update_ticks = 0;
 			read_shm_and_push(st, s, r);
 			rss_osd_clear_dirty(reg->shm);
+
+			/* Show region if not yet visible (new regions from
+			 * osd-restart are created hidden, need first show) */
+			if (!reg->shown) {
+				if (STREAM_ISP_OSD(st, s)) {
+					int sensor = st->streams[s].sensor_idx;
+					int stream_w = st->streams[s].enc_cfg.width;
+					int stream_h = st->streams[s].enc_cfg.height;
+					char pos_key[32];
+					snprintf(pos_key, sizeof(pos_key), "stream%d_%s_pos", s,
+						 region_names[r]);
+					const char *pos_str = rss_config_get_str(
+						st->cfg, "osd", pos_key, default_pos[r]);
+					int x, y;
+					calc_position(stream_w, stream_h, (int)reg->width,
+						      (int)reg->height, pos_str, &x, &y);
+					rss_osd_region_t attr = {
+						.type = RSS_OSD_PIC,
+						.x = x,
+						.y = y,
+						.width = (int)reg->width,
+						.height = (int)reg->height,
+						.bitmap_data = reg->local_buf,
+						.bitmap_fmt = RSS_PIXFMT_BGRA,
+					};
+					int chx = st->streams[s].fs_chn % 3;
+					RSS_HAL_CALL(st->ops, isp_osd_set_region_attr, st->hal_ctx,
+						     sensor, reg->hal_handle, chx, &attr);
+					RSS_HAL_CALL(st->ops, isp_osd_show_region, st->hal_ctx,
+						     sensor, reg->hal_handle, 1);
+				} else {
+					int grp = st->streams[s].chn;
+					RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx,
+						     reg->hal_handle, grp, 1, r + 1);
+				}
+				reg->shown = true;
+				RSS_DEBUG("osd %s_%s: shown after restart", s == 0 ? "s0" : "s1",
+					  region_names[r]);
+			}
 		}
 	}
 
