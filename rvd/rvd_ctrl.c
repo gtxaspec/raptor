@@ -1126,13 +1126,12 @@ static int do_stream_restart(rvd_state_t *st, int chn, char *resp, int resp_size
 
 	/* Stop: IVS → JPEG → video */
 	if (has_ivs) {
-		/* Signal IVS thread to exit (it checks ivs_active), then join */
-		atomic_store(&st->ivs_active, false);
+		rvd_ivs_pause(st); /* StopRecvPic — must be before active=false */
+		atomic_store(&st->ivs_active, false); /* signal thread exit */
 		if (st->ivs_tid) {
 			pthread_join(st->ivs_tid, NULL);
 			st->ivs_tid = 0;
 		}
-		rvd_ivs_pause(st); /* lightweight — keep channel/group/algo alive */
 	}
 	if (jpeg >= 0)
 		rvd_stream_stop(st, jpeg);
@@ -1149,6 +1148,8 @@ static int do_stream_restart(rvd_state_t *st, int chn, char *resp, int resp_size
 	int ret = rvd_stream_init(st, chn);
 	if (ret != RSS_OK) {
 		RSS_ERROR("stream-restart: init stream %d failed: %d", chn, ret);
+		if (has_ivs)
+			atomic_store(&st->ivs_active, false);
 		if (resp)
 			rss_ctrl_resp_error(resp, resp_size, "init failed");
 		return -1;
@@ -1300,12 +1301,12 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 
 		/* Stop */
 		if (has_ivs) {
+			rvd_ivs_pause(st);
 			atomic_store(&st->ivs_active, false);
 			if (st->ivs_tid) {
 				pthread_join(st->ivs_tid, NULL);
 				st->ivs_tid = 0;
 			}
-			rvd_ivs_pause(st);
 		}
 		if (jpeg >= 0)
 			rvd_stream_stop(st, jpeg);
@@ -1333,6 +1334,13 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 			st->streams[chn].fs_cfg.height = old_fs_h;
 			st->streams[chn].fs_cfg.scaler.out_width = old_sc_w;
 			st->streams[chn].fs_cfg.scaler.out_height = old_sc_h;
+			/* Restore FS scaler and attempt re-init with old config */
+			RSS_HAL_CALL(st->ops, fs_set_channel_attr, st->hal_ctx,
+				     st->streams[chn].fs_chn, &st->streams[chn].fs_cfg);
+			if (rvd_stream_init(st, chn) == RSS_OK)
+				rvd_stream_start(st, chn);
+			if (has_ivs)
+				atomic_store(&st->ivs_active, false);
 			rss_ctrl_resp_error(resp, resp_size, "init failed");
 			return 1;
 		}
@@ -1402,12 +1410,12 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 			}
 		}
 		if (has_ivs) {
+			rvd_ivs_pause(st);
 			atomic_store(&st->ivs_active, false);
 			if (st->ivs_tid) {
 				pthread_join(st->ivs_tid, NULL);
 				st->ivs_tid = 0;
 			}
-			rvd_ivs_pause(st);
 		}
 
 		/* Stop all: JPEG first, then video (reverse of start order) */

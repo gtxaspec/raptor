@@ -739,6 +739,8 @@ int rvd_pipeline_init(rvd_state_t *st)
 		st->privacy[s] = false;
 	}
 
+	pthread_mutex_init(&st->osd_lock, NULL);
+
 	/* ── 7-10. Create encoder, OSD, bind, rings per stream ── */
 	/* IVS init must happen before bind (SDK requires all groups created) */
 	st->ivs_enabled = rss_config_get_bool(cfg, "motion", "enabled", false);
@@ -782,8 +784,6 @@ int rvd_pipeline_init(rvd_state_t *st)
 	/* FS enable + encoder start deferred to rvd_stream_start()
 	 * (called from rvd_frame_loop for initial startup, or from ctrl
 	 * handler for hot restart). */
-
-	pthread_mutex_init(&st->osd_lock, NULL);
 
 	st->pipeline_ready = true;
 	RSS_INFO("pipeline ready: %d streams", st->stream_count);
