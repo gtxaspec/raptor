@@ -58,11 +58,20 @@ typedef struct {
 	int ascender;
 } rod_font_t;
 
+/* Per-element font index (for fonts[][]) */
+#define ROD_FONT_TIME	0
+#define ROD_FONT_UPTIME 1
+#define ROD_FONT_TEXT	2
+#define ROD_FONT_COUNT	3
+
 /* Config from [osd] section */
 typedef struct {
 	bool enabled;
 	char font_path[128];
-	int font_size;
+	int font_size;	    /* global default */
+	int time_font_size; /* per-element overrides (0 = use global) */
+	int uptime_font_size;
+	int text_font_size;
 	uint32_t font_color;   /* BGRA packed */
 	uint32_t stroke_color; /* BGRA packed (default: black) */
 	int font_stroke;
@@ -85,8 +94,8 @@ typedef struct {
 typedef struct {
 	rod_config_t settings;
 
-	/* Fonts (one per stream — different sizes) */
-	rod_font_t fonts[ROD_MAX_STREAMS];
+	/* Fonts: [stream][element] — per-element sizing */
+	rod_font_t fonts[ROD_MAX_STREAMS][ROD_FONT_COUNT];
 	int stream_count;
 
 	/* Stream dimensions (read from config) */
@@ -116,12 +125,12 @@ typedef struct {
 } rod_state_t;
 
 /* rod_render.c */
-int rod_render_init(rod_state_t *st, int stream_idx, int font_size);
-void rod_render_deinit(rod_state_t *st, int stream_idx);
+int rod_render_init(rod_state_t *st, int stream_idx, int font_idx, int font_size);
+void rod_render_deinit(rod_state_t *st, int stream_idx, int font_idx);
 rod_glyph_t *rod_glyph_lookup(rod_font_t *font, uint32_t codepoint);
 /* align: 0=left, 1=center, 2=right */
-void rod_draw_text(rod_state_t *st, int stream_idx, uint8_t *buf, uint32_t buf_w, uint32_t buf_h,
-		   const char *text, int align);
+void rod_draw_text(rod_state_t *st, int stream_idx, int font_idx, uint8_t *buf, uint32_t buf_w,
+		   uint32_t buf_h, const char *text, int align);
 int rod_load_logo(const char *path, int expected_w, int expected_h, uint8_t **out_data);
 void rod_draw_rect_outline(uint8_t *buf, uint32_t buf_w, uint32_t buf_h, int x0, int y0, int x1,
 			   int y1, uint32_t color_bgra, int thickness);

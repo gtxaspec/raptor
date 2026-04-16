@@ -38,6 +38,9 @@ static void load_config(rod_state_t *st)
 		    rss_config_get_str(cfg, "osd", "font", "/usr/share/fonts/default.ttf"),
 		    sizeof(c->font_path));
 	c->font_size = rss_config_get_int(cfg, "osd", "font_size", 24);
+	c->time_font_size = rss_config_get_int(cfg, "osd", "time_font_size", 0);
+	c->uptime_font_size = rss_config_get_int(cfg, "osd", "uptime_font_size", 0);
+	c->text_font_size = rss_config_get_int(cfg, "osd", "text_font_size", 0);
 	c->font_color = parse_color(rss_config_get_str(cfg, "osd", "font_color", "0xFFFFFFFF"));
 	c->stroke_color = parse_color(rss_config_get_str(cfg, "osd", "stroke_color", "0xFF000000"));
 	c->font_stroke = rss_config_get_int(cfg, "osd", "font_stroke", 1);
@@ -119,31 +122,42 @@ static void create_region_shm(rod_state_t *st, int s, int role, uint32_t w, uint
 	RSS_INFO("osd shm %s: %ux%u", name, w, h);
 }
 
+/* Helper: get SHM dimensions for a text region from its font context */
+static void font_region_dims(rod_font_t *f, int chars, int stroke, uint32_t *w, uint32_t *h)
+{
+	int adv = f->max_text_width / 24;
+	if (adv < 10)
+		adv = 10;
+	int pad = stroke > 0 ? stroke * 2 : 0;
+	*w = chars * adv + pad;
+	*h = f->text_height;
+}
+
 static void create_shms(rod_state_t *st)
 {
 	for (int s = 0; s < st->stream_count; s++) {
-		rod_font_t *f = &st->fonts[s];
-		int adv = f->max_text_width / 24; /* approximate per-char advance */
-		if (adv < 10)
-			adv = 10;
 		int pad = st->settings.font_stroke > 0 ? st->settings.font_stroke * 2 : 0;
+		uint32_t w, h;
 
-		if (st->settings.time_enabled)
-			create_region_shm(st, s, ROD_REGION_TIME, ROD_TIME_CHARS * adv + pad,
-					  f->text_height);
+		if (st->settings.time_enabled) {
+			font_region_dims(&st->fonts[s][ROD_FONT_TIME], ROD_TIME_CHARS, pad, &w, &h);
+			create_region_shm(st, s, ROD_REGION_TIME, w, h);
+		}
 
-		if (st->settings.uptime_enabled)
-			create_region_shm(st, s, ROD_REGION_UPTIME, ROD_UPTIME_CHARS * adv + pad,
-					  f->text_height);
+		if (st->settings.uptime_enabled) {
+			font_region_dims(&st->fonts[s][ROD_FONT_UPTIME], ROD_UPTIME_CHARS, pad, &w,
+					 &h);
+			create_region_shm(st, s, ROD_REGION_UPTIME, w, h);
+		}
 
-		if (st->settings.text_enabled)
-			create_region_shm(st, s, ROD_REGION_TEXT, ROD_TEXT_CHARS * adv + pad,
-					  f->text_height);
+		if (st->settings.text_enabled) {
+			font_region_dims(&st->fonts[s][ROD_FONT_TEXT], ROD_TEXT_CHARS, pad, &w, &h);
+			create_region_shm(st, s, ROD_REGION_TEXT, w, h);
+		}
 
-		/* Privacy text region — use full text width so centering
-		 * works correctly within the RVD region */
-		create_region_shm(st, s, ROD_REGION_PRIVACY, ROD_TIME_CHARS * adv + pad,
-				  f->text_height);
+		/* Privacy uses time's font */
+		font_region_dims(&st->fonts[s][ROD_FONT_TIME], ROD_TIME_CHARS, pad, &w, &h);
+		create_region_shm(st, s, ROD_REGION_PRIVACY, w, h);
 
 		if (st->settings.logo_enabled) {
 			int lw, lh;
@@ -206,7 +220,7 @@ static int role_align(int role)
 	}
 }
 
-static void render_text_region(rod_state_t *st, int s, int role, const char *text)
+static void render_text_region(rod_state_t *st, int s, int role, int font_idx, const char *text)
 {
 	rod_region_t *reg = &st->regions[s][role];
 	if (!reg->enabled || !reg->shm)
@@ -216,7 +230,7 @@ static void render_text_region(rod_state_t *st, int s, int role, const char *tex
 	if (!buf)
 		return;
 
-	rod_draw_text(st, s, buf, reg->width, reg->height, text, role_align(role));
+	rod_draw_text(st, s, font_idx, buf, reg->width, reg->height, text, role_align(role));
 	rss_osd_publish(reg->shm);
 }
 
@@ -343,21 +357,23 @@ static void render_tick(rod_state_t *st)
 	for (int s = 0; s < st->stream_count; s++) {
 		/* Time (1Hz) */
 		if (st->settings.time_enabled)
-			render_text_region(st, s, ROD_REGION_TIME, time_str);
+			render_text_region(st, s, ROD_REGION_TIME, ROD_FONT_TIME, time_str);
 
 		/* Uptime (1Hz) */
 		if (st->settings.uptime_enabled)
-			render_text_region(st, s, ROD_REGION_UPTIME, uptime_str);
+			render_text_region(st, s, ROD_REGION_UPTIME, ROD_FONT_UPTIME, uptime_str);
 
 		/* Text (on change only) */
 		if (st->settings.text_enabled && st->regions[s][ROD_REGION_TEXT].needs_update) {
-			render_text_region(st, s, ROD_REGION_TEXT, st->settings.text_string);
+			render_text_region(st, s, ROD_REGION_TEXT, ROD_FONT_TEXT,
+					   st->settings.text_string);
 			st->regions[s][ROD_REGION_TEXT].needs_update = false;
 		}
 
 		/* Privacy text (once) */
 		if (st->regions[s][ROD_REGION_PRIVACY].needs_update) {
-			render_text_region(st, s, ROD_REGION_PRIVACY, "Privacy Mode");
+			render_text_region(st, s, ROD_REGION_PRIVACY, ROD_FONT_TIME,
+					   "Privacy Mode");
 			st->regions[s][ROD_REGION_PRIVACY].needs_update = false;
 		}
 
@@ -452,6 +468,86 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		}
 	}
 
+	/* Per-element font size — check before global (substring match) */
+	if (strstr(cmd_json, "\"set-time-font-size\"") ||
+	    strstr(cmd_json, "\"set-uptime-font-size\"") ||
+	    strstr(cmd_json, "\"set-text-font-size\"")) {
+		int val;
+		if (rss_json_get_int(cmd_json, "value", &val) != 0 || val < 10 || val > 72)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value 10-72");
+
+		int fi;
+		const char *key;
+		int *setting;
+		if (strstr(cmd_json, "\"set-time-font-size\"")) {
+			fi = ROD_FONT_TIME;
+			key = "time_font_size";
+			setting = &st->settings.time_font_size;
+		} else if (strstr(cmd_json, "\"set-uptime-font-size\"")) {
+			fi = ROD_FONT_UPTIME;
+			key = "uptime_font_size";
+			setting = &st->settings.uptime_font_size;
+		} else {
+			fi = ROD_FONT_TEXT;
+			key = "text_font_size";
+			setting = &st->settings.text_font_size;
+		}
+
+		RSS_INFO("set-%s: → %d", key, val);
+
+		/* Re-rasterize only this element's font */
+		for (int s = 0; s < st->stream_count; s++) {
+			int fs = val;
+			if (s > 0) {
+				fs = fs * st->stream_h[s] / st->stream_h[0];
+				if (fs < 12)
+					fs = 12;
+			}
+			rod_render_deinit(st, s, fi);
+			if (rod_render_init(st, s, fi, fs) < 0)
+				RSS_ERROR("font re-init failed s%d fi%d", s, fi);
+		}
+
+		/* Destroy and recreate only the affected SHM regions */
+		static const int font_to_region[][2] = {
+			{ROD_REGION_TIME, ROD_REGION_PRIVACY}, /* TIME font → time + privacy */
+			{ROD_REGION_UPTIME, -1},	       /* UPTIME font → uptime only */
+			{ROD_REGION_TEXT, -1},		       /* TEXT font → text only */
+		};
+		for (int s = 0; s < st->stream_count; s++) {
+			for (int ri = 0; ri < 2 && font_to_region[fi][ri] >= 0; ri++) {
+				int r = font_to_region[fi][ri];
+				if (st->regions[s][r].shm) {
+					rss_osd_destroy(st->regions[s][r].shm);
+					st->regions[s][r].shm = NULL;
+					st->regions[s][r].enabled = false;
+				}
+			}
+			int pad = st->settings.font_stroke > 0 ? st->settings.font_stroke * 2 : 0;
+			uint32_t w, h;
+			for (int ri = 0; ri < 2 && font_to_region[fi][ri] >= 0; ri++) {
+				int r = font_to_region[fi][ri];
+				int chars = (r == ROD_REGION_UPTIME) ? ROD_UPTIME_CHARS
+					    : (r == ROD_REGION_TEXT) ? ROD_TEXT_CHARS
+								     : ROD_TIME_CHARS;
+				font_region_dims(&st->fonts[s][fi], chars, pad, &w, &h);
+				create_region_shm(st, s, r, w, h);
+			}
+		}
+
+		*setting = val;
+		rss_config_set_int(st->cfg, "osd", key, val);
+
+		/* Notify RVD */
+		char cmd[96];
+		snprintf(cmd, sizeof(cmd), "{\"cmd\":\"osd-restart\",\"pool_kb\":0}");
+		char rvd_resp[256];
+		rss_ctrl_send_command("/var/run/rss/rvd.sock", cmd, rvd_resp, sizeof(rvd_resp),
+				      5000);
+
+		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+	}
+
 	if (strstr(cmd_json, "\"set-font-size\"")) {
 		int val;
 		if (rss_json_get_int(cmd_json, "value", &val) != 0 || val < 10 || val > 72)
@@ -467,11 +563,13 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				if (fs < 12)
 					fs = 12;
 			}
-			rod_render_deinit(st, s);
-			if (rod_render_init(st, s, fs) < 0) {
-				RSS_ERROR("font re-init failed for stream %d", s);
-				return rss_ctrl_resp_error(resp_buf, resp_buf_size,
-							   "font init failed");
+			for (int fi = 0; fi < ROD_FONT_COUNT; fi++) {
+				rod_render_deinit(st, s, fi);
+				if (rod_render_init(st, s, fi, fs) < 0) {
+					RSS_ERROR("font re-init failed s%d fi%d", s, fi);
+					return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+								   "font init failed");
+				}
 			}
 		}
 
@@ -490,7 +588,7 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 
 		/* Recreate text SHM regions with new font dimensions */
 		for (int s = 0; s < st->stream_count; s++) {
-			rod_font_t *f = &st->fonts[s];
+			rod_font_t *f = &st->fonts[s][ROD_FONT_TIME];
 			int adv = f->max_text_width / 24;
 			if (adv < 10)
 				adv = 10;
@@ -516,7 +614,7 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		/* Tell RVD to restart OSD with resized pool.
 		 * Calculate pool: worst case per-stream region bytes. */
 		{
-			rod_font_t *f0 = &st->fonts[0];
+			rod_font_t *f0 = &st->fonts[0][ROD_FONT_TIME];
 			int adv = f0->max_text_width / 24;
 			if (adv < 10)
 				adv = 10;
@@ -603,23 +701,25 @@ int main(int argc, char **argv)
 	st.running = ctx.running;
 	load_config(&st);
 
-	/* Init fonts per stream — check for per-stream font_size override */
+	/* Init fonts per stream per element */
 	for (int s = 0; s < st.stream_count; s++) {
-		char key[32];
-		snprintf(key, sizeof(key), "stream%d_font_size", s);
-		int fs = rss_config_get_int(ctx.cfg, "osd", key, 0);
-		if (fs <= 0) {
-			/* No per-stream override — auto-scale from global */
-			fs = st.settings.font_size;
+		/* Per-element sizes: use element override, fall back to global */
+		int sizes[ROD_FONT_COUNT];
+		sizes[ROD_FONT_TIME] = st.settings.time_font_size;
+		sizes[ROD_FONT_UPTIME] = st.settings.uptime_font_size;
+		sizes[ROD_FONT_TEXT] = st.settings.text_font_size;
+
+		for (int fi = 0; fi < ROD_FONT_COUNT; fi++) {
+			int fs = sizes[fi] > 0 ? sizes[fi] : st.settings.font_size;
 			if (s > 0) {
 				fs = fs * st.stream_h[s] / st.stream_h[0];
 				if (fs < 12)
 					fs = 12;
 			}
-		}
-		if (rod_render_init(&st, s, fs) < 0) {
-			RSS_FATAL("font init failed for stream %d", s);
-			goto cleanup;
+			if (rod_render_init(&st, s, fi, fs) < 0) {
+				RSS_FATAL("font init failed for stream %d element %d", s, fi);
+				goto cleanup;
+			}
 		}
 	}
 
@@ -713,7 +813,8 @@ int main(int argc, char **argv)
 
 cleanup:
 	for (int s = 0; s < st.stream_count; s++)
-		rod_render_deinit(&st, s);
+		for (int fi = 0; fi < ROD_FONT_COUNT; fi++)
+			rod_render_deinit(&st, s, fi);
 
 	rss_config_free(ctx.cfg);
 	rss_daemon_cleanup("rod");

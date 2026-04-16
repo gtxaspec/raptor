@@ -12,13 +12,13 @@
 
 #include "rod.h"
 
-int rod_render_init(rod_state_t *st, int stream_idx, int font_size)
+int rod_render_init(rod_state_t *st, int stream_idx, int font_idx, int font_size)
 {
-	rod_font_t *f = &st->fonts[stream_idx];
+	rod_font_t *f = &st->fonts[stream_idx][font_idx];
 
-	/* Share font across streams — load once, reuse for different sizes */
-	if (stream_idx > 0 && st->fonts[0].sft.font) {
-		f->sft.font = st->fonts[0].sft.font;
+	/* Share font file across all contexts — load once, reuse */
+	if (st->fonts[0][0].sft.font) {
+		f->sft.font = st->fonts[0][0].sft.font;
 	} else {
 		f->sft.font = sft_loadfile(st->settings.font_path);
 		if (!f->sft.font) {
@@ -116,18 +116,18 @@ int rod_render_init(rod_state_t *st, int stream_idx, int font_size)
 	return 0;
 }
 
-void rod_render_deinit(rod_state_t *st, int stream_idx)
+void rod_render_deinit(rod_state_t *st, int stream_idx, int font_idx)
 {
-	rod_font_t *f = &st->fonts[stream_idx];
+	rod_font_t *f = &st->fonts[stream_idx][font_idx];
 	for (int i = 0; i < f->glyph_count; i++)
 		free(f->glyphs[i].alpha);
 	f->glyph_count = 0;
-	/* Only free font for stream 0 (other streams share it) */
-	if (stream_idx == 0 && f->sft.font) {
+	/* Only free font file for the primary context */
+	if (stream_idx == 0 && font_idx == 0 && f->sft.font) {
 		sft_freefont(f->sft.font);
 		f->sft.font = NULL;
 	} else {
-		f->sft.font = NULL; /* don't double-free */
+		f->sft.font = NULL;
 	}
 }
 
@@ -208,10 +208,10 @@ static int measure_text(rod_font_t *f, const char *text)
 	return w;
 }
 
-void rod_draw_text(rod_state_t *st, int stream_idx, uint8_t *buf, uint32_t buf_w, uint32_t buf_h,
-		   const char *text, int align)
+void rod_draw_text(rod_state_t *st, int stream_idx, int font_idx, uint8_t *buf, uint32_t buf_w,
+		   uint32_t buf_h, const char *text, int align)
 {
-	rod_font_t *f = &st->fonts[stream_idx];
+	rod_font_t *f = &st->fonts[stream_idx][font_idx];
 	int stroke = st->settings.font_stroke;
 	int baseline = f->ascender + (stroke > 0 ? stroke : 0);
 
