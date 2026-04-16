@@ -558,8 +558,6 @@ build_schrift() {
 
 build_raptor_common() {
     local src="$DEPS_DIR/raptor-common"
-    [ -f "$SYSROOT_DIR/usr/lib/librss_common.a" ] && return
-
     echo "Building raptor-common..."
     make -C "$src" clean 2>/dev/null || true
     run raptor-common make -C "$src" CC="${CROSS_COMPILE}gcc" AR="${CROSS_COMPILE}ar" -j"$JOBS"
@@ -570,8 +568,6 @@ build_raptor_common() {
 
 build_raptor_ipc() {
     local src="$DEPS_DIR/raptor-ipc"
-    [ -f "$SYSROOT_DIR/usr/lib/librss_ipc.a" ] && return
-
     echo "Building raptor-ipc..."
     make -C "$src" clean 2>/dev/null || true
     run raptor-ipc make -C "$src" CC="${CROSS_COMPILE}gcc" AR="${CROSS_COMPILE}ar" -j"$JOBS"
@@ -581,8 +577,6 @@ build_raptor_ipc() {
 
 build_raptor_hal() {
     local src="$DEPS_DIR/raptor-hal"
-    [ -f "$SYSROOT_DIR/usr/lib/libraptor_hal_video.a" ] && return
-
     echo "Building raptor-hal ($PLATFORM_UPPER)..."
     make -C "$src" clean 2>/dev/null || true
     run raptor-hal make -C "$src" \
@@ -598,8 +592,6 @@ build_raptor_hal() {
 build_compy() {
     local src="$DEPS_DIR/compy"
     local builddir="$src/build-cross"
-    [ -f "$SYSROOT_DIR/usr/lib/libcompy.a" ] && return
-
     echo "Building compy..."
     rm -rf "$builddir"
     mkdir -p "$builddir"
