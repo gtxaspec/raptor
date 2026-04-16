@@ -21,6 +21,8 @@
 #define client_addr_str rss_addr_str
 #define client_port	rss_addr_port
 
+/* Called without clients_lock — safe because only the main thread
+ * (epoll loop) modifies the client array. No concurrent writers. */
 static rsd_client_t *find_client_by_fd(rsd_server_t *srv, int fd)
 {
 	for (int i = 0; i < srv->client_count; i++) {
@@ -496,8 +498,9 @@ static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		int n = snprintf(resp_buf, resp_buf_size,
 				 "{\"status\":\"ok\",\"count\":%d,\"clients\":[",
 				 srv->client_count);
+		if (n >= resp_buf_size) n = resp_buf_size - 1;
 		pthread_mutex_lock(&srv->clients_lock);
-		for (int i = 0; i < srv->client_count; i++) {
+		for (int i = 0; i < srv->client_count && n < resp_buf_size - 4; i++) {
 			rsd_client_t *c = srv->clients[i];
 			char addr[INET6_ADDRSTRLEN];
 			client_addr_str(&c->addr, addr, sizeof(addr));
@@ -514,15 +517,20 @@ static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				      c->video.playing ? "true" : "false",
 				      c->audio.playing ? "true" : "false",
 				      c->backchannel ? "true" : "false");
+			if (n >= resp_buf_size) break;
 			if (rr)
 				n += snprintf(resp_buf + n, resp_buf_size - n,
 					      ",\"loss_pct\":%.1f,\"jitter\":%u,"
 					      "\"cum_lost\":%u",
 					      rr->fraction_lost * 100.0 / 256.0,
 					      rr->interarrival_jitter, rr->cumulative_lost);
+			if (n >= resp_buf_size) break;
 			n += snprintf(resp_buf + n, resp_buf_size - n, "}");
+			if (n >= resp_buf_size) break;
 		}
 		pthread_mutex_unlock(&srv->clients_lock);
+		if (n >= resp_buf_size - 2)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "response truncated");
 		snprintf(resp_buf + n, resp_buf_size - n, "]}");
 		return (int)strlen(resp_buf);
 	}
