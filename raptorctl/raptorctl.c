@@ -1035,6 +1035,8 @@ int main(int argc, char **argv)
 		cJSON *j = jcmd("set-position");
 		jadd_s(j, "element", argv[3]);
 		jadd_s(j, "pos", argv[4]);
+		if (argc > 5)
+			jadd_i(j, "stream", argv[5]);
 		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "enable-time") == 0 || strcmp(cmd, "enable-uptime") == 0 ||
@@ -1045,6 +1047,8 @@ int main(int argc, char **argv)
 		}
 		cJSON *j = jcmd(cmd);
 		jadd_i(j, "value", argv[3]);
+		if (argc > 4)
+			jadd_i(j, "stream", argv[4]);
 		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-font-size") == 0 || strcmp(cmd, "set-stroke-size") == 0 ||

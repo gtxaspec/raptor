@@ -479,8 +479,12 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		if (!element[0] || !pos[0])
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need element and pos");
 
-		/* Forward to RVD for all streams */
+		/* Forward to RVD — optional stream filter (-1 = all) */
+		int target_stream = -1;
+		rss_json_get_int(cmd_json, "stream", &target_stream);
 		for (int s = 0; s < st->stream_count; s++) {
+			if (target_stream >= 0 && s != target_stream)
+				continue;
 			char cmd[128];
 			snprintf(cmd, sizeof(cmd),
 				 "{\"cmd\":\"osd-position\",\"stream\":%d,"
@@ -525,14 +529,22 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			key = "text_enabled";
 		}
 
-		if (*setting == enable)
-			return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+		/* Optional stream filter (-1 = all streams, persists to config) */
+		int target_stream = -1;
+		rss_json_get_int(cmd_json, "stream", &target_stream);
 
-		*setting = enable;
-		rss_config_set_str(st->cfg, "osd", key, enable ? "true" : "false");
+		if (target_stream < 0) {
+			/* Global: update config + ROD state */
+			if (*setting == enable)
+				return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+			*setting = enable;
+			rss_config_set_str(st->cfg, "osd", key, enable ? "true" : "false");
+		}
 
-		/* Tell RVD to show/hide the HAL region (single HAL call, no restart) */
+		/* Tell RVD to show/hide the HAL region */
 		for (int s = 0; s < st->stream_count; s++) {
+			if (target_stream >= 0 && s != target_stream)
+				continue;
 			char cmd[128];
 			snprintf(cmd, sizeof(cmd),
 				 "{\"cmd\":\"osd-show\",\"stream\":%d,\"region\":\"%s\","
