@@ -221,6 +221,7 @@ const struct help_entry help_entries[] = {
 	{"rvd", "get-isp                             Show all ISP settings"},
 	{"rvd", "get-exposure                        Show exposure info"},
 	{"rsd", "clients                             List connected clients"},
+	{"rad", "set-codec <codec>                   Change audio codec (restart)"},
 	{"rad", "set-volume <val>                    Input volume"},
 	{"rad", "set-gain <val>                      Input gain"},
 	{"rad", "set-alc-gain <0-7>                  ALC gain (T21/T31 only)"},
@@ -904,15 +905,29 @@ int main(int argc, char **argv)
 		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-codec") == 0) {
-		if (argc < 5) {
-			fprintf(stderr, "Usage: raptorctl %s set-codec <channel> <h264|h265>\n",
-				daemon);
-			return 1;
+		if (strcmp(daemon, "rad") == 0) {
+			/* RAD: set-codec <codec> (no channel) */
+			if (argc < 4) {
+				fprintf(stderr, "Usage: raptorctl rad set-codec "
+						"<pcmu|pcma|l16|aac|opus>\n");
+				return 1;
+			}
+			cJSON *j = jcmd("set-codec");
+			jadd_s(j, "value", argv[3]);
+			jstr(j, json, sizeof(json));
+		} else {
+			/* RVD: set-codec <channel> <h264|h265> */
+			if (argc < 5) {
+				fprintf(stderr,
+					"Usage: raptorctl %s set-codec <channel> <h264|h265>\n",
+					daemon);
+				return 1;
+			}
+			cJSON *j = jcmd("set-codec");
+			jadd_i(j, "channel", argv[3]);
+			jadd_s(j, "value", argv[4]);
+			jstr(j, json, sizeof(json));
 		}
-		cJSON *j = jcmd("set-codec");
-		jadd_i(j, "channel", argv[3]);
-		jadd_s(j, "value", argv[4]);
-		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-resolution") == 0) {
 		if (argc < 6) {

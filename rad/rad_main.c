@@ -49,6 +49,12 @@ typedef struct {
 	bool hpf_enabled;
 	bool agc_enabled;
 #endif
+	/* Pipeline state — updated by ctrl handler on restart */
+	rss_ring_t **ring;
+	const rad_codec_ops_t **codec_ops;
+	rad_codec_ctx_t *codec_ctx;
+	uint8_t **encode_buf;
+	int *encode_buf_size;
 } rad_ctrl_ctx_t;
 
 static void rad_fmt_result(char *buf, int bufsz, int ret)
@@ -125,7 +131,8 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			if (val && !ctx->ns_enabled) {
 				if (level < RSS_NS_LOW || level > RSS_NS_VERYHIGH)
 					level = RSS_NS_MODERATE;
-				ret = RSS_HAL_CALL(ctx->ops, audio_enable_ns, ctx->hal_ctx, (rss_ns_level_t)level);
+				ret = RSS_HAL_CALL(ctx->ops, audio_enable_ns, ctx->hal_ctx,
+						   (rss_ns_level_t)level);
 			} else if (!val && ctx->ns_enabled) {
 				ret = RSS_HAL_CALL(ctx->ops, audio_disable_ns, ctx->hal_ctx);
 			}
@@ -134,10 +141,9 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			if (ret == RSS_ERR_NOTSUP)
 				return rss_ctrl_resp_error(resp_buf, resp_buf_size,
 							   "not supported on this SoC");
-			return rss_ctrl_resp(resp_buf, resp_buf_size,
-					     "{\"status\":\"%s\",\"ns\":%s}",
-					     ret == RSS_OK ? "ok" : "error",
-					     ctx->ns_enabled ? "true" : "false");
+			return rss_ctrl_resp(
+				resp_buf, resp_buf_size, "{\"status\":\"%s\",\"ns\":%s}",
+				ret == RSS_OK ? "ok" : "error", ctx->ns_enabled ? "true" : "false");
 		}
 		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value (0/1)");
 	}
@@ -215,6 +221,129 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	if (strstr(cmd_json, "\"ao-flush\"")) {
 		if (ctx->ao_flush)
 			atomic_store(ctx->ao_flush, 1);
+		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+	}
+
+	/* ── Audio pipeline restart (codec/sample-rate change) ── */
+
+	if (strstr(cmd_json, "\"set-codec\"") || strstr(cmd_json, "\"audio-restart\"")) {
+		char new_codec_str[16] = "";
+		rss_json_get_str(cmd_json, "value", new_codec_str, sizeof(new_codec_str));
+
+		/* If no codec specified, restart with current codec */
+		const char *target_codec = new_codec_str[0] ? new_codec_str : ctx->codec_str;
+
+		const rad_codec_ops_t *new_ops = rad_codec_find(target_codec);
+		if (!new_ops) {
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "unknown codec");
+		}
+
+		int new_codec_id = new_ops->codec_id;
+		int new_sample_rate = ctx->sample_rate;
+
+		/* G.711 forces 8kHz; other codecs use configured rate */
+		if (new_codec_id == RAD_CODEC_PCMU || new_codec_id == RAD_CODEC_PCMA)
+			new_sample_rate = 8000;
+		else
+			new_sample_rate =
+				rss_config_get_int(ctx->cfg, "audio", "sample_rate", 16000);
+
+		RSS_INFO("audio-restart: %s %dHz → %s %dHz", ctx->codec_str, ctx->sample_rate,
+			 target_codec, new_sample_rate);
+
+		/* 1. Tear down codec */
+		if (*ctx->codec_ops && (*ctx->codec_ops)->deinit)
+			(*ctx->codec_ops)->deinit(ctx->codec_ctx);
+		memset(ctx->codec_ctx, 0, sizeof(*ctx->codec_ctx));
+
+		/* 2. Destroy ring (consumers will detect and reconnect) */
+		if (*ctx->ring) {
+			rss_ring_destroy(*ctx->ring);
+			*ctx->ring = NULL;
+		}
+
+		/* 3. Reinit HAL audio (sample rate may have changed) */
+		RSS_HAL_CALL(ctx->ops, audio_deinit, ctx->hal_ctx);
+
+		rss_audio_config_t audio_cfg = {
+			.sample_rate = new_sample_rate,
+			.samples_per_frame = new_sample_rate / 50,
+			.chn_count = 1,
+			.frame_depth = 20,
+			.ai_vol = ctx->volume,
+			.ai_gain = ctx->gain,
+		};
+		int ret = RSS_HAL_CALL(ctx->ops, audio_init, ctx->hal_ctx, &audio_cfg);
+		if (ret != RSS_OK) {
+			RSS_ERROR("audio-restart: audio_init failed: %d", ret);
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "audio_init failed");
+		}
+
+		RSS_HAL_CALL(ctx->ops, audio_set_volume, ctx->hal_ctx, ctx->ai_dev, 0, ctx->volume);
+		RSS_HAL_CALL(ctx->ops, audio_set_gain, ctx->hal_ctx, ctx->ai_dev, 0, ctx->gain);
+
+		/* 4. Re-apply audio effects */
+#ifdef RAPTOR_AUDIO_EFFECTS
+		if (ctx->ns_enabled) {
+			int ns_level =
+				rss_config_get_int(ctx->cfg, "audio", "ns_level", RSS_NS_MODERATE);
+			RSS_HAL_CALL(ctx->ops, audio_enable_ns, ctx->hal_ctx,
+				     (rss_ns_level_t)ns_level);
+		}
+		if (ctx->hpf_enabled)
+			RSS_HAL_CALL(ctx->ops, audio_enable_hpf, ctx->hal_ctx);
+		if (ctx->agc_enabled) {
+			rss_agc_config_t agc_cfg = {
+				.target_level_dbfs = rss_config_get_int(ctx->cfg, "audio",
+									"agc_target_dbfs", 10),
+				.compression_gain_db = rss_config_get_int(ctx->cfg, "audio",
+									  "agc_compression_db", 0),
+			};
+			RSS_HAL_CALL(ctx->ops, audio_enable_agc, ctx->hal_ctx, &agc_cfg);
+		}
+#endif
+
+		/* 5. Init new codec */
+		ctx->codec_ctx->codec_id = new_codec_id;
+		if (new_ops->init(ctx->codec_ctx, ctx->cfg, new_sample_rate) != 0) {
+			RSS_ERROR("audio-restart: codec %s init failed", target_codec);
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "codec init failed");
+		}
+
+		/* 6. Create new ring */
+		int ring_data_size = (new_codec_id == RAD_CODEC_L16) ? 256 * 1024 : 128 * 1024;
+		*ctx->ring = rss_ring_create("audio", 32, ring_data_size);
+		if (!*ctx->ring) {
+			RSS_ERROR("audio-restart: ring create failed");
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "ring create failed");
+		}
+		rss_ring_set_stream_info(*ctx->ring, 0x10, new_codec_id, 0, 0, new_sample_rate, 1,
+					 0, 0);
+		ctx->codec_ctx->ring = *ctx->ring;
+
+		/* 7. Resize encode buffer if needed */
+		int new_buf_size = ctx->codec_ctx->encode_buf_size;
+		if (new_buf_size < new_sample_rate / 50 * 2)
+			new_buf_size = new_sample_rate / 50 * 2;
+		if (new_buf_size > *ctx->encode_buf_size) {
+			uint8_t *new_buf = malloc(new_buf_size);
+			if (!new_buf) {
+				RSS_ERROR("audio-restart: encode buf alloc failed");
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size, "alloc failed");
+			}
+			free(*ctx->encode_buf);
+			*ctx->encode_buf = new_buf;
+		}
+		*ctx->encode_buf_size = new_buf_size;
+
+		/* 8. Update state — persist config only after success */
+		*ctx->codec_ops = new_ops;
+		ctx->codec_id = new_codec_id;
+		ctx->codec_str = new_ops->name;
+		ctx->sample_rate = new_sample_rate;
+		rss_config_set_str(ctx->cfg, "audio", "codec", target_codec);
+
+		RSS_INFO("audio-restart: %s %dHz ready", target_codec, new_sample_rate);
 		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
 	}
 
@@ -377,15 +506,16 @@ static void hal_log_bridge(int level, const char *file, int line, const char *fm
 int main(int argc, char **argv)
 {
 	rss_daemon_ctx_t dctx;
-	int ret = rss_daemon_init(&dctx, "rad", argc, argv, ""
+	int ret = rss_daemon_init(&dctx, "rad", argc, argv,
+				  ""
 #ifdef RAPTOR_AAC
-		" aac"
+				  " aac"
 #endif
 #ifdef RAPTOR_OPUS
-		" opus"
+				  " opus"
 #endif
 #ifdef RAPTOR_AUDIO_EFFECTS
-		" effects"
+				  " effects"
 #endif
 	);
 	if (ret != 0)
@@ -591,6 +721,12 @@ int main(int argc, char **argv)
 		.hpf_enabled = hpf_enabled,
 		.agc_enabled = agc_enabled,
 #endif
+		/* Pipeline state pointers (for audio-restart) */
+		.ring = &ring,
+		.codec_ops = &codec_ops,
+		.codec_ctx = &codec_ctx,
+		.encode_buf = &encode_buf,
+		.encode_buf_size = &encode_buf_size,
 	};
 
 	uint64_t frame_count = 0;
@@ -622,8 +758,9 @@ int main(int argc, char **argv)
 		}
 
 		int samples = frame.length / 2;
-		if (samples > (int)audio_cfg.samples_per_frame)
-			samples = audio_cfg.samples_per_frame;
+		int max_samples = ctrl_ctx.sample_rate / 50; /* 20ms */
+		if (samples > max_samples)
+			samples = max_samples;
 
 		const int16_t *pcm = frame.data;
 		int out_len;
@@ -632,7 +769,8 @@ int main(int argc, char **argv)
 					    frame.timestamp);
 
 		if (out_len > 0)
-			rss_ring_publish(ring, encode_buf, out_len, frame.timestamp, codec_id, 0);
+			rss_ring_publish(ring, encode_buf, out_len, frame.timestamp,
+					 ctrl_ctx.codec_id, 0);
 
 		RSS_HAL_CALL(ops, audio_release_frame, hal_ctx, ai_dev, 0, &frame);
 
