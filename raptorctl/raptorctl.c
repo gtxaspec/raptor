@@ -239,6 +239,7 @@ const struct help_entry help_entries[] = {
 	{"rod", "enable-uptime <0|1>                 Show/hide uptime"},
 	{"rod", "enable-text <0|1>                   Show/hide camera text"},
 	{"rod", "enable-logo <0|1>                   Show/hide logo"},
+	{"rod", "set-position <elem> <pos>           Move element (named or x,y)"},
 	{"rod", "set-font-size <10-72>               Font size (all elements)"},
 	{"rod", "set-time-font-size <10-72>          Time font size"},
 	{"rod", "set-uptime-font-size <10-72>        Uptime font size"},
@@ -1019,6 +1020,21 @@ int main(int argc, char **argv)
 		}
 		cJSON *j = jcmd(cmd);
 		jadd_s(j, "value", argv[3]);
+		jstr(j, json, sizeof(json));
+
+	} else if (strcmp(cmd, "set-position") == 0) {
+		if (argc < 5) {
+			fprintf(stderr,
+				"Usage: raptorctl %s set-position <element> <pos>\n"
+				"  element: time, uptime, text, logo\n"
+				"  pos: top_left, top_center, top_right, bottom_left,\n"
+				"       bottom_center, bottom_right, center, or x,y\n",
+				daemon);
+			return 1;
+		}
+		cJSON *j = jcmd("set-position");
+		jadd_s(j, "element", argv[3]);
+		jadd_s(j, "pos", argv[4]);
 		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "enable-time") == 0 || strcmp(cmd, "enable-uptime") == 0 ||

@@ -59,8 +59,8 @@ static const char *default_pos[] = {
  * Parse position string: named ("top_left", "bottom_right", etc.)
  * or coordinates ("100,50").
  */
-static void calc_position(int stream_w, int stream_h, int region_w, int region_h,
-			  const char *pos_str, int *out_x, int *out_y)
+void rvd_osd_calc_position(int stream_w, int stream_h, int region_w, int region_h,
+			   const char *pos_str, int *out_x, int *out_y)
 {
 	/* Try x,y coordinates first */
 	if (pos_str) {
@@ -145,7 +145,7 @@ static bool create_region(rvd_state_t *st, int s, int r, uint32_t w, uint32_t h)
 	const char *pos_str = rss_config_get_str(st->cfg, "osd", pos_key, default_pos[r]);
 
 	int x, y;
-	calc_position(stream_w, stream_h, (int)w, (int)h, pos_str, &x, &y);
+	rvd_osd_calc_position(stream_w, stream_h, (int)w, (int)h, pos_str, &x, &y);
 
 	rss_osd_region_t attr = {
 		.type = RSS_OSD_PIC,
@@ -438,8 +438,8 @@ static void push_region(rvd_state_t *st, int s, int r)
 		snprintf(pos_key, sizeof(pos_key), "stream%d_%s_pos", s, region_names[r]);
 		const char *pos_str = rss_config_get_str(st->cfg, "osd", pos_key, default_pos[r]);
 		int x, y;
-		calc_position(stream_w, stream_h, (int)reg->width, (int)reg->height, pos_str, &x,
-			      &y);
+		rvd_osd_calc_position(stream_w, stream_h, (int)reg->width, (int)reg->height,
+				      pos_str, &x, &y);
 		rss_osd_region_t attr = {
 			.type = RSS_OSD_PIC,
 			.x = x,
@@ -533,8 +533,8 @@ static void try_open_shm(rvd_state_t *st, int s, int r)
 				const char *pos_str =
 					rss_config_get_str(st->cfg, "osd", pos_key, default_pos[r]);
 				int x, y;
-				calc_position(stream_w, stream_h, (int)new_w, (int)new_h, pos_str,
-					      &x, &y);
+				rvd_osd_calc_position(stream_w, stream_h, (int)new_w, (int)new_h,
+						      pos_str, &x, &y);
 
 				rss_osd_region_t attr = {
 					.type = RSS_OSD_PIC,
@@ -585,8 +585,8 @@ static void try_open_shm(rvd_state_t *st, int s, int r)
 			const char *pos_str =
 				rss_config_get_str(st->cfg, "osd", pos_key, default_pos[r]);
 			int x, y;
-			calc_position(stream_w, stream_h, (int)reg->width, (int)reg->height,
-				      pos_str, &x, &y);
+			rvd_osd_calc_position(stream_w, stream_h, (int)reg->width, (int)reg->height,
+					      pos_str, &x, &y);
 			rss_osd_region_t attr = {
 				.type = RSS_OSD_PIC,
 				.x = x,
@@ -747,8 +747,8 @@ push_updates:
 					const char *pos_str = rss_config_get_str(
 						st->cfg, "osd", pos_key, default_pos[r]);
 					int x, y;
-					calc_position(stream_w, stream_h, (int)reg->width,
-						      (int)reg->height, pos_str, &x, &y);
+					rvd_osd_calc_position(stream_w, stream_h, (int)reg->width,
+							      (int)reg->height, pos_str, &x, &y);
 					rss_osd_region_t attr = {
 						.type = RSS_OSD_PIC,
 						.x = x,
@@ -871,8 +871,8 @@ void *rvd_osd_thread(void *arg)
 				const char *pos_str =
 					rss_config_get_str(st->cfg, "osd", pos_key, default_pos[r]);
 				int x, y;
-				calc_position(stream_w, stream_h, (int)reg->width, (int)reg->height,
-					      pos_str, &x, &y);
+				rvd_osd_calc_position(stream_w, stream_h, (int)reg->width,
+						      (int)reg->height, pos_str, &x, &y);
 				rss_osd_region_t attr = {
 					.type = RSS_OSD_PIC,
 					.x = x,

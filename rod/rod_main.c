@@ -470,6 +470,31 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		}
 	}
 
+	/* ── Element positioning — lightweight, no pipeline restart ── */
+	if (strstr(cmd_json, "\"set-position\"")) {
+		char element[16] = "", pos[32] = "";
+		rss_json_get_str(cmd_json, "element", element, sizeof(element));
+		rss_json_get_str(cmd_json, "pos", pos, sizeof(pos));
+
+		if (!element[0] || !pos[0])
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need element and pos");
+
+		/* Forward to RVD for all streams */
+		for (int s = 0; s < st->stream_count; s++) {
+			char cmd[128];
+			snprintf(cmd, sizeof(cmd),
+				 "{\"cmd\":\"osd-position\",\"stream\":%d,"
+				 "\"region\":\"%s\",\"pos\":\"%s\"}",
+				 s, element, pos);
+			char rvd_resp[256];
+			rss_ctrl_send_command("/var/run/rss/rvd.sock", cmd, rvd_resp,
+					      sizeof(rvd_resp), 1000);
+		}
+
+		RSS_INFO("set-position: %s → %s", element, pos);
+		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+	}
+
 	/* ── Element show/hide — lightweight, no pipeline restart ── */
 	if (strstr(cmd_json, "\"enable-time\"") || strstr(cmd_json, "\"enable-uptime\"") ||
 	    strstr(cmd_json, "\"enable-text\"") || strstr(cmd_json, "\"enable-logo\"")) {

@@ -1425,6 +1425,74 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 		return 1;
 	}
 
+	if (strstr(cmd_json, "\"osd-position\"")) {
+		int stream = -1;
+		char region[16] = "", pos[32] = "";
+		rss_json_get_int(cmd_json, "stream", &stream);
+		rss_json_get_str(cmd_json, "region", region, sizeof(region));
+		rss_json_get_str(cmd_json, "pos", pos, sizeof(pos));
+
+		if (stream < 0 || stream >= st->stream_count || !region[0] || !pos[0]) {
+			rss_ctrl_resp_error(resp, resp_size, "need stream, region, pos");
+			return 1;
+		}
+
+		static const char *names[] = {"time", "uptime",	 "text",
+					      "logo", "privacy", "detect"};
+		int r = -1;
+		for (int i = 0; i < 6; i++) {
+			if (strcmp(region, names[i]) == 0) {
+				r = i;
+				break;
+			}
+		}
+		if (r < 0) {
+			rss_ctrl_resp_error(resp, resp_size, "unknown region");
+			return 1;
+		}
+
+		rvd_osd_region_t *reg = &st->osd_regions[stream][r];
+		if (!reg->active || reg->hal_handle < 0) {
+			rss_ctrl_resp_error(resp, resp_size, "region not active");
+			return 1;
+		}
+
+		int stream_w = st->streams[stream].enc_cfg.width;
+		int stream_h = st->streams[stream].enc_cfg.height;
+		int x, y;
+		rvd_osd_calc_position(stream_w, stream_h, (int)reg->width, (int)reg->height, pos,
+				      &x, &y);
+
+		char pos_key[32];
+		snprintf(pos_key, sizeof(pos_key), "stream%d_%s_pos", stream, names[r]);
+		rss_config_set_str(st->cfg, "osd", pos_key, pos);
+
+		pthread_mutex_lock(&st->osd_lock);
+		rss_osd_region_t attr = {
+			.type = RSS_OSD_PIC,
+			.x = x,
+			.y = y,
+			.width = (int)reg->width,
+			.height = (int)reg->height,
+			.bitmap_data = reg->local_buf,
+			.bitmap_fmt = RSS_PIXFMT_BGRA,
+		};
+		if (st->use_isp_osd && st->streams[stream].fs_chn % 3 == 0) {
+			int sensor = st->streams[stream].sensor_idx;
+			int chx = st->streams[stream].fs_chn % 3;
+			RSS_HAL_CALL(st->ops, isp_osd_set_region_attr, st->hal_ctx, sensor,
+				     reg->hal_handle, chx, &attr);
+		} else {
+			RSS_HAL_CALL(st->ops, osd_set_region_attr, st->hal_ctx, reg->hal_handle,
+				     &attr);
+		}
+		pthread_mutex_unlock(&st->osd_lock);
+
+		RSS_DEBUG("osd-position: stream %d %s → %s (%d,%d)", stream, names[r], pos, x, y);
+		rss_ctrl_resp_ok(resp, resp_size);
+		return 1;
+	}
+
 	if (strstr(cmd_json, "\"osd-restart\"")) {
 		int pool_kb = 0;
 		int font_size = 0;

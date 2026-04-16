@@ -143,6 +143,8 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running);
 void *rvd_encoder_thread(void *arg);
 
 /* rvd_osd.c */
+void rvd_osd_calc_position(int stream_w, int stream_h, int region_w, int region_h,
+			   const char *pos_str, int *out_x, int *out_y);
 void rvd_osd_init(rvd_state_t *st);
 void rvd_osd_init_stream(rvd_state_t *st, int idx);
 void rvd_osd_deinit_stream(rvd_state_t *st, int idx);
