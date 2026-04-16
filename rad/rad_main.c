@@ -57,15 +57,14 @@ typedef struct {
 	int *encode_buf_size;
 } rad_ctrl_ctx_t;
 
-static void rad_fmt_result(char *buf, int bufsz, int ret)
+static int rad_fmt_result(char *buf, int bufsz, int ret)
 {
 	if (ret == 0)
-		snprintf(buf, bufsz, "{\"status\":\"ok\"}");
-	else if (ret == RSS_ERR_NOTSUP)
-		snprintf(buf, bufsz,
-			 "{\"status\":\"error\",\"reason\":\"not supported on this SoC\"}");
-	else
-		snprintf(buf, bufsz, "{\"status\":\"error\",\"reason\":\"failed (%d)\"}", ret);
+		return snprintf(buf, bufsz, "{\"status\":\"ok\"}");
+	if (ret == RSS_ERR_NOTSUP)
+		return snprintf(buf, bufsz,
+				"{\"status\":\"error\",\"reason\":\"not supported on this SoC\"}");
+	return snprintf(buf, bufsz, "{\"status\":\"error\",\"reason\":\"failed (%d)\"}", ret);
 }
 
 static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, void *userdata)
@@ -90,8 +89,7 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				ctx->volume = val;
 				rss_config_set_int(ctx->cfg, "audio", "volume", val);
 			}
-			rad_fmt_result(resp_buf, resp_buf_size, ret);
-			return (int)strlen(resp_buf);
+			return rad_fmt_result(resp_buf, resp_buf_size, ret);
 		}
 		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value");
 	}
@@ -104,8 +102,7 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				ctx->gain = val;
 				rss_config_set_int(ctx->cfg, "audio", "gain", val);
 			}
-			rad_fmt_result(resp_buf, resp_buf_size, ret);
-			return (int)strlen(resp_buf);
+			return rad_fmt_result(resp_buf, resp_buf_size, ret);
 		}
 		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value");
 	}
@@ -400,8 +397,8 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			      ctx->hpf_enabled ? "true" : "false",
 			      ctx->agc_enabled ? "true" : "false");
 #endif
-		snprintf(resp_buf + n, resp_buf_size - n, "}");
-		return (int)strlen(resp_buf);
+		n += snprintf(resp_buf + n, resp_buf_size - n, "}");
+		return n;
 	}
 
 	return rss_ctrl_resp_error(resp_buf, resp_buf_size, "unknown command");

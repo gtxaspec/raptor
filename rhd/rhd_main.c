@@ -391,8 +391,7 @@ static int rhd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				      "%s{\"ip\":\"%s\",\"type\":\"%s\"}", i > 0 ? "," : "", addr,
 				      type);
 		}
-		snprintf(resp_buf + n, resp_buf_size - n, "]}");
-		return (int)strlen(resp_buf);
+		return snprintf(resp_buf + n, resp_buf_size - n, "]}");
 	}
 
 	/* Default: status */

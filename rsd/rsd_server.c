@@ -535,8 +535,7 @@ static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		pthread_mutex_unlock(&srv->clients_lock);
 		if (n >= resp_buf_size - 2)
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "response truncated");
-		snprintf(resp_buf + n, resp_buf_size - n, "]}");
-		return (int)strlen(resp_buf);
+		return snprintf(resp_buf + n, resp_buf_size - n, "]}");
 	}
 
 	/* Default: status */

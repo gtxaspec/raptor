@@ -456,8 +456,7 @@ static int rwd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			first = 0;
 		}
 		pthread_mutex_unlock(&srv->clients_lock);
-		snprintf(resp_buf + n, resp_buf_size - n, "]}");
-		return (int)strlen(resp_buf);
+		return snprintf(resp_buf + n, resp_buf_size - n, "]}");
 	}
 
 	if (strcmp(cmd, "share-rotate") == 0) {

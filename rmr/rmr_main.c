@@ -359,8 +359,7 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			atomic_store(&st->recording, true);
 		if (st->mode == RMR_MODE_BOTH)
 			atomic_store(&st->clip_recording, true);
-		snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
-		return (int)strlen(resp_buf);
+		return snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
 	}
 
 	if (strcmp(cmd, "stop") == 0) {
@@ -368,12 +367,11 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			atomic_store(&st->recording, false);
 		if (st->mode == RMR_MODE_BOTH)
 			atomic_store(&st->clip_recording, false);
-		snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
-		return (int)strlen(resp_buf);
+		return snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
 	}
 
 	if (strcmp(cmd, "status") == 0) {
-		snprintf(resp_buf, resp_buf_size,
+		return snprintf(resp_buf, resp_buf_size,
 			 "{\"recording\":%s,\"clip\":%s,\"mode\":%d,"
 			 "\"file\":\"%s\",\"frames\":%" PRIu64 ",\"dropped\":%" PRIu64
 			 ",\"bytes\":%" PRIu64 "}",
@@ -381,11 +379,9 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			 atomic_load(&st->clip_recording) ? "true" : "false", st->mode,
 			 st->segment_path, st->frames_written, st->frames_dropped,
 			 st->bytes_written);
-		return (int)strlen(resp_buf);
 	}
 
-	snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
-	return (int)strlen(resp_buf);
+	return snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
 }
 
 /* ── Main loop ── */

@@ -589,7 +589,7 @@ static int ctrl_handler(const char *cmd_json, char *resp, int resp_size,
 	if (rc >= 0)
 		return rc;
 
-	snprintf(resp, resp_size,
+	return snprintf(resp, resp_size,
 	         "{\"status\":\"ok\",\"streaming\":%s,\"format\":\"%s\","
 	         "\"resolution\":\"%ux%u\",\"fps\":%u,\"audio\":%s}",
 	         st->streaming ? "true" : "false",
@@ -598,7 +598,6 @@ static int ctrl_handler(const char *cmd_json, char *resp, int resp_size,
 	         st->streaming ? rwc_frames[st->cur_frame].height : 0,
 	         st->cur_interval ? 10000000 / st->cur_interval : 0,
 	         st->audio_enabled ? "true" : "false");
-	return (int)strlen(resp);
 }
 
 /* --------------------------------------------------------------------------
