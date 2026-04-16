@@ -344,10 +344,9 @@ build_ingenic_lib() {
 }
 
 build_libc_shim() {
-    # The shim MUST be a .so (DT_NEEDED), even for --static builds.
-    # musl's dynamic linker does not interpose symbols from the executable
-    # into shared libraries — only .so → .so interposition works.
-    # The shim .so must be deployed to /usr/lib/ on the device.
+    # Build both .a (preferred — statically linked into HAL daemons via
+    # --whole-archive + --export-dynamic) and .so (fallback for musl where
+    # executable→.so interposition doesn't work).
     local shimname="" shimsrc=""
     case "$LIBC" in
         uclibc)
@@ -363,12 +362,11 @@ build_libc_shim() {
         glibc) return ;;
     esac
 
-    [ -f "$SYSROOT_DIR/usr/lib/lib${shimname}.so" ] && return
+    [ -f "$SYSROOT_DIR/usr/lib/lib${shimname}.a" ] && return
     echo "Building $LIBC shim..."
+    ${CROSS_COMPILE}gcc -fPIC -c -o "$DEPS_DIR/${shimname}.o" "$shimsrc"
+    ${CROSS_COMPILE}ar rcs "$SYSROOT_DIR/usr/lib/lib${shimname}.a" "$DEPS_DIR/${shimname}.o"
     ${CROSS_COMPILE}gcc -fPIC -shared -o "$SYSROOT_DIR/usr/lib/lib${shimname}.so" "$shimsrc"
-    # Copy to build output so user knows to deploy it
-    mkdir -p "$SCRIPT_DIR/build"
-    cp -f "$SYSROOT_DIR/usr/lib/lib${shimname}.so" "$SCRIPT_DIR/build/"
 }
 
 build_mbedtls() {
