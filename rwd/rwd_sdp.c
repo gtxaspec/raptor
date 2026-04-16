@@ -17,24 +17,40 @@
 
 /* ── Line-by-line SDP parser helpers ── */
 
-/* Get next SDP line. Returns pointer to start, sets *next to line after \r\n.
- * Returns NULL when no more lines. */
+/* Get next SDP line. Handles both CRLF and bare LF line endings.
+ * Returns pointer to line_buf on success, NULL when no more lines. */
 static const char *sdp_next_line(const char *p, const char **next, char *line_buf, size_t buf_size)
 {
 	if (!p || !*p)
 		return NULL;
 
-	const char *eol = strstr(p, "\r\n");
-	if (!eol)
+	/* Find earliest line ending: CRLF or bare LF */
+	const char *crlf = strstr(p, "\r\n");
+	const char *lf = strchr(p, '\n');
+	const char *eol;
+	int skip;
+
+	if (crlf && (!lf || crlf < lf)) {
+		eol = crlf;
+		skip = 2;
+	} else if (lf) {
+		eol = lf;
+		skip = 1;
+	} else {
 		eol = p + strlen(p);
+		skip = 0;
+	}
 
 	size_t len = (size_t)(eol - p);
+	/* Strip trailing CR if present (handles \r\n via bare-LF path) */
+	if (len > 0 && p[len - 1] == '\r')
+		len--;
 	if (len >= buf_size)
 		len = buf_size - 1;
 	memcpy(line_buf, p, len);
 	line_buf[len] = '\0';
 
-	*next = *eol ? eol + 2 : eol;
+	*next = *(eol) ? eol + skip : eol;
 	return line_buf;
 }
 
@@ -196,7 +212,11 @@ int rwd_sdp_parse_offer(const char *sdp, rwd_sdp_offer_t *offer)
 
 		/* ICE candidates: parse for NAT hole punching */
 		if (strncmp(line, "a=candidate:", 12) == 0 &&
-		    offer->candidate_count < RWD_MAX_CANDIDATES) {
+		    offer->candidate_count >= RWD_MAX_CANDIDATES) {
+			RSS_WARN("SDP: candidate limit reached (%d), discarding", RWD_MAX_CANDIDATES);
+			continue;
+		}
+		if (strncmp(line, "a=candidate:", 12) == 0) {
 			char foundation[32], transport[8], addr[64], ctype[16];
 			int component, cport;
 			uint32_t prio;
@@ -291,7 +311,7 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 	APPEND("a=ssrc:%u cname:raptor", c->video_ssrc);
 	APPEND("a=candidate:1 1 UDP 2130706431 %s %d typ host", srv->local_ip, srv->udp_port);
 	if (srv->has_srflx)
-		APPEND("a=candidate:2 1 UDP 1694498815 %s %u typ srflx raddr %s rport %d",
+		APPEND("a=candidate:2 1 UDP ICE_PRIORITY_SRFLX %s %u typ srflx raddr %s rport %d",
 		       srv->srflx_ip, srv->srflx_port, srv->local_ip, srv->udp_port);
 
 	/* Audio m-line — use wire_codec, but only if the browser offered it.
@@ -333,7 +353,7 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 		APPEND("a=candidate:1 1 UDP 2130706431 %s %d typ host", srv->local_ip,
 		       srv->udp_port);
 		if (srv->has_srflx)
-			APPEND("a=candidate:2 1 UDP 1694498815 %s %u typ srflx raddr %s rport %d",
+			APPEND("a=candidate:2 1 UDP ICE_PRIORITY_SRFLX %s %u typ srflx raddr %s rport %d",
 			       srv->srflx_ip, srv->srflx_port, srv->local_ip, srv->udp_port);
 	}
 
