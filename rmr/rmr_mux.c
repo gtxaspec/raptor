@@ -909,19 +909,19 @@ int rmr_mux_set_video(rmr_mux_t *mux, const rmr_video_params_t *params, const ui
 {
 	if (!mux || !params || !sps || !sps_len || !pps || !pps_len)
 		return -1;
-	mux->video = *params;
-	mux->has_video = true;
-
 	if (sps_len > sizeof(mux->sps) || pps_len > sizeof(mux->pps))
 		return -1;
+	if (vps && vps_len > 0 && vps_len > sizeof(mux->vps))
+		return -1;
+
+	mux->video = *params;
+	mux->has_video = true;
 	memcpy(mux->sps, sps, sps_len);
 	mux->sps_len = sps_len;
 	memcpy(mux->pps, pps, pps_len);
 	mux->pps_len = pps_len;
 
 	if (vps && vps_len > 0) {
-		if (vps_len > sizeof(mux->vps))
-			return -1;
 		memcpy(mux->vps, vps, vps_len);
 		mux->vps_len = vps_len;
 	}
