@@ -191,7 +191,7 @@ fi
 case "$PLATFORM" in
     t10|t20) SDK_VERSION=3.12.0; GCC_VER=4.7.2 ;;
     t21)     SDK_VERSION=1.0.33; GCC_VER=4.7.2 ;;
-    t23)     SDK_VERSION=1.1.0;  GCC_VER=5.4.0 ;;
+    t23)     SDK_VERSION=1.3.0;  GCC_VER=5.4.0 ;;
     t30)     SDK_VERSION=1.0.5;  GCC_VER=4.7.2 ;;
     t31)     SDK_VERSION=1.1.6;  GCC_VER=5.4.0 ;;
     t32)     SDK_VERSION=1.0.6;  GCC_VER=5.4.0 ;;
