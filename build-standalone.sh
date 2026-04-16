@@ -194,7 +194,7 @@ case "$PLATFORM" in
     t23)     SDK_VERSION=1.1.0;  GCC_VER=5.4.0 ;;
     t30)     SDK_VERSION=1.0.5;  GCC_VER=4.7.2 ;;
     t31)     SDK_VERSION=1.1.6;  GCC_VER=5.4.0 ;;
-    t32)     SDK_VERSION=1.0.4;  GCC_VER=5.4.0 ;;
+    t32)     SDK_VERSION=1.0.6;  GCC_VER=5.4.0 ;;
     t40)     SDK_VERSION=1.2.0;  GCC_VER=7.2.0 ;;
     t41)     SDK_VERSION=1.2.0;  GCC_VER=7.2.0 ;;
 esac
@@ -317,6 +317,8 @@ build_ingenic_lib() {
     local sdk_libc="$LIBC"
     [ "$sdk_libc" = "musl" ] && sdk_libc=uclibc
     local libdir="$src/$PLATFORM_UPPER/lib/$SDK_VERSION/$sdk_libc/$GCC_VER"
+    # Some platforms don't have a GCC version subdirectory
+    [ ! -d "$libdir" ] && libdir="$src/$PLATFORM_UPPER/lib/$SDK_VERSION/$sdk_libc"
 
     if [ ! -d "$libdir" ]; then
         echo "ERROR: Ingenic SDK libs not found at $libdir"
