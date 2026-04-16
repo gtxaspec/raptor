@@ -1,0 +1,39 @@
+name: Build (musl static)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [t20, t21, t23, t30, t31, t32, t40, t41]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install host dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            build-essential cmake git curl \
+            autoconf automake libtool \
+            meson ninja-build python3
+
+      - name: Cache toolchain and deps
+        uses: actions/cache@v5
+        with:
+          path: .deps
+          key: ${{ matrix.platform }}-musl-deps-${{ hashFiles('build-standalone.sh') }}
+          restore-keys: ${{ matrix.platform }}-musl-deps-
+
+      - name: Build
+        run: ./build-standalone.sh --static --libc=musl ${{ matrix.platform }}
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v7
+        with:
+          name: raptor-${{ matrix.platform }}-musl-static
+          path: build/
+          retention-days: 14
