@@ -282,8 +282,8 @@ static void handle_request(rhd_server_t *srv, rhd_client_t *c)
 		return; /* incomplete */
 
 	/* Parse method and path */
-	char method[8] = {0}, path[128] = {0};
-	sscanf(c->recv_buf, "%7s %127s", method, path);
+	char method[8] = {0}, path[256] = {0};
+	sscanf(c->recv_buf, "%7s %255s", method, path);
 
 	char addrstr[INET6_ADDRSTRLEN];
 	RSS_INFO("%s %s from %s:%u", method, path,
