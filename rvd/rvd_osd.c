@@ -106,6 +106,14 @@ clamp:
 		*out_x = 0;
 	if (*out_y < 0)
 		*out_y = 0;
+	if (*out_x + region_w > stream_w)
+		*out_x = stream_w - region_w;
+	if (*out_y + region_h > stream_h)
+		*out_y = stream_h - region_h;
+	if (*out_x < 0)
+		*out_x = 0;
+	if (*out_y < 0)
+		*out_y = 0;
 	*out_x &= ~1;
 	*out_y &= ~1;
 }
