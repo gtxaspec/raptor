@@ -696,6 +696,10 @@ make -j"$JOBS" \
     PLATFORM="$PLATFORM_UPPER" \
     CROSS_COMPILE="$CROSS_COMPILE" \
     SYSROOT="$SYSROOT_DIR" \
+    HAL_DIR=".deps/raptor-hal" \
+    IPC_DIR=".deps/raptor-ipc" \
+    COMMON_DIR=".deps/raptor-common" \
+    COMPY_DIR=".deps/compy" \
     LIB_HAL_VIDEO="$SYSROOT_DIR/usr/lib/libraptor_hal_video.a" \
     LIB_HAL_AUDIO="$SYSROOT_DIR/usr/lib/libraptor_hal_audio.a" \
     LIB_IPC="$SYSROOT_DIR/usr/lib/librss_ipc.a" \
