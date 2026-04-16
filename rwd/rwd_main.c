@@ -238,14 +238,36 @@ static int create_http_socket(int port)
 
 /* ── Find client by source address ── */
 
+/* Compare sockaddr by family-specific fields only (not padding bytes).
+ * memcmp on sockaddr_storage can fail on uninitialized padding. */
+static bool sockaddr_equal(const struct sockaddr_storage *a, const struct sockaddr_storage *b)
+{
+	if (a->ss_family != b->ss_family)
+		return false;
+	if (a->ss_family == AF_INET) {
+		const struct sockaddr_in *a4 = (const struct sockaddr_in *)a;
+		const struct sockaddr_in *b4 = (const struct sockaddr_in *)b;
+		return a4->sin_port == b4->sin_port &&
+		       a4->sin_addr.s_addr == b4->sin_addr.s_addr;
+	}
+	if (a->ss_family == AF_INET6) {
+		const struct sockaddr_in6 *a6 = (const struct sockaddr_in6 *)a;
+		const struct sockaddr_in6 *b6 = (const struct sockaddr_in6 *)b;
+		return a6->sin6_port == b6->sin6_port &&
+		       memcmp(&a6->sin6_addr, &b6->sin6_addr, 16) == 0;
+	}
+	return false;
+}
+
 static rwd_client_t *find_client_by_addr(rwd_server_t *srv, const struct sockaddr_storage *addr,
 					 socklen_t addr_len)
 {
+	(void)addr_len;
 	for (int i = 0; i < RWD_MAX_CLIENTS; i++) {
 		rwd_client_t *c = srv->clients[i];
 		if (!c || !c->ice_verified)
 			continue;
-		if (c->addr_len == addr_len && memcmp(&c->addr, addr, addr_len) == 0)
+		if (sockaddr_equal(&c->addr, addr))
 			return c;
 	}
 	return NULL;
