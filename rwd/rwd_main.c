@@ -114,16 +114,17 @@ void rwd_generate_ice_credentials(char *ufrag, size_t ufrag_len, char *pwd, size
 	uint8_t ufrag_rand[8];
 	uint8_t pwd_rand[24];
 
-	if (rwd_random_bytes(ufrag_rand, sizeof(ufrag_rand)) != 0) {
-		uint64_t ts = rss_timestamp_us();
-		memcpy(ufrag_rand, &ts, sizeof(ufrag_rand));
-	}
-	if (rwd_random_bytes(pwd_rand, sizeof(pwd_rand)) != 0) {
-		static uint32_t pwd_counter;
-		uint64_t ts = rss_timestamp_us() ^ (uint64_t)(++pwd_counter);
-		memcpy(pwd_rand, &ts,
-		       sizeof(ts) < sizeof(pwd_rand) ? sizeof(ts) : sizeof(pwd_rand));
-	}
+	/* ICE credentials must be cryptographically random — predictable
+	 * values allow an attacker to forge STUN HMAC and hijack sessions.
+	 * Fail closed: zero-fill produces obviously invalid credentials
+	 * that will fail HMAC verification on both sides. */
+	memset(ufrag_rand, 0, sizeof(ufrag_rand));
+	memset(pwd_rand, 0, sizeof(pwd_rand));
+
+	if (rwd_random_bytes(ufrag_rand, sizeof(ufrag_rand)) != 0)
+		RSS_ERROR("ICE: CSPRNG failed for ufrag — session will fail");
+	if (rwd_random_bytes(pwd_rand, sizeof(pwd_rand)) != 0)
+		RSS_ERROR("ICE: CSPRNG failed for pwd — session will fail");
 
 	size_t ulen = ufrag_len - 1 < 8 ? ufrag_len - 1 : 8;
 	for (size_t i = 0; i < ulen; i++)
@@ -328,7 +329,14 @@ static void handle_udp_packet(rwd_server_t *srv, const uint8_t *buf, size_t len,
 
 		/* Check for RTCP feedback (PLI/FIR) — the first 8 bytes of
 		 * SRTCP are unencrypted, so we can read PT and FMT directly.
-		 * PT=206 (PSFB): FMT=1=PLI, FMT=4=FIR → request IDR */
+		 * PT=206 (PSFB): FMT=1=PLI, FMT=4=FIR → request IDR.
+		 *
+		 * Security note: this acts on unverified SRTCP headers. An
+		 * attacker spoofing the ICE-verified source address could
+		 * trigger repeated IDR requests (bandwidth/CPU amplification).
+		 * Mitigated by: source must match ICE-verified addr, client
+		 * must be in sending state, and IDR requests are naturally
+		 * rate-limited by the encoder (coalesced per GOP). */
 		uint8_t pt = buf[1] & 0x7F;
 		uint8_t fmt = buf[0] & 0x1F;
 		if (pt == 206 && (fmt == 1 || fmt == 4)) {
