@@ -9,6 +9,7 @@
  */
 
 #include "rmr_nal.h"
+#include "rss_common.h"
 
 #include <string.h>
 
@@ -130,24 +131,44 @@ void rmr_extract_params(const uint8_t *data, uint32_t len, int codec, rmr_codec_
 
 		if (codec == 1) {
 			uint8_t nal_type = (nal_start[0] >> 1) & 0x3F;
-			if (nal_type == 32 && nal_len <= sizeof(params->vps)) {
-				memcpy(params->vps, nal_start, nal_len);
-				params->vps_len = nal_len;
-			} else if (nal_type == 33 && nal_len <= sizeof(params->sps)) {
-				memcpy(params->sps, nal_start, nal_len);
-				params->sps_len = nal_len;
-			} else if (nal_type == 34 && nal_len <= sizeof(params->pps)) {
-				memcpy(params->pps, nal_start, nal_len);
-				params->pps_len = nal_len;
+			if (nal_type == 32) {
+				if (nal_len > sizeof(params->vps)) {
+					RSS_WARN("VPS too large (%u > %zu), skipped", nal_len, sizeof(params->vps));
+				} else {
+					memcpy(params->vps, nal_start, nal_len);
+					params->vps_len = nal_len;
+				}
+			} else if (nal_type == 33) {
+				if (nal_len > sizeof(params->sps)) {
+					RSS_WARN("SPS too large (%u > %zu), skipped", nal_len, sizeof(params->sps));
+				} else {
+					memcpy(params->sps, nal_start, nal_len);
+					params->sps_len = nal_len;
+				}
+			} else if (nal_type == 34) {
+				if (nal_len > sizeof(params->pps)) {
+					RSS_WARN("PPS too large (%u > %zu), skipped", nal_len, sizeof(params->pps));
+				} else {
+					memcpy(params->pps, nal_start, nal_len);
+					params->pps_len = nal_len;
+				}
 			}
 		} else {
 			uint8_t nal_type = nal_start[0] & 0x1F;
-			if (nal_type == 7 && nal_len <= sizeof(params->sps)) {
-				memcpy(params->sps, nal_start, nal_len);
-				params->sps_len = nal_len;
-			} else if (nal_type == 8 && nal_len <= sizeof(params->pps)) {
-				memcpy(params->pps, nal_start, nal_len);
-				params->pps_len = nal_len;
+			if (nal_type == 7) {
+				if (nal_len > sizeof(params->sps)) {
+					RSS_WARN("SPS too large (%u > %zu), skipped", nal_len, sizeof(params->sps));
+				} else {
+					memcpy(params->sps, nal_start, nal_len);
+					params->sps_len = nal_len;
+				}
+			} else if (nal_type == 8) {
+				if (nal_len > sizeof(params->pps)) {
+					RSS_WARN("PPS too large (%u > %zu), skipped", nal_len, sizeof(params->pps));
+				} else {
+					memcpy(params->pps, nal_start, nal_len);
+					params->pps_len = nal_len;
+				}
 			}
 		}
 

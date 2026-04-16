@@ -206,11 +206,14 @@ int rmr_storage_enforce_limit(rmr_storage_t *st)
 		char dir_path[512];
 		snprintf(dir_path, sizeof(dir_path), "%s/%s", st->base_path, days[i]);
 
-		/* Delete all .mp4 files in this day directory */
+		/* Delete .mp4 files in this day directory (skip non-mp4) */
 		int file_count;
 		char **files = scan_dir_sorted(dir_path, &file_count);
 		if (files) {
 			for (int j = 0; j < file_count; j++) {
+				size_t flen = strlen(files[j]);
+				if (flen < 4 || strcmp(files[j] + flen - 4, ".mp4") != 0)
+					continue;
 				char fpath[768];
 				snprintf(fpath, sizeof(fpath), "%s/%s", dir_path, files[j]);
 				struct stat fst;

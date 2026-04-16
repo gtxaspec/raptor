@@ -912,15 +912,18 @@ int rmr_mux_set_video(rmr_mux_t *mux, const rmr_video_params_t *params, const ui
 	mux->video = *params;
 	mux->has_video = true;
 
-	memcpy(mux->sps, sps, sps_len < sizeof(mux->sps) ? sps_len : sizeof(mux->sps));
-	mux->sps_len = sps_len < sizeof(mux->sps) ? sps_len : sizeof(mux->sps);
-
-	memcpy(mux->pps, pps, pps_len < sizeof(mux->pps) ? pps_len : sizeof(mux->pps));
-	mux->pps_len = pps_len < sizeof(mux->pps) ? pps_len : sizeof(mux->pps);
+	if (sps_len > sizeof(mux->sps) || pps_len > sizeof(mux->pps))
+		return -1;
+	memcpy(mux->sps, sps, sps_len);
+	mux->sps_len = sps_len;
+	memcpy(mux->pps, pps, pps_len);
+	mux->pps_len = pps_len;
 
 	if (vps && vps_len > 0) {
-		memcpy(mux->vps, vps, vps_len < sizeof(mux->vps) ? vps_len : sizeof(mux->vps));
-		mux->vps_len = vps_len < sizeof(mux->vps) ? vps_len : sizeof(mux->vps);
+		if (vps_len > sizeof(mux->vps))
+			return -1;
+		memcpy(mux->vps, vps, vps_len);
+		mux->vps_len = vps_len;
 	}
 
 	return 0;
