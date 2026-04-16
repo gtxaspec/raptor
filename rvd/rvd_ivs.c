@@ -125,7 +125,7 @@ int rvd_ivs_start(rvd_state_t *st)
 		return RSS_ERR;
 	} else
 #endif
-	if (strcmp(algo, "persondet") == 0) {
+		if (strcmp(algo, "persondet") == 0) {
 		rss_ivs_persondet_param_t pp = {0};
 		pp.skip_frame_count = skip;
 		pp.width = w;
@@ -301,6 +301,28 @@ void rvd_ivs_stop(rvd_state_t *st)
 	}
 
 	RSS_INFO("IVS: stopped");
+}
+
+/*
+ * Lightweight pause/resume for hot restart — just StopRecvPic/StartRecvPic.
+ * The channel, algo interface, and group stay alive. Used when the bind
+ * chain needs to be torn down and rebuilt (stream-restart, set-resolution).
+ * Full stop (rvd_ivs_stop) destroys the channel — SDK can't recreate it.
+ */
+void rvd_ivs_pause(rvd_state_t *st)
+{
+	if (!st->ivs_active)
+		return;
+	RSS_HAL_CALL(st->ops, ivs_stop, st->hal_ctx, st->ivs_chn);
+	RSS_INFO("IVS: paused");
+}
+
+void rvd_ivs_resume(rvd_state_t *st)
+{
+	if (!st->ivs_active)
+		return;
+	RSS_HAL_CALL(st->ops, ivs_start, st->hal_ctx, st->ivs_chn);
+	RSS_INFO("IVS: resumed");
 }
 
 /*
@@ -494,7 +516,7 @@ static void *rvd_jzdl_thread(void *arg)
 	 * Must be > 0 for GetFrame to return frames. */
 	IMP_FrameSource_SetFrameDepth(1, 1);
 
-	while (*st->running) {
+	while (*st->running && atomic_load(&st->ivs_active)) {
 		IMPFrameInfo *frame = NULL;
 		int ret = IMP_FrameSource_GetFrame(1, &frame);
 		if (ret != 0 || !frame) {
@@ -555,7 +577,7 @@ void *rvd_ivs_thread(void *arg)
 
 	RSS_INFO("IVS poll thread started (algo=%s)", st->ivs_persondet ? "persondet" : "move");
 
-	while (*st->running) {
+	while (*st->running && atomic_load(&st->ivs_active)) {
 		int ret = RSS_HAL_CALL(st->ops, ivs_poll_result, st->hal_ctx, st->ivs_chn, 1000);
 		if (ret != 0)
 			continue;

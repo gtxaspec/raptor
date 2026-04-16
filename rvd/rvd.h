@@ -158,6 +158,8 @@ int rvd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, vo
 int rvd_ivs_init(rvd_state_t *st);
 int rvd_ivs_start(rvd_state_t *st);
 void rvd_ivs_stop(rvd_state_t *st);
+void rvd_ivs_pause(rvd_state_t *st);
+void rvd_ivs_resume(rvd_state_t *st);
 void rvd_ivs_deinit(rvd_state_t *st);
 void *rvd_ivs_thread(void *arg);
 

@@ -1126,26 +1126,25 @@ static int do_stream_restart(rvd_state_t *st, int chn, char *resp, int resp_size
 
 	/* Stop: IVS → JPEG → video */
 	if (has_ivs) {
+		/* Signal IVS thread to exit (it checks ivs_active), then join */
+		atomic_store(&st->ivs_active, false);
 		if (st->ivs_tid) {
 			pthread_join(st->ivs_tid, NULL);
 			st->ivs_tid = 0;
 		}
-		rvd_ivs_stop(st);
+		rvd_ivs_pause(st); /* lightweight — keep channel/group/algo alive */
 	}
 	if (jpeg >= 0)
 		rvd_stream_stop(st, jpeg);
 	rvd_stream_stop(st, chn);
 
-	/* Deinit: JPEG → video (unregister before group destroy) */
+	/* Deinit: JPEG → video. IVS channel stays alive (SDK limitation). */
 	if (jpeg >= 0)
 		rvd_stream_deinit(st, jpeg);
 	rvd_stream_deinit(st, chn);
-	if (has_ivs)
-		rvd_ivs_deinit(st);
 
-	/* Reinit: IVS → video → JPEG */
 	if (has_ivs)
-		rvd_ivs_init(st);
+		atomic_store(&st->ivs_active, true); /* re-enable for bind chain */
 
 	int ret = rvd_stream_init(st, chn);
 	if (ret != RSS_OK) {
@@ -1163,20 +1162,19 @@ static int do_stream_restart(rvd_state_t *st, int chn, char *resp, int resp_size
 			RSS_WARN("stream-restart: jpeg init failed: %d (non-fatal)", ret);
 	}
 
-	/* Start: video → JPEG → IVS */
-	if (has_ivs)
-		rvd_ivs_start(st);
-
+	/* Start: video → JPEG, then IVS (SDK requires FS streaming before IVS channel) */
 	rvd_stream_start(st, chn);
 	if (jpeg >= 0 && st->streams[jpeg].ring)
 		rvd_stream_start(st, jpeg);
 
-	/* IVS thread relaunch */
+	/* IVS resume + thread relaunch */
 	if (has_ivs) {
+		rvd_ivs_resume(st);
 		pthread_attr_t ivs_attr;
 		pthread_attr_init(&ivs_attr);
 		pthread_attr_setstacksize(&ivs_attr, 64 * 1024);
-		pthread_create(&st->ivs_tid, &ivs_attr, rvd_ivs_thread, st);
+		if (pthread_create(&st->ivs_tid, &ivs_attr, rvd_ivs_thread, st) != 0)
+			RSS_ERROR("ivs thread create failed");
 		pthread_attr_destroy(&ivs_attr);
 	}
 
@@ -1302,22 +1300,21 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 
 		/* Stop */
 		if (has_ivs) {
+			atomic_store(&st->ivs_active, false);
 			if (st->ivs_tid) {
 				pthread_join(st->ivs_tid, NULL);
 				st->ivs_tid = 0;
 			}
-			rvd_ivs_stop(st);
+			rvd_ivs_pause(st);
 		}
 		if (jpeg >= 0)
 			rvd_stream_stop(st, jpeg);
 		rvd_stream_stop(st, chn);
 
-		/* Deinit */
+		/* Deinit (IVS channel stays alive — SDK limitation) */
 		if (jpeg >= 0)
 			rvd_stream_deinit(st, jpeg);
 		rvd_stream_deinit(st, chn);
-		if (has_ivs)
-			rvd_ivs_deinit(st);
 
 		/* Reconfigure FS scaler (channel disabled, not destroyed) */
 		RSS_HAL_CALL(st->ops, fs_set_channel_attr, st->hal_ctx, st->streams[chn].fs_chn,
@@ -1325,7 +1322,7 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 
 		/* Reinit */
 		if (has_ivs)
-			rvd_ivs_init(st);
+			atomic_store(&st->ivs_active, true);
 
 		int ret = rvd_stream_init(st, chn);
 		if (ret != RSS_OK) {
@@ -1347,17 +1344,17 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 				RSS_WARN("set-resolution: jpeg init failed: %d", ret);
 		}
 
-		/* Start */
-		if (has_ivs)
-			rvd_ivs_start(st);
+		/* Start streams first, then IVS (SDK requires FS streaming) */
 		rvd_stream_start(st, chn);
 		if (jpeg >= 0 && st->streams[jpeg].ring)
 			rvd_stream_start(st, jpeg);
 		if (has_ivs) {
+			rvd_ivs_resume(st);
 			pthread_attr_t ivs_attr;
 			pthread_attr_init(&ivs_attr);
 			pthread_attr_setstacksize(&ivs_attr, 64 * 1024);
-			pthread_create(&st->ivs_tid, &ivs_attr, rvd_ivs_thread, st);
+			if (pthread_create(&st->ivs_tid, &ivs_attr, rvd_ivs_thread, st) != 0)
+				RSS_ERROR("ivs thread create failed");
 			pthread_attr_destroy(&ivs_attr);
 		}
 
@@ -1405,11 +1402,12 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 			}
 		}
 		if (has_ivs) {
+			atomic_store(&st->ivs_active, false);
 			if (st->ivs_tid) {
 				pthread_join(st->ivs_tid, NULL);
 				st->ivs_tid = 0;
 			}
-			rvd_ivs_stop(st);
+			rvd_ivs_pause(st);
 		}
 
 		/* Stop all: JPEG first, then video (reverse of start order) */
@@ -1423,8 +1421,7 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 			rvd_stream_deinit(st, jpeg_indices[j]);
 		for (int j = video_count - 1; j >= 0; j--)
 			rvd_stream_deinit(st, video_indices[j]);
-		if (has_ivs)
-			rvd_ivs_deinit(st);
+		/* IVS group stays alive (SDK limitation — can't recreate) */
 
 		/* All OSD groups destroyed. Try resizing the pool. */
 		if (pool_kb > 0) {
@@ -1434,9 +1431,8 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 			RSS_INFO("osd-restart: osd_set_pool_size returned %d", ret);
 		}
 
-		/* IVS reinit before streams (SDK requires group created before bind) */
 		if (has_ivs)
-			rvd_ivs_init(st);
+			atomic_store(&st->ivs_active, true);
 
 		/* Reinit all: video first, then JPEG */
 		bool init_ok[RVD_MAX_STREAMS] = {0};
@@ -1457,10 +1453,6 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 				init_ok[jpeg_indices[j]] = true;
 		}
 
-		/* IVS start after streams are ready */
-		if (has_ivs)
-			rvd_ivs_start(st);
-
 		/* Start all: video first, then JPEG (skip failed inits) */
 		for (int j = 0; j < video_count; j++) {
 			if (init_ok[video_indices[j]])
@@ -1471,12 +1463,14 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 				rvd_stream_start(st, jpeg_indices[j]);
 		}
 
-		/* IVS thread relaunch */
+		/* IVS start + thread relaunch (after streams — SDK requires FS streaming) */
 		if (has_ivs) {
+			rvd_ivs_resume(st);
 			pthread_attr_t ivs_attr;
 			pthread_attr_init(&ivs_attr);
 			pthread_attr_setstacksize(&ivs_attr, 64 * 1024);
-			pthread_create(&st->ivs_tid, &ivs_attr, rvd_ivs_thread, st);
+			if (pthread_create(&st->ivs_tid, &ivs_attr, rvd_ivs_thread, st) != 0)
+				RSS_ERROR("ivs thread create failed");
 			pthread_attr_destroy(&ivs_attr);
 		}
 
