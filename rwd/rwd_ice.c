@@ -369,24 +369,29 @@ int rwd_ice_process(rwd_server_t *srv, const uint8_t *buf, size_t len,
 	*colon = '\0';
 	const char *local_ufrag = username;
 
-	/* Find matching client by local ICE ufrag */
-	rwd_client_t *client = NULL;
+	/* Find matching client by local ICE ufrag.
+	 * Hold the lock through all client dereferences — consistent with
+	 * the DTLS handler and prevents UAF if threading model changes. */
+	int result = -1;
 	pthread_mutex_lock(&srv->clients_lock);
+
+	rwd_client_t *client = NULL;
 	for (int i = 0; i < RWD_MAX_CLIENTS; i++) {
 		if (srv->clients[i] && strcmp(srv->clients[i]->local_ufrag, local_ufrag) == 0) {
 			client = srv->clients[i];
 			break;
 		}
 	}
-	pthread_mutex_unlock(&srv->clients_lock);
 
 	if (!client) {
+		pthread_mutex_unlock(&srv->clients_lock);
 		RSS_DEBUG("STUN: no client with ufrag %s", local_ufrag);
 		return -1;
 	}
 
 	/* Verify MESSAGE-INTEGRITY with our local ICE password */
 	if (stun_verify_integrity(buf, STUN_HEADER_SIZE + msg_len, client->local_pwd) != 0) {
+		pthread_mutex_unlock(&srv->clients_lock);
 		RSS_WARN("STUN: MESSAGE-INTEGRITY check failed for %s", local_ufrag);
 		return -1;
 	}
@@ -402,6 +407,9 @@ int rwd_ice_process(rwd_server_t *srv, const uint8_t *buf, size_t len,
 	/* Track consent freshness (RFC 7675) */
 	client->last_stun_at = rss_timestamp_us();
 
-	/* Send binding response */
-	return stun_send_response(srv, buf, from, from_len, client->local_pwd);
+	/* Send binding response (sendto is safe under lock — non-blocking UDP) */
+	result = stun_send_response(srv, buf, from, from_len, client->local_pwd);
+
+	pthread_mutex_unlock(&srv->clients_lock);
+	return result;
 }
