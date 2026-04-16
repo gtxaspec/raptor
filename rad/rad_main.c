@@ -248,6 +248,12 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			new_sample_rate =
 				rss_config_get_int(ctx->cfg, "audio", "sample_rate", 16000);
 
+		/* Save old state for rollback */
+		const rad_codec_ops_t *old_ops = *ctx->codec_ops;
+		const char *old_codec_str = ctx->codec_str;
+		int old_codec_id = ctx->codec_id;
+		int old_sample_rate = ctx->sample_rate;
+
 		RSS_INFO("audio-restart: %s %dHz → %s %dHz", ctx->codec_str, ctx->sample_rate,
 			 target_codec, new_sample_rate);
 
@@ -303,19 +309,31 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		}
 #endif
 
-		/* 5. Init new codec */
+		/* 5. Init new codec — restore old on failure */
+		bool codec_switched = true;
 		ctx->codec_ctx->codec_id = new_codec_id;
 		if (new_ops->init(ctx->codec_ctx, ctx->cfg, new_sample_rate) != 0) {
-			RSS_ERROR("audio-restart: codec %s init failed", target_codec);
-			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "codec init failed");
+			RSS_ERROR("audio-restart: codec %s init failed, restoring %s", target_codec,
+				  old_codec_str);
+			memset(ctx->codec_ctx, 0, sizeof(*ctx->codec_ctx));
+			ctx->codec_ctx->codec_id = old_codec_id;
+			if (old_ops->init(ctx->codec_ctx, ctx->cfg, old_sample_rate) != 0)
+				RSS_FATAL("audio-restart: old codec %s restore also failed",
+					  old_codec_str);
+			new_ops = old_ops;
+			new_codec_id = old_codec_id;
+			new_sample_rate = old_sample_rate;
+			codec_switched = false;
 		}
 
-		/* 6. Create new ring */
+		/* 6. Create new ring — restore old codec on failure */
 		int ring_data_size = (new_codec_id == RAD_CODEC_L16) ? 256 * 1024 : 128 * 1024;
 		*ctx->ring = rss_ring_create("audio", 32, ring_data_size);
 		if (!*ctx->ring) {
-			RSS_ERROR("audio-restart: ring create failed");
-			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "ring create failed");
+			RSS_ERROR("audio-restart: ring create failed, retrying");
+			*ctx->ring = rss_ring_create("audio", 32, 128 * 1024);
+			if (!*ctx->ring)
+				RSS_FATAL("audio-restart: ring create failed on retry");
 		}
 		rss_ring_set_stream_info(*ctx->ring, 0x10, new_codec_id, 0, 0, new_sample_rate, 1,
 					 0, 0);
@@ -336,14 +354,18 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		}
 		*ctx->encode_buf_size = new_buf_size;
 
-		/* 8. Update state — persist config only after success */
+		/* 8. Update state — persist config only after successful switch */
 		*ctx->codec_ops = new_ops;
 		ctx->codec_id = new_codec_id;
 		ctx->codec_str = new_ops->name;
 		ctx->sample_rate = new_sample_rate;
-		rss_config_set_str(ctx->cfg, "audio", "codec", target_codec);
+		if (codec_switched)
+			rss_config_set_str(ctx->cfg, "audio", "codec", target_codec);
 
-		RSS_INFO("audio-restart: %s %dHz ready", target_codec, new_sample_rate);
+		RSS_INFO("audio-restart: %s %dHz ready", new_ops->name, new_sample_rate);
+		if (!codec_switched)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+						   "codec init failed, restored old codec");
 		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
 	}
 

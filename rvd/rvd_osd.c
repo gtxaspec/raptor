@@ -515,6 +515,8 @@ static void try_open_shm(rvd_state_t *st, int s, int r)
 		if (shm_w > 0 && shm_h > 0 && (shm_w != reg->width || shm_h != reg->height)) {
 			uint32_t new_w = (shm_w + 1) & ~1;
 			uint32_t new_h = (shm_h + 1) & ~1;
+			uint32_t old_w = reg->width;
+			uint32_t old_h = reg->height;
 			uint8_t *new_buf = calloc(1, new_w * new_h * 4);
 			if (new_buf) {
 				free(reg->local_buf);
@@ -556,8 +558,8 @@ static void try_open_shm(rvd_state_t *st, int s, int r)
 					RSS_HAL_CALL(st->ops, osd_set_region_attr, st->hal_ctx,
 						     reg->hal_handle, &attr);
 				}
-				RSS_DEBUG("osd %s: resized %ux%u → %ux%u at (%d,%d)", name,
-					  reg->width, reg->height, new_w, new_h, x, y);
+				RSS_DEBUG("osd %s: resized %ux%u → %ux%u at (%d,%d)", name, old_w,
+					  old_h, new_w, new_h, x, y);
 			}
 		}
 	}
@@ -826,6 +828,7 @@ void rvd_osd_set_privacy(rvd_state_t *st, bool enable, int stream)
 	if (!st->osd_enabled)
 		return;
 
+	pthread_mutex_lock(&st->osd_lock);
 	if (stream >= 0 && stream < st->stream_count) {
 		set_privacy_stream(st, stream, enable);
 		RSS_INFO("privacy stream %d %s", stream, enable ? "ON" : "OFF");
@@ -834,6 +837,7 @@ void rvd_osd_set_privacy(rvd_state_t *st, bool enable, int stream)
 			set_privacy_stream(st, s, enable);
 		RSS_INFO("privacy %s (all streams)", enable ? "ON" : "OFF");
 	}
+	pthread_mutex_unlock(&st->osd_lock);
 }
 
 void *rvd_osd_thread(void *arg)

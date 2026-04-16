@@ -283,11 +283,15 @@ int rvd_pipeline_init(rvd_state_t *st)
 	/* Validate primary sensor */
 	if (!multi_cfg.sensors[0].name[0]) {
 		RSS_FATAL("sensor name not in config and not in /proc/jz/sensor/name");
+		rss_hal_destroy(st->hal_ctx);
+		st->hal_ctx = NULL;
 		return RSS_ERR;
 	}
 
 	if (multi_cfg.sensors[0].i2c_addr == 0) {
 		RSS_FATAL("i2c_addr not in config and not in /proc/jz/sensor/i2c_addr");
+		rss_hal_destroy(st->hal_ctx);
+		st->hal_ctx = NULL;
 		return RSS_ERR;
 	}
 
@@ -825,10 +829,14 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 	rvd_stream_t *s = &st->streams[idx];
 	rss_config_t *cfg = st->cfg;
 	int ret;
+	/* Track which group the channel was registered with (for rollback clarity).
+	 * JPEG registers with parent video's group; non-JPEG with its own. */
+	int reg_grp = s->chn;
 
 	/* ── Encoder group + channel ── */
 	if (s->is_jpeg) {
 		int video_grp = find_video_group(st, s->fs_chn);
+		reg_grp = video_grp;
 
 		if (rss_config_get_bool(cfg, "jpeg", "bufshare", true)) {
 			ret = RSS_HAL_CALL(st->ops, enc_set_bufshare, st->hal_ctx, s->chn,
@@ -1008,6 +1016,7 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 	/* Rollback on failure */
 fail_ring:
 fail_bind:
+	(void)reg_grp;
 	if (st->osd_enabled && !s->is_jpeg) {
 		pthread_mutex_lock(&st->osd_lock);
 		rvd_osd_deinit_stream(st, idx);
@@ -1114,8 +1123,13 @@ int rvd_stream_start(rvd_state_t *st, int idx)
 	pthread_attr_t attr;
 	pthread_attr_init(&attr);
 	pthread_attr_setstacksize(&attr, 128 * 1024);
-	pthread_create(&st->enc_tids[idx], &attr, rvd_encoder_thread, &st->enc_args[idx]);
+	int ret = pthread_create(&st->enc_tids[idx], &attr, rvd_encoder_thread, &st->enc_args[idx]);
 	pthread_attr_destroy(&attr);
+	if (ret != 0) {
+		RSS_ERROR("stream%d: pthread_create failed: %d", idx, ret);
+		atomic_store(&st->stream_active[idx], false);
+		return RSS_ERR;
+	}
 
 	RSS_INFO("stream%d: %ux%u %s @ %u fps %s", idx, s->enc_cfg.width, s->enc_cfg.height,
 		 s->is_jpeg			      ? "JPEG"

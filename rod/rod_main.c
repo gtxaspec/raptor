@@ -136,27 +136,29 @@ static void font_region_dims(rod_font_t *f, int chars, int stroke, uint32_t *w, 
 static void create_shms(rod_state_t *st)
 {
 	for (int s = 0; s < st->stream_count; s++) {
-		int pad = st->settings.font_stroke > 0 ? st->settings.font_stroke * 2 : 0;
 		uint32_t w, h;
 
 		if (st->settings.time_enabled) {
-			font_region_dims(&st->fonts[s][ROD_FONT_TIME], ROD_TIME_CHARS, pad, &w, &h);
+			font_region_dims(&st->fonts[s][ROD_FONT_TIME], ROD_TIME_CHARS,
+					 st->settings.font_stroke, &w, &h);
 			create_region_shm(st, s, ROD_REGION_TIME, w, h);
 		}
 
 		if (st->settings.uptime_enabled) {
-			font_region_dims(&st->fonts[s][ROD_FONT_UPTIME], ROD_UPTIME_CHARS, pad, &w,
-					 &h);
+			font_region_dims(&st->fonts[s][ROD_FONT_UPTIME], ROD_UPTIME_CHARS,
+					 st->settings.font_stroke, &w, &h);
 			create_region_shm(st, s, ROD_REGION_UPTIME, w, h);
 		}
 
 		if (st->settings.text_enabled) {
-			font_region_dims(&st->fonts[s][ROD_FONT_TEXT], ROD_TEXT_CHARS, pad, &w, &h);
+			font_region_dims(&st->fonts[s][ROD_FONT_TEXT], ROD_TEXT_CHARS,
+					 st->settings.font_stroke, &w, &h);
 			create_region_shm(st, s, ROD_REGION_TEXT, w, h);
 		}
 
 		/* Privacy uses time's font */
-		font_region_dims(&st->fonts[s][ROD_FONT_TIME], ROD_TIME_CHARS, pad, &w, &h);
+		font_region_dims(&st->fonts[s][ROD_FONT_TIME], ROD_TIME_CHARS,
+				 st->settings.font_stroke, &w, &h);
 		create_region_shm(st, s, ROD_REGION_PRIVACY, w, h);
 
 		if (st->settings.logo_enabled) {
@@ -507,14 +509,12 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		for (int s = 0; s < st->stream_count; s++) {
 			if (enable) {
 				/* Create SHM region */
-				int pad = st->settings.font_stroke > 0
-						  ? st->settings.font_stroke * 2
-						  : 0;
 				int chars = (role == ROD_REGION_UPTIME) ? ROD_UPTIME_CHARS
 					    : (role == ROD_REGION_TEXT) ? ROD_TEXT_CHARS
 									: ROD_TIME_CHARS;
 				uint32_t w, h;
-				font_region_dims(&st->fonts[s][fi], chars, pad, &w, &h);
+				font_region_dims(&st->fonts[s][fi], chars, st->settings.font_stroke,
+						 &w, &h);
 				create_region_shm(st, s, role, w, h);
 			} else {
 				/* Destroy SHM region */
@@ -592,14 +592,14 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 					st->regions[s][r].enabled = false;
 				}
 			}
-			int pad = st->settings.font_stroke > 0 ? st->settings.font_stroke * 2 : 0;
 			uint32_t w, h;
 			for (int ri = 0; ri < 2 && font_to_region[fi][ri] >= 0; ri++) {
 				int r = font_to_region[fi][ri];
 				int chars = (r == ROD_REGION_UPTIME) ? ROD_UPTIME_CHARS
 					    : (r == ROD_REGION_TEXT) ? ROD_TEXT_CHARS
 								     : ROD_TIME_CHARS;
-				font_region_dims(&st->fonts[s][fi], chars, pad, &w, &h);
+				font_region_dims(&st->fonts[s][fi], chars, st->settings.font_stroke,
+						 &w, &h);
 				create_region_shm(st, s, r, w, h);
 			}
 		}

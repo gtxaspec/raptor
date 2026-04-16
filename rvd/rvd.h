@@ -6,10 +6,10 @@
 #define RVD_H
 
 #include <pthread.h>
-#include <stdatomic.h>
 #include <raptor_hal.h>
 #include <rss_ipc.h>
 #include <rss_common.h>
+#include <stdatomic.h>
 
 #define RVD_MAX_SENSORS	       3
 #define RVD_MAX_STREAMS	       (RVD_MAX_SENSORS * 4) /* main+sub+jpeg0+jpeg1 per sensor */
@@ -87,7 +87,7 @@ struct rvd_state {
 	/* Privacy mode (full-frame cover, per-stream) */
 	int privacy_handles[RVD_MAX_STREAMS]; /* HAL region handles, -1 if none */
 	bool privacy[RVD_MAX_STREAMS];
-	volatile bool pipeline_ready; /* set after FS enable + encoder start */
+	_Atomic bool pipeline_ready; /* set after FS enable + encoder start */
 
 #define RVD_MAX_BIND_STAGES 5 /* FS [→ IVS] [→ OSD] → ENC + headroom */
 

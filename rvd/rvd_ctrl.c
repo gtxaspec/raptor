@@ -69,11 +69,6 @@ static int fmt_hal_result(char *buf, int bufsz, int ret)
 				     "{\"status\":\"error\",\"reason\":\"failed (%d)\"}", ret);
 }
 
-static const char *stream_section(int idx)
-{
-	return (idx >= 0 && idx <= 1) ? (idx == 0 ? "stream0" : "stream1") : "stream0";
-}
-
 /* ── Encoder commands ── */
 
 static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp, int resp_size)
@@ -123,7 +118,7 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 					       st->streams[chn].chn, mode, bitrate);
 			if (ret == 0) {
 				st->streams[chn].enc_cfg.rc_mode = mode;
-				rss_config_set_str(st->cfg, stream_section(chn), "rc_mode",
+				rss_config_set_str(st->cfg, st->streams[chn].cfg_sect, "rc_mode",
 						   mode_str);
 			}
 			rss_ctrl_resp(resp, resp_size, "{\"status\":\"%s\",\"rc_mode\":\"%s\"}",
@@ -142,7 +137,8 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 					       st->streams[chn].chn, val);
 			if (ret == 0) {
 				st->streams[chn].enc_cfg.bitrate = val;
-				rss_config_set_int(st->cfg, stream_section(chn), "bitrate", val);
+				rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, "bitrate",
+						   val);
 			}
 			fmt_hal_result(resp, resp_size, ret);
 		} else {
@@ -159,7 +155,7 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 					       st->streams[chn].chn, val);
 			if (ret == 0) {
 				st->streams[chn].enc_cfg.gop_length = val;
-				rss_config_set_int(st->cfg, stream_section(chn), "gop", val);
+				rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, "gop", val);
 			}
 			fmt_hal_result(resp, resp_size, ret);
 		} else {
@@ -176,7 +172,7 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 					       st->streams[chn].chn, val, 1);
 			if (ret == 0) {
 				st->streams[chn].enc_cfg.fps_num = val;
-				rss_config_set_int(st->cfg, stream_section(chn), "fps", val);
+				rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, "fps", val);
 			}
 			fmt_hal_result(resp, resp_size, ret);
 		} else {
@@ -195,8 +191,10 @@ static int handle_encoder_cmd(const char *cmd_json, rvd_state_t *st, char *resp,
 			if (ret == 0) {
 				st->streams[chn].enc_cfg.min_qp = val;
 				st->streams[chn].enc_cfg.max_qp = val2;
-				rss_config_set_int(st->cfg, stream_section(chn), "min_qp", val);
-				rss_config_set_int(st->cfg, stream_section(chn), "max_qp", val2);
+				rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, "min_qp",
+						   val);
+				rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, "max_qp",
+						   val2);
 			}
 			fmt_hal_result(resp, resp_size, ret);
 		} else {
@@ -1242,13 +1240,16 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 			return 1;
 		}
 
-		/* Update config before restart (stream is stopped first inside) */
+		/* Save old codec, update, restart, restore on failure */
+		rss_codec_t old_codec = st->streams[chn].enc_cfg.codec;
 		st->streams[chn].enc_cfg.codec = codec;
-		rss_config_set_str(st->cfg, st->streams[chn].cfg_sect, "codec", val);
 		RSS_INFO("set-codec: channel %d → %s", chn, val);
 
-		if (do_stream_restart(st, chn, resp, resp_size) < 0)
+		if (do_stream_restart(st, chn, resp, resp_size) < 0) {
+			st->streams[chn].enc_cfg.codec = old_codec;
 			return 1;
+		}
+		rss_config_set_str(st->cfg, st->streams[chn].cfg_sect, "codec", val);
 		rss_ctrl_resp_ok(resp, resp_size);
 		return 1;
 	}
@@ -1274,6 +1275,14 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 			return 1;
 		}
 
+		/* Save old config for rollback */
+		int old_enc_w = st->streams[chn].enc_cfg.width;
+		int old_enc_h = st->streams[chn].enc_cfg.height;
+		int old_fs_w = st->streams[chn].fs_cfg.width;
+		int old_fs_h = st->streams[chn].fs_cfg.height;
+		int old_sc_w = st->streams[chn].fs_cfg.scaler.out_width;
+		int old_sc_h = st->streams[chn].fs_cfg.scaler.out_height;
+
 		/* Update encoder + framesource config */
 		st->streams[chn].enc_cfg.width = w;
 		st->streams[chn].enc_cfg.height = h;
@@ -1283,8 +1292,6 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 			st->streams[chn].fs_cfg.scaler.out_width = w;
 			st->streams[chn].fs_cfg.scaler.out_height = h;
 		}
-		rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, "width", w);
-		rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, "height", h);
 		RSS_INFO("set-resolution: channel %d → %dx%d", chn, w, h);
 
 		/* Reconfigure FS scaler while channel is disabled.
@@ -1322,7 +1329,13 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 
 		int ret = rvd_stream_init(st, chn);
 		if (ret != RSS_OK) {
-			RSS_ERROR("set-resolution: init failed: %d", ret);
+			RSS_ERROR("set-resolution: init failed: %d, restoring old config", ret);
+			st->streams[chn].enc_cfg.width = old_enc_w;
+			st->streams[chn].enc_cfg.height = old_enc_h;
+			st->streams[chn].fs_cfg.width = old_fs_w;
+			st->streams[chn].fs_cfg.height = old_fs_h;
+			st->streams[chn].fs_cfg.scaler.out_width = old_sc_w;
+			st->streams[chn].fs_cfg.scaler.out_height = old_sc_h;
 			rss_ctrl_resp_error(resp, resp_size, "init failed");
 			return 1;
 		}
@@ -1348,6 +1361,9 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 			pthread_attr_destroy(&ivs_attr);
 		}
 
+		/* Persist config only after successful restart */
+		rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, "width", w);
+		rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, "height", h);
 		RSS_INFO("set-resolution: channel %d → %dx%d complete", chn, w, h);
 		rss_ctrl_resp_ok(resp, resp_size);
 		return 1;
@@ -1380,6 +1396,22 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 				video_indices[video_count++] = i;
 		}
 
+		/* IVS: stop before streams (IVS is bound to sub-stream) */
+		bool has_ivs = false;
+		for (int j = 0; j < video_count; j++) {
+			if (st->streams[video_indices[j]].fs_chn == 1 && st->ivs_active) {
+				has_ivs = true;
+				break;
+			}
+		}
+		if (has_ivs) {
+			if (st->ivs_tid) {
+				pthread_join(st->ivs_tid, NULL);
+				st->ivs_tid = 0;
+			}
+			rvd_ivs_stop(st);
+		}
+
 		/* Stop all: JPEG first, then video (reverse of start order) */
 		for (int j = jpeg_count_local - 1; j >= 0; j--)
 			rvd_stream_stop(st, jpeg_indices[j]);
@@ -1391,6 +1423,8 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 			rvd_stream_deinit(st, jpeg_indices[j]);
 		for (int j = video_count - 1; j >= 0; j--)
 			rvd_stream_deinit(st, video_indices[j]);
+		if (has_ivs)
+			rvd_ivs_deinit(st);
 
 		/* All OSD groups destroyed. Try resizing the pool. */
 		if (pool_kb > 0) {
@@ -1400,25 +1434,51 @@ static int handle_pipeline_cmd(const char *cmd_json, rvd_state_t *st, char *resp
 			RSS_INFO("osd-restart: osd_set_pool_size returned %d", ret);
 		}
 
+		/* IVS reinit before streams (SDK requires group created before bind) */
+		if (has_ivs)
+			rvd_ivs_init(st);
+
 		/* Reinit all: video first, then JPEG */
+		bool init_ok[RVD_MAX_STREAMS] = {0};
 		for (int j = 0; j < video_count; j++) {
 			int ret = rvd_stream_init(st, video_indices[j]);
 			if (ret != RSS_OK)
 				RSS_ERROR("osd-restart: stream%d init failed: %d", video_indices[j],
 					  ret);
+			else
+				init_ok[video_indices[j]] = true;
 		}
 		for (int j = 0; j < jpeg_count_local; j++) {
 			int ret = rvd_stream_init(st, jpeg_indices[j]);
 			if (ret != RSS_OK)
 				RSS_WARN("osd-restart: jpeg stream%d init failed: %d",
 					 jpeg_indices[j], ret);
+			else
+				init_ok[jpeg_indices[j]] = true;
 		}
 
-		/* Start all: video first, then JPEG */
-		for (int j = 0; j < video_count; j++)
-			rvd_stream_start(st, video_indices[j]);
-		for (int j = 0; j < jpeg_count_local; j++)
-			rvd_stream_start(st, jpeg_indices[j]);
+		/* IVS start after streams are ready */
+		if (has_ivs)
+			rvd_ivs_start(st);
+
+		/* Start all: video first, then JPEG (skip failed inits) */
+		for (int j = 0; j < video_count; j++) {
+			if (init_ok[video_indices[j]])
+				rvd_stream_start(st, video_indices[j]);
+		}
+		for (int j = 0; j < jpeg_count_local; j++) {
+			if (init_ok[jpeg_indices[j]])
+				rvd_stream_start(st, jpeg_indices[j]);
+		}
+
+		/* IVS thread relaunch */
+		if (has_ivs) {
+			pthread_attr_t ivs_attr;
+			pthread_attr_init(&ivs_attr);
+			pthread_attr_setstacksize(&ivs_attr, 64 * 1024);
+			pthread_create(&st->ivs_tid, &ivs_attr, rvd_ivs_thread, st);
+			pthread_attr_destroy(&ivs_attr);
+		}
 
 		RSS_INFO("osd-restart: complete");
 		rss_ctrl_resp_ok(resp, resp_size);
