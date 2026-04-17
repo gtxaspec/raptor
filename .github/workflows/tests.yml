@@ -1,0 +1,45 @@
+name: Tests
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-asan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake git curl \
+            autoconf automake libtool meson ninja-build python3
+
+      - name: Build all daemons with ASan+UBSan
+        run: ./build-asan.sh
+
+      - name: Unit tests (under ASan)
+        run: |
+          cd tests
+          make SAN=address clean
+          make SAN=address test
+
+  build-tsan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake git curl \
+            autoconf automake libtool meson ninja-build python3
+
+      - name: Build all daemons with TSan
+        run: ./build-asan.sh tsan
+
+      - name: Unit tests (under TSan)
+        run: |
+          cd tests
+          make SAN=thread clean
+          make SAN=thread test

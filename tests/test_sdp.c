@@ -143,8 +143,9 @@ TEST sdp_garbage(void)
 
 TEST sdp_no_crlf(void)
 {
-	/* SDP with plain newlines instead of CRLF — parser uses strstr("\r\n")
-	 * so this should fail gracefully (treat as one long line) */
+	/* SDP with plain \n line endings. The parser accepts both \r\n and
+	 * bare \n (see sdp_next_line in rwd_sdp.c), so this should parse
+	 * successfully — same fields extracted as a CRLF variant. */
 	const char *sdp =
 		"v=0\n"
 		"a=ice-ufrag:abcd\n"
@@ -153,8 +154,8 @@ TEST sdp_no_crlf(void)
 		"m=video 9 UDP/TLS/RTP/SAVPF 96\n"
 		"a=rtpmap:96 H264/90000\n";
 	rwd_sdp_offer_t offer;
-	/* Should fail — parser requires \r\n line endings */
-	ASSERT(rwd_sdp_parse_offer(sdp, &offer) != 0);
+	ASSERT(rwd_sdp_parse_offer(sdp, &offer) == 0);
+	ASSERT(offer.has_video);
 	PASS();
 }
 
