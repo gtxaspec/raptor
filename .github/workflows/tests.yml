@@ -19,6 +19,14 @@ jobs:
       - name: Build all daemons with ASan+UBSan
         run: ./build-asan.sh
 
+      - name: Symlink sibling repos for tests/Makefile
+        run: |
+          # tests/Makefile references ../../raptor-common and
+          # ../../raptor-ipc. build-asan.sh already cloned them under
+          # asan-out/deps/; symlink into the expected sibling path.
+          ln -sfn "$PWD/asan-out/deps/raptor-common" ../raptor-common
+          ln -sfn "$PWD/asan-out/deps/raptor-ipc"    ../raptor-ipc
+
       - name: Unit tests (under ASan)
         run: |
           cd tests
@@ -39,6 +47,11 @@ jobs:
 
       - name: Build all daemons with TSan
         run: ./build-asan.sh tsan
+
+      - name: Symlink sibling repos for tests/Makefile
+        run: |
+          ln -sfn "$PWD/asan-out/deps/raptor-common" ../raptor-common
+          ln -sfn "$PWD/asan-out/deps/raptor-ipc"    ../raptor-ipc
 
       - name: Unit tests (under TSan)
         run: |
