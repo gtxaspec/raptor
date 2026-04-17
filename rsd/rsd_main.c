@@ -42,9 +42,10 @@ int main(int argc, char **argv)
 	srand(time(NULL));
 
 	rss_daemon_ctx_t dctx;
-	int ret = rss_daemon_init(&dctx, "rsd", argc, argv, ""
+	int ret = rss_daemon_init(&dctx, "rsd", argc, argv,
+				  ""
 #ifdef COMPY_HAS_TLS
-		" tls"
+				  " tls"
 #endif
 	);
 	if (ret != 0)
@@ -106,7 +107,34 @@ int main(int argc, char **argv)
 		Compy_TlsConfig tls_cfg = {.cert_path = tls_cert, .key_path = tls_key};
 		srv.tls_ctx = Compy_TlsContext_new(tls_cfg);
 		if (srv.tls_ctx) {
-			RSS_INFO("RTSPS enabled (cert=%s, port=%d)", tls_cert, srv.port);
+			/*
+			 * Optional ciphersuite preference. Useful on slow SoCs
+			 * where the per-record cost of AES-GCM via a kernel
+			 * crypto engine outweighs software ChaCha20 — see
+			 * Compy_TlsCipherPreference docs in <compy/tls.h>.
+			 *
+			 * Values: "default" (backend default, typically GCM),
+			 *         "chacha20" (force TLS 1.3 CHACHA20-POLY1305).
+			 */
+			const char *pref = rss_config_get_str(dctx.cfg, "rtsp",
+							      "tls_cipher_preference", "default");
+			Compy_TlsCipherPreference pref_val = COMPY_TLS_CIPHER_DEFAULT;
+			if (strcmp(pref, "chacha20") == 0) {
+				pref_val = COMPY_TLS_CIPHER_CHACHA20_ONLY;
+			} else if (strcmp(pref, "default") != 0) {
+				RSS_WARN("unknown tls_cipher_preference '%s', "
+					 "using backend default",
+					 pref);
+			}
+			if (pref_val != COMPY_TLS_CIPHER_DEFAULT) {
+				if (Compy_TlsContext_set_cipher_preference(srv.tls_ctx, pref_val) !=
+				    0) {
+					RSS_WARN("TLS backend does not support "
+						 "cipher preference");
+				}
+			}
+			RSS_INFO("RTSPS enabled (cert=%s, port=%d, ciphers=%s)", tls_cert, srv.port,
+				 pref);
 		} else {
 			RSS_WARN("TLS enabled but cert/key not usable (cert=%s, key=%s), "
 				 "falling back to plain RTSP on port 554",
