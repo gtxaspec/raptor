@@ -91,6 +91,7 @@ find_or_clone raptor-ipc    https://github.com/gtxaspec/raptor-ipc.git    IPC_DI
 find_or_clone raptor-hal    https://github.com/gtxaspec/raptor-hal.git    HAL_DIR
 find_or_clone compy         https://github.com/gtxaspec/compy.git         COMPY_DIR
 find_or_clone libschrift    https://github.com/tomolt/libschrift.git      SCHRIFT_DIR
+find_or_clone faac          https://github.com/knik0/faac.git             FAAC_DIR
 
 # Build mbedTLS from source with DTLS-SRTP enabled
 MBEDTLS_VER="3.6.5"
@@ -273,12 +274,44 @@ $CC -o "$OUT/rvd" "$OUT"/rvd_main.o "$OUT"/rvd_pipeline.o "$OUT"/rvd_frame_loop.
 echo "  -> rvd"
 
 echo "=== RAD (mock HAL) ==="
+# Build libfaac from the clone — not packaged in Debian/Ubuntu due to
+# licensing. Needs a minimal config.h (upstream's Makefile/autotools
+# build chain is bypassed; mirrors thingino-firmware's faac.mk).
+FAAC_BUILD="$OUT/faac-build"
+if [ ! -f "$FAAC_BUILD/libfaac.a" ]; then
+    echo "=== libfaac (from clone) ==="
+    mkdir -p "$FAAC_BUILD"
+    printf '%s\n' \
+        '#define PACKAGE "faac"' \
+        '#define PACKAGE_VERSION "1.40.0"' \
+        '#define HAVE_GETOPT_H 1' \
+        '#define HAVE_STDINT_H 1' \
+        '#define HAVE_SYS_TIME_H 1' \
+        '#define HAVE_SYS_TYPES_H 1' \
+        '#define HAVE_STRCASECMP 1' \
+        '#define FAAC_PRECISION_SINGLE 1' \
+        '#define MAX_CHANNELS 2' \
+        > "$FAAC_BUILD/config.h"
+    FAAC_SRCS="bitstream.c blockswitch.c channels.c cpu_compute.c fft.c \
+               filtbank.c frame.c huff2.c huffdata.c quantize.c stereo.c \
+               tns.c util.c"
+    for f in $FAAC_SRCS; do
+        $CC $CFLAGS -DHAVE_CONFIG_H -I"$FAAC_BUILD" \
+            -I"$FAAC_DIR" -I"$FAAC_DIR/include" -fPIC \
+            -c "$FAAC_DIR/libfaac/$f" -o "$FAAC_BUILD/${f%.c}.o"
+    done
+    ar rcs "$FAAC_BUILD/libfaac.a" "$FAAC_BUILD"/*.o
+    echo "  -> libfaac.a"
+fi
+FAAC_CFLAGS="-I$FAAC_DIR/include"
+FAAC_LIBS="$FAAC_BUILD/libfaac.a"
+
 for f in rad_main.c rad_codec.c rad_codec_g711.c rad_codec_l16.c rad_codec_aac.c rad_codec_opus.c; do
-  $CC $CFLAGS $HAL_CFLAGS -c "$RAPTOR_DIR/rad/$f" -o "$OUT/${f%.c}.o"
+  $CC $CFLAGS $HAL_CFLAGS $FAAC_CFLAGS -c "$RAPTOR_DIR/rad/$f" -o "$OUT/${f%.c}.o"
 done
 $CC -o "$OUT/rad" "$OUT"/rad_main.o "$OUT"/rad_codec.o "$OUT"/rad_codec_g711.o \
     "$OUT"/rad_codec_l16.o "$OUT"/rad_codec_aac.o "$OUT"/rad_codec_opus.o \
-    $LIBS_HAL $LDFLAGS
+    $LIBS_HAL $FAAC_LIBS -lopus $LDFLAGS
 echo "  -> rad"
 
 # ── Test helpers ──
