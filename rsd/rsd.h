@@ -49,10 +49,11 @@ typedef struct {
 } rsd_stream_t;
 
 /* Per-client send queue — decouples ring reader from network I/O.
- * Video entries point directly into the ring context's frame_buf
- * (zero-copy). An atomic barrier on the ring context prevents the
- * reader from overwriting frame_buf while send threads are using it.
- * Audio entries hold a malloc'd copy (small, <4KB). */
+ * Every entry holds a malloc'd copy of the frame payload so the
+ * reader can overwrite frame_buf with the next ring frame without
+ * waiting for any send thread to finish. The memcpy cost is small
+ * next to the send-latency hit we'd otherwise take from a barrier
+ * wait, especially on slow single-core SoCs. */
 #define RSD_SENDQ_SLOTS	  8
 #define RSD_FRAME_VIDEO	  0
 #define RSD_FRAME_AUDIO	  1
@@ -60,10 +61,7 @@ typedef struct {
 #define RSD_SENDQ_DROPPED 1
 
 typedef struct {
-	_Atomic int *barrier;	      /* non-NULL: video, decrement when done */
-	pthread_mutex_t *barrier_mtx; /* for condvar signal on last release */
-	pthread_cond_t *barrier_cv;   /* signaled when barrier hits 0 */
-	uint8_t *data;		      /* frame_buf (video) or malloc'd (audio) */
+	uint8_t *data; /* malloc'd copy, freed on release */
 	uint32_t len;
 	uint32_t rtp_ts;
 	uint8_t type;	/* RSD_FRAME_VIDEO or RSD_FRAME_AUDIO */
@@ -135,9 +133,6 @@ typedef struct {
 	uint64_t read_seq;
 	uint8_t *frame_buf;
 	uint32_t frame_buf_size;
-	_Atomic int frame_readers; /* barrier: send threads using frame_buf */
-	pthread_mutex_t frame_mtx; /* protects frame_done condvar */
-	pthread_cond_t frame_done; /* signaled when frame_readers hits 0 */
 	int idx;
 	const char *ring_name; /* for reconnection after RVD restart */
 

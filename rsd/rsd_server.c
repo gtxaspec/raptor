@@ -364,13 +364,6 @@ int rsd_server_init(rsd_server_t *srv)
 		return -1;
 	}
 
-	/* Initialize barrier primitives for all ring contexts unconditionally.
-	 * Rings may be opened later via reconnect and need valid mutex/condvar. */
-	for (int s = 0; s < RSD_STREAM_COUNT; s++) {
-		pthread_mutex_init(&srv->video[s].frame_mtx, NULL);
-		pthread_cond_init(&srv->video[s].frame_done, NULL);
-	}
-
 	/* Log and allocate frame buffers for available video rings */
 	for (int s = 0; s < RSD_STREAM_COUNT; s++) {
 		if (!srv->video[s].ring)
@@ -502,7 +495,8 @@ static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		int n = snprintf(resp_buf, resp_buf_size,
 				 "{\"status\":\"ok\",\"count\":%d,\"clients\":[",
 				 srv->client_count);
-		if (n >= resp_buf_size) n = resp_buf_size - 1;
+		if (n >= resp_buf_size)
+			n = resp_buf_size - 1;
 		pthread_mutex_lock(&srv->clients_lock);
 		for (int i = 0; i < srv->client_count && n < resp_buf_size - 4; i++) {
 			rsd_client_t *c = srv->clients[i];
@@ -521,16 +515,19 @@ static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				      c->video.playing ? "true" : "false",
 				      c->audio.playing ? "true" : "false",
 				      c->backchannel ? "true" : "false");
-			if (n >= resp_buf_size) break;
+			if (n >= resp_buf_size)
+				break;
 			if (rr)
 				n += snprintf(resp_buf + n, resp_buf_size - n,
 					      ",\"loss_pct\":%.1f,\"jitter\":%u,"
 					      "\"cum_lost\":%u",
 					      rr->fraction_lost * 100.0 / 256.0,
 					      rr->interarrival_jitter, rr->cumulative_lost);
-			if (n >= resp_buf_size) break;
+			if (n >= resp_buf_size)
+				break;
 			n += snprintf(resp_buf + n, resp_buf_size - n, "}");
-			if (n >= resp_buf_size) break;
+			if (n >= resp_buf_size)
+				break;
 		}
 		pthread_mutex_unlock(&srv->clients_lock);
 		if (n >= resp_buf_size - 2)
@@ -666,8 +663,6 @@ void rsd_server_deinit(rsd_server_t *srv)
 		if (srv->video[s].ring)
 			rss_ring_close(srv->video[s].ring);
 		free(srv->video[s].frame_buf);
-		pthread_mutex_destroy(&srv->video[s].frame_mtx);
-		pthread_cond_destroy(&srv->video[s].frame_done);
 	}
 	if (srv->ring_audio)
 		rss_ring_close(srv->ring_audio);

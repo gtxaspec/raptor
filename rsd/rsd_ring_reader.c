@@ -21,6 +21,27 @@ static void rsd_send_audio_frame(rsd_client_t *c, uint32_t codec, const uint8_t 
 				 uint32_t rtp_ts);
 
 /*
+ * Minimum interval between IDR requests from the reader's lag-recovery
+ * paths (skip-to-latest, RSS_EOVERFLOW, sendq-full). Without this cap the
+ * three call sites cascade on slow SoCs: each IDR is ~10x a P-frame, so
+ * requesting one slows the reader, which triggers another skip, which
+ * requests another IDR — observed as 1:9 IDR:SLICE on T20 (expected with
+ * GOP=60 is 1:60). One second is enough: the encoder's own GOP will
+ * produce its next IDR in due course, and the client already has the
+ * current keyframe.
+ */
+#define RSD_IDR_REQ_MIN_INTERVAL_US 1000000
+
+static inline void rsd_maybe_request_idr(rss_ring_t *ring, int64_t *last_req_us)
+{
+	int64_t now_us = rss_timestamp_us();
+	if (now_us - *last_req_us > RSD_IDR_REQ_MIN_INTERVAL_US) {
+		rss_ring_request_idr(ring);
+		*last_req_us = now_us;
+	}
+}
+
+/*
  * Extract SPS/PPS from Annex B keyframe data and cache in ring context.
  * Called once when the first keyframe is seen (or when SPS/PPS change).
  */
@@ -152,19 +173,7 @@ int rsd_sendq_init(rsd_sendq_t *q)
 
 static void sendq_release_entry(rsd_sendq_entry_t *e)
 {
-	if (e->barrier) {
-		/* Video: release frame_buf hold. If we're the last reader,
-		 * signal the condvar so the ring reader wakes immediately
-		 * instead of spinning in usleep. */
-		if (atomic_fetch_sub(e->barrier, 1) == 1) {
-			pthread_mutex_lock(e->barrier_mtx);
-			pthread_cond_signal(e->barrier_cv);
-			pthread_mutex_unlock(e->barrier_mtx);
-		}
-	} else {
-		free(e->data); /* audio: free malloc'd copy */
-	}
-	e->barrier = NULL;
+	free(e->data);
 	e->data = NULL;
 }
 
@@ -191,21 +200,24 @@ static void sendq_flush_locked(rsd_sendq_t *q)
 }
 
 /*
- * Push a video frame (zero-copy — points directly into frame_buf).
- * Caller must have already incremented *barrier for this client.
+ * Push a video frame onto the client's sendq. The data is copied so
+ * the reader can immediately overwrite frame_buf with the next ring
+ * frame — no barrier wait on the send thread. The old zero-copy
+ * barrier capped throughput at 1 / send_latency on single-core SoCs
+ * and was the root of the residual IDR clustering we saw even after
+ * the crypto-path optimizations.
  */
-static int rsd_sendq_push_video(rsd_sendq_t *q, uint8_t *data, uint32_t len, uint32_t rtp_ts,
-				_Atomic int *barrier, pthread_mutex_t *mtx, pthread_cond_t *cv)
+static int rsd_sendq_push_video(rsd_sendq_t *q, const uint8_t *data, uint32_t len, uint32_t rtp_ts)
 {
+	uint8_t *copy = malloc(len);
+	if (!copy)
+		return -1;
+	memcpy(copy, data, len);
+
 	pthread_mutex_lock(&q->lock);
 	if (q->shutdown) {
 		pthread_mutex_unlock(&q->lock);
-		/* Release barrier and signal in case reader is waiting */
-		if (atomic_fetch_sub(barrier, 1) == 1) {
-			pthread_mutex_lock(mtx);
-			pthread_cond_signal(cv);
-			pthread_mutex_unlock(mtx);
-		}
+		free(copy);
 		return -1;
 	}
 
@@ -216,10 +228,7 @@ static int rsd_sendq_push_video(rsd_sendq_t *q, uint8_t *data, uint32_t len, uin
 	}
 
 	rsd_sendq_entry_t *slot = &q->entries[q->head];
-	slot->barrier = barrier;
-	slot->barrier_mtx = mtx;
-	slot->barrier_cv = cv;
-	slot->data = data;
+	slot->data = copy;
 	slot->len = len;
 	slot->rtp_ts = rtp_ts;
 	slot->type = RSD_FRAME_VIDEO;
@@ -233,9 +242,7 @@ static int rsd_sendq_push_video(rsd_sendq_t *q, uint8_t *data, uint32_t len, uin
 	return dropped ? RSD_SENDQ_DROPPED : RSD_SENDQ_OK;
 }
 
-/* Push an audio frame (small malloc copy).
- * Audio uses a burst loop (up to 16 frames) that's incompatible with
- * the shared-buffer barrier — each frame needs its own independent copy. */
+/* Push an audio frame onto the client's sendq (small malloc copy). */
 static int rsd_sendq_push_audio(rsd_sendq_t *q, const uint8_t *data, uint32_t len, uint32_t rtp_ts,
 				uint32_t codec)
 {
@@ -256,9 +263,6 @@ static int rsd_sendq_push_audio(rsd_sendq_t *q, const uint8_t *data, uint32_t le
 	memcpy(copy, data, len);
 
 	rsd_sendq_entry_t *slot = &q->entries[q->head];
-	slot->barrier = NULL;
-	slot->barrier_mtx = NULL;
-	slot->barrier_cv = NULL;
 	slot->data = copy;
 	slot->len = len;
 	slot->rtp_ts = rtp_ts;
@@ -290,7 +294,6 @@ void *rsd_client_send_thread(void *arg)
 		}
 
 		rsd_sendq_entry_t entry = q->entries[q->tail];
-		q->entries[q->tail].barrier = NULL;
 		q->entries[q->tail].data = NULL;
 		q->tail = (q->tail + 1) % RSD_SENDQ_SLOTS;
 		q->count--;
@@ -330,6 +333,9 @@ void *rsd_video_reader_thread(void *arg)
 	uint64_t last_write_seq = 0;
 	int idle_count = 0;
 
+	/* Per-thread state for rsd_maybe_request_idr (see top of file). */
+	int64_t last_idr_req_us = 0;
+
 	RSS_DEBUG("video reader[%d] started", stream_idx);
 	while (*srv->running) {
 		if (!rctx->ring) {
@@ -341,15 +347,8 @@ void *rsd_video_reader_thread(void *arg)
 			}
 			const rss_ring_header_t *h = rss_ring_get_header(rctx->ring);
 			if (rctx->frame_buf_size < h->data_size) {
-				/* Wait for send threads to release old frame_buf
-				 * before freeing it (prevents use-after-free). */
-				if (atomic_load(&rctx->frame_readers) > 0) {
-					pthread_mutex_lock(&rctx->frame_mtx);
-					while (atomic_load(&rctx->frame_readers) > 0)
-						pthread_cond_wait(&rctx->frame_done,
-								  &rctx->frame_mtx);
-					pthread_mutex_unlock(&rctx->frame_mtx);
-				}
+				/* Copy-on-push sendq means no send thread references
+				 * frame_buf, so it's safe to free+realloc here. */
 				uint8_t *new_buf = malloc(h->data_size);
 				if (!new_buf) {
 					rss_ring_close(rctx->ring);
@@ -432,31 +431,23 @@ void *rsd_video_reader_thread(void *arg)
 			continue;
 
 		/* Skip stale frames: if consumer is more than 1 frame behind,
-		 * jump to latest to minimize latency. Request IDR since we
-		 * skipped reference frames. */
+		 * jump to latest to minimize latency. IDR request is rate-
+		 * limited — polling lag triggers this on nearly every
+		 * iteration and unlimited requests cascade into all-IDR output. */
 		const rss_ring_header_t *hdr = rss_ring_get_header(rctx->ring);
 		uint64_t write_seq = hdr->write_seq;
 		if (write_seq > read_seq + 1 && read_seq > 0) {
 			read_seq = write_seq - 1;
-			rss_ring_request_idr(rctx->ring);
+			rsd_maybe_request_idr(rctx->ring, &last_idr_req_us);
 		}
 
-		/* Barrier: wait for all send threads to finish with frame_buf
-		 * before overwriting it. At 25fps the send threads have ~40ms
-		 * to complete — this almost never waits. Last consumer signals
-		 * the condvar for zero-latency wakeup (no usleep spin). */
-		if (atomic_load(&rctx->frame_readers) > 0) {
-			pthread_mutex_lock(&rctx->frame_mtx);
-			while (atomic_load(&rctx->frame_readers) > 0)
-				pthread_cond_wait(&rctx->frame_done, &rctx->frame_mtx);
-			pthread_mutex_unlock(&rctx->frame_mtx);
-		}
-
+		/* No barrier wait — copy-on-push sendq owns the copies; the
+		 * reader is free to overwrite frame_buf immediately. */
 		ret = rss_ring_read(rctx->ring, &read_seq, rctx->frame_buf, rctx->frame_buf_size,
 				    &length, &meta);
 		if (ret == RSS_EOVERFLOW) {
 			rctx->read_seq = read_seq;
-			rss_ring_request_idr(rctx->ring);
+			rsd_maybe_request_idr(rctx->ring, &last_idr_req_us);
 			continue;
 		}
 		if (ret != 0)
@@ -502,14 +493,12 @@ void *rsd_video_reader_thread(void *arg)
 			}
 
 			uint32_t client_ts = rtp_ts - c->video_ts_offset;
-			atomic_fetch_add(&rctx->frame_readers, 1);
-			int qret = rsd_sendq_push_video(&c->sendq, rctx->frame_buf, length,
-							client_ts, &rctx->frame_readers,
-							&rctx->frame_mtx, &rctx->frame_done);
+			int qret =
+				rsd_sendq_push_video(&c->sendq, rctx->frame_buf, length, client_ts);
 			if (qret == RSD_SENDQ_DROPPED) {
 				c->waiting_keyframe = true;
 				c->audio_ts_base_set = false;
-				rss_ring_request_idr(rctx->ring);
+				rsd_maybe_request_idr(rctx->ring, &last_idr_req_us);
 				RSS_DEBUG("client[%d] sendq full, waiting for IDR", stream_idx);
 			}
 		}
