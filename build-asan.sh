@@ -46,7 +46,7 @@ if [ "$1" = "clean" ]; then
     rm -f "$OUT"/rmd "$OUT"/rmr "$OUT"/rwc "$OUT"/rwd
     rm -f "$OUT"/raptorctl "$OUT"/ringdump "$OUT"/rac "$OUT"/create_rings
     rm -rf "$OUT"/mbedtls-build "$OUT"/mbedtls-install "$OUT"/compy-build
-    echo "Cleaned asan-out/ (deps kept, use distclean to remove)"
+    echo "Cleaned asan-out/ (deps kept — use distclean to remove)"
     exit 0
 fi
 
@@ -90,6 +90,7 @@ find_or_clone raptor-common https://github.com/gtxaspec/raptor-common.git COMMON
 find_or_clone raptor-ipc    https://github.com/gtxaspec/raptor-ipc.git    IPC_DIR
 find_or_clone raptor-hal    https://github.com/gtxaspec/raptor-hal.git    HAL_DIR
 find_or_clone compy         https://github.com/gtxaspec/compy.git         COMPY_DIR
+find_or_clone libschrift    https://github.com/tomolt/libschrift.git      SCHRIFT_DIR
 
 # Build mbedTLS from source with DTLS-SRTP enabled
 MBEDTLS_VER="3.6.5"
@@ -218,9 +219,25 @@ $CC -o "$OUT/rmd" "$OUT/rmd_main.o" "$OUT/rmd_actions.o" $LIBS $LDFLAGS
 echo "  -> rmd"
 
 echo "=== ROD ==="
-$CC $CFLAGS -c "$RAPTOR_DIR/rod/rod_main.c" -o "$OUT/rod_main.o"
-$CC $CFLAGS -c "$RAPTOR_DIR/rod/rod_render.c" -o "$OUT/rod_render.o"
-$CC -o "$OUT/rod" "$OUT/rod_main.o" "$OUT/rod_render.o" $LIBS -lschrift -lm $LDFLAGS
+# Compile libschrift's single .c directly into rod — avoids depending on
+# a system-wide install (CI runs on fresh ubuntu-latest with nothing in
+# /usr/lib). Sanitizer flags apply to schrift.c too, which is actually
+# desirable: it exercises the font path under ASan/TSan.
+#
+# libschrift carries a static reallocarray() polyfill for older libcs;
+# glibc 2.26+ exports reallocarray too, which creates a static-vs-
+# non-static redeclaration conflict. Patch the polyfill's forward
+# decl and definition to use a different name so both can coexist.
+# Idempotent: skips the sed if already renamed.
+if ! grep -q 'schrift_reallocarray' "$SCHRIFT_DIR/schrift.c"; then
+    sed -i 's|\breallocarray\b|schrift_reallocarray|g' "$SCHRIFT_DIR/schrift.c"
+fi
+if [ ! -f "$OUT/schrift.o" ]; then
+    $CC $CFLAGS -c "$SCHRIFT_DIR/schrift.c" -o "$OUT/schrift.o"
+fi
+$CC $CFLAGS -I"$SCHRIFT_DIR" -c "$RAPTOR_DIR/rod/rod_main.c" -o "$OUT/rod_main.o"
+$CC $CFLAGS -I"$SCHRIFT_DIR" -c "$RAPTOR_DIR/rod/rod_render.c" -o "$OUT/rod_render.o"
+$CC -o "$OUT/rod" "$OUT/rod_main.o" "$OUT/rod_render.o" "$OUT/schrift.o" $LIBS -lm $LDFLAGS
 echo "  -> rod"
 
 echo "=== RMR ==="
