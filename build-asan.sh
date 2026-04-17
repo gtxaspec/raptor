@@ -234,7 +234,9 @@ if ! grep -q 'schrift_reallocarray' "$SCHRIFT_DIR/schrift.c"; then
     sed -i 's|\breallocarray\b|schrift_reallocarray|g' "$SCHRIFT_DIR/schrift.c"
 fi
 if [ ! -f "$OUT/schrift.o" ]; then
-    $CC $CFLAGS -c "$SCHRIFT_DIR/schrift.c" -o "$OUT/schrift.o"
+    # -w silences upstream warnings in libschrift (calloc-transposed-args,
+    # _POSIX_C_SOURCE redefine). Our own code still builds with -Wall.
+    $CC $CFLAGS -w -c "$SCHRIFT_DIR/schrift.c" -o "$OUT/schrift.o"
 fi
 $CC $CFLAGS -I"$SCHRIFT_DIR" -c "$RAPTOR_DIR/rod/rod_main.c" -o "$OUT/rod_main.o"
 $CC $CFLAGS -I"$SCHRIFT_DIR" -c "$RAPTOR_DIR/rod/rod_render.c" -o "$OUT/rod_render.o"
@@ -295,8 +297,10 @@ if [ ! -f "$FAAC_BUILD/libfaac.a" ]; then
     FAAC_SRCS="bitstream.c blockswitch.c channels.c cpu_compute.c fft.c \
                filtbank.c frame.c huff2.c huffdata.c quantize.c stereo.c \
                tns.c util.c"
+    # -w silences upstream libfaac warnings (sign-compare, unused-parameter,
+    # missing-field-initializers). Not our code to fix.
     for f in $FAAC_SRCS; do
-        $CC $CFLAGS -DHAVE_CONFIG_H -I"$FAAC_BUILD" \
+        $CC $CFLAGS -w -DHAVE_CONFIG_H -I"$FAAC_BUILD" \
             -I"$FAAC_DIR" -I"$FAAC_DIR/include" -fPIC \
             -c "$FAAC_DIR/libfaac/$f" -o "$FAAC_BUILD/${f%.c}.o"
     done

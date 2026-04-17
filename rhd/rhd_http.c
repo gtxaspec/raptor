@@ -62,6 +62,32 @@ void http_send(rhd_client_t *c, const char *status, const char *content_type, co
 }
 
 /* Plain fd version for pre-TLS error responses (e.g., max clients rejection) */
+/*
+ * Send @len bytes from @buf to @fd, looping over partial writes and
+ * retrying on EINTR. The only errors worth flagging here are ECONNRESET /
+ * EPIPE (client dropped) and ENOSPC (disk-backed socket, shouldn't
+ * happen) — both are non-fatal from the daemon's perspective. Log at
+ * DEBUG level so operators can see repeated client resets under load
+ * without spamming the log on the common happy path.
+ */
+static void http_write_all(int fd, const void *buf, size_t len, const char *what)
+{
+	const char *p = buf;
+	size_t remaining = len;
+	while (remaining > 0) {
+		ssize_t n = write(fd, p, remaining);
+		if (n < 0) {
+			if (errno == EINTR)
+				continue;
+			RSS_DEBUG("http_send_fd: %s write failed after %zu/%zu bytes: %s",
+				  what, len - remaining, len, strerror(errno));
+			return;
+		}
+		p += n;
+		remaining -= (size_t)n;
+	}
+}
+
 void http_send_fd(int fd, const char *status, const char *content_type, const void *body,
 		  int body_len)
 {
@@ -73,9 +99,16 @@ void http_send_fd(int fd, const char *status, const char *content_type, const vo
 			    "Connection: close\r\n"
 			    "\r\n",
 			    status, content_type, body_len);
-	write(fd, header, hlen);
+	if (hlen < 0 || hlen >= (int)sizeof(header)) {
+		/* snprintf truncation — status/content_type came from a
+		 * caller with an oversized string. Bail rather than send a
+		 * partial header that the client would reject anyway. */
+		RSS_DEBUG("http_send_fd: header truncated (len=%d)", hlen);
+		return;
+	}
+	http_write_all(fd, header, (size_t)hlen, "header");
 	if (body && body_len > 0)
-		write(fd, body, body_len);
+		http_write_all(fd, body, (size_t)body_len, "body");
 }
 
 /* Queue a large response for non-blocking send via epoll.
