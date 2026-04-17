@@ -102,7 +102,7 @@ EOF
     log "generated default config: $CONF"
 fi
 
-# Kill any running daemons
+# Kill any running daemons and wait for them to exit
 log "stopping running daemons..."
 for d in rvd rad rod rsd rhd rmr rmd ric rwd; do
     pid=$(pidof $d 2>/dev/null)
@@ -111,7 +111,20 @@ for d in rvd rad rod rsd rhd rmr rmd ric rwd; do
         kill $pid 2>/dev/null
     fi
 done
-sleep 1
+# Wait for all to exit (HAL teardown can take several seconds)
+for i in 1 2 3 4 5 6 7 8 9 10; do
+    alive=0
+    for d in rvd rad rod rsd rhd rmr rmd ric rwd; do
+        pidof $d >/dev/null 2>&1 && alive=1 && break
+    done
+    [ "$alive" = 0 ] && break
+    sleep 1
+done
+# Force-kill anything still alive
+for d in rvd rad rod rsd rhd rmr rmd ric rwd; do
+    pid=$(pidof $d 2>/dev/null)
+    [ -n "$pid" ] && kill -9 $pid 2>/dev/null && log "  force-killed $d"
+done
 
 # Clean stale SHM
 rm -f /dev/shm/rss_ring_* /dev/shm/rss_osd_* 2>/dev/null
