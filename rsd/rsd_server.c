@@ -476,76 +476,66 @@ static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "missing cmd");
 
 	if (strcmp(cmd, "config-show") == 0) {
-		return rss_ctrl_resp(resp_buf, resp_buf_size,
-				     "{\"status\":\"ok\",\"config\":{"
-				     "\"port\":%d,\"clients\":%d,"
-				     "\"max_clients\":%d,"
-				     "\"tls\":%s,"
-				     "\"config_path\":\"%s\"}}",
-				     srv->port, srv->client_count, srv->max_clients,
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddStringToObject(r, "status", "ok");
+		cJSON *cfg = cJSON_AddObjectToObject(r, "config");
+		cJSON_AddNumberToObject(cfg, "port", srv->port);
+		cJSON_AddNumberToObject(cfg, "clients", srv->client_count);
+		cJSON_AddNumberToObject(cfg, "max_clients", srv->max_clients);
 #ifdef COMPY_HAS_TLS
-				     srv->tls_ctx ? "true" : "false",
+		cJSON_AddBoolToObject(cfg, "tls", srv->tls_ctx != NULL);
 #else
-				     "false",
+		cJSON_AddBoolToObject(cfg, "tls", false);
 #endif
-				     srv->config_path);
+		cJSON_AddStringToObject(cfg, "config_path", srv->config_path);
+		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 	}
 
 	if (strcmp(cmd, "clients") == 0) {
-		int n = snprintf(resp_buf, resp_buf_size,
-				 "{\"status\":\"ok\",\"count\":%d,\"clients\":[",
-				 srv->client_count);
-		if (n >= resp_buf_size)
-			n = resp_buf_size - 1;
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddStringToObject(r, "status", "ok");
+		cJSON_AddNumberToObject(r, "count", srv->client_count);
+		cJSON *arr = cJSON_AddArrayToObject(r, "clients");
 		pthread_mutex_lock(&srv->clients_lock);
-		for (int i = 0; i < srv->client_count && n < resp_buf_size - 4; i++) {
+		for (int i = 0; i < srv->client_count; i++) {
 			rsd_client_t *c = srv->clients[i];
 			char addr[INET6_ADDRSTRLEN];
 			client_addr_str(&c->addr, addr, sizeof(addr));
+			cJSON *item = cJSON_CreateObject();
+			cJSON_AddStringToObject(item, "ip", addr);
+			cJSON_AddNumberToObject(item, "port", client_port(&c->addr));
+			cJSON_AddNumberToObject(item, "stream", c->stream_idx);
+			cJSON_AddStringToObject(item, "transport", c->is_tcp ? "tcp" : "udp");
+			cJSON_AddBoolToObject(item, "video", c->video.playing);
+			cJSON_AddBoolToObject(item, "audio", c->audio.playing);
+			cJSON_AddBoolToObject(item, "backchannel", c->backchannel != NULL);
 			/* Include RTCP RR stats if available */
 			const Compy_RtcpReportBlock *rr = NULL;
 			if (c->video.rtcp)
 				rr = Compy_Rtcp_get_last_rr(c->video.rtcp);
-			n += snprintf(resp_buf + n, resp_buf_size - n,
-				      "%s{\"ip\":\"%s\",\"port\":%u,"
-				      "\"stream\":%d,\"transport\":\"%s\","
-				      "\"video\":%s,\"audio\":%s,\"backchannel\":%s",
-				      i > 0 ? "," : "", addr, client_port(&c->addr), c->stream_idx,
-				      c->is_tcp ? "tcp" : "udp",
-				      c->video.playing ? "true" : "false",
-				      c->audio.playing ? "true" : "false",
-				      c->backchannel ? "true" : "false");
-			if (n >= resp_buf_size)
-				break;
-			if (rr)
-				n += snprintf(resp_buf + n, resp_buf_size - n,
-					      ",\"loss_pct\":%.1f,\"jitter\":%u,"
-					      "\"cum_lost\":%u",
-					      rr->fraction_lost * 100.0 / 256.0,
-					      rr->interarrival_jitter, rr->cumulative_lost);
-			if (n >= resp_buf_size)
-				break;
-			n += snprintf(resp_buf + n, resp_buf_size - n, "}");
-			if (n >= resp_buf_size)
-				break;
+			if (rr) {
+				cJSON_AddNumberToObject(item, "loss_pct",
+							rr->fraction_lost * 100.0 / 256.0);
+				cJSON_AddNumberToObject(item, "jitter", rr->interarrival_jitter);
+				cJSON_AddNumberToObject(item, "cum_lost", rr->cumulative_lost);
+			}
+			cJSON_AddItemToArray(arr, item);
 		}
 		pthread_mutex_unlock(&srv->clients_lock);
-		if (n >= resp_buf_size - 2)
-			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "response truncated");
-		n += snprintf(resp_buf + n, resp_buf_size - n, "]}");
-		return n;
+		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 	}
 
 	/* Default: status */
-	return rss_ctrl_resp(resp_buf, resp_buf_size,
-			     "{\"status\":\"ok\",\"clients\":%d,\"port\":%d,\"tls\":%s}",
-			     srv->client_count, srv->port,
+	cJSON *r = cJSON_CreateObject();
+	cJSON_AddStringToObject(r, "status", "ok");
+	cJSON_AddNumberToObject(r, "clients", srv->client_count);
+	cJSON_AddNumberToObject(r, "port", srv->port);
 #ifdef COMPY_HAS_TLS
-			     srv->tls_ctx ? "true" : "false"
+	cJSON_AddBoolToObject(r, "tls", srv->tls_ctx != NULL);
 #else
-			     "false"
+	cJSON_AddBoolToObject(r, "tls", false);
 #endif
-	);
+	return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 }
 
 void rsd_server_run(rsd_server_t *srv)

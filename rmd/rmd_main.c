@@ -35,15 +35,25 @@ static void rmd_apply_ivs_config(rmd_ctx_t *ctx)
 	char cmd[128], resp[128];
 	int ok = 0;
 
-	snprintf(cmd, sizeof(cmd), "{\"cmd\":\"ivs-set-sensitivity\",\"value\":%d}",
-		 ctx->settings.sensitivity);
+	{
+		cJSON *j = cJSON_CreateObject();
+		cJSON_AddStringToObject(j, "cmd", "ivs-set-sensitivity");
+		cJSON_AddNumberToObject(j, "value", ctx->settings.sensitivity);
+		cJSON_PrintPreallocated(j, cmd, sizeof(cmd), 0);
+		cJSON_Delete(j);
+	}
 	if (rss_ctrl_send_command("/var/run/rss/rvd.sock", cmd, resp, sizeof(resp), 1000) >= 0)
 		ok++;
 	else
 		RSS_WARN("failed to set RVD sensitivity");
 
-	snprintf(cmd, sizeof(cmd), "{\"cmd\":\"ivs-set-skip-frames\",\"value\":%d}",
-		 ctx->settings.skip_frames);
+	{
+		cJSON *j = cJSON_CreateObject();
+		cJSON_AddStringToObject(j, "cmd", "ivs-set-skip-frames");
+		cJSON_AddNumberToObject(j, "value", ctx->settings.skip_frames);
+		cJSON_PrintPreallocated(j, cmd, sizeof(cmd), 0);
+		cJSON_Delete(j);
+	}
 	if (rss_ctrl_send_command("/var/run/rss/rvd.sock", cmd, resp, sizeof(resp), 1000) >= 0)
 		ok++;
 	else
@@ -68,10 +78,13 @@ static bool rmd_poll_motion(rmd_ctx_t *ctx)
 	rss_json_get_int(resp, "persons", &persons);
 	ctx->person_count = persons > 0 ? persons : 0;
 
-	/* RVD sends "motion":true/false (JSON boolean). strstr is correct
-	 * here — rss_json_get_int/get_str don't handle JSON booleans.
-	 * Trusted peer (RVD), not external input. */
-	return strstr(resp, "\"motion\":true") != NULL;
+	bool motion = false;
+	cJSON *root = cJSON_Parse(resp);
+	if (root) {
+		motion = cJSON_IsTrue(cJSON_GetObjectItem(root, "motion"));
+		cJSON_Delete(root);
+	}
+	return motion;
 }
 
 static void rmd_update_state(rmd_ctx_t *ctx, bool motion)
@@ -146,12 +159,19 @@ static int rmd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		if (rss_json_get_int(cmd_json, "value", &val) == 0 && val >= 0) {
 			ctx->settings.sensitivity = val;
 			char cmd[128], resp[128];
-			snprintf(cmd, sizeof(cmd), "{\"cmd\":\"ivs-set-sensitivity\",\"value\":%d}",
-				 val);
+			{
+				cJSON *j = cJSON_CreateObject();
+				cJSON_AddStringToObject(j, "cmd", "ivs-set-sensitivity");
+				cJSON_AddNumberToObject(j, "value", val);
+				cJSON_PrintPreallocated(j, cmd, sizeof(cmd), 0);
+				cJSON_Delete(j);
+			}
 			rss_ctrl_send_command("/var/run/rss/rvd.sock", cmd, resp, sizeof(resp),
 					      1000);
-			return rss_ctrl_resp(resp_buf, resp_buf_size,
-					     "{\"status\":\"ok\",\"sensitivity\":%d}", val);
+			cJSON *r = cJSON_CreateObject();
+			cJSON_AddStringToObject(r, "status", "ok");
+			cJSON_AddNumberToObject(r, "sensitivity", val);
+			return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 		} else {
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size,
 						   "missing or invalid value");
@@ -163,12 +183,19 @@ static int rmd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		if (rss_json_get_int(cmd_json, "value", &val) == 0 && val >= 0) {
 			ctx->settings.skip_frames = val;
 			char cmd[128], resp[128];
-			snprintf(cmd, sizeof(cmd), "{\"cmd\":\"ivs-set-skip-frames\",\"value\":%d}",
-				 val);
+			{
+				cJSON *j = cJSON_CreateObject();
+				cJSON_AddStringToObject(j, "cmd", "ivs-set-skip-frames");
+				cJSON_AddNumberToObject(j, "value", val);
+				cJSON_PrintPreallocated(j, cmd, sizeof(cmd), 0);
+				cJSON_Delete(j);
+			}
 			rss_ctrl_send_command("/var/run/rss/rvd.sock", cmd, resp, sizeof(resp),
 					      1000);
-			return rss_ctrl_resp(resp_buf, resp_buf_size,
-					     "{\"status\":\"ok\",\"skip_frames\":%d}", val);
+			cJSON *r = cJSON_CreateObject();
+			cJSON_AddStringToObject(r, "status", "ok");
+			cJSON_AddNumberToObject(r, "skip_frames", val);
+			return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 		} else {
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size,
 						   "missing or invalid value");
@@ -176,12 +203,14 @@ static int rmd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 	/* Default: status */
-	return rss_ctrl_resp(resp_buf, resp_buf_size,
-			     "{\"status\":\"ok\",\"state\":\"%s\",\"recording\":%s,\"sensitivity\":"
-			     "%d,\"skip_frames\":%d,\"persons\":%d}",
-			     state_names[ctx->state], ctx->recording_active ? "true" : "false",
-			     ctx->settings.sensitivity, ctx->settings.skip_frames,
-			     ctx->person_count);
+	cJSON *r = cJSON_CreateObject();
+	cJSON_AddStringToObject(r, "status", "ok");
+	cJSON_AddStringToObject(r, "state", state_names[ctx->state]);
+	cJSON_AddBoolToObject(r, "recording", ctx->recording_active);
+	cJSON_AddNumberToObject(r, "sensitivity", ctx->settings.sensitivity);
+	cJSON_AddNumberToObject(r, "skip_frames", ctx->settings.skip_frames);
+	cJSON_AddNumberToObject(r, "persons", ctx->person_count);
+	return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 }
 
 int main(int argc, char **argv)
@@ -210,9 +239,14 @@ int main(int argc, char **argv)
 		char resp[128];
 		if (rss_ctrl_send_command("/var/run/rss/rvd.sock", "{\"cmd\":\"ivs-status\"}", resp,
 					  sizeof(resp), 500) >= 0) {
-			if (strstr(resp, "\"active\":true")) {
-				RSS_DEBUG("RVD IVS active");
-				break;
+			cJSON *root = cJSON_Parse(resp);
+			if (root) {
+				bool active = cJSON_IsTrue(cJSON_GetObjectItem(root, "active"));
+				cJSON_Delete(root);
+				if (active) {
+					RSS_DEBUG("RVD IVS active");
+					break;
+				}
 			}
 		}
 		usleep(500000);

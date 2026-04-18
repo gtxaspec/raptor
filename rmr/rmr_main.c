@@ -359,7 +359,7 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			atomic_store(&st->recording, true);
 		if (st->mode == RMR_MODE_BOTH)
 			atomic_store(&st->clip_recording, true);
-		return snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
+		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
 	}
 
 	if (strcmp(cmd, "stop") == 0) {
@@ -367,21 +367,22 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			atomic_store(&st->recording, false);
 		if (st->mode == RMR_MODE_BOTH)
 			atomic_store(&st->clip_recording, false);
-		return snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
+		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
 	}
 
 	if (strcmp(cmd, "status") == 0) {
-		return snprintf(resp_buf, resp_buf_size,
-			 "{\"recording\":%s,\"clip\":%s,\"mode\":%d,"
-			 "\"file\":\"%s\",\"frames\":%" PRIu64 ",\"dropped\":%" PRIu64
-			 ",\"bytes\":%" PRIu64 "}",
-			 atomic_load(&st->recording) ? "true" : "false",
-			 atomic_load(&st->clip_recording) ? "true" : "false", st->mode,
-			 st->segment_path, st->frames_written, st->frames_dropped,
-			 st->bytes_written);
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddBoolToObject(r, "recording", atomic_load(&st->recording));
+		cJSON_AddBoolToObject(r, "clip", atomic_load(&st->clip_recording));
+		cJSON_AddNumberToObject(r, "mode", st->mode);
+		cJSON_AddStringToObject(r, "file", st->segment_path);
+		cJSON_AddNumberToObject(r, "frames", (double)st->frames_written);
+		cJSON_AddNumberToObject(r, "dropped", (double)st->frames_dropped);
+		cJSON_AddNumberToObject(r, "bytes", (double)st->bytes_written);
+		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 	}
 
-	return snprintf(resp_buf, resp_buf_size, "{\"status\":\"ok\"}");
+	return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
 }
 
 /* ── Main loop ── */

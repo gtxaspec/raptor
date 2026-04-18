@@ -216,17 +216,11 @@ void ric_set_mode(ric_state_t *st, ric_mode_t mode)
  * Poll ISP exposure and decide day/night transition.
  * Uses total_gain with hysteresis debounce.
  */
-/* Parse integer from simple JSON: "key":123 */
-static int json_parse_uint(const char *json, const char *key, uint32_t *out)
+/* Extract unsigned integer from parsed cJSON object */
+static uint32_t json_get_uint(const cJSON *root, const char *key)
 {
-	char pattern[64];
-	snprintf(pattern, sizeof(pattern), "\"%s\":", key);
-	const char *p = strstr(json, pattern);
-	if (!p)
-		return -1;
-	p += strlen(pattern);
-	*out = (uint32_t)strtoul(p, NULL, 10);
-	return 0;
+	const cJSON *item = cJSON_GetObjectItem(root, key);
+	return cJSON_IsNumber(item) ? (uint32_t)item->valueint : 0;
 }
 
 void ric_poll_exposure(ric_state_t *st)
@@ -242,8 +236,12 @@ void ric_poll_exposure(ric_state_t *st)
 		return;
 
 	uint32_t total_gain = 0, ae_luma = 0;
-	json_parse_uint(resp, "total_gain", &total_gain);
-	json_parse_uint(resp, "ae_luma", &ae_luma);
+	cJSON *parsed = cJSON_Parse(resp);
+	if (!parsed)
+		return;
+	total_gain = json_get_uint(parsed, "total_gain");
+	ae_luma = json_get_uint(parsed, "ae_luma");
+	cJSON_Delete(parsed);
 
 	/* Cooldown after mode switch: wait for IR LEDs / ISP to stabilize.
 	 * After cooldown in night mode, sample total_gain as baseline for

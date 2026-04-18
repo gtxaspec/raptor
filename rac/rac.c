@@ -79,8 +79,8 @@ int main(int argc, char **argv)
 	}
 
 	if (strcmp(argv[1], "-v") == 0 || strcmp(argv[1], "--version") == 0) {
-		fprintf(stderr, "Raptor Streaming System — rac [%s] built %s\n",
-			rss_build_hash, rss_build_time);
+		fprintf(stderr, "Raptor Streaming System — rac [%s] built %s\n", rss_build_hash,
+			rss_build_time);
 		return 0;
 	}
 
@@ -147,7 +147,11 @@ int main(int argc, char **argv)
 		}
 		char json[128];
 		long val = strtol(argv[2], NULL, 10);
-		snprintf(json, sizeof(json), "{\"cmd\":\"ao-set-volume\",\"value\":%ld}", val);
+		cJSON *j = cJSON_CreateObject();
+		cJSON_AddStringToObject(j, "cmd", "ao-set-volume");
+		cJSON_AddNumberToObject(j, "value", val);
+		cJSON_PrintPreallocated(j, json, sizeof(json), 0);
+		cJSON_Delete(j);
 		return cmd_ctrl(json);
 
 	} else if (strcmp(cmd, "ao-gain") == 0) {
@@ -157,7 +161,11 @@ int main(int argc, char **argv)
 		}
 		char json[128];
 		long val = strtol(argv[2], NULL, 10);
-		snprintf(json, sizeof(json), "{\"cmd\":\"ao-set-gain\",\"value\":%ld}", val);
+		cJSON *j = cJSON_CreateObject();
+		cJSON_AddStringToObject(j, "cmd", "ao-set-gain");
+		cJSON_AddNumberToObject(j, "value", val);
+		cJSON_PrintPreallocated(j, json, sizeof(json), 0);
+		cJSON_Delete(j);
 		return cmd_ctrl(json);
 
 	} else if (strcmp(cmd, "-h") == 0 || strcmp(cmd, "help") == 0) {

@@ -65,14 +65,17 @@ static int fmt_hal_result(char *buf, int bufsz, int ret)
 		return rss_ctrl_resp_ok(buf, bufsz);
 	else if (ret == RSS_ERR_NOTSUP)
 		return rss_ctrl_resp_error(buf, bufsz, "not supported on this SoC");
-	else
-		return rss_ctrl_resp(buf, bufsz,
-				     "{\"status\":\"error\",\"reason\":\"failed (%d)\"}", ret);
+	else {
+		char reason[32];
+		snprintf(reason, sizeof(reason), "failed (%d)", ret);
+		return rss_ctrl_resp_error(buf, bufsz, reason);
+	}
 }
 
 /* ── Encoder commands ── */
 
-static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st, char *resp, int resp_size)
+static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st, char *resp,
+			      int resp_size)
 {
 	int chn, val, val2;
 
@@ -121,12 +124,13 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 				rss_config_set_str(st->cfg, st->streams[chn].cfg_sect, "rc_mode",
 						   mode_str);
 			}
-			rss_ctrl_resp(resp, resp_size, "{\"status\":\"%s\",\"rc_mode\":\"%s\"}",
-				      ret == 0 ? "ok" : "error", mode_str);
+			cJSON *r = cJSON_CreateObject();
+			cJSON_AddStringToObject(r, "status", ret == 0 ? "ok" : "error");
+			cJSON_AddStringToObject(r, "rc_mode", mode_str);
+			return rss_ctrl_resp_json(resp, resp_size, r);
 		} else {
-			rss_ctrl_resp_error(resp, resp_size, "need channel and mode");
+			return rss_ctrl_resp_error(resp, resp_size, "need channel and mode");
 		}
-		return (int)strlen(resp);
 	}
 
 	if (strcmp(cmd, "set-bitrate") == 0) {
@@ -140,11 +144,9 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 				rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, "bitrate",
 						   val);
 			}
-			fmt_hal_result(resp, resp_size, ret);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "need channel and value");
+			return fmt_hal_result(resp, resp_size, ret);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "need channel and value");
 	}
 
 	if (strcmp(cmd, "set-gop") == 0) {
@@ -157,11 +159,9 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 				st->streams[chn].enc_cfg.gop_length = val;
 				rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, "gop", val);
 			}
-			fmt_hal_result(resp, resp_size, ret);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "need channel and value");
+			return fmt_hal_result(resp, resp_size, ret);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "need channel and value");
 	}
 
 	if (strcmp(cmd, "set-fps") == 0) {
@@ -174,11 +174,9 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 				st->streams[chn].enc_cfg.fps_num = val;
 				rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, "fps", val);
 			}
-			fmt_hal_result(resp, resp_size, ret);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "need channel and value");
+			return fmt_hal_result(resp, resp_size, ret);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "need channel and value");
 	}
 
 	if (strcmp(cmd, "set-qp-bounds") == 0) {
@@ -196,11 +194,9 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 				rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, "max_qp",
 						   val2);
 			}
-			fmt_hal_result(resp, resp_size, ret);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "need channel, min, max");
+			return fmt_hal_result(resp, resp_size, ret);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "need channel, min, max");
 	}
 
 	if (strcmp(cmd, "get-bitrate") == 0) {
@@ -209,13 +205,14 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 			uint32_t avg = 0;
 			RSS_HAL_CALL(st->ops, enc_get_avg_bitrate, st->hal_ctx,
 				     st->streams[chn].chn, &avg);
-			rss_ctrl_resp(resp, resp_size,
-				      "{\"status\":\"ok\",\"bitrate\":%u,\"avg_bitrate\":%u}",
-				      st->streams[chn].enc_cfg.bitrate, avg);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "need channel");
+			cJSON *r = cJSON_CreateObject();
+			cJSON_AddStringToObject(r, "status", "ok");
+			cJSON_AddNumberToObject(r, "bitrate",
+						(double)st->streams[chn].enc_cfg.bitrate);
+			cJSON_AddNumberToObject(r, "avg_bitrate", (double)avg);
+			return rss_ctrl_resp_json(resp, resp_size, r);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "need channel");
 	}
 
 	if (strcmp(cmd, "get-fps") == 0) {
@@ -224,13 +221,13 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 			uint32_t num = 0, den = 0;
 			RSS_HAL_CALL(st->ops, enc_get_fps, st->hal_ctx, st->streams[chn].chn, &num,
 				     &den);
-			rss_ctrl_resp(resp, resp_size,
-				      "{\"status\":\"ok\",\"fps_num\":%u,\"fps_den\":%u}", num,
-				      den);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "need channel");
+			cJSON *r = cJSON_CreateObject();
+			cJSON_AddStringToObject(r, "status", "ok");
+			cJSON_AddNumberToObject(r, "fps_num", (double)num);
+			cJSON_AddNumberToObject(r, "fps_den", (double)den);
+			return rss_ctrl_resp_json(resp, resp_size, r);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "need channel");
 	}
 
 	if (strcmp(cmd, "get-gop") == 0) {
@@ -239,23 +236,26 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 			uint32_t gop = 0;
 			RSS_HAL_CALL(st->ops, enc_get_gop_attr, st->hal_ctx, st->streams[chn].chn,
 				     &gop);
-			rss_ctrl_resp(resp, resp_size, "{\"status\":\"ok\",\"gop\":%u}", gop);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "need channel");
+			cJSON *r = cJSON_CreateObject();
+			cJSON_AddStringToObject(r, "status", "ok");
+			cJSON_AddNumberToObject(r, "gop", (double)gop);
+			return rss_ctrl_resp_json(resp, resp_size, r);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "need channel");
 	}
 
 	if (strcmp(cmd, "get-qp-bounds") == 0) {
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
 		    chn < st->stream_count) {
-			rss_ctrl_resp(
-				resp, resp_size, "{\"status\":\"ok\",\"min_qp\":%d,\"max_qp\":%d}",
-				st->streams[chn].enc_cfg.min_qp, st->streams[chn].enc_cfg.max_qp);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "need channel");
+			cJSON *r = cJSON_CreateObject();
+			cJSON_AddStringToObject(r, "status", "ok");
+			cJSON_AddNumberToObject(r, "min_qp",
+						(double)st->streams[chn].enc_cfg.min_qp);
+			cJSON_AddNumberToObject(r, "max_qp",
+						(double)st->streams[chn].enc_cfg.max_qp);
+			return rss_ctrl_resp_json(resp, resp_size, r);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "need channel");
 	}
 
 	if (strcmp(cmd, "get-rc-mode") == 0) {
@@ -268,13 +268,13 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 				(mode >= 0 && mode < (int)(sizeof(rc_names) / sizeof(rc_names[0])))
 					? rc_names[mode]
 					: "unknown";
-			rss_ctrl_resp(resp, resp_size,
-				      "{\"status\":\"ok\",\"rc_mode\":\"%s\",\"rc_mode_id\":%d}",
-				      name, mode);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "need channel");
+			cJSON *r = cJSON_CreateObject();
+			cJSON_AddStringToObject(r, "status", "ok");
+			cJSON_AddStringToObject(r, "rc_mode", name);
+			cJSON_AddNumberToObject(r, "rc_mode_id", (double)mode);
+			return rss_ctrl_resp_json(resp, resp_size, r);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "need channel");
 	}
 
 	return 0; /* not an encoder command */
@@ -282,8 +282,8 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 
 /* ── Advanced encoder commands ── */
 
-static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st, char *resp,
-				       int resp_size)
+static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st,
+				       char *resp, int resp_size)
 {
 	int chn, val, val2;
 	const rss_hal_caps_t *caps = st->ops->get_caps ? st->ops->get_caps(st->hal_ctx) : NULL;
@@ -296,11 +296,9 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		    chn < st->stream_count) {                                                      \
 			int ret =                                                                  \
 				RSS_HAL_CALL(st->ops, fn, st->hal_ctx, st->streams[chn].chn, val); \
-			fmt_hal_result(resp, resp_size, ret);                                      \
-		} else {                                                                           \
-			rss_ctrl_resp_error(resp, resp_size, "need channel and value");            \
+			return fmt_hal_result(resp, resp_size, ret);                               \
 		}                                                                                  \
-		return (int)strlen(resp);                                                          \
+		return rss_ctrl_resp_error(resp, resp_size, "need channel and value");             \
 	}
 
 /* Simple set: channel + bool value */
@@ -311,11 +309,9 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		    chn < st->stream_count) {                                                      \
 			int ret = RSS_HAL_CALL(st->ops, fn, st->hal_ctx, st->streams[chn].chn,     \
 					       (bool)val);                                         \
-			fmt_hal_result(resp, resp_size, ret);                                      \
-		} else {                                                                           \
-			rss_ctrl_resp_error(resp, resp_size, "need channel and value");            \
+			return fmt_hal_result(resp, resp_size, ret);                               \
 		}                                                                                  \
-		return (int)strlen(resp);                                                          \
+		return rss_ctrl_resp_error(resp, resp_size, "need channel and value");             \
 	}
 
 /* Simple get: channel → HAL call returning uint32_t */
@@ -326,15 +322,15 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 			uint32_t out = 0;                                                          \
 			int ret = RSS_HAL_CALL(st->ops, fn, st->hal_ctx, st->streams[chn].chn,     \
 					       &out);                                              \
-			if (ret == 0)                                                              \
-				rss_ctrl_resp(resp, resp_size,                                     \
-					      "{\"status\":\"ok\",\"" field "\":%u}", out);        \
-			else                                                                       \
-				fmt_hal_result(resp, resp_size, ret);                              \
-		} else {                                                                           \
-			rss_ctrl_resp_error(resp, resp_size, "need channel");                      \
+			if (ret == 0) {                                                            \
+				cJSON *r = cJSON_CreateObject();                                   \
+				cJSON_AddStringToObject(r, "status", "ok");                        \
+				cJSON_AddNumberToObject(r, field, (double)out);                    \
+				return rss_ctrl_resp_json(resp, resp_size, r);                     \
+			}                                                                          \
+			return fmt_hal_result(resp, resp_size, ret);                               \
 		}                                                                                  \
-		return (int)strlen(resp);                                                          \
+		return rss_ctrl_resp_error(resp, resp_size, "need channel");                       \
 	}
 
 /* Simple get: channel → HAL call returning int */
@@ -345,15 +341,15 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 			int out = 0;                                                               \
 			int ret = RSS_HAL_CALL(st->ops, fn, st->hal_ctx, st->streams[chn].chn,     \
 					       &out);                                              \
-			if (ret == 0)                                                              \
-				rss_ctrl_resp(resp, resp_size,                                     \
-					      "{\"status\":\"ok\",\"" field "\":%d}", out);        \
-			else                                                                       \
-				fmt_hal_result(resp, resp_size, ret);                              \
-		} else {                                                                           \
-			rss_ctrl_resp_error(resp, resp_size, "need channel");                      \
+			if (ret == 0) {                                                            \
+				cJSON *r = cJSON_CreateObject();                                   \
+				cJSON_AddStringToObject(r, "status", "ok");                        \
+				cJSON_AddNumberToObject(r, field, (double)out);                    \
+				return rss_ctrl_resp_json(resp, resp_size, r);                     \
+			}                                                                          \
+			return fmt_hal_result(resp, resp_size, ret);                               \
 		}                                                                                  \
-		return (int)strlen(resp);                                                          \
+		return rss_ctrl_resp_error(resp, resp_size, "need channel");                       \
 	}
 
 /* Simple get: channel → HAL call returning bool */
@@ -364,16 +360,15 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 			bool out = false;                                                          \
 			int ret = RSS_HAL_CALL(st->ops, fn, st->hal_ctx, st->streams[chn].chn,     \
 					       &out);                                              \
-			if (ret == 0)                                                              \
-				rss_ctrl_resp(resp, resp_size,                                     \
-					      "{\"status\":\"ok\",\"" field "\":%s}",              \
-					      out ? "true" : "false");                             \
-			else                                                                       \
-				fmt_hal_result(resp, resp_size, ret);                              \
-		} else {                                                                           \
-			rss_ctrl_resp_error(resp, resp_size, "need channel");                      \
+			if (ret == 0) {                                                            \
+				cJSON *r = cJSON_CreateObject();                                   \
+				cJSON_AddStringToObject(r, "status", "ok");                        \
+				cJSON_AddBoolToObject(r, field, out);                              \
+				return rss_ctrl_resp_json(resp, resp_size, r);                     \
+			}                                                                          \
+			return fmt_hal_result(resp, resp_size, ret);                               \
 		}                                                                                  \
-		return (int)strlen(resp);                                                          \
+		return rss_ctrl_resp_error(resp, resp_size, "need channel");                       \
 	}
 
 	/* ── Simple int/bool set commands ── */
@@ -400,15 +395,15 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 			rss_gop_mode_t mode = RSS_GOP_DEFAULT;
 			int ret = RSS_HAL_CALL(st->ops, enc_get_gop_mode, st->hal_ctx,
 					       st->streams[chn].chn, &mode);
-			if (ret == 0)
-				rss_ctrl_resp(resp, resp_size,
-					      "{\"status\":\"ok\",\"gop_mode\":%d}", (int)mode);
-			else
-				fmt_hal_result(resp, resp_size, ret);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "need channel");
+			if (ret == 0) {
+				cJSON *r = cJSON_CreateObject();
+				cJSON_AddStringToObject(r, "status", "ok");
+				cJSON_AddNumberToObject(r, "gop_mode", (double)(int)mode);
+				return rss_ctrl_resp_json(resp, resp_size, r);
+			}
+			return fmt_hal_result(resp, resp_size, ret);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "need channel");
 	}
 	ENC_GET_U32("get-rc-options", enc_get_rc_options, "rc_options")
 	ENC_GET_U32("get-max-same-scene", enc_get_max_same_scene_cnt, "max_same_scene")
@@ -435,12 +430,10 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		    chn < st->stream_count) {
 			int ret = RSS_HAL_CALL(st->ops, enc_set_qp_bounds_per_frame, st->hal_ctx,
 					       st->streams[chn].chn, min_i, max_i, min_p, max_p);
-			fmt_hal_result(resp, resp_size, ret);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size,
-					    "need channel, min_i, max_i, min_p, max_p");
+			return fmt_hal_result(resp, resp_size, ret);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size,
+					   "need channel, min_i, max_i, min_p, max_p");
 	}
 
 	/* ── Max picture size ── */
@@ -451,11 +444,9 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		    chn < st->stream_count) {
 			int ret = RSS_HAL_CALL(st->ops, enc_set_max_pic_size, st->hal_ctx,
 					       st->streams[chn].chn, (uint32_t)val, (uint32_t)val2);
-			fmt_hal_result(resp, resp_size, ret);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "need channel, i_kbits, p_kbits");
+			return fmt_hal_result(resp, resp_size, ret);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "need channel, i_kbits, p_kbits");
 	}
 
 	/* ── H.264 transform ── */
@@ -466,11 +457,9 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 			rss_enc_h264_trans_t cfg = {.chroma_qp_index_offset = val};
 			int ret = RSS_HAL_CALL(st->ops, enc_set_h264_trans, st->hal_ctx,
 					       st->streams[chn].chn, &cfg);
-			fmt_hal_result(resp, resp_size, ret);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "need channel and value");
+			return fmt_hal_result(resp, resp_size, ret);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "need channel and value");
 	}
 
 	if (strcmp(cmd, "get-h264-trans") == 0) {
@@ -479,16 +468,16 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 			rss_enc_h264_trans_t cfg = {0};
 			int ret = RSS_HAL_CALL(st->ops, enc_get_h264_trans, st->hal_ctx,
 					       st->streams[chn].chn, &cfg);
-			if (ret == 0)
-				rss_ctrl_resp(resp, resp_size,
-					      "{\"status\":\"ok\",\"chroma_qp_offset\":%d}",
-					      cfg.chroma_qp_index_offset);
-			else
-				fmt_hal_result(resp, resp_size, ret);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "need channel");
+			if (ret == 0) {
+				cJSON *r = cJSON_CreateObject();
+				cJSON_AddStringToObject(r, "status", "ok");
+				cJSON_AddNumberToObject(r, "chroma_qp_offset",
+							(double)cfg.chroma_qp_index_offset);
+				return rss_ctrl_resp_json(resp, resp_size, r);
+			}
+			return fmt_hal_result(resp, resp_size, ret);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "need channel");
 	}
 
 	/* ── H.265 transform ── */
@@ -502,11 +491,9 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 						    .chroma_cb_qp_offset = cb_off};
 			int ret = RSS_HAL_CALL(st->ops, enc_set_h265_trans, st->hal_ctx,
 					       st->streams[chn].chn, &cfg);
-			fmt_hal_result(resp, resp_size, ret);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "need channel, cr_offset, cb_offset");
+			return fmt_hal_result(resp, resp_size, ret);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "need channel, cr_offset, cb_offset");
 	}
 
 	if (strcmp(cmd, "get-h265-trans") == 0) {
@@ -515,17 +502,18 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 			rss_enc_h265_trans_t cfg = {0};
 			int ret = RSS_HAL_CALL(st->ops, enc_get_h265_trans, st->hal_ctx,
 					       st->streams[chn].chn, &cfg);
-			if (ret == 0)
-				rss_ctrl_resp(resp, resp_size,
-					      "{\"status\":\"ok\",\"cr_offset\":%d,"
-					      "\"cb_offset\":%d}",
-					      cfg.chroma_cr_qp_offset, cfg.chroma_cb_qp_offset);
-			else
-				fmt_hal_result(resp, resp_size, ret);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "need channel");
+			if (ret == 0) {
+				cJSON *r = cJSON_CreateObject();
+				cJSON_AddStringToObject(r, "status", "ok");
+				cJSON_AddNumberToObject(r, "cr_offset",
+							(double)cfg.chroma_cr_qp_offset);
+				cJSON_AddNumberToObject(r, "cb_offset",
+							(double)cfg.chroma_cb_qp_offset);
+				return rss_ctrl_resp_json(resp, resp_size, r);
+			}
+			return fmt_hal_result(resp, resp_size, ret);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "need channel");
 	}
 
 	/* ── ROI ── */
@@ -549,12 +537,10 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 					     .h = h};
 			int ret = RSS_HAL_CALL(st->ops, enc_set_roi, st->hal_ctx,
 					       st->streams[chn].chn, &roi);
-			fmt_hal_result(resp, resp_size, ret);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size,
-					    "need channel, index, enable, x, y, w, h, qp");
+			return fmt_hal_result(resp, resp_size, ret);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size,
+					   "need channel, index, enable, x, y, w, h, qp");
 	}
 
 	if (strcmp(cmd, "get-roi") == 0) {
@@ -565,18 +551,21 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 			rss_enc_roi_t roi = {0};
 			int ret = RSS_HAL_CALL(st->ops, enc_get_roi, st->hal_ctx,
 					       st->streams[chn].chn, (uint32_t)idx, &roi);
-			if (ret == 0)
-				rss_ctrl_resp(resp, resp_size,
-					      "{\"status\":\"ok\",\"index\":%u,\"enable\":%s,"
-					      "\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,\"qp\":%d}",
-					      roi.index, roi.enable ? "true" : "false", roi.x,
-					      roi.y, roi.w, roi.h, roi.qp);
-			else
-				fmt_hal_result(resp, resp_size, ret);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "need channel and index");
+			if (ret == 0) {
+				cJSON *r = cJSON_CreateObject();
+				cJSON_AddStringToObject(r, "status", "ok");
+				cJSON_AddNumberToObject(r, "index", (double)roi.index);
+				cJSON_AddBoolToObject(r, "enable", roi.enable);
+				cJSON_AddNumberToObject(r, "x", (double)roi.x);
+				cJSON_AddNumberToObject(r, "y", (double)roi.y);
+				cJSON_AddNumberToObject(r, "w", (double)roi.w);
+				cJSON_AddNumberToObject(r, "h", (double)roi.h);
+				cJSON_AddNumberToObject(r, "qp", (double)roi.qp);
+				return rss_ctrl_resp_json(resp, resp_size, r);
+			}
+			return fmt_hal_result(resp, resp_size, ret);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "need channel and index");
 	}
 
 	/* ── Super frame ── */
@@ -593,11 +582,9 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 						     .priority = RSS_RC_PRIO_BITRATE};
 			int ret = RSS_HAL_CALL(st->ops, enc_set_super_frame, st->hal_ctx,
 					       st->streams[chn].chn, &cfg);
-			fmt_hal_result(resp, resp_size, ret);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "need channel, mode, i_thr, p_thr");
+			return fmt_hal_result(resp, resp_size, ret);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "need channel, mode, i_thr, p_thr");
 	}
 
 	if (strcmp(cmd, "get-super-frame") == 0) {
@@ -606,18 +593,18 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 			rss_super_frame_cfg_t cfg = {0};
 			int ret = RSS_HAL_CALL(st->ops, enc_get_super_frame, st->hal_ctx,
 					       st->streams[chn].chn, &cfg);
-			if (ret == 0)
-				rss_ctrl_resp(resp, resp_size,
-					      "{\"status\":\"ok\",\"mode\":%d,"
-					      "\"i_thr\":%u,\"p_thr\":%u,\"priority\":%d}",
-					      cfg.mode, cfg.i_bits_thr, cfg.p_bits_thr,
-					      cfg.priority);
-			else
-				fmt_hal_result(resp, resp_size, ret);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "need channel");
+			if (ret == 0) {
+				cJSON *r = cJSON_CreateObject();
+				cJSON_AddStringToObject(r, "status", "ok");
+				cJSON_AddNumberToObject(r, "mode", (double)cfg.mode);
+				cJSON_AddNumberToObject(r, "i_thr", (double)cfg.i_bits_thr);
+				cJSON_AddNumberToObject(r, "p_thr", (double)cfg.p_bits_thr);
+				cJSON_AddNumberToObject(r, "priority", (double)cfg.priority);
+				return rss_ctrl_resp_json(resp, resp_size, r);
+			}
+			return fmt_hal_result(resp, resp_size, ret);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "need channel");
 	}
 
 	/* ── P-skip ── */
@@ -630,11 +617,9 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 			rss_pskip_cfg_t cfg = {.enable = (bool)enable, .max_frames = max_frames};
 			int ret = RSS_HAL_CALL(st->ops, enc_set_pskip, st->hal_ctx,
 					       st->streams[chn].chn, &cfg);
-			fmt_hal_result(resp, resp_size, ret);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "need channel, enable, max_frames");
+			return fmt_hal_result(resp, resp_size, ret);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "need channel, enable, max_frames");
 	}
 
 	if (strcmp(cmd, "get-pskip") == 0) {
@@ -643,17 +628,16 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 			rss_pskip_cfg_t cfg = {0};
 			int ret = RSS_HAL_CALL(st->ops, enc_get_pskip, st->hal_ctx,
 					       st->streams[chn].chn, &cfg);
-			if (ret == 0)
-				rss_ctrl_resp(resp, resp_size,
-					      "{\"status\":\"ok\",\"enable\":%s,"
-					      "\"max_frames\":%d}",
-					      cfg.enable ? "true" : "false", cfg.max_frames);
-			else
-				fmt_hal_result(resp, resp_size, ret);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "need channel");
+			if (ret == 0) {
+				cJSON *r = cJSON_CreateObject();
+				cJSON_AddStringToObject(r, "status", "ok");
+				cJSON_AddBoolToObject(r, "enable", cfg.enable);
+				cJSON_AddNumberToObject(r, "max_frames", (double)cfg.max_frames);
+				return rss_ctrl_resp_json(resp, resp_size, r);
+			}
+			return fmt_hal_result(resp, resp_size, ret);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "need channel");
 	}
 
 	if (strcmp(cmd, "request-pskip") == 0) {
@@ -661,11 +645,9 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		    chn < st->stream_count) {
 			int ret = RSS_HAL_CALL(st->ops, enc_request_pskip, st->hal_ctx,
 					       st->streams[chn].chn);
-			fmt_hal_result(resp, resp_size, ret);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "need channel");
+			return fmt_hal_result(resp, resp_size, ret);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "need channel");
 	}
 
 	/* ── SRD (static scene refresh) ── */
@@ -678,11 +660,9 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 			rss_srd_cfg_t cfg = {.enable = (bool)enable, .level = (uint8_t)level};
 			int ret = RSS_HAL_CALL(st->ops, enc_set_srd, st->hal_ctx,
 					       st->streams[chn].chn, &cfg);
-			fmt_hal_result(resp, resp_size, ret);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "need channel, enable, level");
+			return fmt_hal_result(resp, resp_size, ret);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "need channel, enable, level");
 	}
 
 	if (strcmp(cmd, "get-srd") == 0) {
@@ -691,16 +671,16 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 			rss_srd_cfg_t cfg = {0};
 			int ret = RSS_HAL_CALL(st->ops, enc_get_srd, st->hal_ctx,
 					       st->streams[chn].chn, &cfg);
-			if (ret == 0)
-				rss_ctrl_resp(resp, resp_size,
-					      "{\"status\":\"ok\",\"enable\":%s,\"level\":%u}",
-					      cfg.enable ? "true" : "false", cfg.level);
-			else
-				fmt_hal_result(resp, resp_size, ret);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "need channel");
+			if (ret == 0) {
+				cJSON *r = cJSON_CreateObject();
+				cJSON_AddStringToObject(r, "status", "ok");
+				cJSON_AddBoolToObject(r, "enable", cfg.enable);
+				cJSON_AddNumberToObject(r, "level", (double)cfg.level);
+				return rss_ctrl_resp_json(resp, resp_size, r);
+			}
+			return fmt_hal_result(resp, resp_size, ret);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "need channel");
 	}
 
 	/* ── Encoder denoise ── */
@@ -718,12 +698,10 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 						     .dn_p_qp = p_qp};
 			int ret = RSS_HAL_CALL(st->ops, enc_set_denoise, st->hal_ctx,
 					       st->streams[chn].chn, &cfg);
-			fmt_hal_result(resp, resp_size, ret);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size,
-					    "need channel, enable, type, i_qp, p_qp");
+			return fmt_hal_result(resp, resp_size, ret);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size,
+					   "need channel, enable, type, i_qp, p_qp");
 	}
 
 	if (strcmp(cmd, "get-enc-denoise") == 0) {
@@ -732,18 +710,18 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 			rss_enc_denoise_cfg_t cfg = {0};
 			int ret = RSS_HAL_CALL(st->ops, enc_get_denoise, st->hal_ctx,
 					       st->streams[chn].chn, &cfg);
-			if (ret == 0)
-				rss_ctrl_resp(resp, resp_size,
-					      "{\"status\":\"ok\",\"enable\":%s,"
-					      "\"type\":%d,\"i_qp\":%d,\"p_qp\":%d}",
-					      cfg.enable ? "true" : "false", cfg.dn_type,
-					      cfg.dn_i_qp, cfg.dn_p_qp);
-			else
-				fmt_hal_result(resp, resp_size, ret);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "need channel");
+			if (ret == 0) {
+				cJSON *r = cJSON_CreateObject();
+				cJSON_AddStringToObject(r, "status", "ok");
+				cJSON_AddBoolToObject(r, "enable", cfg.enable);
+				cJSON_AddNumberToObject(r, "type", (double)cfg.dn_type);
+				cJSON_AddNumberToObject(r, "i_qp", (double)cfg.dn_i_qp);
+				cJSON_AddNumberToObject(r, "p_qp", (double)cfg.dn_p_qp);
+				return rss_ctrl_resp_json(resp, resp_size, r);
+			}
+			return fmt_hal_result(resp, resp_size, ret);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "need channel");
 	}
 
 	/* ── GDR (gradual decoder refresh) ── */
@@ -756,11 +734,9 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 			rss_enc_gdr_cfg_t cfg = {.enable = (bool)enable, .gdr_cycle = cycle};
 			int ret = RSS_HAL_CALL(st->ops, enc_set_gdr, st->hal_ctx,
 					       st->streams[chn].chn, &cfg);
-			fmt_hal_result(resp, resp_size, ret);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "need channel, enable, cycle");
+			return fmt_hal_result(resp, resp_size, ret);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "need channel, enable, cycle");
 	}
 
 	if (strcmp(cmd, "get-gdr") == 0) {
@@ -769,16 +745,16 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 			rss_enc_gdr_cfg_t cfg = {0};
 			int ret = RSS_HAL_CALL(st->ops, enc_get_gdr, st->hal_ctx,
 					       st->streams[chn].chn, &cfg);
-			if (ret == 0)
-				rss_ctrl_resp(resp, resp_size,
-					      "{\"status\":\"ok\",\"enable\":%s,\"cycle\":%d}",
-					      cfg.enable ? "true" : "false", cfg.gdr_cycle);
-			else
-				fmt_hal_result(resp, resp_size, ret);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "need channel");
+			if (ret == 0) {
+				cJSON *r = cJSON_CreateObject();
+				cJSON_AddStringToObject(r, "status", "ok");
+				cJSON_AddBoolToObject(r, "enable", cfg.enable);
+				cJSON_AddNumberToObject(r, "cycle", (double)cfg.gdr_cycle);
+				return rss_ctrl_resp_json(resp, resp_size, r);
+			}
+			return fmt_hal_result(resp, resp_size, ret);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "need channel");
 	}
 
 	if (strcmp(cmd, "request-gdr") == 0) {
@@ -788,11 +764,9 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		    chn < st->stream_count) {
 			int ret = RSS_HAL_CALL(st->ops, enc_request_gdr, st->hal_ctx,
 					       st->streams[chn].chn, frames);
-			fmt_hal_result(resp, resp_size, ret);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "need channel and value");
+			return fmt_hal_result(resp, resp_size, ret);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "need channel and value");
 	}
 
 	/* ── Encoder crop ── */
@@ -812,11 +786,9 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 						  .h = (uint32_t)h};
 			int ret = RSS_HAL_CALL(st->ops, enc_set_crop, st->hal_ctx,
 					       st->streams[chn].chn, &cfg);
-			fmt_hal_result(resp, resp_size, ret);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "need channel, enable, x, y, w, h");
+			return fmt_hal_result(resp, resp_size, ret);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "need channel, enable, x, y, w, h");
 	}
 
 	if (strcmp(cmd, "get-enc-crop") == 0) {
@@ -825,18 +797,19 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 			rss_enc_crop_cfg_t cfg = {0};
 			int ret = RSS_HAL_CALL(st->ops, enc_get_crop, st->hal_ctx,
 					       st->streams[chn].chn, &cfg);
-			if (ret == 0)
-				rss_ctrl_resp(resp, resp_size,
-					      "{\"status\":\"ok\",\"enable\":%s,"
-					      "\"x\":%u,\"y\":%u,\"w\":%u,\"h\":%u}",
-					      cfg.enable ? "true" : "false", cfg.x, cfg.y, cfg.w,
-					      cfg.h);
-			else
-				fmt_hal_result(resp, resp_size, ret);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "need channel");
+			if (ret == 0) {
+				cJSON *r = cJSON_CreateObject();
+				cJSON_AddStringToObject(r, "status", "ok");
+				cJSON_AddBoolToObject(r, "enable", cfg.enable);
+				cJSON_AddNumberToObject(r, "x", (double)cfg.x);
+				cJSON_AddNumberToObject(r, "y", (double)cfg.y);
+				cJSON_AddNumberToObject(r, "w", (double)cfg.w);
+				cJSON_AddNumberToObject(r, "h", (double)cfg.h);
+				return rss_ctrl_resp_json(resp, resp_size, r);
+			}
+			return fmt_hal_result(resp, resp_size, ret);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "need channel");
 	}
 
 	/* ── Encoder capabilities query ── */
@@ -844,32 +817,29 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		if (!caps) {
 			return rss_ctrl_resp_error(resp, resp_size, "caps not available");
 		}
-		return rss_ctrl_resp(
-			resp, resp_size,
-			"{\"status\":\"ok\""
-			",\"smartp_gop\":%s,\"rc_options\":%s"
-			",\"pskip\":%s,\"srd\":%s,\"max_pic_size\":%s"
-			",\"super_frame\":%s,\"color2grey\":%s"
-			",\"roi\":%s,\"map_roi\":%s"
-			",\"qp_bounds_per_frame\":%s,\"qpg_mode\":%s"
-			",\"mbrc\":%s,\"enc_denoise\":%s,\"gdr\":%s"
-			",\"h264_trans\":%s,\"h265_trans\":%s"
-			",\"enc_crop\":%s,\"resize_mode\":%s"
-			",\"jpeg_ql\":%s,\"jpeg_qp\":%s}",
-			caps->has_smartp_gop ? "true" : "false",
-			caps->has_rc_options ? "true" : "false", caps->has_pskip ? "true" : "false",
-			caps->has_srd ? "true" : "false", caps->has_max_pic_size ? "true" : "false",
-			caps->has_super_frame ? "true" : "false",
-			caps->has_color2grey ? "true" : "false", caps->has_roi ? "true" : "false",
-			caps->has_map_roi ? "true" : "false",
-			caps->has_qp_bounds_per_frame ? "true" : "false",
-			caps->has_qpg_mode ? "true" : "false", caps->has_mbrc ? "true" : "false",
-			caps->has_enc_denoise ? "true" : "false", caps->has_gdr ? "true" : "false",
-			caps->has_h264_trans ? "true" : "false",
-			caps->has_h265_trans ? "true" : "false",
-			caps->has_enc_crop ? "true" : "false",
-			caps->has_resize_mode ? "true" : "false",
-			caps->has_jpeg_ql ? "true" : "false", caps->has_jpeg_qp ? "true" : "false");
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddStringToObject(r, "status", "ok");
+		cJSON_AddBoolToObject(r, "smartp_gop", caps->has_smartp_gop);
+		cJSON_AddBoolToObject(r, "rc_options", caps->has_rc_options);
+		cJSON_AddBoolToObject(r, "pskip", caps->has_pskip);
+		cJSON_AddBoolToObject(r, "srd", caps->has_srd);
+		cJSON_AddBoolToObject(r, "max_pic_size", caps->has_max_pic_size);
+		cJSON_AddBoolToObject(r, "super_frame", caps->has_super_frame);
+		cJSON_AddBoolToObject(r, "color2grey", caps->has_color2grey);
+		cJSON_AddBoolToObject(r, "roi", caps->has_roi);
+		cJSON_AddBoolToObject(r, "map_roi", caps->has_map_roi);
+		cJSON_AddBoolToObject(r, "qp_bounds_per_frame", caps->has_qp_bounds_per_frame);
+		cJSON_AddBoolToObject(r, "qpg_mode", caps->has_qpg_mode);
+		cJSON_AddBoolToObject(r, "mbrc", caps->has_mbrc);
+		cJSON_AddBoolToObject(r, "enc_denoise", caps->has_enc_denoise);
+		cJSON_AddBoolToObject(r, "gdr", caps->has_gdr);
+		cJSON_AddBoolToObject(r, "h264_trans", caps->has_h264_trans);
+		cJSON_AddBoolToObject(r, "h265_trans", caps->has_h265_trans);
+		cJSON_AddBoolToObject(r, "enc_crop", caps->has_enc_crop);
+		cJSON_AddBoolToObject(r, "resize_mode", caps->has_resize_mode);
+		cJSON_AddBoolToObject(r, "jpeg_ql", caps->has_jpeg_ql);
+		cJSON_AddBoolToObject(r, "jpeg_qp", caps->has_jpeg_qp);
+		return rss_ctrl_resp_json(resp, resp_size, r);
 	}
 
 	(void)caps;
@@ -878,7 +848,8 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 
 /* ── ISP commands ── */
 
-static int handle_isp_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st, char *resp, int resp_size)
+static int handle_isp_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st, char *resp,
+			  int resp_size)
 {
 	int val;
 	int sensor_idx = -1;
@@ -893,11 +864,9 @@ static int handle_isp_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 				ret = RSS_HAL_CALL(st->ops, fn##_n, st->hal_ctx, sensor_idx, val); \
 			else                                                                       \
 				ret = RSS_HAL_CALL(st->ops, fn, st->hal_ctx, val);                 \
-			fmt_hal_result(resp, resp_size, ret);                                      \
-		} else {                                                                           \
-			rss_ctrl_resp_error(resp, resp_size, "need value");                        \
+			return fmt_hal_result(resp, resp_size, ret);                               \
 		}                                                                                  \
-		return (int)strlen(resp);                                                          \
+		return rss_ctrl_resp_error(resp, resp_size, "need value");                         \
 	}
 
 /* ISP_SET: single-sensor only (no _n variant) */
@@ -905,11 +874,9 @@ static int handle_isp_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 	if (strcmp(cmd, name) == 0) {                                                              \
 		if (rss_json_get_int(cmd_json, "value", &val) == 0) {                              \
 			int ret = RSS_HAL_CALL(st->ops, fn, st->hal_ctx, val);                     \
-			fmt_hal_result(resp, resp_size, ret);                                      \
-		} else {                                                                           \
-			rss_ctrl_resp_error(resp, resp_size, "need value");                        \
+			return fmt_hal_result(resp, resp_size, ret);                               \
 		}                                                                                  \
-		return (int)strlen(resp);                                                          \
+		return rss_ctrl_resp_error(resp, resp_size, "need value");                         \
 	}
 
 	ISP_SET_N("set-brightness", isp_set_brightness)
@@ -946,19 +913,24 @@ static int handle_isp_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 		if (rss_json_get_int(cmd_json, "b_gain", &b_gain) == 0)
 			wb.b_gain = (uint16_t)b_gain;
 		int ret = RSS_HAL_CALL(st->ops, isp_set_wb, st->hal_ctx, &wb);
-		return rss_ctrl_resp(resp, resp_size,
-			      "{\"status\":\"%s\",\"mode\":\"%s\",\"r_gain\":%u,\"b_gain\":%u}",
-			      ret == 0 ? "ok" : "error", wb_mode_str(wb.mode), wb.r_gain,
-			      wb.b_gain);
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddStringToObject(r, "status", ret == 0 ? "ok" : "error");
+		cJSON_AddStringToObject(r, "mode", wb_mode_str(wb.mode));
+		cJSON_AddNumberToObject(r, "r_gain", (double)wb.r_gain);
+		cJSON_AddNumberToObject(r, "b_gain", (double)wb.b_gain);
+		return rss_ctrl_resp_json(resp, resp_size, r);
 	}
 
 	if (strcmp(cmd, "get-wb") == 0) {
 		rss_wb_config_t wb = {0};
 		RSS_HAL_CALL(st->ops, isp_get_wb, st->hal_ctx, &wb);
-		return rss_ctrl_resp(resp, resp_size,
-			      "{\"status\":\"ok\",\"mode\":\"%s\",\"r_gain\":%u,\"g_gain\":%u,"
-			      "\"b_gain\":%u}",
-			      wb_mode_str(wb.mode), wb.r_gain, wb.g_gain, wb.b_gain);
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddStringToObject(r, "status", "ok");
+		cJSON_AddStringToObject(r, "mode", wb_mode_str(wb.mode));
+		cJSON_AddNumberToObject(r, "r_gain", (double)wb.r_gain);
+		cJSON_AddNumberToObject(r, "g_gain", (double)wb.g_gain);
+		cJSON_AddNumberToObject(r, "b_gain", (double)wb.b_gain);
+		return rss_ctrl_resp_json(resp, resp_size, r);
 	}
 
 	if (strcmp(cmd, "get-isp") == 0) {
@@ -978,24 +950,35 @@ static int handle_isp_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 		RSS_HAL_CALL(st->ops, isp_get_max_dgain, st->hal_ctx, &dgain);
 		rss_wb_config_t wb = {0};
 		RSS_HAL_CALL(st->ops, isp_get_wb, st->hal_ctx, &wb);
-		return rss_ctrl_resp(resp, resp_size,
-			      "{\"status\":\"ok\","
-			      "\"brightness\":%u,\"contrast\":%u,\"saturation\":%u,"
-			      "\"sharpness\":%u,\"hue\":%u,\"sinter\":%u,\"temper\":%u,"
-			      "\"hflip\":%d,\"vflip\":%d,\"ae_comp\":%d,"
-			      "\"max_again\":%u,\"max_dgain\":%u,"
-			      "\"wb_mode\":\"%s\",\"wb_r\":%u,\"wb_g\":%u,\"wb_b\":%u}",
-			      bri, con, sat, shp, hue, sin, tem, hf, vf, ae, again, dgain,
-			      wb.mode == RSS_WB_MANUAL ? "manual" : "auto", wb.r_gain, wb.g_gain,
-			      wb.b_gain);
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddStringToObject(r, "status", "ok");
+		cJSON_AddNumberToObject(r, "brightness", (double)bri);
+		cJSON_AddNumberToObject(r, "contrast", (double)con);
+		cJSON_AddNumberToObject(r, "saturation", (double)sat);
+		cJSON_AddNumberToObject(r, "sharpness", (double)shp);
+		cJSON_AddNumberToObject(r, "hue", (double)hue);
+		cJSON_AddNumberToObject(r, "sinter", (double)sin);
+		cJSON_AddNumberToObject(r, "temper", (double)tem);
+		cJSON_AddNumberToObject(r, "hflip", (double)hf);
+		cJSON_AddNumberToObject(r, "vflip", (double)vf);
+		cJSON_AddNumberToObject(r, "ae_comp", (double)ae);
+		cJSON_AddNumberToObject(r, "max_again", (double)again);
+		cJSON_AddNumberToObject(r, "max_dgain", (double)dgain);
+		cJSON_AddStringToObject(r, "wb_mode", wb.mode == RSS_WB_MANUAL ? "manual" : "auto");
+		cJSON_AddNumberToObject(r, "wb_r", (double)wb.r_gain);
+		cJSON_AddNumberToObject(r, "wb_g", (double)wb.g_gain);
+		cJSON_AddNumberToObject(r, "wb_b", (double)wb.b_gain);
+		return rss_ctrl_resp_json(resp, resp_size, r);
 	}
 
 	if (strcmp(cmd, "get-exposure") == 0) {
 		rss_exposure_t exp = {0};
 		RSS_HAL_CALL(st->ops, isp_get_exposure, st->hal_ctx, &exp);
-		return rss_ctrl_resp(resp, resp_size,
-			      "{\"total_gain\":%u,\"exposure_us\":%u,\"ae_luma\":%u}",
-			      exp.total_gain, exp.exposure_time, exp.ae_luma);
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddNumberToObject(r, "total_gain", (double)exp.total_gain);
+		cJSON_AddNumberToObject(r, "exposure_us", (double)exp.exposure_time);
+		cJSON_AddNumberToObject(r, "ae_luma", (double)exp.ae_luma);
+		return rss_ctrl_resp_json(resp, resp_size, r);
 	}
 
 	if (strcmp(cmd, "set-running-mode") == 0) {
@@ -1003,12 +986,12 @@ static int handle_isp_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 		if (rss_json_get_str(cmd_json, "value", mode_str, sizeof(mode_str)) == 0) {
 			int mode = (strcmp(mode_str, "night") == 0) ? 1 : 0;
 			RSS_HAL_CALL(st->ops, isp_set_running_mode, st->hal_ctx, mode);
-			rss_ctrl_resp(resp, resp_size, "{\"status\":\"ok\",\"mode\":\"%s\"}",
-				      mode ? "night" : "day");
-		} else {
-			rss_ctrl_resp(resp, resp_size, "{\"status\":\"error\"}");
+			cJSON *r = cJSON_CreateObject();
+			cJSON_AddStringToObject(r, "status", "ok");
+			cJSON_AddStringToObject(r, "mode", mode ? "night" : "day");
+			return rss_ctrl_resp_json(resp, resp_size, r);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "need value");
 	}
 
 	return 0;
@@ -1016,38 +999,46 @@ static int handle_isp_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 
 /* ── IVS commands ── */
 
-static int handle_ivs_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st, char *resp, int resp_size)
+static int handle_ivs_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st, char *resp,
+			  int resp_size)
 {
 	if (strcmp(cmd, "ivs-status") == 0) {
 		bool motion = atomic_load(&st->ivs_motion);
 		int64_t ts = atomic_load(&st->ivs_motion_ts);
 		int persons = st->ivs_persondet ? atomic_load(&st->ivs_person_count) : -1;
-		return rss_ctrl_resp(resp, resp_size,
-			      "{\"status\":\"ok\",\"active\":%s,\"motion\":%s,"
-			      "\"persondet\":%s,\"persons\":%d,\"timestamp\":%" PRId64 "}",
-			      st->ivs_active ? "true" : "false", motion ? "true" : "false",
-			      st->ivs_persondet ? "true" : "false", persons, ts);
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddStringToObject(r, "status", "ok");
+		cJSON_AddBoolToObject(r, "active", st->ivs_active);
+		cJSON_AddBoolToObject(r, "motion", motion);
+		cJSON_AddBoolToObject(r, "persondet", st->ivs_persondet);
+		cJSON_AddNumberToObject(r, "persons", (double)persons);
+		cJSON_AddNumberToObject(r, "timestamp", (double)ts);
+		return rss_ctrl_resp_json(resp, resp_size, r);
 	}
 
 	if (strcmp(cmd, "ivs-detections") == 0) {
 		if (!st->ivs_active) {
 			return rss_ctrl_resp_error(resp, resp_size, "ivs not active");
 		}
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddStringToObject(r, "status", "ok");
 		pthread_mutex_lock(&st->ivs_det_lock);
 		int count = st->ivs_detections.count;
-		int off = snprintf(resp, resp_size,
-				   "{\"status\":\"ok\",\"count\":%d,\"detections\":[", count);
-		for (int i = 0; i < count && off < resp_size - 64; i++) {
+		cJSON_AddNumberToObject(r, "count", (double)count);
+		cJSON *arr = cJSON_AddArrayToObject(r, "detections");
+		for (int i = 0; i < count; i++) {
 			rss_ivs_detection_t *d = &st->ivs_detections.detections[i];
-			off += snprintf(resp + off, resp_size - off,
-					"%s{\"x0\":%d,\"y0\":%d,\"x1\":%d,\"y1\":%d,"
-					"\"confidence\":%.2f,\"class\":%d}",
-					i > 0 ? "," : "", d->box.p0_x, d->box.p0_y, d->box.p1_x,
-					d->box.p1_y, (double)d->confidence, d->class_id);
+			cJSON *item = cJSON_CreateObject();
+			cJSON_AddNumberToObject(item, "x0", (double)d->box.p0_x);
+			cJSON_AddNumberToObject(item, "y0", (double)d->box.p0_y);
+			cJSON_AddNumberToObject(item, "x1", (double)d->box.p1_x);
+			cJSON_AddNumberToObject(item, "y1", (double)d->box.p1_y);
+			cJSON_AddNumberToObject(item, "confidence", (double)d->confidence);
+			cJSON_AddNumberToObject(item, "class", (double)d->class_id);
+			cJSON_AddItemToArray(arr, item);
 		}
 		pthread_mutex_unlock(&st->ivs_det_lock);
-		snprintf(resp + off, resp_size - off, "]}");
-		return (int)strlen(resp);
+		return rss_ctrl_resp_json(resp, resp_size, r);
 	}
 
 	if (strcmp(cmd, "ivs-set-sensitivity") == 0) {
@@ -1062,12 +1053,12 @@ static int handle_ivs_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 					mp.sense[i] = sens;
 				RSS_HAL_CALL(st->ops, ivs_set_param, st->hal_ctx, st->ivs_chn, &mp);
 			}
-			rss_ctrl_resp(resp, resp_size, "{\"status\":\"ok\",\"sensitivity\":%d}",
-				      sens);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "invalid or ivs not active");
+			cJSON *r = cJSON_CreateObject();
+			cJSON_AddStringToObject(r, "status", "ok");
+			cJSON_AddNumberToObject(r, "sensitivity", (double)sens);
+			return rss_ctrl_resp_json(resp, resp_size, r);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "invalid or ivs not active");
 	}
 
 	if (strcmp(cmd, "ivs-set-skip-frames") == 0) {
@@ -1080,12 +1071,12 @@ static int handle_ivs_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 				mp.skip_frame_count = val;
 				RSS_HAL_CALL(st->ops, ivs_set_param, st->hal_ctx, st->ivs_chn, &mp);
 			}
-			rss_ctrl_resp(resp, resp_size, "{\"status\":\"ok\",\"skip_frames\":%d}",
-				      val);
-		} else {
-			rss_ctrl_resp_error(resp, resp_size, "invalid or ivs not active");
+			cJSON *r = cJSON_CreateObject();
+			cJSON_AddStringToObject(r, "status", "ok");
+			cJSON_AddNumberToObject(r, "skip_frames", (double)val);
+			return rss_ctrl_resp_json(resp, resp_size, r);
 		}
-		return (int)strlen(resp);
+		return rss_ctrl_resp_error(resp, resp_size, "invalid or ivs not active");
 	}
 
 	return 0;
@@ -1186,13 +1177,14 @@ static int validate_video_channel(rvd_state_t *st, const char *cmd_json, int *ou
 	return 0;
 }
 
-static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st, char *resp, int resp_size)
+static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st, char *resp,
+			       int resp_size)
 {
 	int chn;
 
 	if (strcmp(cmd, "stream-restart") == 0) {
 		if (validate_video_channel(st, cmd_json, &chn, resp, resp_size) < 0)
-			return (int)strlen(resp);
+			return (int)strlen(resp); /* validate already wrote error */
 		if (do_stream_restart(st, chn, resp, resp_size) < 0)
 			return (int)strlen(resp);
 		return rss_ctrl_resp_ok(resp, resp_size);
@@ -1223,8 +1215,7 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		}
 
 		if (st->streams[chn].enc_cfg.codec == codec) {
-			rss_ctrl_resp_ok(resp, resp_size); /* already set */
-			return (int)strlen(resp);
+			return rss_ctrl_resp_ok(resp, resp_size); /* already set */
 		}
 
 		/* Save old codec, update, restart, restore on failure */
@@ -1247,7 +1238,8 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		if (rss_json_get_int(cmd_json, "width", &w) != 0 ||
 		    rss_json_get_int(cmd_json, "height", &h) != 0 || w < 32 || h < 32 || w > 4096 ||
 		    h > 4096) {
-			return rss_ctrl_resp_error(resp, resp_size, "need width and height (32-4096)");
+			return rss_ctrl_resp_error(resp, resp_size,
+						   "need width and height (32-4096)");
 		}
 
 		/* Even dimensions required by encoder */
@@ -1585,31 +1577,35 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 
 /* ── Config and status commands ── */
 
-static int handle_config_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st, char *resp, int resp_size)
+static int handle_config_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st, char *resp,
+			     int resp_size)
 {
 	if (strcmp(cmd, "config-show") == 0) {
-		int off = snprintf(resp, resp_size, "{\"status\":\"ok\",\"config\":{\"streams\":[");
-		for (int i = 0; i < st->stream_count && off < resp_size; i++) {
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddStringToObject(r, "status", "ok");
+		cJSON *cfg = cJSON_AddObjectToObject(r, "config");
+		cJSON *arr = cJSON_AddArrayToObject(cfg, "streams");
+		for (int i = 0; i < st->stream_count; i++) {
 			rvd_stream_t *s = &st->streams[i];
 			uint32_t avg_br = 0;
 			RSS_HAL_CALL(st->ops, enc_get_avg_bitrate, st->hal_ctx, s->chn, &avg_br);
-			int n = snprintf(resp + off, resp_size - off,
-					 "%s{\"chn\":%d,\"w\":%u,\"h\":%u,\"codec\":%u,"
-					 "\"bitrate\":%u,\"avg_bitrate\":%u,\"gop\":%u,"
-					 "\"fps\":%u,\"min_qp\":%d,\"max_qp\":%d,"
-					 "\"rc_mode\":%u,\"profile\":%d}",
-					 i > 0 ? "," : "", s->chn, s->enc_cfg.width,
-					 s->enc_cfg.height, s->enc_cfg.codec, s->enc_cfg.bitrate,
-					 avg_br, s->enc_cfg.gop_length, s->enc_cfg.fps_num,
-					 s->enc_cfg.min_qp, s->enc_cfg.max_qp, s->enc_cfg.rc_mode,
-					 s->enc_cfg.profile);
-			if (n > 0 && off + n < resp_size)
-				off += n;
+			cJSON *item = cJSON_CreateObject();
+			cJSON_AddNumberToObject(item, "chn", (double)s->chn);
+			cJSON_AddNumberToObject(item, "w", (double)s->enc_cfg.width);
+			cJSON_AddNumberToObject(item, "h", (double)s->enc_cfg.height);
+			cJSON_AddNumberToObject(item, "codec", (double)s->enc_cfg.codec);
+			cJSON_AddNumberToObject(item, "bitrate", (double)s->enc_cfg.bitrate);
+			cJSON_AddNumberToObject(item, "avg_bitrate", (double)avg_br);
+			cJSON_AddNumberToObject(item, "gop", (double)s->enc_cfg.gop_length);
+			cJSON_AddNumberToObject(item, "fps", (double)s->enc_cfg.fps_num);
+			cJSON_AddNumberToObject(item, "min_qp", (double)s->enc_cfg.min_qp);
+			cJSON_AddNumberToObject(item, "max_qp", (double)s->enc_cfg.max_qp);
+			cJSON_AddNumberToObject(item, "rc_mode", (double)s->enc_cfg.rc_mode);
+			cJSON_AddNumberToObject(item, "profile", (double)s->enc_cfg.profile);
+			cJSON_AddItemToArray(arr, item);
 		}
-		if (off < resp_size)
-			snprintf(resp + off, resp_size - off, "],\"config_path\":\"%s\"}}",
-				 st->config_path);
-		return (int)strlen(resp);
+		cJSON_AddStringToObject(cfg, "config_path", st->config_path);
+		return rss_ctrl_resp_json(resp, resp_size, r);
 	}
 
 	if (strcmp(cmd, "privacy") == 0) {
@@ -1627,45 +1623,42 @@ static int handle_config_cmd(const char *cmd, const char *cmd_json, rvd_state_t 
 
 		rvd_osd_set_privacy(st, enable, channel);
 
-		int n = snprintf(resp, resp_size, "{\"status\":\"ok\",\"privacy\":[");
-		int first = 1;
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddStringToObject(r, "status", "ok");
+		cJSON *arr = cJSON_AddArrayToObject(r, "privacy");
 		for (int i = 0; i < st->stream_count; i++) {
 			if (st->streams[i].is_jpeg)
 				continue;
-			if (n >= resp_size - 2)
-				break;
-			n += snprintf(resp + n, resp_size - n, "%s\"%s\"", first ? "" : ",",
-				      st->privacy[i] ? "on" : "off");
-			first = 0;
+			cJSON_AddItemToArray(arr,
+					     cJSON_CreateString(st->privacy[i] ? "on" : "off"));
 		}
-		if (n < resp_size - 2)
-			snprintf(resp + n, resp_size - n, "]}");
-		else
-			resp[resp_size - 1] = '\0';
-		return (int)strlen(resp);
+		return rss_ctrl_resp_json(resp, resp_size, r);
 	}
 
 	if (strcmp(cmd, "status") == 0) {
-		int off = snprintf(resp, resp_size, "{\"status\":\"ok\",\"streams\":[");
-		for (int i = 0; i < st->stream_count && off < resp_size; i++) {
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddStringToObject(r, "status", "ok");
+		cJSON *arr = cJSON_AddArrayToObject(r, "streams");
+		for (int i = 0; i < st->stream_count; i++) {
 			uint32_t avg_br = 0;
 			RSS_HAL_CALL(st->ops, enc_get_avg_bitrate, st->hal_ctx, st->streams[i].chn,
 				     &avg_br);
-			int n = snprintf(
-				resp + off, resp_size - off,
-				"%s{\"chn\":%d,\"w\":%u,\"h\":%u,\"codec\":%u,"
-				"\"bitrate\":%u,\"avg_bitrate\":%u,\"gop\":%u,"
-				"\"fps\":%u}",
-				i > 0 ? "," : "", st->streams[i].chn, st->streams[i].enc_cfg.width,
-				st->streams[i].enc_cfg.height, st->streams[i].enc_cfg.codec,
-				st->streams[i].enc_cfg.bitrate, avg_br,
-				st->streams[i].enc_cfg.gop_length, st->streams[i].enc_cfg.fps_num);
-			if (n > 0 && off + n < resp_size)
-				off += n;
+			cJSON *item = cJSON_CreateObject();
+			cJSON_AddNumberToObject(item, "chn", (double)st->streams[i].chn);
+			cJSON_AddNumberToObject(item, "w", (double)st->streams[i].enc_cfg.width);
+			cJSON_AddNumberToObject(item, "h", (double)st->streams[i].enc_cfg.height);
+			cJSON_AddNumberToObject(item, "codec",
+						(double)st->streams[i].enc_cfg.codec);
+			cJSON_AddNumberToObject(item, "bitrate",
+						(double)st->streams[i].enc_cfg.bitrate);
+			cJSON_AddNumberToObject(item, "avg_bitrate", (double)avg_br);
+			cJSON_AddNumberToObject(item, "gop",
+						(double)st->streams[i].enc_cfg.gop_length);
+			cJSON_AddNumberToObject(item, "fps",
+						(double)st->streams[i].enc_cfg.fps_num);
+			cJSON_AddItemToArray(arr, item);
 		}
-		if (off < resp_size)
-			snprintf(resp + off, resp_size - off, "]}");
-		return (int)strlen(resp);
+		return rss_ctrl_resp_json(resp, resp_size, r);
 	}
 
 	return 0;
@@ -1678,7 +1671,8 @@ int rvd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, vo
 	rvd_state_t *st = userdata;
 	int len;
 
-	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, st->cfg, st->config_path);
+	int rc =
+		rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, st->cfg, st->config_path);
 	if (rc >= 0)
 		return rc;
 

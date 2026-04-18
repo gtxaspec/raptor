@@ -60,11 +60,12 @@ typedef struct {
 static int rad_fmt_result(char *buf, int bufsz, int ret)
 {
 	if (ret == 0)
-		return snprintf(buf, bufsz, "{\"status\":\"ok\"}");
+		return rss_ctrl_resp_ok(buf, bufsz);
 	if (ret == RSS_ERR_NOTSUP)
-		return snprintf(buf, bufsz,
-				"{\"status\":\"error\",\"reason\":\"not supported on this SoC\"}");
-	return snprintf(buf, bufsz, "{\"status\":\"error\",\"reason\":\"failed (%d)\"}", ret);
+		return rss_ctrl_resp_error(buf, bufsz, "not supported on this SoC");
+	char reason[64];
+	snprintf(reason, sizeof(reason), "failed (%d)", ret);
+	return rss_ctrl_resp_error(buf, bufsz, reason);
 }
 
 static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, void *userdata)
@@ -142,9 +143,10 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			if (ret == RSS_ERR_NOTSUP)
 				return rss_ctrl_resp_error(resp_buf, resp_buf_size,
 							   "not supported on this SoC");
-			return rss_ctrl_resp(
-				resp_buf, resp_buf_size, "{\"status\":\"%s\",\"ns\":%s}",
-				ret == RSS_OK ? "ok" : "error", ctx->ns_enabled ? "true" : "false");
+			cJSON *r = cJSON_CreateObject();
+			cJSON_AddStringToObject(r, "status", ret == RSS_OK ? "ok" : "error");
+			cJSON_AddBoolToObject(r, "ns", ctx->ns_enabled);
+			return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 		}
 		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value (0/1)");
 	}
@@ -161,10 +163,10 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			if (ret == RSS_ERR_NOTSUP)
 				return rss_ctrl_resp_error(resp_buf, resp_buf_size,
 							   "not supported on this SoC");
-			return rss_ctrl_resp(resp_buf, resp_buf_size,
-					     "{\"status\":\"%s\",\"hpf\":%s}",
-					     ret == RSS_OK ? "ok" : "error",
-					     ctx->hpf_enabled ? "true" : "false");
+			cJSON *r = cJSON_CreateObject();
+			cJSON_AddStringToObject(r, "status", ret == RSS_OK ? "ok" : "error");
+			cJSON_AddBoolToObject(r, "hpf", ctx->hpf_enabled);
+			return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 		}
 		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value (0/1)");
 	}
@@ -190,10 +192,10 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			if (ret == RSS_ERR_NOTSUP)
 				return rss_ctrl_resp_error(resp_buf, resp_buf_size,
 							   "not supported on this SoC");
-			return rss_ctrl_resp(resp_buf, resp_buf_size,
-					     "{\"status\":\"%s\",\"agc\":%s}",
-					     ret == RSS_OK ? "ok" : "error",
-					     ctx->agc_enabled ? "true" : "false");
+			cJSON *r = cJSON_CreateObject();
+			cJSON_AddStringToObject(r, "status", ret == RSS_OK ? "ok" : "error");
+			cJSON_AddBoolToObject(r, "agc", ctx->agc_enabled);
+			return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 		}
 		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value (0/1)");
 	}
@@ -371,34 +373,36 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 	if (strcmp(cmd, "config-show") == 0) {
-		return rss_ctrl_resp(resp_buf, resp_buf_size,
-				     "{\"status\":\"ok\",\"config\":{"
-				     "\"codec\":\"%s\",\"sample_rate\":%d,"
-				     "\"volume\":%d,\"gain\":%d,\"device\":%d,"
-				     "\"config_path\":\"%s\"}}",
-				     ctx->codec_str, ctx->sample_rate, ctx->volume, ctx->gain,
-				     ctx->ai_dev, ctx->config_path);
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddStringToObject(r, "status", "ok");
+		cJSON *config = cJSON_AddObjectToObject(r, "config");
+		cJSON_AddStringToObject(config, "codec", ctx->codec_str);
+		cJSON_AddNumberToObject(config, "sample_rate", ctx->sample_rate);
+		cJSON_AddNumberToObject(config, "volume", ctx->volume);
+		cJSON_AddNumberToObject(config, "gain", ctx->gain);
+		cJSON_AddNumberToObject(config, "device", ctx->ai_dev);
+		cJSON_AddStringToObject(config, "config_path", ctx->config_path);
+		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 	}
 
 	if (strcmp(cmd, "status") == 0) {
-		int n = snprintf(resp_buf, resp_buf_size,
-				 "{\"status\":\"ok\",\"codec\":\"%s\","
-				 "\"sample_rate\":%d,\"volume\":%d,\"gain\":%d,"
-				 "\"ao_enabled\":%s",
-				 ctx->codec_str, ctx->sample_rate, ctx->volume, ctx->gain,
-				 ctx->ao_enabled ? "true" : "false");
-		if (ctx->ao_enabled)
-			n += snprintf(resp_buf + n, resp_buf_size - n,
-				      ",\"ao_volume\":%d,\"ao_gain\":%d", ctx->ao_volume,
-				      ctx->ao_gain);
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddStringToObject(r, "status", "ok");
+		cJSON_AddStringToObject(r, "codec", ctx->codec_str);
+		cJSON_AddNumberToObject(r, "sample_rate", ctx->sample_rate);
+		cJSON_AddNumberToObject(r, "volume", ctx->volume);
+		cJSON_AddNumberToObject(r, "gain", ctx->gain);
+		cJSON_AddBoolToObject(r, "ao_enabled", ctx->ao_enabled);
+		if (ctx->ao_enabled) {
+			cJSON_AddNumberToObject(r, "ao_volume", ctx->ao_volume);
+			cJSON_AddNumberToObject(r, "ao_gain", ctx->ao_gain);
+		}
 #ifdef RAPTOR_AUDIO_EFFECTS
-		n += snprintf(resp_buf + n, resp_buf_size - n, ",\"ns\":%s,\"hpf\":%s,\"agc\":%s",
-			      ctx->ns_enabled ? "true" : "false",
-			      ctx->hpf_enabled ? "true" : "false",
-			      ctx->agc_enabled ? "true" : "false");
+		cJSON_AddBoolToObject(r, "ns", ctx->ns_enabled);
+		cJSON_AddBoolToObject(r, "hpf", ctx->hpf_enabled);
+		cJSON_AddBoolToObject(r, "agc", ctx->agc_enabled);
 #endif
-		n += snprintf(resp_buf + n, resp_buf_size - n, "}");
-		return n;
+		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 	}
 
 	return rss_ctrl_resp_error(resp_buf, resp_buf_size, "unknown command");

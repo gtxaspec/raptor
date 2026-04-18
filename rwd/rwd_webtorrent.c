@@ -480,109 +480,6 @@ static size_t json_escape(const char *in, char *out, size_t out_size)
 	return w;
 }
 
-/* Find key at JSON key position (not inside a string value).
- * Counts unescaped quotes before each match — even = key position. */
-static const char *json_find_key(const char *json, const char *needle, size_t needle_len)
-{
-	const char *p = json;
-	while ((p = strstr(p, needle)) != NULL) {
-		/* Count unescaped quotes from start to match position */
-		int quotes = 0;
-		for (const char *q = json; q < p; q++) {
-			if (*q == '"' && (q == json || q[-1] != '\\'))
-				quotes++;
-		}
-		if (quotes % 2 == 0)
-			return p; /* outside a string — real key */
-		p += needle_len;
-	}
-	return NULL;
-}
-
-static int json_get_str(const char *json, const char *key, char *out, size_t out_size)
-{
-	if (out_size == 0)
-		return -1;
-	char needle[128];
-	int nlen = snprintf(needle, sizeof(needle), "\"%s\":", key);
-	const char *p = json_find_key(json, needle, (size_t)nlen);
-	if (!p)
-		return -1;
-	p += nlen;
-	while (*p == ' ')
-		p++;
-	if (*p != '"')
-		return -1;
-	p++;
-	size_t i = 0;
-	while (*p && *p != '"' && i < out_size - 1) {
-		if (*p == '\\' && p[1]) {
-			p++;
-			switch (*p) {
-			case 'r':
-				out[i++] = '\r';
-				break;
-			case 'n':
-				out[i++] = '\n';
-				break;
-			case 't':
-				out[i++] = '\t';
-				break;
-			default:
-				out[i++] = *p;
-				break;
-			}
-		} else {
-			out[i++] = *p;
-		}
-		p++;
-	}
-	out[i] = '\0';
-	return 0;
-}
-
-/* Extract nested JSON object as raw string (brace-matched). */
-static int json_get_object(const char *json, const char *key, char *out, size_t out_size)
-{
-	char needle[128];
-	int nlen = snprintf(needle, sizeof(needle), "\"%s\":", key);
-	const char *p = json_find_key(json, needle, (size_t)nlen);
-	if (!p)
-		return -1;
-	p += nlen;
-	while (*p == ' ')
-		p++;
-	if (*p != '{')
-		return -1;
-
-	int depth = 0;
-	const char *start = p;
-	while (*p) {
-		if (*p == '{')
-			depth++;
-		else if (*p == '}') {
-			depth--;
-			if (depth == 0) {
-				size_t len = (size_t)(p - start + 1);
-				if (len >= out_size)
-					return -1;
-				memcpy(out, start, len);
-				out[len] = '\0';
-				return 0;
-			}
-		} else if (*p == '"') {
-			p++;
-			while (*p && *p != '"') {
-				if (*p == '\\' && p[1])
-					p++;
-				p++;
-			}
-		}
-		p++;
-	}
-	return -1;
-}
-
 /* ── STUN client (discover server-reflexive address) ── */
 
 int rwd_stun_discover_srflx(int udp_fd, const char *server, int port, char *ip_out, size_t ip_size,
@@ -794,52 +691,65 @@ static void handle_tracker_offer(rwd_webtorrent_t *wt, wt_tls_t *tls, const char
 {
 	rwd_server_t *srv = wt->srv;
 
-	char viewer_peer_id[64] = {0};
-	char offer_id[64] = {0};
-
-	json_get_str(json, "peer_id", viewer_peer_id, sizeof(viewer_peer_id));
-	json_get_str(json, "offer_id", offer_id, sizeof(offer_id));
-
-	/* Heap-allocate SDP buffers — three 4KB buffers on a thread stack is risky */
-	char *offer_obj = malloc(RWD_SDP_BUF_SIZE);
-	char *sdp = malloc(RWD_SDP_BUF_SIZE);
-	char *sdp_answer = malloc(RWD_SDP_BUF_SIZE);
-	if (!offer_obj || !sdp || !sdp_answer) {
-		free(offer_obj);
-		free(sdp);
-		free(sdp_answer);
-		RSS_ERROR("webtorrent: OOM in handle_tracker_offer");
+	cJSON *root = cJSON_Parse(json);
+	if (!root) {
+		RSS_WARN("webtorrent: failed to parse tracker message");
 		return;
 	}
 
-	offer_obj[0] = sdp[0] = sdp_answer[0] = '\0';
+	const char *viewer_peer_id = "";
+	const char *offer_id_str = "";
+	cJSON *pid = cJSON_GetObjectItem(root, "peer_id");
+	if (cJSON_IsString(pid))
+		viewer_peer_id = pid->valuestring;
+	cJSON *oid = cJSON_GetObjectItem(root, "offer_id");
+	if (cJSON_IsString(oid))
+		offer_id_str = oid->valuestring;
 
-	if (json_get_object(json, "offer", offer_obj, RWD_SDP_BUF_SIZE) != 0) {
+	cJSON *offer_obj = cJSON_GetObjectItem(root, "offer");
+	if (!offer_obj) {
 		RSS_WARN("webtorrent: no offer in tracker message");
-		goto out;
+		cJSON_Delete(root);
+		return;
 	}
-	if (json_get_str(offer_obj, "sdp", sdp, RWD_SDP_BUF_SIZE) != 0) {
+	cJSON *sdp_item = cJSON_GetObjectItem(offer_obj, "sdp");
+	if (!cJSON_IsString(sdp_item)) {
 		RSS_WARN("webtorrent: no sdp in offer");
-		goto out;
+		cJSON_Delete(root);
+		return;
 	}
+	const char *sdp = sdp_item->valuestring;
 
 	/* Parse stream index from offer_id: "sN_..." where N is 0 or 1 */
 	int stream_idx = 0;
-	if (offer_id[0] == 's' && (offer_id[1] == '0' || offer_id[1] == '1') && offer_id[2] == '_')
-		stream_idx = offer_id[1] - '0';
+	if (offer_id_str[0] == 's' && (offer_id_str[1] == '0' || offer_id_str[1] == '1') &&
+	    offer_id_str[2] == '_')
+		stream_idx = offer_id_str[1] - '0';
 
 	RSS_DEBUG("webtorrent: offer from peer %.16s... (stream %d)", viewer_peer_id, stream_idx);
+
+	char *sdp_answer = malloc(RWD_SDP_BUF_SIZE);
+	if (!sdp_answer) {
+		RSS_ERROR("webtorrent: OOM in handle_tracker_offer");
+		cJSON_Delete(root);
+		return;
+	}
+	sdp_answer[0] = '\0';
 
 	rwd_client_t *c = rwd_client_from_offer(srv, sdp, stream_idx, sdp_answer, RWD_SDP_BUF_SIZE);
 	if (!c) {
 		RSS_WARN("webtorrent: failed to create client from offer");
-		goto out;
+		free(sdp_answer);
+		cJSON_Delete(root);
+		return;
 	}
 
-	if (wt_send_answer(tls, wt->info_hash, wt->peer_id, viewer_peer_id, offer_id, sdp_answer) !=
-	    0) {
+	if (wt_send_answer(tls, wt->info_hash, wt->peer_id, viewer_peer_id, offer_id_str,
+			   sdp_answer) != 0) {
 		RSS_ERROR("webtorrent: failed to send answer");
-		goto out;
+		free(sdp_answer);
+		cJSON_Delete(root);
+		return;
 	}
 
 	/* NAT hole punch: send ICE checks to browser's candidates */
@@ -849,10 +759,8 @@ static void handle_tracker_offer(rwd_webtorrent_t *wt, wt_tls_t *tls, const char
 	RSS_DEBUG("webtorrent: answer sent (session %s, %d candidates punched)", c->session_id,
 		  c->offer.candidate_count);
 
-out:
-	free(offer_obj);
-	free(sdp);
 	free(sdp_answer);
+	cJSON_Delete(root);
 }
 
 /* ── Parse tracker URL ── */

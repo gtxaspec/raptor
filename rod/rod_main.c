@@ -298,45 +298,21 @@ static void render_detections(rod_state_t *st)
 		memset(buf, 0, reg->width * reg->height * 4);
 
 		if (count > 0) {
-			/* Parse detection array from JSON response.
-			 * Format: {"detections":[{"x0":N,"y0":N,"x1":N,"y1":N,...},...]} */
-			const char *p = strstr(resp, "\"detections\"");
-			if (!p)
+			cJSON *root = cJSON_Parse(resp);
+			if (!root)
 				goto publish;
-
-			p = strchr(p, '[');
-			if (!p)
-				goto publish;
-			p++; /* skip '[' */
-
-			for (int i = 0; i < count; i++) {
-				const char *obj = strchr(p, '{');
-				if (!obj)
-					break;
-				const char *end = strchr(obj, '}');
-				if (!end)
-					break;
-
-				/* Parse coords within this object only */
-				int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
-				const char *k;
-				k = strstr(obj, "\"x0\":");
-				if (k && k < end)
-					sscanf(k + 5, "%d", &x0);
-				k = strstr(obj, "\"y0\":");
-				if (k && k < end)
-					sscanf(k + 5, "%d", &y0);
-				k = strstr(obj, "\"x1\":");
-				if (k && k < end)
-					sscanf(k + 5, "%d", &x1);
-				k = strstr(obj, "\"y1\":");
-				if (k && k < end)
-					sscanf(k + 5, "%d", &y1);
-
+			cJSON *dets = cJSON_GetObjectItem(root, "detections");
+			cJSON *det;
+			cJSON_ArrayForEach(det, dets)
+			{
+				int x0 = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(det, "x0"));
+				int y0 = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(det, "y0"));
+				int x1 = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(det, "x1"));
+				int y1 = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(det, "y1"));
 				rod_draw_rect_outline(buf, reg->width, reg->height, x0, y0, x1, y1,
 						      0xFF00FF00, 2);
-				p = end + 1;
 			}
+			cJSON_Delete(root);
 		}
 	publish:
 		rss_osd_publish(reg->shm);
@@ -490,10 +466,15 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			if (target_stream >= 0 && s != target_stream)
 				continue;
 			char cmd[128];
-			snprintf(cmd, sizeof(cmd),
-				 "{\"cmd\":\"osd-position\",\"stream\":%d,"
-				 "\"region\":\"%s\",\"pos\":\"%s\"}",
-				 s, element, pos);
+			{
+				cJSON *j = cJSON_CreateObject();
+				cJSON_AddStringToObject(j, "cmd", "osd-position");
+				cJSON_AddNumberToObject(j, "stream", s);
+				cJSON_AddStringToObject(j, "region", element);
+				cJSON_AddStringToObject(j, "pos", pos);
+				cJSON_PrintPreallocated(j, cmd, sizeof(cmd), 0);
+				cJSON_Delete(j);
+			}
 			char rvd_resp[256];
 			rss_ctrl_send_command("/var/run/rss/rvd.sock", cmd, rvd_resp,
 					      sizeof(rvd_resp), 1000);
@@ -550,10 +531,15 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			if (target_stream >= 0 && s != target_stream)
 				continue;
 			char cmd[128];
-			snprintf(cmd, sizeof(cmd),
-				 "{\"cmd\":\"osd-show\",\"stream\":%d,\"region\":\"%s\","
-				 "\"show\":%d}",
-				 s, region_name, enable ? 1 : 0);
+			{
+				cJSON *j = cJSON_CreateObject();
+				cJSON_AddStringToObject(j, "cmd", "osd-show");
+				cJSON_AddNumberToObject(j, "stream", s);
+				cJSON_AddStringToObject(j, "region", region_name);
+				cJSON_AddNumberToObject(j, "show", enable ? 1 : 0);
+				cJSON_PrintPreallocated(j, cmd, sizeof(cmd), 0);
+				cJSON_Delete(j);
+			}
 			char rvd_resp[256];
 			rss_ctrl_send_command("/var/run/rss/rvd.sock", cmd, rvd_resp,
 					      sizeof(rvd_resp), 1000);
@@ -564,8 +550,7 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 	/* Per-element font size — check before global (substring match) */
-	if (strcmp(cmd, "set-time-font-size") == 0 ||
-	    strcmp(cmd, "set-uptime-font-size") == 0 ||
+	if (strcmp(cmd, "set-time-font-size") == 0 || strcmp(cmd, "set-uptime-font-size") == 0 ||
 	    strcmp(cmd, "set-text-font-size") == 0) {
 		int val;
 		if (rss_json_get_int(cmd_json, "value", &val) != 0 || val < 10 || val > 72)
@@ -635,7 +620,13 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 
 		/* Notify RVD */
 		char cmd[96];
-		snprintf(cmd, sizeof(cmd), "{\"cmd\":\"osd-restart\",\"pool_kb\":0}");
+		{
+			cJSON *j = cJSON_CreateObject();
+			cJSON_AddStringToObject(j, "cmd", "osd-restart");
+			cJSON_AddNumberToObject(j, "pool_kb", 0);
+			cJSON_PrintPreallocated(j, cmd, sizeof(cmd), 0);
+			cJSON_Delete(j);
+		}
 		char rvd_resp[256];
 		rss_ctrl_send_command("/var/run/rss/rvd.sock", cmd, rvd_resp, sizeof(rvd_resp),
 				      5000);
@@ -727,9 +718,14 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				pool_kb = 448; /* minimum */
 
 			char cmd[96];
-			snprintf(cmd, sizeof(cmd),
-				 "{\"cmd\":\"osd-restart\",\"pool_kb\":%u,\"font_size\":%d}",
-				 pool_kb, val);
+			{
+				cJSON *j = cJSON_CreateObject();
+				cJSON_AddStringToObject(j, "cmd", "osd-restart");
+				cJSON_AddNumberToObject(j, "pool_kb", pool_kb);
+				cJSON_AddNumberToObject(j, "font_size", val);
+				cJSON_PrintPreallocated(j, cmd, sizeof(cmd), 0);
+				cJSON_Delete(j);
+			}
 			char rvd_resp[256];
 			int ret = rss_ctrl_send_command("/var/run/rss/rvd.sock", cmd, rvd_resp,
 							sizeof(rvd_resp), 5000);
@@ -743,23 +739,22 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 	if (strcmp(cmd, "config-show") == 0) {
-		return rss_ctrl_resp(
-			resp_buf, resp_buf_size,
-			"{\"status\":\"ok\",\"config\":{"
-			"\"font_size\":%d,"
-			"\"font_color\":\"0x%08X\","
-			"\"stroke_color\":\"0x%08X\","
-			"\"font_stroke\":%d,"
-			"\"time_enabled\":%s,"
-			"\"uptime_enabled\":%s,"
-			"\"text_enabled\":%s,"
-			"\"text_string\":\"%s\","
-			"\"logo_enabled\":%s}}",
-			st->settings.font_size, st->settings.font_color, st->settings.stroke_color,
-			st->settings.font_stroke, st->settings.time_enabled ? "true" : "false",
-			st->settings.uptime_enabled ? "true" : "false",
-			st->settings.text_enabled ? "true" : "false", st->settings.text_string,
-			st->settings.logo_enabled ? "true" : "false");
+		char fc[16], sc[16];
+		snprintf(fc, sizeof(fc), "0x%08X", st->settings.font_color);
+		snprintf(sc, sizeof(sc), "0x%08X", st->settings.stroke_color);
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddStringToObject(r, "status", "ok");
+		cJSON *cfg = cJSON_AddObjectToObject(r, "config");
+		cJSON_AddNumberToObject(cfg, "font_size", st->settings.font_size);
+		cJSON_AddStringToObject(cfg, "font_color", fc);
+		cJSON_AddStringToObject(cfg, "stroke_color", sc);
+		cJSON_AddNumberToObject(cfg, "font_stroke", st->settings.font_stroke);
+		cJSON_AddBoolToObject(cfg, "time_enabled", st->settings.time_enabled);
+		cJSON_AddBoolToObject(cfg, "uptime_enabled", st->settings.uptime_enabled);
+		cJSON_AddBoolToObject(cfg, "text_enabled", st->settings.text_enabled);
+		cJSON_AddStringToObject(cfg, "text_string", st->settings.text_string);
+		cJSON_AddBoolToObject(cfg, "logo_enabled", st->settings.logo_enabled);
+		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 	}
 
 	/* Default: status */
@@ -769,9 +764,11 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			if (st->regions[s][r].enabled)
 				region_count++;
 
-	return rss_ctrl_resp(resp_buf, resp_buf_size,
-			     "{\"status\":\"ok\",\"streams\":%d,\"regions\":%d}", st->stream_count,
-			     region_count);
+	cJSON *r = cJSON_CreateObject();
+	cJSON_AddStringToObject(r, "status", "ok");
+	cJSON_AddNumberToObject(r, "streams", st->stream_count);
+	cJSON_AddNumberToObject(r, "regions", region_count);
+	return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 }
 
 /* ── Entry point ── */

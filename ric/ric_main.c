@@ -137,8 +137,8 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 {
 	ric_state_t *st = userdata;
 
-	int rc = rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, st->cfg,
-					st->config_path);
+	int rc =
+		rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, st->cfg, st->config_path);
 	if (rc >= 0)
 		return rc;
 
@@ -156,9 +156,12 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			isp_state = val;
 			RSS_INFO("ISP mode set to %s (GPIO unchanged)", val);
 		}
-		return rss_ctrl_resp(resp_buf, resp_buf_size,
-				     "{\"status\":\"ok\",\"isp_mode\":\"%s\",\"hw_state\":\"%s\"}",
-				     isp_state, st->current_mode == RIC_MODE_DAY ? "day" : "night");
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddStringToObject(r, "status", "ok");
+		cJSON_AddStringToObject(r, "isp_mode", isp_state);
+		cJSON_AddStringToObject(r, "hw_state",
+					st->current_mode == RIC_MODE_DAY ? "day" : "night");
+		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 	}
 
 	if (strcmp(cmd, "mode") == 0) {
@@ -175,41 +178,52 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			}
 			rss_config_set_str(st->cfg, "ircut", "mode", val);
 		}
-		return rss_ctrl_resp(
-			resp_buf, resp_buf_size, "{\"status\":\"ok\",\"mode\":\"%s\",\"state\":\"%s\"}",
-			st->settings.opmode == RIC_AUTO
-				? "auto"
-				: (st->settings.opmode == RIC_FORCE_DAY ? "day" : "night"),
-			st->current_mode == RIC_MODE_DAY ? "day" : "night");
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddStringToObject(r, "status", "ok");
+		cJSON_AddStringToObject(r, "mode",
+					st->settings.opmode == RIC_AUTO	       ? "auto"
+					: st->settings.opmode == RIC_FORCE_DAY ? "day"
+									       : "night");
+		cJSON_AddStringToObject(r, "state",
+					st->current_mode == RIC_MODE_DAY ? "day" : "night");
+		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 	}
 
 	if (strcmp(cmd, "config-show") == 0) {
 		char exp_resp[256] = {0};
 		rss_ctrl_send_command("/var/run/rss/rvd.sock", "{\"cmd\":\"get-exposure\"}",
 				      exp_resp, sizeof(exp_resp), 1000);
-		return rss_ctrl_resp(
-			resp_buf, resp_buf_size,
-			"{\"status\":\"ok\",\"mode\":\"%s\",\"state\":\"%s\","
-			"\"exposure\":%s,"
-			"\"night_threshold\":%d,\"day_threshold\":%d}",
-			st->settings.opmode == RIC_AUTO
-				? "auto"
-				: (st->settings.opmode == RIC_FORCE_DAY ? "day" : "night"),
-			st->current_mode == RIC_MODE_DAY ? "day" : "night",
-			exp_resp[0] ? exp_resp : "null", st->settings.night_threshold,
-			st->settings.day_threshold);
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddStringToObject(r, "status", "ok");
+		cJSON_AddStringToObject(r, "mode",
+					st->settings.opmode == RIC_AUTO	       ? "auto"
+					: st->settings.opmode == RIC_FORCE_DAY ? "day"
+									       : "night");
+		cJSON_AddStringToObject(r, "state",
+					st->current_mode == RIC_MODE_DAY ? "day" : "night");
+		cJSON *sub = exp_resp[0] ? cJSON_Parse(exp_resp) : NULL;
+		if (sub)
+			cJSON_AddItemToObject(r, "exposure", sub);
+		cJSON_AddNumberToObject(r, "night_threshold", st->settings.night_threshold);
+		cJSON_AddNumberToObject(r, "day_threshold", st->settings.day_threshold);
+		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 	}
 
 	/* Default: status */
 	char exp_resp[256] = {0};
 	rss_ctrl_send_command("/var/run/rss/rvd.sock", "{\"cmd\":\"get-exposure\"}", exp_resp,
 			      sizeof(exp_resp), 1000);
-	return rss_ctrl_resp(
-		resp_buf, resp_buf_size,
-		"{\"status\":\"ok\",\"mode\":\"%s\",\"state\":\"%s\",\"exposure\":%s}",
-		st->settings.opmode == RIC_AUTO ? "auto"
-					   : (st->settings.opmode == RIC_FORCE_DAY ? "day" : "night"),
-		st->current_mode == RIC_MODE_DAY ? "day" : "night", exp_resp[0] ? exp_resp : "null");
+	cJSON *r = cJSON_CreateObject();
+	cJSON_AddStringToObject(r, "status", "ok");
+	cJSON_AddStringToObject(r, "mode",
+				st->settings.opmode == RIC_AUTO	       ? "auto"
+				: st->settings.opmode == RIC_FORCE_DAY ? "day"
+								       : "night");
+	cJSON_AddStringToObject(r, "state", st->current_mode == RIC_MODE_DAY ? "day" : "night");
+	cJSON *sub = exp_resp[0] ? cJSON_Parse(exp_resp) : NULL;
+	if (sub)
+		cJSON_AddItemToObject(r, "exposure", sub);
+	return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 }
 
 /* ── Entry point ── */
@@ -283,8 +297,9 @@ int main(int argc, char **argv)
 	}
 
 	RSS_INFO("ric running (mode=%s, trigger=%s, gpio_ircut=%d, gpio_ircut2=%d, gpio_irled=%d)",
-		 st.settings.opmode == RIC_AUTO ? "auto"
-					   : (st.settings.opmode == RIC_FORCE_DAY ? "day" : "night"),
+		 st.settings.opmode == RIC_AUTO
+			 ? "auto"
+			 : (st.settings.opmode == RIC_FORCE_DAY ? "day" : "night"),
 		 st.settings.trigger == RIC_TRIGGER_LUMA ? "luma" : "gain", st.settings.gpio_ircut,
 		 st.settings.gpio_ircut2, st.settings.gpio_irled);
 

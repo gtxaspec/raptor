@@ -376,28 +376,24 @@ static int rhd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "missing cmd");
 
 	if (strcmp(cmd, "clients") == 0) {
-		int n = snprintf(resp_buf, resp_buf_size,
-				 "{\"status\":\"ok\",\"count\":%d,\"max_clients\":%d,\"clients\":[",
-				 srv->client_count, srv->max_clients);
-		if (n >= resp_buf_size)
-			n = resp_buf_size - 1;
-		for (int i = 0; i < srv->client_count && n < resp_buf_size - 4; i++) {
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddStringToObject(r, "status", "ok");
+		cJSON_AddNumberToObject(r, "count", srv->client_count);
+		cJSON_AddNumberToObject(r, "max_clients", srv->max_clients);
+		cJSON *arr = cJSON_AddArrayToObject(r, "clients");
+		for (int i = 0; i < srv->client_count; i++) {
 			rhd_client_t *c = srv->clients[i];
 			char addr[INET6_ADDRSTRLEN];
 			client_addr_str(&c->addr, addr, sizeof(addr));
 			const char *type = c->is_mjpeg	 ? "mjpeg"
 					   : c->is_audio ? "audio"
 							 : "snapshot";
-			n += snprintf(resp_buf + n, resp_buf_size - n,
-				      "%s{\"ip\":\"%s\",\"type\":\"%s\"}", i > 0 ? "," : "", addr,
-				      type);
-			if (n >= resp_buf_size)
-				break;
+			cJSON *item = cJSON_CreateObject();
+			cJSON_AddStringToObject(item, "ip", addr);
+			cJSON_AddStringToObject(item, "type", type);
+			cJSON_AddItemToArray(arr, item);
 		}
-		if (n >= resp_buf_size - 2)
-			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "response truncated");
-		n += snprintf(resp_buf + n, resp_buf_size - n, "]}");
-		return n;
+		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 	}
 
 	/* Default: status */
@@ -408,16 +404,19 @@ static int rhd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		if (srv->clients[i]->is_audio)
 			audio++;
 	}
-	return rss_ctrl_resp(resp_buf, resp_buf_size,
-			     "{\"status\":\"ok\",\"clients\":%d,\"mjpeg\":%d,"
-			     "\"audio\":%d,\"port\":%d,\"jpeg_rings\":%d,\"tls\":%s}",
-			     srv->client_count, mjpeg, audio, srv->port, srv->jpeg_ring_count,
+	cJSON *r = cJSON_CreateObject();
+	cJSON_AddStringToObject(r, "status", "ok");
+	cJSON_AddNumberToObject(r, "clients", srv->client_count);
+	cJSON_AddNumberToObject(r, "mjpeg", mjpeg);
+	cJSON_AddNumberToObject(r, "audio", audio);
+	cJSON_AddNumberToObject(r, "port", srv->port);
+	cJSON_AddNumberToObject(r, "jpeg_rings", srv->jpeg_ring_count);
 #ifdef RSS_HAS_TLS
-			     srv->tls ? "true" : "false"
+	cJSON_AddBoolToObject(r, "tls", srv->tls != NULL);
 #else
-			     "false"
+	cJSON_AddBoolToObject(r, "tls", false);
 #endif
-	);
+	return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 }
 
 static int server_init(rhd_server_t *srv)

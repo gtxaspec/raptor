@@ -431,48 +431,46 @@ static int rwd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "missing cmd");
 
 	if (strcmp(cmd, "clients") == 0) {
-		int n = snprintf(resp_buf, resp_buf_size,
-				 "{\"status\":\"ok\",\"count\":%d,\"max_clients\":%d,\"clients\":[",
-				 srv->client_count, srv->max_clients);
-		if (n >= resp_buf_size)
-			n = resp_buf_size - 1;
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddStringToObject(r, "status", "ok");
+		cJSON_AddNumberToObject(r, "count", srv->client_count);
+		cJSON_AddNumberToObject(r, "max_clients", srv->max_clients);
+		cJSON *arr = cJSON_AddArrayToObject(r, "clients");
 		pthread_mutex_lock(&srv->clients_lock);
-		int first = 1;
-		for (int i = 0; i < RWD_MAX_CLIENTS && n < resp_buf_size - 4; i++) {
+		for (int i = 0; i < RWD_MAX_CLIENTS; i++) {
 			rwd_client_t *c = srv->clients[i];
 			if (!c)
 				continue;
 			char addr[INET6_ADDRSTRLEN];
 			rss_addr_str(&c->addr, addr, sizeof(addr));
-			n += snprintf(resp_buf + n, resp_buf_size - n,
-				      "%s{\"ip\":\"%s\",\"stream\":%d,\"sending\":%s,"
-				      "\"ice\":%s,\"dtls\":\"%s\"}",
-				      first ? "" : ",", addr, c->stream_idx,
-				      c->sending ? "true" : "false",
-				      c->ice_verified ? "true" : "false",
-				      c->dtls_state == RWD_DTLS_ESTABLISHED   ? "established"
-				      : c->dtls_state == RWD_DTLS_HANDSHAKING ? "handshaking"
-				      : c->dtls_state == RWD_DTLS_FAILED      ? "failed"
-									      : "new");
-			if (n >= resp_buf_size)
-				break;
-			first = 0;
+			cJSON *item = cJSON_CreateObject();
+			cJSON_AddStringToObject(item, "ip", addr);
+			cJSON_AddNumberToObject(item, "stream", c->stream_idx);
+			cJSON_AddBoolToObject(item, "sending", c->sending);
+			cJSON_AddBoolToObject(item, "ice", c->ice_verified);
+			cJSON_AddStringToObject(
+				item, "dtls",
+				c->dtls_state == RWD_DTLS_ESTABLISHED	? "established"
+				: c->dtls_state == RWD_DTLS_HANDSHAKING ? "handshaking"
+				: c->dtls_state == RWD_DTLS_FAILED	? "failed"
+									: "new");
+			cJSON_AddItemToArray(arr, item);
 		}
 		pthread_mutex_unlock(&srv->clients_lock);
-		if (n >= resp_buf_size - 2)
-			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "response truncated");
-		n += snprintf(resp_buf + n, resp_buf_size - n, "]}");
-		return n;
+		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 	}
 
 	if (strcmp(cmd, "share-rotate") == 0) {
 		if (srv->webtorrent) {
 			rwd_webtorrent_t *wt = srv->webtorrent;
 			rwd_webtorrent_rotate_key(wt);
-			return rss_ctrl_resp(resp_buf, resp_buf_size,
-					     "{\"status\":\"ok\",\"key\":\"%s\","
-					     "\"url\":\"%s#key=%s\"}",
-					     wt->share_key, wt->viewer_base_url, wt->share_key);
+			cJSON *r = cJSON_CreateObject();
+			cJSON_AddStringToObject(r, "status", "ok");
+			cJSON_AddStringToObject(r, "key", wt->share_key);
+			char url[512];
+			snprintf(url, sizeof(url), "%s#key=%s", wt->viewer_base_url, wt->share_key);
+			cJSON_AddStringToObject(r, "url", url);
+			return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 		}
 		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "webtorrent not enabled");
 	}
@@ -480,26 +478,32 @@ static int rwd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	if (strcmp(cmd, "share") == 0) {
 		if (srv->webtorrent) {
 			rwd_webtorrent_t *wt = srv->webtorrent;
-			return rss_ctrl_resp(resp_buf, resp_buf_size,
-					     "{\"status\":\"ok\",\"key\":\"%s\","
-					     "\"url\":\"%s#key=%s\"}",
-					     wt->share_key, wt->viewer_base_url, wt->share_key);
+			cJSON *r = cJSON_CreateObject();
+			cJSON_AddStringToObject(r, "status", "ok");
+			cJSON_AddStringToObject(r, "key", wt->share_key);
+			char url[512];
+			snprintf(url, sizeof(url), "%s#key=%s", wt->viewer_base_url, wt->share_key);
+			cJSON_AddStringToObject(r, "url", url);
+			return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 		}
 		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "webtorrent not enabled");
 	}
 
 	/* Default: status */
-	return rss_ctrl_resp(resp_buf, resp_buf_size,
-			     "{\"status\":\"ok\",\"clients\":%d,\"udp_port\":%d,"
-			     "\"http_port\":%d,\"dtls\":%s,\"https\":%s}",
-			     srv->client_count, srv->udp_port, srv->http_port,
-			     srv->dtls ? "true" : "false",
+	{
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddStringToObject(r, "status", "ok");
+		cJSON_AddNumberToObject(r, "clients", srv->client_count);
+		cJSON_AddNumberToObject(r, "udp_port", srv->udp_port);
+		cJSON_AddNumberToObject(r, "http_port", srv->http_port);
+		cJSON_AddBoolToObject(r, "dtls", srv->dtls != NULL);
 #ifdef RSS_HAS_TLS
-			     srv->tls ? "true" : "false"
+		cJSON_AddBoolToObject(r, "https", srv->tls != NULL);
 #else
-			     "false"
+		cJSON_AddBoolToObject(r, "https", false);
 #endif
-	);
+		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
+	}
 }
 
 /* ── Main event loop ── */
