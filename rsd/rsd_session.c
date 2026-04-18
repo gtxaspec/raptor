@@ -284,12 +284,13 @@ static int detect_stream_idx(const rsd_server_t *srv, CharSlice99 uri)
 			return s;
 	}
 
+	static char *const default_paths[RSD_STREAM_COUNT] = {
+		"/stream0", "/stream1", "/stream2", "/stream3", "/stream4", "/stream5",
+	};
 	for (int s = 0; s < RSD_STREAM_COUNT; s++) {
 		if (srv->endpoints[s][0])
 			continue;
-		char path[16];
-		snprintf(path, sizeof(path), "/stream%d", s);
-		if (CharSlice99_primitive_ends_with(base, CharSlice99_from_str(path)))
+		if (CharSlice99_primitive_ends_with(base, CharSlice99_from_str(default_paths[s])))
 			return s;
 	}
 
