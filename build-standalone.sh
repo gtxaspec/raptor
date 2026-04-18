@@ -10,6 +10,7 @@
 #
 # Options:
 #   --no-tls       Disable TLS (no RTSPS/WebRTC)
+#   --alt          Enable mbedtls ALT patches (jz-crypto HW accel)
 #   --no-aac       Disable AAC codec
 #   --no-opus      Disable Opus codec
 #   --no-mp3       Disable MP3 codec
@@ -98,6 +99,7 @@ RAPTOR_HAL_VERSION=HEAD
 RAPTOR_IPC_VERSION=HEAD
 RAPTOR_COMMON_VERSION=HEAD
 MBEDTLS_VERSION=v3.6.5
+JZ_CRYPTO_VERSION=HEAD
 OPUS_VERSION=1.5.2
 FAAC_VERSION=6d9b02edd268bd2f3377a388ed77dde4f34556c8
 HELIX_VERSION=05f2fb0045cc294b4e0d1a1a9747b89c22c1fea4
@@ -110,6 +112,7 @@ UCLIBC_SHIM_VERSION=HEAD
 PLATFORM=""
 LIBC=uclibc
 OPT_TLS=1
+OPT_ALT=0
 OPT_AAC=1
 OPT_OPUS=1
 OPT_MP3=1
@@ -126,6 +129,7 @@ usage() {
     echo ""
     echo "Options:"
     echo "  --no-tls       Disable TLS/WebRTC"
+    echo "  --alt          Enable mbedtls ALT patches (jz-crypto HW accel)"
     echo "  --no-aac       Disable AAC codec"
     echo "  --no-opus      Disable Opus codec"
     echo "  --no-mp3       Disable MP3 codec"
@@ -142,6 +146,7 @@ for arg in "$@"; do
     case "$arg" in
         t10|t20|t21|t23|t30|t31|t32|t40|t41) PLATFORM="$arg" ;;
         --no-tls)    OPT_TLS=0 ;;
+        --alt)       OPT_ALT=1 ;;
         --no-aac)    OPT_AAC=0 ;;
         --no-opus)   OPT_OPUS=0 ;;
         --no-mp3)    OPT_MP3=0 ;;
@@ -371,6 +376,36 @@ build_libc_shim() {
     ${CROSS_COMPILE}gcc -fPIC -shared -o "$SYSROOT_DIR/usr/lib/lib${shimname}.so" "$shimsrc"
 }
 
+install_jz_crypto_alt() {
+    # Bake jz-crypto's mbedtls *_ALT implementations (AES/CCM/GCM via /dev/aes)
+    # into the standalone mbedtls source tree. Only needed for static builds —
+    # shared builds pick up ALT from the device's buildroot-installed
+    # libmbedtls.so at runtime. Mirrors thingino-firmware/package/thingino-
+    # mbedtls/mbedtls-override.mk so prod + dev stay in lockstep.
+    local src="$DEPS_DIR/mbedtls"
+    local alt="$DEPS_DIR/jz-crypto/aes"
+
+    if [ ! -d "$alt" ]; then
+        echo "WARNING: jz-crypto/aes not present; mbedtls will use software crypto"
+        return
+    fi
+
+    echo "Installing jz-crypto ALT (AES/CCM/GCM) into mbedtls..."
+    local config_h="$src/include/mbedtls/mbedtls_config.h"
+    sed -i 's|^//#define MBEDTLS_AES_ALT|#define MBEDTLS_AES_ALT|' "$config_h"
+    sed -i 's|^//#define MBEDTLS_CCM_ALT|#define MBEDTLS_CCM_ALT|' "$config_h"
+    sed -i 's|^//#define MBEDTLS_GCM_ALT|#define MBEDTLS_GCM_ALT|' "$config_h"
+
+    cp "$alt/aes_alt.h" "$alt/ccm_alt.h" "$alt/gcm_alt.h" "$src/include/mbedtls/"
+    cp "$alt/aes_alt.c" "$alt/ccm_alt.c" "$alt/gcm_alt.c" "$src/library/"
+
+    # Idempotent: only splice the three ALT sources into src_crypto if absent.
+    local cmake="$src/library/CMakeLists.txt"
+    if ! grep -q 'aes_alt\.c' "$cmake"; then
+        sed -i '/^    aes\.c$/a\    aes_alt.c\n    ccm_alt.c\n    gcm_alt.c' "$cmake"
+    fi
+}
+
 build_mbedtls() {
     local src="$DEPS_DIR/mbedtls"
     local builddir="$src/build-cross"
@@ -391,8 +426,14 @@ build_mbedtls() {
         sed -i 's|^//#define MBEDTLS_SSL_DTLS_SRTP|#define MBEDTLS_SSL_DTLS_SRTP|' "$config_h" 2>/dev/null || \
         echo "#define MBEDTLS_SSL_DTLS_SRTP" >> "$config_h"
     fi
+    [ "$OPT_ALT" = 1 ] && install_jz_crypto_alt
     local shared=ON static=OFF
     if [ "$OPT_STATIC" = 1 ]; then shared=OFF; static=ON; fi
+    # Enable jz-crypto ALT's runtime stats logs in standalone builds — this
+    # is the dev/test path, so make the hardware-engine hits visible on
+    # stderr. Buildroot leaves JZ_CRYPTO_DEBUG off for silent production.
+    local cflags="-Os"
+    [ "$OPT_ALT" = 1 ] && cflags="$cflags -DJZ_CRYPTO_DEBUG=1"
     run mbedtls-cmake cmake .. \
         -DCMAKE_C_COMPILER="${CROSS_COMPILE}gcc" \
         -DCMAKE_SYSTEM_NAME=Linux \
@@ -401,9 +442,17 @@ build_mbedtls() {
         -DUSE_STATIC_MBEDTLS_LIBRARY="$static" \
         -DENABLE_PROGRAMS=OFF \
         -DENABLE_TESTING=OFF \
-        -DCMAKE_C_FLAGS="-Os"
+        -DCMAKE_C_FLAGS="$cflags"
     run mbedtls-build make -j"$JOBS"
     run mbedtls-install make install
+    # Ensure sysroot holds only the chosen link form. Without this, stale
+    # .so files from a prior shared build would outrank the freshly-built
+    # .a at link time (and vice versa), silently defeating --static.
+    if [ "$OPT_STATIC" = 1 ]; then
+        rm -f "$SYSROOT_DIR"/usr/lib/libmbed{tls,crypto,x509}*.so*
+    else
+        rm -f "$SYSROOT_DIR"/usr/lib/libmbed{tls,crypto,x509}*.a
+    fi
     cd "$SCRIPT_DIR"
 }
 
@@ -629,7 +678,7 @@ build_compy() {
 
 echo "=== Raptor standalone build ==="
 echo "Platform:  $PLATFORM_UPPER (SDK $SDK_VERSION)"
-echo "Features:  TLS=$OPT_TLS AAC=$OPT_AAC OPUS=$OPT_OPUS MP3=$OPT_MP3 STATIC=$OPT_STATIC LOCAL=$OPT_LOCAL"
+echo "Features:  TLS=$OPT_TLS ALT=$OPT_ALT AAC=$OPT_AAC OPUS=$OPT_OPUS MP3=$OPT_MP3 STATIC=$OPT_STATIC LOCAL=$OPT_LOCAL"
 echo "Deps dir:  $DEPS_DIR"
 echo ""
 
@@ -648,6 +697,7 @@ clone_repo compy        https://github.com/gtxaspec/compy            "$COMPY_VER
 clone_repo libschrift   https://github.com/tomolt/libschrift         "$SCHRIFT_VERSION"
 
 [ "$OPT_TLS" = 1 ] && clone_repo mbedtls https://github.com/Mbed-TLS/mbedtls "$MBEDTLS_VERSION" submodules
+[ "$OPT_TLS" = 1 ] && [ "$OPT_ALT" = 1 ] && clone_repo jz-crypto https://github.com/gtxaspec/jz-crypto "$JZ_CRYPTO_VERSION"
 [ "$OPT_OPUS" = 1 ] && clone_repo opus https://github.com/xiph/opus "v$OPUS_VERSION"
 [ "$OPT_AAC" = 1 ] && clone_repo faac https://github.com/knik0/faac "$FAAC_VERSION"
 if [ "$OPT_AAC" = 1 ] || [ "$OPT_MP3" = 1 ]; then
