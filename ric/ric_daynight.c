@@ -220,7 +220,7 @@ void ric_set_mode(ric_state_t *st, ric_mode_t mode)
 static uint32_t json_get_uint(const cJSON *root, const char *key)
 {
 	const cJSON *item = cJSON_GetObjectItem(root, key);
-	return cJSON_IsNumber(item) ? (uint32_t)item->valueint : 0;
+	return cJSON_IsNumber(item) ? (uint32_t)item->valuedouble : 0;
 }
 
 void ric_poll_exposure(ric_state_t *st)
