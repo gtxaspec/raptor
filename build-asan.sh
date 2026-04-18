@@ -171,7 +171,7 @@ const char *rss_build_hash = "asan";
 const char *rss_build_time = "asan-build";
 BUILDEOF
 $CC $CFLAGS -c "$OUT/rss_build_info.c" -o "$OUT/rss_build_info.o"
-ar rcs "$OUT/librss_common.a" "$OUT"/rss_log.o "$OUT"/rss_config.o "$OUT"/rss_daemon.o "$OUT"/rss_util.o "$OUT"/rss_ctrl_common.o "$OUT"/rss_http.o "$OUT"/cJSON.o "$OUT"/rss_build_info.o
+ar rcs "$OUT/librss_common.a" "$OUT"/rss_log.o "$OUT"/rss_config.o "$OUT"/rss_daemon.o "$OUT"/rss_util.o "$OUT"/rss_ctrl_common.o "$OUT"/rss_http.o "$OUT"/cJSON.o
 
 echo "=== raptor-ipc ==="
 $CC $CFLAGS -c "$IPC_DIR/src/rss_ring.c" -o "$OUT/rss_ring.o"
@@ -186,7 +186,7 @@ ar rcs "$OUT/libmock_hal.a" "$OUT/mock_hal.o"
 echo "=== rss_tls ==="
 $CC $CFLAGS $TLS_CFLAGS -c "$COMMON_DIR/src/rss_tls.c" -o "$OUT/rss_tls.o"
 
-LIBS="$OUT/librss_ipc.a $OUT/librss_common.a"
+LIBS="$OUT/librss_ipc.a $OUT/librss_common.a $OUT/rss_build_info.o"
 LIBS_HAL="$OUT/libmock_hal.a $LIBS"
 LIBS_TLS="$OUT/rss_tls.o $MBEDTLS_LIBS"
 
