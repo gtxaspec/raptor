@@ -133,51 +133,92 @@ log "config: $CONF"
 log "binaries: $DIR"
 echo ""
 
+FAILED=""
+SKIPPED=""
+
+launch() {
+    local name="$1"; shift
+    log "starting $name..."
+    "$@" >> /tmp/${name}.log 2>&1 &
+    eval "PID_${name}=$!"
+}
+
+check() {
+    local name="$1"
+    local pid
+
+    # Already categorized from a prior check
+    echo "$SKIPPED $FAILED" | grep -qw "$name" && return 0
+
+    eval "pid=\$PID_${name}"
+    [ -z "$pid" ] && return 0
+
+    if kill -0 "$pid" 2>/dev/null; then
+        return 0
+    fi
+
+    # Process exited — check why
+    wait "$pid" 2>/dev/null
+    local rc=$?
+    if [ "$rc" = 0 ]; then
+        SKIPPED="$SKIPPED $name"
+    else
+        log "ERROR: $name crashed (exit $rc):"
+        tail -5 /tmp/${name}.log 2>/dev/null | sed 's/^/  /'
+        FAILED="$FAILED $name"
+        return 1
+    fi
+    return 0
+}
+
 # RVD must start first (creates rings, encoder, ISP)
-log "starting rvd (video pipeline)..."
-$DIR/rvd/rvd -c "$CONF" -f -d >> /tmp/rvd.log 2>&1 &
+launch rvd $DIR/rvd/rvd -c "$CONF" -f -d
 sleep 4
+check rvd || { log "rvd is required — aborting"; exit 1; }
 
 # Audio producer
-log "starting rad (audio)..."
-$DIR/rad/rad -c "$CONF" -f -d >> /tmp/rad.log 2>&1 &
+launch rad $DIR/rad/rad -c "$CONF" -f -d
 sleep 2
+check rad
 
 # OSD renderer
-log "starting rod (OSD)..."
-$DIR/rod/rod -c "$CONF" -f -d >> /tmp/rod.log 2>&1 &
+launch rod $DIR/rod/rod -c "$CONF" -f -d
 
 # Stream consumers
-log "starting rsd (RTSP)..."
-$DIR/rsd/rsd -c "$CONF" -f -d >> /tmp/rsd.log 2>&1 &
-
-log "starting rhd (HTTP/MJPEG)..."
-$DIR/rhd/rhd -c "$CONF" -f -d >> /tmp/rhd.log 2>&1 &
-
-log "starting rmr (recording)..."
-$DIR/rmr/rmr -c "$CONF" -f -d >> /tmp/rmr.log 2>&1 &
-
-log "starting rwd (WebRTC)..."
-$DIR/rwd/rwd -c "$CONF" -f -d >> /tmp/rwd.log 2>&1 &
+launch rsd $DIR/rsd/rsd -c "$CONF" -f -d
+launch rhd $DIR/rhd/rhd -c "$CONF" -f -d
+launch rmr $DIR/rmr/rmr -c "$CONF" -f -d
+launch rwd $DIR/rwd/rwd -c "$CONF" -f -d
 sleep 1
+for d in rod rsd rhd rmr rwd; do check $d; done
 
 # Aux daemons
-log "starting ric (IR-cut)..."
-$DIR/ric/ric -c "$CONF" -f -d >> /tmp/ric.log 2>&1 &
-
-log "starting rmd (motion)..."
-$DIR/rmd/rmd -c "$CONF" -f -d >> /tmp/rmd.log 2>&1 &
+launch ric $DIR/ric/ric -c "$CONF" -f -d
+launch rmd $DIR/rmd/rmd -c "$CONF" -f -d
 sleep 2
+for d in ric rmd; do check $d; done
+
+# Final settle — catch delayed crashes
+sleep 2
+log "verifying all daemons survived..."
+for d in rvd rad rod rsd rhd rmr rwd ric rmd; do check $d; done
 
 echo ""
-log "all daemons started:"
 for d in rvd rad rod rsd rhd rmr rwd ric rmd; do
     pid=$(pidof $d 2>/dev/null)
     if [ -n "$pid" ]; then
         printf "  %-6s pid %-6s OK\n" "$d" "$pid"
-    else
-        printf "  %-6s %-13s FAILED\n" "$d" ""
+    elif echo "$SKIPPED" | grep -qw "$d"; then
+        printf "  %-6s %13s SKIPPED\n" "$d" ""
+    elif echo "$FAILED" | grep -qw "$d"; then
+        printf "  %-6s %13s CRASHED\n" "$d" ""
     fi
 done
 echo ""
+[ -n "$SKIPPED" ] && log "skipped (disabled in config):$SKIPPED"
+if [ -n "$FAILED" ]; then
+    log "FAILED:$FAILED"
+    log "check logs: /tmp/{daemon}.log"
+    exit 1
+fi
 log "logs: /tmp/{rvd,rad,rod,rsd,rhd,rmr,rwd,ric,rmd}.log"
