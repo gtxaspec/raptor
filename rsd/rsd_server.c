@@ -494,9 +494,9 @@ static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	if (strcmp(cmd, "clients") == 0) {
 		cJSON *r = cJSON_CreateObject();
 		cJSON_AddStringToObject(r, "status", "ok");
-		cJSON_AddNumberToObject(r, "count", srv->client_count);
 		cJSON *arr = cJSON_AddArrayToObject(r, "clients");
 		pthread_mutex_lock(&srv->clients_lock);
+		cJSON_AddNumberToObject(r, "count", srv->client_count);
 		for (int i = 0; i < srv->client_count; i++) {
 			rsd_client_t *c = srv->clients[i];
 			char addr[INET6_ADDRSTRLEN];

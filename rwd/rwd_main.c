@@ -433,10 +433,10 @@ static int rwd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	if (strcmp(cmd, "clients") == 0) {
 		cJSON *r = cJSON_CreateObject();
 		cJSON_AddStringToObject(r, "status", "ok");
-		cJSON_AddNumberToObject(r, "count", srv->client_count);
 		cJSON_AddNumberToObject(r, "max_clients", srv->max_clients);
 		cJSON *arr = cJSON_AddArrayToObject(r, "clients");
 		pthread_mutex_lock(&srv->clients_lock);
+		cJSON_AddNumberToObject(r, "count", srv->client_count);
 		for (int i = 0; i < RWD_MAX_CLIENTS; i++) {
 			rwd_client_t *c = srv->clients[i];
 			if (!c)
