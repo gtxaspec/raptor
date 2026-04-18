@@ -182,9 +182,17 @@ typedef struct rsd_server {
 	/* Digest auth (NULL = no auth required) */
 	Compy_Auth *auth;
 
-	/* Custom stream endpoints (empty = use defaults) */
-	char endpoint_main[64];
-	char endpoint_sub[64];
+	/* Custom endpoint aliases, indexed by stream number.
+	 *   [0] sensor 0 main — config key: endpoint_main
+	 *   [1] sensor 0 sub  — config key: endpoint_sub
+	 *   [2] sensor 1 main — config key: endpoint_s1_main
+	 *   [3] sensor 1 sub  — config key: endpoint_s1_sub
+	 *   [4] sensor 2 main — config key: endpoint_s2_main
+	 *   [5] sensor 2 sub  — config key: endpoint_s2_sub
+	 * Blank = use default /streamN. Setting an alias disables the default
+	 * path for that stream (per-stream security gate). Validated and
+	 * populated by rsd_endpoints_load(). */
+	char endpoints[RSD_STREAM_COUNT][64];
 
 	/* SDP session name and info */
 	char session_name[64];
@@ -203,6 +211,7 @@ void rsd_server_deinit(rsd_server_t *srv);
 
 /* rsd_session.c */
 void rsd_handle_rtsp_data(rsd_client_t *client, const char *data, size_t len);
+void rsd_endpoints_load(rsd_server_t *srv, rss_config_t *cfg);
 
 /* rsd_ring_reader.c */
 void rsd_set_server_for_readers(rsd_server_t *srv);

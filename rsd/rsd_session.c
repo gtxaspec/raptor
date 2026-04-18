@@ -5,10 +5,11 @@
  * the RTSP method handlers via compy's Controller interface.
  */
 
+#include <ctype.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <inttypes.h>
 #include <unistd.h>
 
 #include "rsd.h"
@@ -145,12 +146,131 @@ static CharSlice99 uri_strip_last(CharSlice99 uri)
 	return uri;
 }
 
-/* Detect stream index from URI. Returns -1 for unknown endpoints. */
+/* Config keys in stream-index order. Sole authoritative mapping between
+ * [rtsp] config names and stream slots — any code that needs to translate
+ * between the two should go through this table. */
+static const char *const ENDPOINT_KEYS[RSD_STREAM_COUNT] = {
+	"endpoint_main",   "endpoint_sub",     "endpoint_s1_main",
+	"endpoint_s1_sub", "endpoint_s2_main", "endpoint_s2_sub",
+};
+
+/* Allowed alias characters: alphanumerics plus '-', '_', '.'. Restrictive
+ * by design — anything more exotic would complicate URI matching without
+ * enabling any reasonable identifier. */
+static bool alias_chars_ok(const char *s)
+{
+	for (size_t i = 0; s[i]; i++) {
+		if (!isalnum((unsigned char)s[i]) && s[i] != '-' && s[i] != '_' && s[i] != '.')
+			return false;
+	}
+	return true;
+}
+
+/* True when the alias has the syntactic shape of a default /streamN path
+ * ("stream" followed by decimal digits). Rejecting this shape regardless
+ * of the current RSD_STREAM_COUNT prevents a future capacity increase
+ * from silently turning a user alias into a shadow of a default path. */
+static bool alias_looks_like_default(const char *s)
+{
+	if (strncmp(s, "stream", 6) != 0)
+		return false;
+	const char *tail = s + 6;
+	if (!*tail)
+		return false;
+	for (; *tail; tail++) {
+		if (*tail < '0' || *tail > '9')
+			return false;
+	}
+	return true;
+}
+
+/* Load and validate [rtsp] endpoint aliases into srv->endpoints[]. Any
+ * alias that fails a check is cleared (silently disabled at runtime) and
+ * logged as a warning, so a misconfigured field never blocks startup but
+ * is always visible. Each accepted alias is logged at INFO level. */
+void rsd_endpoints_load(rsd_server_t *srv, rss_config_t *cfg)
+{
+	static const char *const reserved_paths[] = {
+		"main", "sub", "audio", "backchannel", ".", "..", NULL,
+	};
+
+	for (int s = 0; s < RSD_STREAM_COUNT; s++) {
+		const char *raw = rss_config_get_str(cfg, "rtsp", ENDPOINT_KEYS[s], "");
+
+		/* Reject over-long input before rss_strlcpy silently truncates. */
+		if (strlen(raw) >= sizeof(srv->endpoints[s])) {
+			RSS_WARN("rtsp.%s exceeds %zu chars; disabling alias", ENDPOINT_KEYS[s],
+				 sizeof(srv->endpoints[s]) - 1);
+			srv->endpoints[s][0] = '\0';
+			continue;
+		}
+		rss_strlcpy(srv->endpoints[s], raw, sizeof(srv->endpoints[s]));
+
+		char *alias = srv->endpoints[s];
+		if (!alias[0])
+			continue;
+
+		if (!alias_chars_ok(alias)) {
+			RSS_WARN("rtsp.%s=\"%s\" has disallowed characters "
+				 "(allowed: a-z 0-9 - _ .); disabling alias",
+				 ENDPOINT_KEYS[s], alias);
+			alias[0] = '\0';
+			continue;
+		}
+
+		if (alias_looks_like_default(alias)) {
+			RSS_WARN("rtsp.%s=\"%s\" conflicts with default /streamN "
+				 "naming; disabling alias",
+				 ENDPOINT_KEYS[s], alias);
+			alias[0] = '\0';
+			continue;
+		}
+
+		bool reject = false;
+		for (int r = 0; reserved_paths[r]; r++) {
+			if (strcmp(alias, reserved_paths[r]) == 0) {
+				RSS_WARN("rtsp.%s=\"%s\" conflicts with a reserved "
+					 "path; disabling alias",
+					 ENDPOINT_KEYS[s], alias);
+				reject = true;
+				break;
+			}
+		}
+		if (reject) {
+			alias[0] = '\0';
+			continue;
+		}
+
+		for (int i = 0; i < s; i++) {
+			if (srv->endpoints[i][0] && strcmp(srv->endpoints[i], alias) == 0) {
+				RSS_WARN("rtsp.%s=\"%s\" duplicates rtsp.%s; "
+					 "disabling alias",
+					 ENDPOINT_KEYS[s], alias, ENDPOINT_KEYS[i]);
+				reject = true;
+				break;
+			}
+		}
+		if (reject) {
+			alias[0] = '\0';
+			continue;
+		}
+
+		RSS_INFO("RTSP: stream %d -> /%s (default /stream%d disabled)", s, alias, s);
+	}
+}
+
+/* Detect stream index from URI. Returns -1 for unknown endpoints.
+ *
+ * Per-stream security gate: a configured alias disables the default
+ * /streamN path for that stream only. Streams with no alias keep all
+ * defaults. Resolution order (first match wins):
+ *   1. Custom alias (srv->endpoints[s]).
+ *   2. /streamN — only for streams with a blank alias.
+ *   3. Legacy /main, /sub, / — only if that stream has a blank alias.
+ *   4. Bare /audio, /backchannel → main — only if main has a blank alias.
+ */
 static int detect_stream_idx(const rsd_server_t *srv, CharSlice99 uri)
 {
-	bool custom = srv->endpoint_main[0] || srv->endpoint_sub[0];
-
-	/* Strip /audio or /backchannel suffix to get base stream path */
 	CharSlice99 base = uri;
 	bool is_subresource = false;
 	if (CharSlice99_primitive_ends_with(uri, CharSlice99_from_str("/audio")) ||
@@ -159,31 +279,32 @@ static int detect_stream_idx(const rsd_server_t *srv, CharSlice99 uri)
 		is_subresource = true;
 	}
 
-	if (custom) {
-		/* Custom endpoints — exclusive, defaults disabled */
-		if (srv->endpoint_sub[0] && uri_ends_with(base, srv->endpoint_sub))
-			return RSD_STREAM_SUB;
-		if (srv->endpoint_main[0] && uri_ends_with(base, srv->endpoint_main))
-			return RSD_STREAM_MAIN;
-	} else {
-		/* Default endpoints — /stream0 through /stream5 for multi-sensor */
-		for (int s = 0; s < RSD_STREAM_COUNT; s++) {
-			char path[24];
-			snprintf(path, sizeof(path), "/stream%d", s);
-			if (CharSlice99_primitive_ends_with(base, CharSlice99_from_str(path)))
-				return s;
-		}
-		/* Legacy aliases */
-		if (CharSlice99_primitive_ends_with(base, CharSlice99_from_str("/sub")))
-			return RSD_STREAM_SUB;
-		if (CharSlice99_primitive_ends_with(base, CharSlice99_from_str("/main")) ||
-		    CharSlice99_primitive_ends_with(base, CharSlice99_from_str("/")))
-			return RSD_STREAM_MAIN;
-		/* Sub-resources of default main stream */
-		if (is_subresource)
-			return RSD_STREAM_MAIN;
+	for (int s = 0; s < RSD_STREAM_COUNT; s++) {
+		if (uri_ends_with(base, srv->endpoints[s]))
+			return s;
 	}
-	return -1; /* unknown endpoint */
+
+	for (int s = 0; s < RSD_STREAM_COUNT; s++) {
+		if (srv->endpoints[s][0])
+			continue;
+		char path[16];
+		snprintf(path, sizeof(path), "/stream%d", s);
+		if (CharSlice99_primitive_ends_with(base, CharSlice99_from_str(path)))
+			return s;
+	}
+
+	if (!srv->endpoints[RSD_STREAM_SUB][0] &&
+	    CharSlice99_primitive_ends_with(base, CharSlice99_from_str("/sub")))
+		return RSD_STREAM_SUB;
+	if (!srv->endpoints[RSD_STREAM_MAIN][0] &&
+	    (CharSlice99_primitive_ends_with(base, CharSlice99_from_str("/main")) ||
+	     CharSlice99_primitive_ends_with(base, CharSlice99_from_str("/"))))
+		return RSD_STREAM_MAIN;
+
+	if (is_subresource && !srv->endpoints[RSD_STREAM_MAIN][0])
+		return RSD_STREAM_MAIN;
+
+	return -1;
 }
 
 static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request *req)
@@ -210,14 +331,13 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 	Compy_Writer sdp_w = compy_string_writer(sdp);
 	ssize_t ret = 0;
 
-	COMPY_SDP_DESCRIBE(ret, sdp_w, (COMPY_SDP_VERSION, "0"),
-			   (COMPY_SDP_ORIGIN, "Raptor %lld 1 IN IP4 0.0.0.0",
-			    (long long)rss_timestamp_us()),
-			   (COMPY_SDP_SESSION_NAME, "%s", self->srv->session_name),
-			   (COMPY_SDP_CONNECTION, "IN IP4 0.0.0.0"), (COMPY_SDP_TIME, "0 0"),
-			   (COMPY_SDP_ATTR, "tool:Raptor RSS"),
-			   (COMPY_SDP_ATTR, "control:*"),
-			   (COMPY_SDP_ATTR, "range:npt=now-"));
+	COMPY_SDP_DESCRIBE(
+		ret, sdp_w, (COMPY_SDP_VERSION, "0"),
+		(COMPY_SDP_ORIGIN, "Raptor %lld 1 IN IP4 0.0.0.0", (long long)rss_timestamp_us()),
+		(COMPY_SDP_SESSION_NAME, "%s", self->srv->session_name),
+		(COMPY_SDP_CONNECTION, "IN IP4 0.0.0.0"), (COMPY_SDP_TIME, "0 0"),
+		(COMPY_SDP_ATTR, "tool:Raptor RSS"), (COMPY_SDP_ATTR, "control:*"),
+		(COMPY_SDP_ATTR, "range:npt=now-"));
 
 	if (self->srv->session_info[0])
 		COMPY_SDP_DESCRIBE(ret, sdp_w, (COMPY_SDP_INFO, "%s", self->srv->session_info));
@@ -257,9 +377,10 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 
 			/* Build fmtp with optional sprop-parameter-sets */
 			char fmtp[1024];
-			int foff = snprintf(fmtp, sizeof(fmtp),
-					    "fmtp:%d packetization-mode=1;profile-level-id=%02X%02X%02X",
-					    RSD_VIDEO_PT, profile_idc, constraint_flags, level_idc);
+			int foff = snprintf(
+				fmtp, sizeof(fmtp),
+				"fmtp:%d packetization-mode=1;profile-level-id=%02X%02X%02X",
+				RSD_VIDEO_PT, profile_idc, constraint_flags, level_idc);
 			if (foff < 0 || foff >= (int)sizeof(fmtp))
 				foff = (int)sizeof(fmtp) - 1;
 			if (sps_l > 0 && pps_l > 0) {
@@ -354,8 +475,8 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 
 	/* Content-Base: tells clients how to resolve relative control URLs
 	 * (RFC 2326 Section 12.5). Must end with '/'. */
-	compy_header(ctx, COMPY_HEADER_CONTENT_BASE, "%.*s/",
-		     (int)req->start_line.uri.len, req->start_line.uri.ptr);
+	compy_header(ctx, COMPY_HEADER_CONTENT_BASE, "%.*s/", (int)req->start_line.uri.len,
+		     req->start_line.uri.ptr);
 	compy_header(ctx, COMPY_HEADER_CONTENT_TYPE, "application/sdp");
 	compy_body(ctx, CharSlice99_from_str(sdp));
 	compy_respond_ok(ctx);
@@ -594,16 +715,16 @@ static void rsd_client_t_play(VSelf, Compy_Context *ctx, const Compy_Request *re
 		if (self->video.rtp) {
 			uint16_t vseq = Compy_RtpTransport_get_seq(self->video.rtp);
 			off += snprintf(rtp_info + off, sizeof(rtp_info) - off,
-					"url=%.*s/video;seq=%u;rtptime=0",
-					(int)base.len, base.ptr, vseq);
+					"url=%.*s/video;seq=%u;rtptime=0", (int)base.len, base.ptr,
+					vseq);
 		}
 		if (self->audio.rtp) {
 			uint16_t aseq = Compy_RtpTransport_get_seq(self->audio.rtp);
 			if (off > 0)
 				off += snprintf(rtp_info + off, sizeof(rtp_info) - off, ",");
 			off += snprintf(rtp_info + off, sizeof(rtp_info) - off,
-					"url=%.*s/audio;seq=%u;rtptime=0",
-					(int)base.len, base.ptr, aseq);
+					"url=%.*s/audio;seq=%u;rtptime=0", (int)base.len, base.ptr,
+					aseq);
 		}
 
 		if (off > 0)
