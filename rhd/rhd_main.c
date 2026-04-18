@@ -113,8 +113,8 @@ static void rhd_sendq_flush_locked(rhd_sendq_t *q)
 	q->tail = 0;
 }
 
-static int rhd_sendq_push(rhd_sendq_t *q, uint8_t type, const uint8_t *data,
-			   uint32_t len, int codec, int sample_rate)
+static int rhd_sendq_push(rhd_sendq_t *q, uint8_t type, const uint8_t *data, uint32_t len,
+			  int codec, int sample_rate)
 {
 	pthread_mutex_lock(&q->lock);
 	if (q->shutdown) {
@@ -176,9 +176,8 @@ static void *rhd_client_send_thread(void *arg)
 		if (entry.type == RHD_FRAME_MJPEG) {
 			ret = http_send_mjpeg_frame(c, entry.data, entry.len);
 		} else {
-			ret = rhd_audio_send_frame(c, entry.codec, entry.sample_rate,
-						   entry.data, entry.len,
-						   c->audio_page_seq, c->audio_granule);
+			ret = rhd_audio_send_frame(c, entry.codec, entry.sample_rate, entry.data,
+						   entry.len, c->audio_page_seq, c->audio_granule);
 			if (ret >= 0) {
 				c->audio_page_seq++;
 				if (entry.codec == RHD_CODEC_OPUS)
@@ -380,7 +379,9 @@ static int rhd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		int n = snprintf(resp_buf, resp_buf_size,
 				 "{\"status\":\"ok\",\"count\":%d,\"max_clients\":%d,\"clients\":[",
 				 srv->client_count, srv->max_clients);
-		for (int i = 0; i < srv->client_count; i++) {
+		if (n >= resp_buf_size)
+			n = resp_buf_size - 1;
+		for (int i = 0; i < srv->client_count && n < resp_buf_size - 4; i++) {
 			rhd_client_t *c = srv->clients[i];
 			char addr[INET6_ADDRSTRLEN];
 			client_addr_str(&c->addr, addr, sizeof(addr));
@@ -390,8 +391,13 @@ static int rhd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			n += snprintf(resp_buf + n, resp_buf_size - n,
 				      "%s{\"ip\":\"%s\",\"type\":\"%s\"}", i > 0 ? "," : "", addr,
 				      type);
+			if (n >= resp_buf_size)
+				break;
 		}
-		return snprintf(resp_buf + n, resp_buf_size - n, "]}");
+		if (n >= resp_buf_size - 2)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "response truncated");
+		n += snprintf(resp_buf + n, resp_buf_size - n, "]}");
+		return n;
 	}
 
 	/* Default: status */
@@ -411,7 +417,7 @@ static int rhd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 #else
 			     "false"
 #endif
-			     );
+	);
 }
 
 static int server_init(rhd_server_t *srv)
@@ -587,8 +593,8 @@ static void server_run(rhd_server_t *srv)
 					if (!ac->is_audio)
 						continue;
 					if (!ac->send_thread_running ||
-					    rhd_sendq_push(&ac->sendq, RHD_FRAME_AUDIO,
-							   audio_buf, alen, srv->audio_codec,
+					    rhd_sendq_push(&ac->sendq, RHD_FRAME_AUDIO, audio_buf,
+							   alen, srv->audio_codec,
 							   srv->audio_sample_rate) < 0)
 						remove_client(srv, i);
 				}

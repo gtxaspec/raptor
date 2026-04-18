@@ -248,8 +248,7 @@ static bool sockaddr_equal(const struct sockaddr_storage *a, const struct sockad
 	if (a->ss_family == AF_INET) {
 		const struct sockaddr_in *a4 = (const struct sockaddr_in *)a;
 		const struct sockaddr_in *b4 = (const struct sockaddr_in *)b;
-		return a4->sin_port == b4->sin_port &&
-		       a4->sin_addr.s_addr == b4->sin_addr.s_addr;
+		return a4->sin_port == b4->sin_port && a4->sin_addr.s_addr == b4->sin_addr.s_addr;
 	}
 	if (a->ss_family == AF_INET6) {
 		const struct sockaddr_in6 *a6 = (const struct sockaddr_in6 *)a;
@@ -435,9 +434,11 @@ static int rwd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		int n = snprintf(resp_buf, resp_buf_size,
 				 "{\"status\":\"ok\",\"count\":%d,\"max_clients\":%d,\"clients\":[",
 				 srv->client_count, srv->max_clients);
+		if (n >= resp_buf_size)
+			n = resp_buf_size - 1;
 		pthread_mutex_lock(&srv->clients_lock);
 		int first = 1;
-		for (int i = 0; i < RWD_MAX_CLIENTS; i++) {
+		for (int i = 0; i < RWD_MAX_CLIENTS && n < resp_buf_size - 4; i++) {
 			rwd_client_t *c = srv->clients[i];
 			if (!c)
 				continue;
@@ -453,10 +454,15 @@ static int rwd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				      : c->dtls_state == RWD_DTLS_HANDSHAKING ? "handshaking"
 				      : c->dtls_state == RWD_DTLS_FAILED      ? "failed"
 									      : "new");
+			if (n >= resp_buf_size)
+				break;
 			first = 0;
 		}
 		pthread_mutex_unlock(&srv->clients_lock);
-		return snprintf(resp_buf + n, resp_buf_size - n, "]}");
+		if (n >= resp_buf_size - 2)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "response truncated");
+		n += snprintf(resp_buf + n, resp_buf_size - n, "]}");
+		return n;
 	}
 
 	if (strcmp(cmd, "share-rotate") == 0) {
@@ -493,7 +499,7 @@ static int rwd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 #else
 			     "false"
 #endif
-			     );
+	);
 }
 
 /* ── Main event loop ── */
@@ -632,12 +638,13 @@ static void rwd_run(rwd_server_t *srv)
 int main(int argc, char **argv)
 {
 	rss_daemon_ctx_t dctx;
-	int ret = rss_daemon_init(&dctx, "rwd", argc, argv, ""
+	int ret = rss_daemon_init(&dctx, "rwd", argc, argv,
+				  ""
 #ifdef RAPTOR_WEBTORRENT
-		" webtorrent"
+				  " webtorrent"
 #endif
 #ifdef RAPTOR_AAC
-		" aac"
+				  " aac"
 #endif
 	);
 	if (ret != 0)
