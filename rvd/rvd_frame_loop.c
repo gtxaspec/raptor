@@ -116,10 +116,16 @@ void *rvd_encoder_thread(void *arg)
 			for (uint32_t n = 0; n < frame.nal_count; n++)
 				total_len += frame.nals[n].length;
 
-			if (!s->enc_buf_base)
+			if (!s->enc_buf_base) {
 				s->enc_buf_base = vaddr;
-			uint8_t buf_idx = (uint8_t)((vaddr - s->enc_buf_base) /
-						    s->enc_cfg.stream_buf_size);
+			} else if (!s->enc_buf_stride && vaddr != s->enc_buf_base) {
+				s->enc_buf_stride = (uint32_t)(vaddr - s->enc_buf_base);
+			}
+
+			uint8_t buf_idx = 0;
+			if (s->enc_buf_stride)
+				buf_idx = (uint8_t)((vaddr - s->enc_buf_base) /
+						    s->enc_buf_stride);
 
 			rss_ring_publish_ref(s->ring, rmem_off, total_len, frame.timestamp,
 					     primary_nal_type(&frame), frame.is_key ? 1 : 0,

@@ -524,14 +524,8 @@ int rvd_pipeline_init(rvd_state_t *st)
 
 	/* Ring reference mode: zero-copy from encoder rmem */
 	st->refmode = rss_config_get_bool(cfg, "ring", "refmode", false);
-	if (st->refmode) {
-		if (!caps->has_stream_buf_size) {
-			RSS_WARN("refmode not supported on %s, falling back to embedded", caps->soc_name);
-			st->refmode = false;
-		} else {
-			RSS_INFO("ring reference mode enabled (zero-copy)");
-		}
-	}
+	if (st->refmode)
+		RSS_INFO("ring reference mode enabled (zero-copy)");
 
 	/* ── 4. Load stream configs (per sensor) ── */
 	int def_w = sensor_w > 0 ? sensor_w : 1920;
@@ -883,8 +877,10 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 
 		/* Pre-CreateChn tuning via config fields */
 		if (st->refmode && !s->is_jpeg) {
+			const rss_hal_caps_t *caps = st->ops->get_caps(st->hal_ctx);
 			s->enc_cfg.max_stream_cnt = 5;
-			s->enc_cfg.stream_buf_size = 256 * 1024;
+			if (caps && caps->has_stream_buf_size)
+				s->enc_cfg.stream_buf_size = 256 * 1024;
 		} else if (st->low_latency) {
 			s->enc_cfg.max_stream_cnt = 1;
 		}
