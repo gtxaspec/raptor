@@ -109,25 +109,35 @@ void *rvd_encoder_thread(void *arg)
 			continue;
 		}
 
-		if (st->refmode && st->rmem_virt_base && frame.nal_count > 0) {
+		if (st->refmode && frame.nal_count > 0) {
 			uintptr_t vaddr = (uintptr_t)frame.nals[0].data;
 			uint32_t total_len = 0;
 			for (uint32_t n = 0; n < frame.nal_count; n++)
 				total_len += frame.nals[n].length;
 
-			/* Verify data is within the rmem mapping */
-			if (vaddr < st->rmem_virt_base ||
-			    vaddr + total_len > st->rmem_virt_base + st->rmem_size) {
+			/* Compute base for offset calculation */
+			uintptr_t ref_base;
+			uint32_t ref_size;
+			if (st->refmode_shm) {
+				ref_base = (uintptr_t)st->enc_shm_addr[idx];
+				ref_size = st->enc_shm_size[idx];
+			} else {
+				ref_base = st->rmem_virt_base;
+				ref_size = st->rmem_size;
+			}
+
+			if (!ref_base || vaddr < ref_base ||
+			    vaddr + total_len > ref_base + ref_size) {
 				if (frame_count == 0)
-					RSS_WARN("stream%d: frame vaddr 0x%lx outside rmem "
-						 "[0x%lx..0x%lx], disabling refmode",
+					RSS_WARN("stream%d: vaddr 0x%lx outside ref region "
+						 "[0x%lx..0x%lx], embedded fallback",
 						 idx, (unsigned long)vaddr,
-						 (unsigned long)st->rmem_virt_base,
-						 (unsigned long)(st->rmem_virt_base + st->rmem_size));
+						 (unsigned long)ref_base,
+						 (unsigned long)(ref_base + ref_size));
 				goto embedded_publish;
 			}
 
-			uint32_t rmem_off = (uint32_t)(vaddr - st->rmem_virt_base);
+			uint32_t rmem_off = (uint32_t)(vaddr - ref_base);
 
 			if (!s->enc_buf_base) {
 				s->enc_buf_base = vaddr;

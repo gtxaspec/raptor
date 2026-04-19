@@ -9,6 +9,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "rvd.h"
 
@@ -522,19 +526,15 @@ int rvd_pipeline_init(rvd_state_t *st)
 	if (st->low_latency)
 		RSS_INFO("low latency mode enabled");
 
-	/* Ring reference mode: zero-copy from encoder rmem.
-	 * Only viable on Allegro-based encoders (T31/T40/T41) where the VPU
-	 * DMA's encoded output directly into rmem. Ingenic VPU encoders
-	 * (T10-T30/T32/T33) malloc the output buffer — needs SHM injection
-	 * approach (not yet implemented). */
+	/* Ring reference mode: zero-copy from encoder output buffers.
+	 * Allegro (T31/T40/T41): encoder DMA's to rmem, consumers mmap /dev/rmem.
+	 * Ingenic VPU (T10-T30/T32/T33): SHM injection into channel struct,
+	 *   encoder writes to POSIX SHM via DMMU, consumers mmap the SHM. */
 	st->refmode = rss_config_get_bool(cfg, "ring", "refmode", false);
 	if (st->refmode) {
-		if (!caps->has_stream_buf_size) {
-			RSS_INFO("refmode not available on %s (non-Allegro encoder)", caps->soc_name);
-			st->refmode = false;
-		} else {
-			RSS_INFO("ring reference mode enabled (zero-copy)");
-		}
+		st->refmode_shm = !caps->has_stream_buf_size;
+		RSS_INFO("ring reference mode enabled (%s)",
+			 st->refmode_shm ? "SHM injection" : "rmem zero-copy");
 	}
 
 	/* ── 4. Load stream configs (per sensor) ── */
@@ -891,6 +891,55 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 			s->enc_cfg.max_stream_cnt = 5;
 			if (caps && caps->has_stream_buf_size)
 				s->enc_cfg.stream_buf_size = 256 * 1024;
+			else
+				s->enc_cfg.buf_size = 256 * 1024;
+
+			/* SHM injection path: create named SHM and inject */
+			if (st->refmode_shm) {
+				char shm_name[64];
+				get_ring_name(s->sensor_idx,
+					      s->chn == 0 ? "main" : "sub",
+					      shm_name, sizeof(shm_name));
+				char full_shm[128];
+				snprintf(full_shm, sizeof(full_shm), "/rss_enc_%s", shm_name);
+
+				uint32_t per_buf = s->enc_cfg.buf_size ? s->enc_cfg.buf_size : 256 * 1024;
+				uint32_t shm_size = s->enc_cfg.max_stream_cnt * per_buf;
+
+				shm_unlink(full_shm);
+				int sfd = shm_open(full_shm, O_CREAT | O_RDWR, 0666);
+				if (sfd < 0 || ftruncate(sfd, shm_size) < 0) {
+					RSS_WARN("stream%d: SHM create failed, embedded fallback", idx);
+					if (sfd >= 0) { close(sfd); shm_unlink(full_shm); }
+					st->refmode = false;
+				} else {
+					void *addr = mmap(NULL, shm_size, PROT_READ | PROT_WRITE,
+							  MAP_SHARED, sfd, 0);
+					if (addr == MAP_FAILED) {
+						RSS_WARN("stream%d: SHM mmap failed", idx);
+						close(sfd);
+						shm_unlink(full_shm);
+						st->refmode = false;
+					} else {
+						st->enc_shm_addr[idx] = addr;
+						st->enc_shm_size[idx] = shm_size;
+						st->enc_shm_fd[idx] = sfd;
+						ret = RSS_HAL_CALL(st->ops, enc_inject_stream_shm,
+								   st->hal_ctx, s->chn, addr, shm_size);
+						if (ret != RSS_OK) {
+							RSS_WARN("stream%d: SHM injection failed (%d)", idx, ret);
+							munmap(addr, shm_size);
+							close(sfd);
+							shm_unlink(full_shm);
+							st->enc_shm_addr[idx] = NULL;
+							st->refmode = false;
+						} else {
+							RSS_INFO("stream%d: encoder SHM %s (%uKB)",
+								 idx, full_shm, shm_size / 1024);
+						}
+					}
+				}
+			}
 		} else if (st->low_latency) {
 			s->enc_cfg.max_stream_cnt = 1;
 		}
@@ -1028,9 +1077,15 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 					rvd_profile_idc(s->enc_cfg.profile),
 					rvd_level_idc(s->enc_cfg.width, s->enc_cfg.height));
 
-				if (st->refmode && st->rmem_size > 0)
+				if (st->refmode && st->refmode_shm && st->enc_shm_size[idx] > 0)
+					rss_ring_enable_refmode(s->ring, st->enc_shm_size[idx],
+								0, s->enc_cfg.max_stream_cnt,
+								s->enc_cfg.buf_size ? s->enc_cfg.buf_size
+								: s->enc_cfg.stream_buf_size);
+				else if (st->refmode && !st->refmode_shm && st->rmem_size > 0)
 					rss_ring_enable_refmode(s->ring, st->rmem_size,
-								st->rmem_mmap_offset, 5,
+								st->rmem_mmap_offset,
+								s->enc_cfg.max_stream_cnt,
 								s->enc_cfg.stream_buf_size);
 			}
 		}

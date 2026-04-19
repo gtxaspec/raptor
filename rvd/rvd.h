@@ -76,9 +76,15 @@ struct rvd_state {
 
 	/* Ring reference mode (zero-copy) */
 	bool refmode;
+	bool refmode_shm;             /* true = SHM injection, false = /dev/rmem */
 	uintptr_t rmem_virt_base;
 	uint32_t rmem_size;
 	uint32_t rmem_mmap_offset;
+
+	/* Per-stream SHM for encoder output (SHM injection path) */
+	void *enc_shm_addr[RVD_MAX_STREAMS];
+	uint32_t enc_shm_size[RVD_MAX_STREAMS];
+	int enc_shm_fd[RVD_MAX_STREAMS];
 
 	/* Per-stream thread management */
 	pthread_t enc_tids[RVD_MAX_STREAMS];
