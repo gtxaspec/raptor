@@ -766,13 +766,15 @@ int rvd_pipeline_init(rvd_state_t *st)
 	/* Refmode: discover /dev/rmem mapping (must happen after HAL init) */
 	if (st->refmode) {
 		ret = RSS_HAL_CALL(st->ops, enc_get_rmem_info, st->hal_ctx,
-				   &st->rmem_virt_base, &st->rmem_size);
+				   &st->rmem_virt_base, &st->rmem_size,
+				   &st->rmem_mmap_offset);
 		if (ret != RSS_OK) {
 			RSS_WARN("enc_get_rmem_info failed (%d), disabling refmode", ret);
 			st->refmode = false;
 		} else {
-			RSS_INFO("rmem: virt_base=0x%lx size=%uKB",
-				 (unsigned long)st->rmem_virt_base, st->rmem_size / 1024);
+			RSS_INFO("rmem: virt_base=0x%lx size=%uKB mmap_offset=0x%x",
+				 (unsigned long)st->rmem_virt_base, st->rmem_size / 1024,
+				 st->rmem_mmap_offset);
 		}
 	}
 
@@ -1027,7 +1029,8 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 					rvd_level_idc(s->enc_cfg.width, s->enc_cfg.height));
 
 				if (st->refmode && st->rmem_size > 0)
-					rss_ring_enable_refmode(s->ring, st->rmem_size, 5,
+					rss_ring_enable_refmode(s->ring, st->rmem_size,
+								st->rmem_mmap_offset, 5,
 								s->enc_cfg.stream_buf_size);
 			}
 		}

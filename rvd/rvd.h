@@ -77,6 +77,7 @@ struct rvd_state {
 	bool refmode;
 	uintptr_t rmem_virt_base;
 	uint32_t rmem_size;
+	uint32_t rmem_mmap_offset;
 
 	/* Per-stream thread management */
 	pthread_t enc_tids[RVD_MAX_STREAMS];
