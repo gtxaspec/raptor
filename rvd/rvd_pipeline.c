@@ -888,7 +888,7 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 		/* Pre-CreateChn tuning via config fields */
 		if (st->refmode && !s->is_jpeg) {
 			const rss_hal_caps_t *caps = st->ops->get_caps(st->hal_ctx);
-			s->enc_cfg.max_stream_cnt = 5;
+			s->enc_cfg.max_stream_cnt = 8;
 			if (caps && caps->has_stream_buf_size)
 				s->enc_cfg.stream_buf_size = 256 * 1024;
 			else
