@@ -334,18 +334,15 @@ static void handle_udp_packet(rwd_server_t *srv, const uint8_t *buf, size_t len,
 		 * attacker spoofing the ICE-verified source address could
 		 * trigger repeated IDR requests (bandwidth/CPU amplification).
 		 * Mitigated by: source must match ICE-verified addr, client
-		 * must be in sending state, and IDR requests are naturally
-		 * rate-limited by the encoder (coalesced per GOP). */
+		 * must be in sending state, and rwd_request_idr enforces
+		 * a per-stream cooldown. */
 		uint8_t pt = buf[1] & 0x7F;
 		uint8_t fmt = buf[0] & 0x1F;
 		if (pt == 206 && (fmt == 1 || fmt == 4)) {
 			pthread_mutex_lock(&srv->clients_lock);
 			rwd_client_t *c = find_client_by_addr(srv, from, from_len);
-			if (c && c->sending) {
-				int si = c->stream_idx;
-				if (si >= 0 && si < RWD_STREAM_COUNT && srv->video_rings[si])
-					rss_ring_request_idr(srv->video_rings[si]);
-			}
+			if (c && c->sending)
+				rwd_request_idr(srv, c->stream_idx);
 			pthread_mutex_unlock(&srv->clients_lock);
 		}
 

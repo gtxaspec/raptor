@@ -32,11 +32,12 @@
 #include <mbedtls/timing.h>
 #include <mbedtls/sha256.h>
 
-#define RWD_MAX_CLIENTS	   4
-#define RWD_UDP_BUF_SIZE   2048
-#define RWD_HTTP_BUF_SIZE  16384
-#define RWD_SDP_BUF_SIZE   4096
-#define RWD_SESSION_ID_LEN 16
+#define RWD_MAX_CLIENTS	    4
+#define RWD_IDR_COOLDOWN_US 2000000 /* 2s between IDR requests per stream */
+#define RWD_UDP_BUF_SIZE    2048
+#define RWD_HTTP_BUF_SIZE   16384
+#define RWD_SDP_BUF_SIZE    4096
+#define RWD_SESSION_ID_LEN  16
 
 /* RTP payload types and clocks */
 #define RWD_VIDEO_PT	96
@@ -68,7 +69,7 @@
 
 /* RFC 8445 §5.1.2.1: (2^24 * type_pref) + (2^8 * local_pref) + (256 - component_id)
  * srflx: type_pref=100, local_pref=65535, component_id=1 (RTP) */
-#define ICE_PRIORITY_SRFLX	    ((100 << 24) | (65535 << 8) | 255)
+#define ICE_PRIORITY_SRFLX ((100 << 24) | (65535 << 8) | 255)
 
 /* ── DTLS server context (shared by all clients) ── */
 
@@ -220,6 +221,7 @@ struct rwd_server {
 	uint8_t *video_bufs[RWD_STREAM_COUNT];
 	uint32_t video_buf_sizes[RWD_STREAM_COUNT];
 	uint32_t video_last_codec[RWD_STREAM_COUNT]; /* detect codec change on reconnect */
+	int64_t last_idr_us[RWD_STREAM_COUNT];	     /* rate-limit IDR requests */
 
 	/* Audio ring */
 	rss_ring_t *audio_ring;
@@ -253,6 +255,18 @@ struct rwd_server {
 	rss_tls_ctx_t *tls; /* HTTPS for signaling (NULL = plain HTTP) */
 #endif
 };
+
+/* Rate-limited IDR request — prevents encoder flood when consumer falls behind */
+static inline void rwd_request_idr(rwd_server_t *srv, int si)
+{
+	if (si < 0 || si >= RWD_STREAM_COUNT || !srv->video_rings[si])
+		return;
+	int64_t now = rss_timestamp_us();
+	if (now - srv->last_idr_us[si] < RWD_IDR_COOLDOWN_US)
+		return;
+	srv->last_idr_us[si] = now;
+	rss_ring_request_idr(srv->video_rings[si]);
+}
 
 /* ── rwd_dtls.c ── */
 

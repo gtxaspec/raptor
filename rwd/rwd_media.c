@@ -280,10 +280,12 @@ int rwd_media_setup(rwd_client_t *c)
 	/* Wake reader threads so they start polling rings immediately */
 	pthread_cond_broadcast(&srv->clients_cond);
 
-	/* Request IDR so we get a keyframe quickly */
+	/* Request IDR so we get a keyframe quickly (bypass cooldown) */
 	int si = c->stream_idx;
-	if (si >= 0 && si < RWD_STREAM_COUNT && srv->video_rings[si])
+	if (si >= 0 && si < RWD_STREAM_COUNT && srv->video_rings[si]) {
+		srv->last_idr_us[si] = rss_timestamp_us();
 		rss_ring_request_idr(srv->video_rings[si]);
+	}
 
 	RSS_DEBUG("media: SRTP stack ready for %s (IDR requested)", c->session_id);
 	return 0;
@@ -652,22 +654,19 @@ void *rwd_video_reader_thread(void *arg)
 			rss_ring_slot_t meta;
 			uint64_t read_seq = srv->video_read_seq[s];
 
-			/* Skip to latest frame to minimize latency.
-			 * Request IDR since we skipped reference frames —
-			 * without it, the decoder shows pixelation until
-			 * the next natural GOP keyframe. */
+			/* Skip to latest frame to minimize latency */
 			const rss_ring_header_t *vhdr = rss_ring_get_header(srv->video_rings[s]);
 			uint64_t ws = vhdr->write_seq;
 			if (ws > read_seq + 1 && read_seq > 0) {
 				read_seq = ws - 1;
-				rss_ring_request_idr(srv->video_rings[s]);
+				rwd_request_idr(srv, s);
 			}
 
 			ret = rss_ring_read(srv->video_rings[s], &read_seq, srv->video_bufs[s],
 					    srv->video_buf_sizes[s], &length, &meta);
 			if (ret == RSS_EOVERFLOW) {
 				srv->video_read_seq[s] = read_seq;
-				rss_ring_request_idr(srv->video_rings[s]);
+				rwd_request_idr(srv, s);
 				continue;
 			}
 			if (ret != 0)
