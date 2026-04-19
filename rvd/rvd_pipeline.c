@@ -1069,6 +1069,11 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 					data = max_data;
 			}
 
+			/* Refmode: data region unused, minimal placeholder */
+			if (st->refmode && ((st->refmode_shm && st->enc_shm_size[idx] > 0) ||
+					    (!st->refmode_shm && st->rmem_size > 0)))
+				data = 4096;
+
 			s->ring = rss_ring_create(ring_name, slots_cfg, data);
 			if (s->ring) {
 				rss_ring_set_stream_info(
