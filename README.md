@@ -69,6 +69,7 @@ ring buffers at runtime, gracefully skipping any that don't exist.
 | [raptor-ipc](https://github.com/gtxaspec/raptor-ipc) | SHM ring buffers, OSD double-buffer SHM, and Unix domain control socket protocol. |
 | [raptor-common](https://github.com/gtxaspec/raptor-common) | Config parser, logging, daemonize, signal handling, timestamp utilities. |
 | [compy](https://github.com/gtxaspec/compy) | RTSP/RTP server library (used by RSD). |
+| [raptor-docs](https://github.com/gtxaspec/raptor-docs) | Architecture docs, design notes, and API reference. |
 
 ## Dependencies
 
