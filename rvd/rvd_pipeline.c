@@ -522,10 +522,20 @@ int rvd_pipeline_init(rvd_state_t *st)
 	if (st->low_latency)
 		RSS_INFO("low latency mode enabled");
 
-	/* Ring reference mode: zero-copy from encoder rmem */
+	/* Ring reference mode: zero-copy from encoder rmem.
+	 * Only viable on Allegro-based encoders (T31/T40/T41) where the VPU
+	 * DMA's encoded output directly into rmem. Ingenic VPU encoders
+	 * (T10-T30/T32/T33) malloc the output buffer — needs SHM injection
+	 * approach (not yet implemented). */
 	st->refmode = rss_config_get_bool(cfg, "ring", "refmode", false);
-	if (st->refmode)
-		RSS_INFO("ring reference mode enabled (zero-copy)");
+	if (st->refmode) {
+		if (!caps->has_stream_buf_size) {
+			RSS_INFO("refmode not available on %s (non-Allegro encoder)", caps->soc_name);
+			st->refmode = false;
+		} else {
+			RSS_INFO("ring reference mode enabled (zero-copy)");
+		}
+	}
 
 	/* ── 4. Load stream configs (per sensor) ── */
 	int def_w = sensor_w > 0 ? sensor_w : 1920;
