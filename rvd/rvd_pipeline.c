@@ -1027,7 +1027,8 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 					rvd_level_idc(s->enc_cfg.width, s->enc_cfg.height));
 
 				if (st->refmode && st->rmem_size > 0)
-					rss_ring_enable_refmode(s->ring, st->rmem_size, 5);
+					rss_ring_enable_refmode(s->ring, st->rmem_size, 5,
+								s->enc_cfg.stream_buf_size);
 			}
 		}
 
