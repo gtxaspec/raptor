@@ -72,6 +72,11 @@ struct rvd_state {
 	/* Low latency mode */
 	bool low_latency;
 
+	/* Ring reference mode (zero-copy) */
+	bool refmode;
+	uintptr_t rmem_virt_base;
+	uint32_t rmem_size;
+
 	/* Per-stream thread management */
 	pthread_t enc_tids[RVD_MAX_STREAMS];
 	rvd_enc_thread_arg_t enc_args[RVD_MAX_STREAMS];

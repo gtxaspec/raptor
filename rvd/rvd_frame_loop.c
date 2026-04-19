@@ -109,17 +109,30 @@ void *rvd_encoder_thread(void *arg)
 			continue;
 		}
 
-		/* Publish NALs directly to ring via scatter-gather */
-		rss_iov_t iov[16];
-		uint32_t cnt = frame.nal_count;
-		if (cnt > 16)
-			cnt = 16;
-		for (uint32_t n = 0; n < cnt; n++) {
-			iov[n].data = frame.nals[n].data;
-			iov[n].length = frame.nals[n].length;
+		if (st->refmode && st->rmem_virt_base && frame.nal_count > 0) {
+			/* Zero-copy: publish rmem offset instead of copying */
+			uintptr_t vaddr = (uintptr_t)frame.nals[0].data;
+			uint32_t rmem_off = (uint32_t)(vaddr - st->rmem_virt_base);
+			uint32_t total_len = 0;
+			for (uint32_t n = 0; n < frame.nal_count; n++)
+				total_len += frame.nals[n].length;
+			uint8_t buf_idx = (uint8_t)(rmem_off / s->enc_cfg.stream_buf_size);
+			rss_ring_publish_ref(s->ring, rmem_off, total_len, frame.timestamp,
+					     primary_nal_type(&frame), frame.is_key ? 1 : 0,
+					     buf_idx);
+		} else {
+			/* Embedded mode: copy NALs into ring via scatter-gather */
+			rss_iov_t iov[16];
+			uint32_t cnt = frame.nal_count;
+			if (cnt > 16)
+				cnt = 16;
+			for (uint32_t n = 0; n < cnt; n++) {
+				iov[n].data = frame.nals[n].data;
+				iov[n].length = frame.nals[n].length;
+			}
+			rss_ring_publish_iov(s->ring, iov, cnt, frame.timestamp,
+					     primary_nal_type(&frame), frame.is_key ? 1 : 0);
 		}
-		rss_ring_publish_iov(s->ring, iov, cnt, frame.timestamp, primary_nal_type(&frame),
-				     frame.is_key ? 1 : 0);
 
 		RSS_HAL_CALL(st->ops, enc_release_frame, st->hal_ctx, s->chn, &frame);
 

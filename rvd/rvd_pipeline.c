@@ -522,6 +522,17 @@ int rvd_pipeline_init(rvd_state_t *st)
 	if (st->low_latency)
 		RSS_INFO("low latency mode enabled");
 
+	/* Ring reference mode: zero-copy from encoder rmem */
+	st->refmode = rss_config_get_bool(cfg, "ring", "refmode", false);
+	if (st->refmode) {
+		if (!caps->has_stream_buf_size) {
+			RSS_WARN("refmode not supported on %s, falling back to embedded", caps->soc_name);
+			st->refmode = false;
+		} else {
+			RSS_INFO("ring reference mode enabled (zero-copy)");
+		}
+	}
+
 	/* ── 4. Load stream configs (per sensor) ── */
 	int def_w = sensor_w > 0 ? sensor_w : 1920;
 	int def_h = sensor_h > 0 ? sensor_h : 1080;
@@ -752,6 +763,19 @@ int rvd_pipeline_init(rvd_state_t *st)
 		}
 	}
 
+	/* Refmode: discover /dev/rmem mapping (must happen after HAL init) */
+	if (st->refmode) {
+		ret = RSS_HAL_CALL(st->ops, enc_get_rmem_info, st->hal_ctx,
+				   &st->rmem_virt_base, &st->rmem_size);
+		if (ret != RSS_OK) {
+			RSS_WARN("enc_get_rmem_info failed (%d), disabling refmode", ret);
+			st->refmode = false;
+		} else {
+			RSS_INFO("rmem: virt_base=0x%lx size=%uKB",
+				 (unsigned long)st->rmem_virt_base, st->rmem_size / 1024);
+		}
+	}
+
 	/* Init all streams: video first (creates encoder groups), then JPEG
 	 * (registers into parent video's group). */
 	for (int i = 0; i < st->stream_count; i++) {
@@ -855,14 +879,19 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 			return ret;
 		}
 
+		/* Pre-CreateChn tuning via config fields */
+		if (st->refmode && !s->is_jpeg) {
+			s->enc_cfg.max_stream_cnt = 5;
+			s->enc_cfg.stream_buf_size = 256 * 1024;
+		} else if (st->low_latency) {
+			s->enc_cfg.max_stream_cnt = 1;
+		}
+
 		ret = RSS_HAL_CALL(st->ops, enc_create_channel, st->hal_ctx, s->chn, &s->enc_cfg);
 		if (ret != RSS_OK) {
 			RSS_ERROR("enc_create_channel(%d) failed: %d", s->chn, ret);
 			goto fail_enc_chn;
 		}
-
-		if (st->low_latency)
-			RSS_HAL_CALL(st->ops, enc_set_max_stream_cnt, st->hal_ctx, s->chn, 1);
 
 		ret = RSS_HAL_CALL(st->ops, enc_register_channel, st->hal_ctx, s->chn, s->chn);
 		if (ret != RSS_OK) {
@@ -983,13 +1012,23 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 					data = max_data;
 			}
 
+			if (st->refmode) {
+				data = 4096;
+				RSS_INFO("stream %d: refmode ring (metadata-only, %dKB placeholder)",
+					 idx, data / 1024);
+			}
+
 			s->ring = rss_ring_create(ring_name, slots_cfg, data);
-			if (s->ring)
+			if (s->ring) {
 				rss_ring_set_stream_info(
 					s->ring, idx, s->enc_cfg.codec, s->enc_cfg.width,
 					s->enc_cfg.height, s->enc_cfg.fps_num, s->enc_cfg.fps_den,
 					rvd_profile_idc(s->enc_cfg.profile),
 					rvd_level_idc(s->enc_cfg.width, s->enc_cfg.height));
+
+				if (st->refmode && st->rmem_size > 0)
+					rss_ring_enable_refmode(s->ring, st->rmem_size, 5);
+			}
 		}
 
 		if (!s->ring) {
