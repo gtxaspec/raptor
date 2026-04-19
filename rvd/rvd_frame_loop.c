@@ -109,7 +109,8 @@ void *rvd_encoder_thread(void *arg)
 			continue;
 		}
 
-		if (st->refmode && frame.nal_count > 0) {
+		const rss_ring_header_t *rhdr = rss_ring_get_header(s->ring);
+		if (rhdr && (rhdr->flags & RSS_RING_FLAG_REFMODE) && frame.nal_count > 0) {
 			uintptr_t vaddr = (uintptr_t)frame.nals[0].data;
 			uint32_t total_len = 0;
 			for (uint32_t n = 0; n < frame.nal_count; n++)
