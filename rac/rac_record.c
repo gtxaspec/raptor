@@ -74,7 +74,7 @@ int cmd_record(const char *dest, int max_seconds)
 			sample_rate);
 
 	uint64_t read_seq = 0;
-	uint8_t *frame_buf = malloc(hdr->data_size);
+	uint8_t *frame_buf = malloc(rss_ring_max_frame_size(ring));
 	if (!frame_buf) {
 		fprintf(stderr, "rac: malloc failed\n");
 		rss_ring_close(ring);
@@ -97,7 +97,7 @@ int cmd_record(const char *dest, int max_seconds)
 
 		uint32_t length = 0;
 		rss_ring_slot_t meta;
-		ret = rss_ring_read(ring, &read_seq, frame_buf, hdr->data_size, &length, &meta);
+		ret = rss_ring_read(ring, &read_seq, frame_buf, rss_ring_max_frame_size(ring), &length, &meta);
 		if (ret != 0)
 			continue;
 

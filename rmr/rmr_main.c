@@ -450,9 +450,10 @@ static void record_loop(rmr_state_t *st)
 			st->video_ring = rss_ring_open(st->video_ring_name);
 			if (st->video_ring) {
 				const rss_ring_header_t *vhdr = rss_ring_get_header(st->video_ring);
-				if (vhdr->data_size > st->frame_buf_size) {
-					uint8_t *new_frame = malloc(vhdr->data_size);
-					uint8_t *new_avcc = malloc(vhdr->data_size);
+				uint32_t mfs = rss_ring_max_frame_size(st->video_ring);
+				if (mfs > st->frame_buf_size) {
+					uint8_t *new_frame = malloc(mfs);
+					uint8_t *new_avcc = malloc(mfs);
 					if (!new_frame || !new_avcc) {
 						free(new_frame);
 						free(new_avcc);
@@ -464,8 +465,8 @@ static void record_loop(rmr_state_t *st)
 					free(st->avcc_buf);
 					st->frame_buf = new_frame;
 					st->avcc_buf = new_avcc;
-					st->frame_buf_size = vhdr->data_size;
-					st->avcc_buf_size = vhdr->data_size;
+					st->frame_buf_size = mfs;
+					st->avcc_buf_size = mfs;
 				}
 				st->video_codec = vhdr->codec;
 				st->video_read_seq = 0;
@@ -816,7 +817,7 @@ int main(int argc, char **argv)
 		 st.height, st.fps_num);
 
 	/* Allocate buffers */
-	st.frame_buf_size = vhdr->data_size;
+	st.frame_buf_size = rss_ring_max_frame_size(st.video_ring);
 	st.frame_buf = malloc(st.frame_buf_size);
 	st.avcc_buf_size = st.frame_buf_size;
 	st.avcc_buf = malloc(st.avcc_buf_size);

@@ -382,9 +382,7 @@ int rsd_server_init(rsd_server_t *srv)
 		srv->video[s].last_width = hdr->width;
 		srv->video[s].last_height = hdr->height;
 
-		/* Frame buffer: sized to largest possible slot payload.
-		 * data_size / slot_count = max bytes per frame in the ring. */
-		srv->video[s].frame_buf_size = hdr->data_size / hdr->slot_count;
+		srv->video[s].frame_buf_size = rss_ring_max_frame_size(srv->video[s].ring);
 		if (srv->video[s].frame_buf_size < 256 * 1024)
 			srv->video[s].frame_buf_size = 256 * 1024;
 		srv->video[s].frame_buf = malloc(srv->video[s].frame_buf_size);

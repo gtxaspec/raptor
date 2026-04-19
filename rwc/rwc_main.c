@@ -702,14 +702,14 @@ int main(int argc, char **argv)
 	/* Allocate video frame buffer */
 	st.frame_buf_size = 512 * 1024;
 	if (st.jpeg_ring) {
-		const rss_ring_header_t *hdr = rss_ring_get_header(st.jpeg_ring);
-		if (hdr->data_size > st.frame_buf_size)
-			st.frame_buf_size = hdr->data_size;
+		uint32_t mfs = rss_ring_max_frame_size(st.jpeg_ring);
+		if (mfs > st.frame_buf_size)
+			st.frame_buf_size = mfs;
 	}
 	if (st.video_ring) {
-		const rss_ring_header_t *hdr = rss_ring_get_header(st.video_ring);
-		if (hdr->data_size > st.frame_buf_size)
-			st.frame_buf_size = hdr->data_size;
+		uint32_t mfs = rss_ring_max_frame_size(st.video_ring);
+		if (mfs > st.frame_buf_size)
+			st.frame_buf_size = mfs;
 	}
 
 	st.frame_buf = malloc(st.frame_buf_size);

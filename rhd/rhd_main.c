@@ -480,8 +480,9 @@ static void server_run(rhd_server_t *srv)
 				RSS_DEBUG("%s ring available: %ux%u", name, hdr->width,
 					  hdr->height);
 				srv->jpeg_ring_count++;
-				if (hdr->data_size > frame_buf_size)
-					frame_buf_size = hdr->data_size;
+				uint32_t mfs = rss_ring_max_frame_size(srv->jpeg_rings[srv->jpeg_ring_count - 1]);
+				if (mfs > frame_buf_size)
+					frame_buf_size = mfs;
 			}
 		}
 		if (srv->jpeg_ring_count > 0)
@@ -746,9 +747,10 @@ static void server_run(rhd_server_t *srv)
 						jpeg_read_seqs[j] = 0;
 						const rss_ring_header_t *hdr =
 							rss_ring_get_header(srv->jpeg_rings[j]);
-						if (hdr->data_size > frame_buf_size) {
+						uint32_t mfs = rss_ring_max_frame_size(srv->jpeg_rings[j]);
+						if (mfs > frame_buf_size) {
 							free(frame_buf);
-							frame_buf_size = hdr->data_size;
+							frame_buf_size = mfs;
 							frame_buf = malloc(frame_buf_size);
 							if (!frame_buf)
 								frame_buf_size = 0;

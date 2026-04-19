@@ -534,8 +534,7 @@ void *rwd_video_reader_thread(void *arg)
 		if (!srv->video_rings[s])
 			continue;
 		const rss_ring_header_t *vhdr = rss_ring_get_header(srv->video_rings[s]);
-		srv->video_buf_sizes[s] =
-			vhdr->data_size / (vhdr->slot_count ? vhdr->slot_count : 1);
+		srv->video_buf_sizes[s] = rss_ring_max_frame_size(srv->video_rings[s]);
 		if (srv->video_buf_sizes[s] < 256 * 1024)
 			srv->video_buf_sizes[s] = 256 * 1024;
 		srv->video_bufs[s] = malloc(srv->video_buf_sizes[s]);
@@ -561,8 +560,7 @@ void *rwd_video_reader_thread(void *arg)
 				if (srv->video_rings[s]) {
 					const rss_ring_header_t *h =
 						rss_ring_get_header(srv->video_rings[s]);
-					uint32_t ds =
-						h->data_size / (h->slot_count ? h->slot_count : 1);
+					uint32_t ds = rss_ring_max_frame_size(srv->video_rings[s]);
 					if (ds < 256 * 1024)
 						ds = 256 * 1024;
 					if (ds > srv->video_buf_sizes[s]) {

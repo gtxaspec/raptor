@@ -345,11 +345,9 @@ void *rsd_video_reader_thread(void *arg)
 				usleep(200000);
 				continue;
 			}
-			const rss_ring_header_t *h = rss_ring_get_header(rctx->ring);
-			if (rctx->frame_buf_size < h->data_size) {
-				/* Copy-on-push sendq means no send thread references
-				 * frame_buf, so it's safe to free+realloc here. */
-				uint8_t *new_buf = malloc(h->data_size);
+			uint32_t max_frame = rss_ring_max_frame_size(rctx->ring);
+			if (rctx->frame_buf_size < max_frame) {
+				uint8_t *new_buf = malloc(max_frame);
 				if (!new_buf) {
 					rss_ring_close(rctx->ring);
 					rctx->ring = NULL;
@@ -358,7 +356,7 @@ void *rsd_video_reader_thread(void *arg)
 				}
 				free(rctx->frame_buf);
 				rctx->frame_buf = new_buf;
-				rctx->frame_buf_size = h->data_size;
+				rctx->frame_buf_size = max_frame;
 			}
 			rctx->read_seq = 0;
 			last_write_seq = 0;
