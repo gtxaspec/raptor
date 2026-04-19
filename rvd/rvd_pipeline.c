@@ -769,9 +769,8 @@ int rvd_pipeline_init(rvd_state_t *st)
 
 	/* Refmode: discover /dev/rmem mapping (must happen after HAL init) */
 	if (st->refmode) {
-		ret = RSS_HAL_CALL(st->ops, enc_get_rmem_info, st->hal_ctx,
-				   &st->rmem_virt_base, &st->rmem_size,
-				   &st->rmem_mmap_offset);
+		ret = RSS_HAL_CALL(st->ops, enc_get_rmem_info, st->hal_ctx, &st->rmem_virt_base,
+				   &st->rmem_size, &st->rmem_mmap_offset);
 		if (ret != RSS_OK) {
 			RSS_WARN("enc_get_rmem_info failed (%d), disabling refmode", ret);
 			st->refmode = false;
@@ -888,9 +887,8 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 		/* Pre-CreateChn tuning via config fields */
 		if (st->refmode && !s->is_jpeg) {
 			if (st->refmode_shm) {
-				/* Ingenic VPU: control buffer count+size for SHM */
+				/* Ingenic VPU: 5 buffers, SDK-default per-buffer size */
 				s->enc_cfg.max_stream_cnt = 5;
-				s->enc_cfg.buf_size = 256 * 1024;
 			}
 			/* Allegro (T31/T40/T41): leave SDK defaults.
 			 * SetMaxStreamCnt consumes extra rmem and can
@@ -900,32 +898,45 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 			if (st->refmode_shm) {
 				int local_chn = s->fs_chn - fs_base_channel(s->sensor_idx);
 				char shm_name[64];
-				get_ring_name(s->sensor_idx,
-					      local_chn == 0 ? "main" : "sub",
+				get_ring_name(s->sensor_idx, local_chn == 0 ? "main" : "sub",
 					      shm_name, sizeof(shm_name));
 				char full_shm[128];
 				snprintf(full_shm, sizeof(full_shm), "/rss_enc_%s", shm_name);
 
-				uint32_t per_buf = s->enc_cfg.buf_size ? s->enc_cfg.buf_size : 256 * 1024;
+				/* Size SHM to match SDK's expected buffer.
+				 * Per-buffer ~= width*height*3/8 (covers SDK's
+				 * internal calculation across SDK versions). */
+				uint32_t per_buf = s->enc_cfg.width * s->enc_cfg.height * 3 / 8;
+				if (per_buf < 256 * 1024)
+					per_buf = 256 * 1024;
+				per_buf = (per_buf + 4095) & ~4095u;
 				uint32_t shm_size = s->enc_cfg.max_stream_cnt * per_buf;
 
 				shm_unlink(full_shm);
 				int sfd = shm_open(full_shm, O_CREAT | O_RDWR, 0666);
 				if (sfd < 0 || ftruncate(sfd, shm_size) < 0) {
-					RSS_WARN("stream%d: SHM create failed, embedded fallback", idx);
-					if (sfd >= 0) { close(sfd); shm_unlink(full_shm); }
+					RSS_WARN("stream%d: SHM create failed, embedded fallback",
+						 idx);
+					if (sfd >= 0) {
+						close(sfd);
+						shm_unlink(full_shm);
+					}
 				} else {
 					void *addr = mmap(NULL, shm_size, PROT_READ | PROT_WRITE,
 							  MAP_SHARED, sfd, 0);
 					if (addr == MAP_FAILED) {
-						RSS_WARN("stream%d: SHM mmap failed, embedded fallback", idx);
+						RSS_WARN("stream%d: SHM mmap failed, embedded "
+							 "fallback",
+							 idx);
 						close(sfd);
 						shm_unlink(full_shm);
 					} else {
 						ret = RSS_HAL_CALL(st->ops, enc_inject_stream_shm,
-								   st->hal_ctx, s->chn, addr, shm_size);
+								   st->hal_ctx, s->chn, addr,
+								   shm_size);
 						if (ret != RSS_OK) {
-							RSS_WARN("stream%d: SHM inject failed (%d), embedded fallback",
+							RSS_WARN("stream%d: SHM inject failed "
+								 "(%d), embedded fallback",
 								 idx, ret);
 							munmap(addr, shm_size);
 							close(sfd);
@@ -1085,20 +1096,22 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 					rvd_profile_idc(s->enc_cfg.profile),
 					rvd_level_idc(s->enc_cfg.width, s->enc_cfg.height));
 
-				if (st->refmode && st->refmode_shm && st->enc_shm_size[idx] > 0)
-					rss_ring_enable_refmode(s->ring, st->enc_shm_size[idx],
-								0, s->enc_cfg.max_stream_cnt,
-								s->enc_cfg.buf_size ? s->enc_cfg.buf_size
-								: s->enc_cfg.stream_buf_size);
-				else if (st->refmode && !st->refmode_shm && st->rmem_size > 0) {
+				if (st->refmode && st->refmode_shm && st->enc_shm_size[idx] > 0) {
+					uint8_t cnt = s->enc_cfg.max_stream_cnt;
+					if (!cnt)
+						cnt = 2;
+					rss_ring_enable_refmode(s->ring, st->enc_shm_size[idx], 0,
+								cnt, st->enc_shm_size[idx] / cnt);
+				} else if (st->refmode && !st->refmode_shm && st->rmem_size > 0) {
 					uint32_t actual_stride = 0;
 					uint8_t actual_cnt = s->enc_cfg.max_stream_cnt;
-					RSS_HAL_CALL(st->ops, enc_get_stream_buf_size,
-						     st->hal_ctx, s->chn, &actual_stride);
-					if (!actual_cnt) actual_cnt = 2;
+					RSS_HAL_CALL(st->ops, enc_get_stream_buf_size, st->hal_ctx,
+						     s->chn, &actual_stride);
+					if (!actual_cnt)
+						actual_cnt = 2;
 					rss_ring_enable_refmode(s->ring, st->rmem_size,
-								st->rmem_mmap_offset,
-								actual_cnt, actual_stride);
+								st->rmem_mmap_offset, actual_cnt,
+								actual_stride);
 				}
 			}
 		}
@@ -1198,8 +1211,8 @@ void rvd_stream_deinit(rvd_state_t *st, int idx)
 
 		int local_chn = s->fs_chn - fs_base_channel(s->sensor_idx);
 		char shm_name[64], full_shm[128];
-		get_ring_name(s->sensor_idx, local_chn == 0 ? "main" : "sub",
-			      shm_name, sizeof(shm_name));
+		get_ring_name(s->sensor_idx, local_chn == 0 ? "main" : "sub", shm_name,
+			      sizeof(shm_name));
 		snprintf(full_shm, sizeof(full_shm), "/rss_enc_%s", shm_name);
 		shm_unlink(full_shm);
 	}
