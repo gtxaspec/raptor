@@ -887,12 +887,12 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 
 		/* Pre-CreateChn tuning via config fields */
 		if (st->refmode && !s->is_jpeg) {
-			const rss_hal_caps_t *caps = st->ops->get_caps(st->hal_ctx);
-			s->enc_cfg.max_stream_cnt = 8;
-			if (caps && caps->has_stream_buf_size)
-				s->enc_cfg.stream_buf_size = 256 * 1024;
-			else
+			if (st->refmode_shm) {
+				/* Ingenic VPU: control buffer count+size for SHM */
+				s->enc_cfg.max_stream_cnt = 5;
 				s->enc_cfg.buf_size = 256 * 1024;
+			}
+			/* Allegro: leave defaults (2 buffers, SDK-sized) */
 
 			/* SHM injection path: create named SHM and inject */
 			if (st->refmode_shm) {
@@ -1086,11 +1086,16 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 								0, s->enc_cfg.max_stream_cnt,
 								s->enc_cfg.buf_size ? s->enc_cfg.buf_size
 								: s->enc_cfg.stream_buf_size);
-				else if (st->refmode && !st->refmode_shm && st->rmem_size > 0)
+				else if (st->refmode && !st->refmode_shm && st->rmem_size > 0) {
+					uint32_t actual_stride = 0;
+					uint8_t actual_cnt = s->enc_cfg.max_stream_cnt;
+					RSS_HAL_CALL(st->ops, enc_get_stream_buf_size,
+						     st->hal_ctx, s->chn, &actual_stride);
+					if (!actual_cnt) actual_cnt = 2;
 					rss_ring_enable_refmode(s->ring, st->rmem_size,
 								st->rmem_mmap_offset,
-								s->enc_cfg.max_stream_cnt,
-								s->enc_cfg.stream_buf_size);
+								actual_cnt, actual_stride);
+				}
 			}
 		}
 
