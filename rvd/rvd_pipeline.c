@@ -1010,12 +1010,6 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 					data = max_data;
 			}
 
-			if (st->refmode) {
-				data = 4096;
-				RSS_INFO("stream %d: refmode ring (metadata-only, %dKB placeholder)",
-					 idx, data / 1024);
-			}
-
 			s->ring = rss_ring_create(ring_name, slots_cfg, data);
 			if (s->ring) {
 				rss_ring_set_stream_info(
