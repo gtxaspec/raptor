@@ -71,7 +71,7 @@ void *rvd_encoder_thread(void *arg)
 				if (s->enabled) {
 					RSS_HAL_CALL(st->ops, enc_stop, st->hal_ctx, s->chn);
 					s->enabled = false;
-					RSS_INFO("jpeg chn %d: stopped (no consumers)", s->chn);
+					RSS_DEBUG("jpeg chn %d: stopped (no consumers)", s->chn);
 				}
 				usleep(100000);
 				continue;
@@ -79,7 +79,7 @@ void *rvd_encoder_thread(void *arg)
 			if (!s->enabled) {
 				RSS_HAL_CALL(st->ops, enc_start, st->hal_ctx, s->chn);
 				s->enabled = true;
-				RSS_INFO("jpeg chn %d: started (%u consumers)", s->chn,
+				RSS_DEBUG("jpeg chn %d: started (%u consumers)", s->chn,
 					 rss_ring_reader_count(s->ring));
 			}
 		}
@@ -184,7 +184,7 @@ embedded_publish:
 
 		int64_t now = rss_timestamp_us();
 		if (now - last_stats >= 30000000) {
-			RSS_DEBUG("stream%d: %llu frames", idx, (unsigned long long)frame_count);
+			RSS_TRACE("stream%d: %llu frames", idx, (unsigned long long)frame_count);
 			last_stats = now;
 		}
 	}
