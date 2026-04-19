@@ -111,10 +111,23 @@ void *rvd_encoder_thread(void *arg)
 
 		if (st->refmode && st->rmem_virt_base && frame.nal_count > 0) {
 			uintptr_t vaddr = (uintptr_t)frame.nals[0].data;
-			uint32_t rmem_off = (uint32_t)(vaddr - st->rmem_virt_base);
 			uint32_t total_len = 0;
 			for (uint32_t n = 0; n < frame.nal_count; n++)
 				total_len += frame.nals[n].length;
+
+			/* Verify data is within the rmem mapping */
+			if (vaddr < st->rmem_virt_base ||
+			    vaddr + total_len > st->rmem_virt_base + st->rmem_size) {
+				if (frame_count == 0)
+					RSS_WARN("stream%d: frame vaddr 0x%lx outside rmem "
+						 "[0x%lx..0x%lx], disabling refmode",
+						 idx, (unsigned long)vaddr,
+						 (unsigned long)st->rmem_virt_base,
+						 (unsigned long)(st->rmem_virt_base + st->rmem_size));
+				goto embedded_publish;
+			}
+
+			uint32_t rmem_off = (uint32_t)(vaddr - st->rmem_virt_base);
 
 			if (!s->enc_buf_base) {
 				s->enc_buf_base = vaddr;
@@ -131,6 +144,7 @@ void *rvd_encoder_thread(void *arg)
 					     primary_nal_type(&frame), frame.is_key ? 1 : 0,
 					     buf_idx);
 		} else {
+embedded_publish:
 			/* Embedded mode: copy NALs into ring via scatter-gather */
 			rss_iov_t iov[16];
 			uint32_t cnt = frame.nal_count;
