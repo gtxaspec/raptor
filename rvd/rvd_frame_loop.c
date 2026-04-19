@@ -121,13 +121,6 @@ void *rvd_encoder_thread(void *arg)
 			uint8_t buf_idx = (uint8_t)((vaddr - s->enc_buf_base) /
 						    s->enc_cfg.stream_buf_size);
 
-			if (frame_count < 3)
-				RSS_INFO("stream%d refmode: vaddr=0x%lx rmem_off=0x%x "
-					 "len=%u bidx=%u first4=[%02x %02x %02x %02x]",
-					 idx, (unsigned long)vaddr, rmem_off, total_len,
-					 buf_idx, frame.nals[0].data[0], frame.nals[0].data[1],
-					 frame.nals[0].data[2], frame.nals[0].data[3]);
-
 			rss_ring_publish_ref(s->ring, rmem_off, total_len, frame.timestamp,
 					     primary_nal_type(&frame), frame.is_key ? 1 : 0,
 					     buf_idx);
