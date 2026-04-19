@@ -896,9 +896,10 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 
 			/* SHM injection path: create named SHM and inject */
 			if (st->refmode_shm) {
+				int local_chn = s->fs_chn - fs_base_channel(s->sensor_idx);
 				char shm_name[64];
 				get_ring_name(s->sensor_idx,
-					      s->chn == 0 ? "main" : "sub",
+					      local_chn == 0 ? "main" : "sub",
 					      shm_name, sizeof(shm_name));
 				char full_shm[128];
 				snprintf(full_shm, sizeof(full_shm), "/rss_enc_%s", shm_name);
@@ -911,29 +912,27 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 				if (sfd < 0 || ftruncate(sfd, shm_size) < 0) {
 					RSS_WARN("stream%d: SHM create failed, embedded fallback", idx);
 					if (sfd >= 0) { close(sfd); shm_unlink(full_shm); }
-					st->refmode = false;
 				} else {
 					void *addr = mmap(NULL, shm_size, PROT_READ | PROT_WRITE,
 							  MAP_SHARED, sfd, 0);
 					if (addr == MAP_FAILED) {
-						RSS_WARN("stream%d: SHM mmap failed", idx);
+						RSS_WARN("stream%d: SHM mmap failed, embedded fallback", idx);
 						close(sfd);
 						shm_unlink(full_shm);
-						st->refmode = false;
 					} else {
-						st->enc_shm_addr[idx] = addr;
-						st->enc_shm_size[idx] = shm_size;
-						st->enc_shm_fd[idx] = sfd;
 						ret = RSS_HAL_CALL(st->ops, enc_inject_stream_shm,
 								   st->hal_ctx, s->chn, addr, shm_size);
 						if (ret != RSS_OK) {
-							RSS_WARN("stream%d: SHM injection failed (%d)", idx, ret);
+							RSS_WARN("stream%d: SHM inject failed (%d), embedded fallback",
+								 idx, ret);
 							munmap(addr, shm_size);
 							close(sfd);
 							shm_unlink(full_shm);
-							st->enc_shm_addr[idx] = NULL;
-							st->refmode = false;
 						} else {
+							st->enc_shm_addr[idx] = addr;
+							st->enc_shm_size[idx] = shm_size;
+							st->enc_shm_fd[idx] = -1;
+							close(sfd);
 							RSS_INFO("stream%d: encoder SHM %s (%uKB)",
 								 idx, full_shm, shm_size / 1024);
 						}
@@ -1181,6 +1180,24 @@ void rvd_stream_deinit(rvd_state_t *st, int idx)
 	RSS_HAL_CALL(st->ops, enc_destroy_channel, st->hal_ctx, s->chn);
 	if (!s->is_jpeg)
 		RSS_HAL_CALL(st->ops, enc_destroy_group, st->hal_ctx, s->chn);
+
+	/* Cleanup encoder SHM (refmode) */
+	if (st->enc_shm_addr[idx]) {
+		munmap(st->enc_shm_addr[idx], st->enc_shm_size[idx]);
+		st->enc_shm_addr[idx] = NULL;
+		st->enc_shm_size[idx] = 0;
+
+		int local_chn = s->fs_chn - fs_base_channel(s->sensor_idx);
+		char shm_name[64], full_shm[128];
+		get_ring_name(s->sensor_idx, local_chn == 0 ? "main" : "sub",
+			      shm_name, sizeof(shm_name));
+		snprintf(full_shm, sizeof(full_shm), "/rss_enc_%s", shm_name);
+		shm_unlink(full_shm);
+	}
+	if (st->enc_shm_fd[idx] >= 0) {
+		close(st->enc_shm_fd[idx]);
+		st->enc_shm_fd[idx] = -1;
+	}
 
 	/* Destroy ring */
 	if (s->ring) {

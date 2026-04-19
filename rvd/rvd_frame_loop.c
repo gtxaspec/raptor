@@ -127,7 +127,7 @@ void *rvd_encoder_thread(void *arg)
 			}
 
 			if (!ref_base || vaddr < ref_base ||
-			    vaddr + total_len > ref_base + ref_size) {
+			    total_len > ref_size || vaddr - ref_base > ref_size - total_len) {
 				if (frame_count == 0)
 					RSS_WARN("stream%d: vaddr 0x%lx outside ref region "
 						 "[0x%lx..0x%lx], embedded fallback",
