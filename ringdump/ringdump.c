@@ -209,8 +209,6 @@ int main(int argc, char **argv)
 	int64_t lat_min = INT64_MAX, lat_max = 0, lat_sum = 0;
 	uint64_t lat_count = 0;
 
-	/* Allocate read buffer based on ring slot capacity */
-	const rss_ring_header_t *rhdr = rss_ring_get_header(ring);
 	uint32_t buf_size = rss_ring_max_frame_size(ring);
 	uint8_t *frame_buf = malloc(buf_size);
 	if (!frame_buf) {

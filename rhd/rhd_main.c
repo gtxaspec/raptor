@@ -745,8 +745,6 @@ static void server_run(rhd_server_t *srv)
 						if (was_streaming)
 							rss_ring_acquire(srv->jpeg_rings[j]);
 						jpeg_read_seqs[j] = 0;
-						const rss_ring_header_t *hdr =
-							rss_ring_get_header(srv->jpeg_rings[j]);
 						uint32_t mfs = rss_ring_max_frame_size(srv->jpeg_rings[j]);
 						if (mfs > frame_buf_size) {
 							free(frame_buf);
