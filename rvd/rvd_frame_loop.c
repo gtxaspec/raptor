@@ -139,16 +139,25 @@ void *rvd_encoder_thread(void *arg)
 
 			uint32_t rmem_off = (uint32_t)(vaddr - ref_base);
 
-			if (!s->enc_buf_base) {
-				s->enc_buf_base = vaddr;
-			} else if (!s->enc_buf_stride && vaddr != s->enc_buf_base) {
-				s->enc_buf_stride = (uint32_t)(vaddr - s->enc_buf_base);
-			}
-
+			/* Map virAddr to buffer index by tracking unique base
+			 * addresses. Stride-based division doesn't work because
+			 * the encoder's per-frame offset varies by a few bytes
+			 * (IDR vs P-frame packing), causing off-by-one in the
+			 * integer division. Instead, compare the upper bits
+			 * of the address to identify which buffer region. */
 			uint8_t buf_idx = 0;
-			if (s->enc_buf_stride)
-				buf_idx = (uint8_t)((vaddr - s->enc_buf_base) /
-						    s->enc_buf_stride);
+			uintptr_t vpage = vaddr & ~(uintptr_t)0xFFF;
+			for (uint8_t b = 0; b < s->enc_buf_count; b++) {
+				if (s->enc_buf_addrs[b] == vpage) {
+					buf_idx = b;
+					goto found_buf;
+				}
+			}
+			if (s->enc_buf_count < 8) {
+				buf_idx = s->enc_buf_count;
+				s->enc_buf_addrs[s->enc_buf_count++] = vpage;
+			}
+found_buf:
 
 			rss_ring_publish_ref(s->ring, rmem_off, total_len, frame.timestamp,
 					     primary_nal_type(&frame), frame.is_key ? 1 : 0,

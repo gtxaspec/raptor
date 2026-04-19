@@ -891,8 +891,14 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 				/* Ingenic VPU: control buffer count+size for SHM */
 				s->enc_cfg.max_stream_cnt = 5;
 				s->enc_cfg.buf_size = 256 * 1024;
+			} else {
+				/* Allegro (T31/T40/T41): 5 buffers at SDK-default
+				 * size. 2 (default) is too tight under multi-daemon
+				 * load. Don't set stream_buf_size — let the SDK
+				 * choose (~927KB for 1080p). 5 × 927KB = 4.6MB
+				 * fits in rmem with headroom. */
+				s->enc_cfg.max_stream_cnt = 5;
 			}
-			/* Allegro: leave defaults (2 buffers, SDK-sized) */
 
 			/* SHM injection path: create named SHM and inject */
 			if (st->refmode_shm) {
