@@ -36,6 +36,7 @@ typedef struct {
 	bool enabled;
 	bool is_jpeg;	/* true for snapshot channel */
 	bool jpeg_idle; /* true = stop encoder when no consumers */
+	uintptr_t enc_buf_base; /* refmode: first virAddr seen (encoder region start) */
 } rvd_stream_t;
 
 /* Per-OSD-region state */

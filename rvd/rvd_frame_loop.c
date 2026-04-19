@@ -110,13 +110,18 @@ void *rvd_encoder_thread(void *arg)
 		}
 
 		if (st->refmode && st->rmem_virt_base && frame.nal_count > 0) {
-			/* Zero-copy: publish rmem offset instead of copying */
 			uintptr_t vaddr = (uintptr_t)frame.nals[0].data;
 			uint32_t rmem_off = (uint32_t)(vaddr - st->rmem_virt_base);
 			uint32_t total_len = 0;
 			for (uint32_t n = 0; n < frame.nal_count; n++)
 				total_len += frame.nals[n].length;
-			uint8_t buf_idx = (uint8_t)(rmem_off / s->enc_cfg.stream_buf_size);
+
+			/* Track encoder buffer region base from first frame */
+			if (!s->enc_buf_base)
+				s->enc_buf_base = vaddr;
+			uint8_t buf_idx = (uint8_t)((vaddr - s->enc_buf_base) /
+						    s->enc_cfg.stream_buf_size);
+
 			rss_ring_publish_ref(s->ring, rmem_off, total_len, frame.timestamp,
 					     primary_nal_type(&frame), frame.is_key ? 1 : 0,
 					     buf_idx);
