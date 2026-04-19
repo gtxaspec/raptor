@@ -147,8 +147,9 @@ and the init script to `$DESTDIR/etc/init.d/S31raptor`.
 
 All daemons share a single INI-style config file: `/etc/raptor.conf`.
 
-Sections: `[sensor]`, `[stream0]`, `[stream1]`, `[jpeg]`, `[ring]`, `[audio]`,
-`[rtsp]`, `[http]`, `[osd]`, `[ircut]`, `[recording]`, `[webrtc]`, `[webtorrent]`, `[motion]`, `[log]`.
+Sections: `[sensor]`, `[stream0]`, `[stream1]`, `[image]`, `[jpeg]`, `[ring]`,
+`[audio]`, `[rtsp]`, `[http]`, `[osd]`, `[ircut]`, `[recording]`, `[webrtc]`,
+`[webcam]`, `[webtorrent]`, `[motion]`, `[log]`.
 
 See `config/raptor.conf` for the full reference with defaults and comments.
 
@@ -268,6 +269,30 @@ video and audio ring buffers after RVD or RAD restarts. If a ring producer
 stops writing for ~2 seconds, consumers close the stale ring and retry until
 the new ring appears. No manual daemon restart required.
 
+## Ring Reference Mode (Zero-Copy)
+
+When `refmode` is enabled, video ring buffers become metadata-only (~9KB per
+stream instead of ~1.5MB). The encoder writes compressed output directly to a
+shared backing store that consumers mmap — eliminating the per-frame memcpy
+from encoder DMA buffer into the ring data region.
+
+Two backing store paths are selected automatically based on the encoder IP:
+
+| SoCs | Method | Backing store |
+|------|--------|---------------|
+| T10-T30, T32, T33 | POSIX SHM injection | Named SHM (`/rss_enc_<stream>`) |
+| T31, T40, T41 | rmem zero-copy | `/dev/rmem` mmap |
+
+Enable in config:
+
+```ini
+[ring]
+refmode = true
+```
+
+Consumers detect refmode transparently via ring header flags — no consumer
+code changes required. JPEG snapshots stay embedded (not affected by refmode).
+
 ## Init Script
 
 The init script `config/S31raptor` (installed as `/etc/init.d/S31raptor`)
@@ -299,7 +324,7 @@ average, measured with `ringdump main -l`. The full end-to-end breakdown:
 Enable in config for encoder immediate frame output:
 
 ```ini
-[stream0]
+[sensor]
 low_latency = true
 ```
 
