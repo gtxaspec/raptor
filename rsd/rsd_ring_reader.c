@@ -336,6 +336,9 @@ void *rsd_video_reader_thread(void *arg)
 	/* Per-thread state for rsd_maybe_request_idr (see top of file). */
 	int64_t last_idr_req_us = 0;
 
+	uint64_t total_read = 0, total_pushed = 0, total_overflow = 0;
+	int64_t last_count_log = rss_timestamp_us();
+
 	RSS_DEBUG("video reader[%d] started", stream_idx);
 	while (*srv->running) {
 		if (!rctx->ring) {
@@ -421,86 +424,117 @@ void *rsd_video_reader_thread(void *arg)
 		}
 		idle_count = 0;
 
-		uint32_t length;
-		rss_ring_slot_t meta;
-		uint64_t read_seq = rctx->read_seq;
-
 		if (!rctx->frame_buf)
 			continue;
 
-		/* Skip stale frames: if consumer is more than 1 frame behind,
-		 * jump to latest to minimize latency. IDR request is rate-
-		 * limited — polling lag triggers this on nearly every
-		 * iteration and unlimited requests cascade into all-IDR output. */
-		const rss_ring_header_t *hdr = rss_ring_get_header(rctx->ring);
-		uint64_t write_seq = hdr->write_seq;
-		if (write_seq > read_seq + 1 && read_seq > 0) {
-			read_seq = write_seq - 1;
-			rsd_maybe_request_idr(rctx->ring, &last_idr_req_us);
-		}
+		/* Drain all available frames before going back to ring_wait.
+		 * On single-core SoCs the scheduler may give CPU to the encoder
+		 * thread before waking the reader, so 2-3 frames can accumulate
+		 * between ring_wait returns. Processing them sequentially
+		 * preserves every frame; the reader is fast enough to catch up
+		 * (measured <2ms per frame vs 33ms budget on T20). */
+		for (int burst = 0; burst < 8; burst++) {
+			uint32_t length;
+			rss_ring_slot_t meta;
+			uint64_t read_seq = rctx->read_seq;
 
-		/* No barrier wait — copy-on-push sendq owns the copies; the
-		 * reader is free to overwrite frame_buf immediately. */
-		ret = rss_ring_read(rctx->ring, &read_seq, rctx->frame_buf, rctx->frame_buf_size,
-				    &length, &meta);
-		if (ret == RSS_EOVERFLOW) {
-			rctx->read_seq = read_seq;
-			rsd_maybe_request_idr(rctx->ring, &last_idr_req_us);
-			continue;
-		}
-		if (ret != 0)
-			continue;
-
-		rctx->read_seq = read_seq;
-
-		if (video_ts_epoch == 0)
-			video_ts_epoch = meta.timestamp;
-		uint32_t rtp_ts =
-			(uint32_t)((uint64_t)(meta.timestamp - video_ts_epoch) * 90000 / 1000000);
-
-		/* Enforce monotonic RTP timestamps. The IMP encoder can
-		 * occasionally produce slightly out-of-order timestamps
-		 * (observed ~2-frame backwards jumps every ~50s on T31).
-		 * Clients (mpv/ffmpeg) reject non-monotonic DTS. */
-		if (has_last_rtp_ts && (int32_t)(rtp_ts - last_rtp_ts) <= 0) {
-			rtp_ts = last_rtp_ts + 1;
-		}
-		last_rtp_ts = rtp_ts;
-		has_last_rtp_ts = true;
-
-		/* Cache SPS/PPS from keyframes for SDP sprop-parameter-sets */
-		if (meta.is_key && atomic_load_explicit(&rctx->sps_len, memory_order_relaxed) == 0)
-			rsd_cache_sps_pps(rctx, rctx->frame_buf, length);
-
-		pthread_mutex_lock(&srv->clients_lock);
-		for (int i = 0; i < srv->client_count; i++) {
-			rsd_client_t *c = srv->clients[i];
-			if (!c || !c->video.playing)
-				continue;
-			if (c->stream_idx != stream_idx)
-				continue;
-
-			if (c->waiting_keyframe) {
-				if (!meta.is_key)
-					continue;
-				c->waiting_keyframe = false;
-				c->video_ts_offset = rtp_ts;
-				c->video_ts_base_set = true;
-				RSS_DEBUG("client[%d] got keyframe (ts_offset=%u)", stream_idx,
-					  rtp_ts);
-			}
-
-			uint32_t client_ts = rtp_ts - c->video_ts_offset;
-			int qret =
-				rsd_sendq_push_video(&c->sendq, rctx->frame_buf, length, client_ts);
-			if (qret == RSD_SENDQ_DROPPED) {
-				c->waiting_keyframe = true;
-				c->audio_ts_base_set = false;
+			uint64_t pre_seq = read_seq;
+			ret = rss_ring_read(rctx->ring, &read_seq, rctx->frame_buf,
+					    rctx->frame_buf_size, &length, &meta);
+			if (ret == RSS_EOVERFLOW) {
+				uint64_t skipped = read_seq - pre_seq;
+				total_overflow += skipped;
+				RSS_WARN("video[%d] EOVERFLOW: seq %llu -> %llu (skipped %llu)",
+					 stream_idx, (unsigned long long)pre_seq,
+					 (unsigned long long)read_seq,
+					 (unsigned long long)skipped);
+				rctx->read_seq = read_seq;
 				rsd_maybe_request_idr(rctx->ring, &last_idr_req_us);
-				RSS_DEBUG("client[%d] sendq full, waiting for IDR", stream_idx);
+				break;
+			}
+			if (ret != 0)
+				break;
+
+			rctx->read_seq = read_seq;
+			total_read++;
+
+			if (video_ts_epoch == 0)
+				video_ts_epoch = meta.timestamp;
+			uint32_t rtp_ts = (uint32_t)((uint64_t)(meta.timestamp - video_ts_epoch) *
+						     90000 / 1000000);
+
+			/* Enforce monotonic RTP timestamps with proper spacing.
+			 * The IMP encoder occasionally produces out-of-order
+			 * timestamps (~5-10ms backward every ~50s). Adding one
+			 * frame duration maintains plausible timing and keeps
+			 * client-estimated frame rate stable. */
+			const rss_ring_header_t *hdr = rss_ring_get_header(rctx->ring);
+			uint32_t fps = (hdr->fps_num > 0 && hdr->fps_den > 0)
+					      ? hdr->fps_num / hdr->fps_den
+					      : 30;
+			uint32_t frame_dur = 90000 / fps;
+			if (has_last_rtp_ts && (int32_t)(rtp_ts - last_rtp_ts) <= 0)
+				rtp_ts = last_rtp_ts + frame_dur;
+			last_rtp_ts = rtp_ts;
+			has_last_rtp_ts = true;
+
+			if (meta.is_key &&
+			    atomic_load_explicit(&rctx->sps_len, memory_order_relaxed) == 0)
+				rsd_cache_sps_pps(rctx, rctx->frame_buf, length);
+
+			pthread_mutex_lock(&srv->clients_lock);
+			for (int i = 0; i < srv->client_count; i++) {
+				rsd_client_t *c = srv->clients[i];
+				if (!c || !c->video.playing)
+					continue;
+				if (c->stream_idx != stream_idx)
+					continue;
+
+				if (c->waiting_keyframe) {
+					if (!meta.is_key)
+						continue;
+					c->waiting_keyframe = false;
+					c->video_ts_offset = rtp_ts;
+					c->video_ts_base_set = true;
+					c->has_last_video_client_ts = false;
+					RSS_DEBUG("client[%d] got keyframe (ts_offset=%u)",
+						  stream_idx, rtp_ts);
+				}
+
+				uint32_t client_ts = rtp_ts - c->video_ts_offset;
+				if (c->has_last_video_client_ts &&
+				    (int32_t)(client_ts - c->last_video_client_ts) <= 0)
+					client_ts = c->last_video_client_ts + frame_dur;
+				c->last_video_client_ts = client_ts;
+				c->has_last_video_client_ts = true;
+
+				int qret = rsd_sendq_push_video(&c->sendq, rctx->frame_buf, length,
+								client_ts);
+				if (qret == RSD_SENDQ_OK)
+					total_pushed++;
+				else if (qret == RSD_SENDQ_DROPPED) {
+					c->waiting_keyframe = true;
+					c->has_last_video_client_ts = false;
+					c->audio_ts_base_set = false;
+					rsd_maybe_request_idr(rctx->ring, &last_idr_req_us);
+					RSS_TRACE("client[%d] sendq full at rtp_ts=%u, waiting IDR",
+						  stream_idx, client_ts);
+				} else {
+					RSS_TRACE("client[%d] sendq push failed: %d (len=%u)",
+						  stream_idx, qret, length);
+				}
+			}
+			pthread_mutex_unlock(&srv->clients_lock);
+
+			int64_t now_count = rss_timestamp_us();
+			if (now_count - last_count_log >= 10000000) {
+				RSS_TRACE("video[%d] stats: read=%llu pushed=%llu overflow=%llu",
+					  stream_idx, (unsigned long long)total_read,
+					  (unsigned long long)total_pushed,
+					  (unsigned long long)total_overflow);
+				last_count_log = now_count;
 			}
 		}
-		pthread_mutex_unlock(&srv->clients_lock);
 	}
 
 	RSS_DEBUG("video reader[%d] exiting", stream_idx);
@@ -647,9 +681,10 @@ void *rsd_audio_reader_thread(void *arg)
 			uint32_t rtp_ts = (uint32_t)((uint64_t)(meta.timestamp - audio_ts_epoch) *
 						     rtp_clock / 1000000);
 
-			/* Enforce monotonic audio timestamps */
+			/* Enforce monotonic audio timestamps with one frame
+			 * duration as the correction step (1024 samples for AAC). */
 			if (has_last_audio_rtp_ts && (int32_t)(rtp_ts - last_audio_rtp_ts) <= 0)
-				rtp_ts = last_audio_rtp_ts + 1;
+				rtp_ts = last_audio_rtp_ts + 1024;
 			last_audio_rtp_ts = rtp_ts;
 			has_last_audio_rtp_ts = true;
 

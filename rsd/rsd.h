@@ -94,6 +94,8 @@ typedef struct rsd_client {
 	bool active;
 	uint32_t video_ts_offset; /* subtracted from global RTP ts for per-client zero-base */
 	bool video_ts_base_set;	  /* true after first keyframe sets the offset */
+	uint32_t last_video_client_ts; /* per-client monotonic enforcement */
+	bool has_last_video_client_ts;
 	uint32_t audio_ts_offset;
 	bool audio_ts_base_set;
 	bool is_tcp;
