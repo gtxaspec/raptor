@@ -496,7 +496,6 @@ void *rsd_video_reader_thread(void *arg)
 					c->waiting_keyframe = false;
 					c->video_ts_offset = rtp_ts;
 					c->video_ts_base_set = true;
-					c->has_last_video_client_ts = false;
 					RSS_DEBUG("client[%d] got keyframe (ts_offset=%u)",
 						  stream_idx, rtp_ts);
 				}
@@ -514,7 +513,6 @@ void *rsd_video_reader_thread(void *arg)
 					total_pushed++;
 				else if (qret == RSD_SENDQ_DROPPED) {
 					c->waiting_keyframe = true;
-					c->has_last_video_client_ts = false;
 					c->audio_ts_base_set = false;
 					rsd_maybe_request_idr(rctx->ring, &last_idr_req_us);
 					RSS_TRACE("client[%d] sendq full at rtp_ts=%u, waiting IDR",
