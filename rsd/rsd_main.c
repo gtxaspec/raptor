@@ -75,6 +75,7 @@ int main(int argc, char **argv)
 	if (srv.session_timeout < 10)
 		srv.session_timeout = 10;
 	srv.tcp_sndbuf = rss_config_get_int(dctx.cfg, "rtsp", "tcp_sndbuf", 64 * 1024);
+	srv.rtcp_sr = rss_config_get_bool(dctx.cfg, "rtsp", "rtcp_sr", false);
 	rsd_endpoints_load(&srv, dctx.cfg);
 	rss_strlcpy(srv.session_name,
 		    rss_config_get_str(dctx.cfg, "rtsp", "session_name", "Raptor Live"),

@@ -84,6 +84,7 @@ static void remove_client(rsd_server_t *srv, rsd_client_t *client)
 		client->send_thread_running = false;
 	}
 	rsd_sendq_destroy(&client->sendq);
+	pthread_mutex_destroy(&client->write_lock);
 
 	/* Step 3: Now safe to free transports — ring readers and send thread are done */
 
@@ -234,6 +235,7 @@ static void accept_client(rsd_server_t *srv)
 
 	/* Initialize send queue and thread AFTER all fallible checks above,
 	 * so error paths don't need to tear down a running thread. */
+	pthread_mutex_init(&client->write_lock, NULL);
 	if (rsd_sendq_init(&client->sendq) != 0) {
 		pthread_mutex_unlock(&srv->clients_lock);
 		epoll_ctl(srv->epoll_fd, EPOLL_CTL_DEL, fd, NULL);

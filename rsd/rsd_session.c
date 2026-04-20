@@ -746,10 +746,13 @@ static void rsd_client_t_play(VSelf, Compy_Context *ctx, const Compy_Request *re
 		self->video_ts_base_set = false;
 		self->audio_ts_base_set = false;
 		self->video.playing = true;
+		self->video.last_rtcp = rss_timestamp_us();
 		self->video_read_seq = 0;
 	}
-	if (self->audio.rtp)
+	if (self->audio.rtp) {
 		self->audio.playing = true;
+		self->audio.last_rtcp = rss_timestamp_us();
+	}
 	pthread_mutex_unlock(&self->srv->clients_lock);
 
 	/* Request IDR from RVD so the client gets a keyframe ASAP */
@@ -898,7 +901,9 @@ void rsd_handle_rtsp_data(rsd_client_t *client, const char *data, size_t len)
 #endif
 			writer = compy_fd_writer(&client->fd);
 		Compy_Controller ctrl = DYN(rsd_client_t, Compy_Controller, client);
+		pthread_mutex_lock(&client->write_lock);
 		compy_dispatch(writer, ctrl, &req);
+		pthread_mutex_unlock(&client->write_lock);
 
 		/* Extract consumed byte count */
 		size_t consumed = len;

@@ -149,11 +149,12 @@ static void rsd_send_video_frame(rsd_client_t *c, const uint8_t *data, uint32_t 
 		p = nalu_end;
 	}
 
-	/* Periodic RTCP SR (every 5 seconds) */
-	int64_t now = rss_timestamp_us();
-	if (c->video.rtcp && now - c->video.last_rtcp > 5000000) {
-		(void)!Compy_Rtcp_send_sr(c->video.rtcp);
-		c->video.last_rtcp = now;
+	if (c->srv->rtcp_sr) {
+		int64_t now = rss_timestamp_us();
+		if (c->video.rtcp && now - c->video.last_rtcp > 30000000) {
+			(void)!Compy_Rtcp_send_sr(c->video.rtcp);
+			c->video.last_rtcp = now;
+		}
 	}
 }
 
@@ -299,10 +300,12 @@ void *rsd_client_send_thread(void *arg)
 		q->count--;
 		pthread_mutex_unlock(&q->lock);
 
+		pthread_mutex_lock(&c->write_lock);
 		if (entry.type == RSD_FRAME_VIDEO)
 			rsd_send_video_frame(c, entry.data, entry.len, entry.rtp_ts);
 		else
 			rsd_send_audio_frame(c, entry.codec, entry.data, entry.len, entry.rtp_ts);
+		pthread_mutex_unlock(&c->write_lock);
 
 		sendq_release_entry(&entry);
 	}
@@ -433,12 +436,18 @@ void *rsd_video_reader_thread(void *arg)
 		 * between ring_wait returns. Processing them sequentially
 		 * preserves every frame; the reader is fast enough to catch up
 		 * (measured <2ms per frame vs 33ms budget on T20). */
+		const rss_ring_header_t *rhdr = rss_ring_get_header(rctx->ring);
+		uint32_t fps = (rhdr->fps_num > 0 && rhdr->fps_den > 0)
+				      ? rhdr->fps_num / rhdr->fps_den
+				      : 30;
+		uint32_t frame_dur = 90000 / fps;
+
 		for (int burst = 0; burst < 8; burst++) {
 			uint32_t length;
 			rss_ring_slot_t meta;
 			uint64_t read_seq = rctx->read_seq;
-
 			uint64_t pre_seq = read_seq;
+
 			ret = rss_ring_read(rctx->ring, &read_seq, rctx->frame_buf,
 					    rctx->frame_buf_size, &length, &meta);
 			if (ret == RSS_EOVERFLOW) {
@@ -463,16 +472,6 @@ void *rsd_video_reader_thread(void *arg)
 			uint32_t rtp_ts = (uint32_t)((uint64_t)(meta.timestamp - video_ts_epoch) *
 						     90000 / 1000000);
 
-			/* Enforce monotonic RTP timestamps with proper spacing.
-			 * The IMP encoder occasionally produces out-of-order
-			 * timestamps (~5-10ms backward every ~50s). Adding one
-			 * frame duration maintains plausible timing and keeps
-			 * client-estimated frame rate stable. */
-			const rss_ring_header_t *hdr = rss_ring_get_header(rctx->ring);
-			uint32_t fps = (hdr->fps_num > 0 && hdr->fps_den > 0)
-					      ? hdr->fps_num / hdr->fps_den
-					      : 30;
-			uint32_t frame_dur = 90000 / fps;
 			if (has_last_rtp_ts && (int32_t)(rtp_ts - last_rtp_ts) <= 0)
 				rtp_ts = last_rtp_ts + frame_dur;
 			last_rtp_ts = rtp_ts;
@@ -507,19 +506,14 @@ void *rsd_video_reader_thread(void *arg)
 				c->last_video_client_ts = client_ts;
 				c->has_last_video_client_ts = true;
 
-				int qret = rsd_sendq_push_video(&c->sendq, rctx->frame_buf, length,
-								client_ts);
+				int qret = rsd_sendq_push_video(&c->sendq, rctx->frame_buf,
+								length, client_ts);
 				if (qret == RSD_SENDQ_OK)
 					total_pushed++;
 				else if (qret == RSD_SENDQ_DROPPED) {
 					c->waiting_keyframe = true;
 					c->audio_ts_base_set = false;
 					rsd_maybe_request_idr(rctx->ring, &last_idr_req_us);
-					RSS_TRACE("client[%d] sendq full at rtp_ts=%u, waiting IDR",
-						  stream_idx, client_ts);
-				} else {
-					RSS_TRACE("client[%d] sendq push failed: %d (len=%u)",
-						  stream_idx, qret, length);
 				}
 			}
 			pthread_mutex_unlock(&srv->clients_lock);
@@ -569,11 +563,12 @@ static void rsd_send_audio_frame(rsd_client_t *c, uint32_t codec, const uint8_t 
 	(void)!Compy_RtpTransport_send_packet(c->audio.rtp, Compy_RtpTimestamp_Raw(rtp_ts), marker,
 					      payload_hdr, U8Slice99_new((uint8_t *)data, len));
 
-	/* Periodic RTCP SR */
-	int64_t now = rss_timestamp_us();
-	if (c->audio.rtcp && now - c->audio.last_rtcp > 5000000) {
-		(void)!Compy_Rtcp_send_sr(c->audio.rtcp);
-		c->audio.last_rtcp = now;
+	if (c->srv->rtcp_sr) {
+		int64_t now = rss_timestamp_us();
+		if (c->audio.rtcp && now - c->audio.last_rtcp > 30000000) {
+			(void)!Compy_Rtcp_send_sr(c->audio.rtcp);
+			c->audio.last_rtcp = now;
+		}
 	}
 }
 

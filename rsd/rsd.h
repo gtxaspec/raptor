@@ -123,6 +123,10 @@ typedef struct rsd_client {
 	/* Connection tracking */
 	int64_t last_activity; /* monotonic timestamp (us) */
 
+	/* Write mutex — serializes RTP data (send thread) and RTSP
+	 * responses (server thread) on TCP interleaved connections. */
+	pthread_mutex_t write_lock;
+
 	/* Send queue (per-client, decouples reader from I/O) */
 	rsd_sendq_t sendq;
 	pthread_t send_tid;
@@ -180,6 +184,7 @@ typedef struct rsd_server {
 	int max_clients;     /* runtime limit (≤ RSD_MAX_CLIENTS) */
 	int session_timeout; /* RTSP session timeout in seconds */
 	int tcp_sndbuf;	     /* TCP send buffer size (bytes) */
+	bool rtcp_sr;	     /* send RTCP Sender Reports (default false) */
 
 	/* Digest auth (NULL = no auth required) */
 	Compy_Auth *auth;
