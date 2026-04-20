@@ -887,8 +887,15 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 		/* Pre-CreateChn tuning via config fields */
 		if (st->refmode && !s->is_jpeg) {
 			if (st->refmode_shm) {
-				/* Ingenic VPU: 5 buffers, SDK-default per-buffer size */
+				/* Ingenic VPU: 5 buffers, per-buffer sized from resolution.
+				 * Must set buf_size — SDK defaults are huge on T20 (~1.8MB)
+				 * and too small values crash T23 (needs ≥625KB at 1080p). */
 				s->enc_cfg.max_stream_cnt = 5;
+				uint32_t pbuf = s->enc_cfg.width * s->enc_cfg.height * 3 / 8;
+				if (pbuf < 256 * 1024)
+					pbuf = 256 * 1024;
+				pbuf = (pbuf + 4095) & ~4095u;
+				s->enc_cfg.buf_size = pbuf;
 			}
 			/* Allegro (T31/T40/T41): leave SDK defaults.
 			 * SetMaxStreamCnt consumes extra rmem and can
@@ -903,14 +910,7 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 				char full_shm[128];
 				snprintf(full_shm, sizeof(full_shm), "/rss_enc_%s", shm_name);
 
-				/* Size SHM to match SDK's expected buffer.
-				 * Per-buffer ~= width*height*3/8 (covers SDK's
-				 * internal calculation across SDK versions). */
-				uint32_t per_buf = s->enc_cfg.width * s->enc_cfg.height * 3 / 8;
-				if (per_buf < 256 * 1024)
-					per_buf = 256 * 1024;
-				per_buf = (per_buf + 4095) & ~4095u;
-				uint32_t shm_size = s->enc_cfg.max_stream_cnt * per_buf;
+				uint32_t shm_size = s->enc_cfg.max_stream_cnt * s->enc_cfg.buf_size;
 
 				shm_unlink(full_shm);
 				int sfd = shm_open(full_shm, O_CREAT | O_RDWR, 0666);
