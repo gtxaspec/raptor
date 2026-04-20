@@ -758,6 +758,7 @@ int main(int argc, char **argv)
 
 	uint64_t frame_count = 0;
 	int64_t last_stats = rss_timestamp_us();
+	int64_t synth_audio_ts = rss_timestamp_us();
 
 	while (*dctx.running) {
 		/* Check control socket (non-blocking) */
@@ -789,15 +790,22 @@ int main(int argc, char **argv)
 		if (samples > max_samples)
 			samples = max_samples;
 
+		/* T20 SDK doesn't populate IMPAudioFrame.timeStamp —
+		 * synthesize from sample count when the SDK returns 0. */
+		int64_t ts = frame.timestamp;
+		if (ts <= 0) {
+			ts = synth_audio_ts;
+			synth_audio_ts += (int64_t)samples * 1000000 / ctrl_ctx.sample_rate;
+		}
+
 		const int16_t *pcm = frame.data;
 		int out_len;
 
 		out_len = codec_ops->encode(&codec_ctx, pcm, samples, encode_buf, encode_buf_size,
-					    frame.timestamp);
+					    ts);
 
 		if (out_len > 0)
-			rss_ring_publish(ring, encode_buf, out_len, frame.timestamp,
-					 ctrl_ctx.codec_id, 0);
+			rss_ring_publish(ring, encode_buf, out_len, ts, ctrl_ctx.codec_id, 0);
 
 		RSS_HAL_CALL(ops, audio_release_frame, hal_ctx, ai_dev, 0, &frame);
 
