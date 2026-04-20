@@ -328,7 +328,10 @@ void rvd_osd_init_stream(rvd_state_t *st, int s)
 
 	if (time_en) {
 		int stream_w = st->streams[s].enc_cfg.width;
-		uint32_t tw = merge_top ? (uint32_t)(stream_w - 2 * OSD_MARGIN) : time_w;
+		int merged_w = stream_w - 2 * OSD_MARGIN;
+		if (merged_w < (int)time_w)
+			merged_w = (int)time_w;
+		uint32_t tw = merge_top ? (uint32_t)merged_w : time_w;
 		tw = (tw + 1) & ~1u;
 		if (create_region(st, s, RVD_OSD_TIME, tw, th))
 			region_count++;
@@ -553,7 +556,7 @@ static void try_open_shm(rvd_state_t *st, int s, int r)
 			uint32_t new_h = (shm_h + 1) & ~1;
 			uint32_t old_w = reg->width;
 			uint32_t old_h = reg->height;
-			uint8_t *new_buf = calloc(1, new_w * new_h * 4);
+			uint8_t *new_buf = calloc(1, (size_t)new_w * new_h * 4);
 			if (new_buf) {
 				free(reg->local_buf);
 				reg->local_buf = new_buf;
@@ -799,7 +802,8 @@ push_updates:
 					uint32_t uw, uh;
 					const uint8_t *ubmp =
 						rss_osd_get_active_buffer(ureg->shm, &uw, &uh);
-					if (ubmp && uw > 0 && uh > 0 && uh <= reg->height) {
+					if (ubmp && uw > 0 && uh > 0 && uw <= reg->width &&
+					    uh <= reg->height) {
 						uint32_t x_off =
 							reg->width > uw ? reg->width - uw : 0;
 						uint32_t rows = uh < reg->height ? uh : reg->height;
