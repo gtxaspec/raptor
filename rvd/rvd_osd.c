@@ -318,15 +318,33 @@ void rvd_osd_init_stream(rvd_state_t *st, int s)
 	}
 
 	int region_count = 0;
+	bool time_en = rss_config_get_bool(cfg, "osd", "time_enabled", true);
+	bool uptime_en = rss_config_get_bool(cfg, "osd", "uptime_enabled", true);
 
-	if (rss_config_get_bool(cfg, "osd", "time_enabled", true)) {
-		if (create_region(st, s, RVD_OSD_TIME, time_w, th))
+	/* Merge time + uptime into one full-width region to reduce IPU
+	 * OSD channel count.  The T20 IPU stalls when two OSD channels
+	 * on the same scanline span opposite frame edges. */
+	bool merge_top = time_en && uptime_en;
+
+	if (time_en) {
+		int stream_w = st->streams[s].enc_cfg.width;
+		uint32_t tw = merge_top ? (uint32_t)(stream_w - 2 * OSD_MARGIN) : time_w;
+		tw = (tw + 1) & ~1u;
+		if (create_region(st, s, RVD_OSD_TIME, tw, th))
 			region_count++;
 	}
 
-	if (rss_config_get_bool(cfg, "osd", "uptime_enabled", true)) {
+	if (uptime_en && !merge_top) {
 		if (create_region(st, s, RVD_OSD_UPTIME, up_w, th))
 			region_count++;
+	} else if (uptime_en && merge_top) {
+		/* Virtual region: track SHM but no hardware OSD region.
+		 * Content is composited into the TIME region. */
+		rvd_osd_region_t *ureg = &st->osd_regions[s][RVD_OSD_UPTIME];
+		ureg->active = true;
+		ureg->hal_handle = -1;
+		ureg->width = up_w;
+		ureg->height = th;
 	}
 
 	if (rss_config_get_bool(cfg, "osd", "text_enabled", true)) {
@@ -519,11 +537,18 @@ static void try_open_shm(rvd_state_t *st, int s, int r)
 
 	/* Check if SHM dimensions differ from HAL region (font size change
 	 * or initial boot where RVD created regions before ROD started).
-	 * Resize the HAL region to match so positions are correct. */
-	{
+	 * Resize the HAL region to match so positions are correct.
+	 * Skip for virtual regions and merged TIME (keeps full width). */
+	if (reg->hal_handle >= 0) {
+		/* Don't resize merged TIME region — it's intentionally wider
+		 * than the SHM content to hold uptime at the right side. */
+		bool is_merged_time =
+			(r == RVD_OSD_TIME && st->osd_regions[s][RVD_OSD_UPTIME].active &&
+			 st->osd_regions[s][RVD_OSD_UPTIME].hal_handle < 0);
 		uint32_t shm_w, shm_h;
 		rss_osd_get_active_buffer(reg->shm, &shm_w, &shm_h);
-		if (shm_w > 0 && shm_h > 0 && (shm_w != reg->width || shm_h != reg->height)) {
+		if (!is_merged_time && shm_w > 0 && shm_h > 0 &&
+		    (shm_w != reg->width || shm_h != reg->height)) {
 			uint32_t new_w = (shm_w + 1) & ~1;
 			uint32_t new_h = (shm_h + 1) & ~1;
 			uint32_t old_w = reg->width;
@@ -584,6 +609,10 @@ static void try_open_shm(rvd_state_t *st, int s, int r)
 			}
 		}
 	}
+
+	/* Virtual region (merged into another) — just track the SHM */
+	if (reg->hal_handle < 0)
+		return;
 
 	/* Read and push current buffer immediately — dirty flag may have
 	 * been cleared by a previous RVD instance, but content is valid. */
@@ -743,13 +772,47 @@ push_updates:
 			if (!reg->active || !reg->shm)
 				continue;
 
-			if (!rss_osd_check_dirty(reg->shm)) {
-				reg->no_update_ticks++;
+			/* Virtual region (merged into another) — no hardware push */
+			if (reg->hal_handle < 0) {
+				if (rss_osd_check_dirty(reg->shm))
+					rss_osd_clear_dirty(reg->shm);
 				continue;
+			}
+
+			if (!rss_osd_check_dirty(reg->shm)) {
+				/* Check if merged uptime is dirty */
+				rvd_osd_region_t *ureg = &st->osd_regions[s][RVD_OSD_UPTIME];
+				if (r != RVD_OSD_TIME || !ureg->active || ureg->hal_handle >= 0 ||
+				    !ureg->shm || !rss_osd_check_dirty(ureg->shm)) {
+					reg->no_update_ticks++;
+					continue;
+				}
 			}
 			reg->no_update_ticks = 0;
 			read_shm_and_push(st, s, r);
 			rss_osd_clear_dirty(reg->shm);
+
+			/* Composite merged uptime into TIME region */
+			if (r == RVD_OSD_TIME) {
+				rvd_osd_region_t *ureg = &st->osd_regions[s][RVD_OSD_UPTIME];
+				if (ureg->active && ureg->hal_handle < 0 && ureg->shm) {
+					uint32_t uw, uh;
+					const uint8_t *ubmp =
+						rss_osd_get_active_buffer(ureg->shm, &uw, &uh);
+					if (ubmp && uw > 0 && uh > 0 && uh <= reg->height) {
+						uint32_t x_off =
+							reg->width > uw ? reg->width - uw : 0;
+						uint32_t rows = uh < reg->height ? uh : reg->height;
+						for (uint32_t row = 0; row < rows; row++)
+							memcpy(reg->local_buf +
+								       (row * reg->width + x_off) *
+									       4,
+							       ubmp + row * uw * 4, uw * 4);
+					}
+					rss_osd_clear_dirty(ureg->shm);
+					push_region(st, s, r);
+				}
+			}
 
 			/* Privacy stays hidden unless active */
 			if (!reg->shown && r == RVD_OSD_PRIVACY && !st->privacy[s])
@@ -878,7 +941,7 @@ void *rvd_osd_thread(void *arg)
 			continue;
 		for (int r = 0; r < RVD_OSD_REGIONS; r++) {
 			rvd_osd_region_t *reg = &st->osd_regions[s][r];
-			if (!reg->active)
+			if (!reg->active || reg->hal_handle < 0)
 				continue;
 			if (r == RVD_OSD_PRIVACY)
 				continue;
