@@ -102,18 +102,21 @@ void rvd_osd_calc_position(int stream_w, int stream_h, int region_w, int region_
 	}
 
 clamp:
-	if (*out_x < 0)
-		*out_x = 0;
-	if (*out_y < 0)
-		*out_y = 0;
-	if (*out_x + region_w > stream_w)
-		*out_x = stream_w - region_w;
-	if (*out_y + region_h > stream_h)
-		*out_y = stream_h - region_h;
-	if (*out_x < 0)
-		*out_x = 0;
-	if (*out_y < 0)
-		*out_y = 0;
+	/* Clamp OSD regions to stay within frame boundaries
+	 * with at least OSD_MARGIN pixels from each edge. */
+	int margin = OSD_MARGIN;
+	if (*out_x < margin)
+		*out_x = margin;
+	if (*out_y < margin)
+		*out_y = margin;
+	if (*out_x + region_w > stream_w - margin)
+		*out_x = stream_w - region_w - margin;
+	if (*out_y + region_h > stream_h - margin)
+		*out_y = stream_h - region_h - margin;
+	if (*out_x < margin)
+		*out_x = margin;
+	if (*out_y < margin)
+		*out_y = margin;
 	*out_x &= ~1;
 	*out_y &= ~1;
 }
@@ -563,8 +566,18 @@ static void try_open_shm(rvd_state_t *st, int s, int r)
 					RSS_HAL_CALL(st->ops, isp_osd_set_region_attr, st->hal_ctx,
 						     sensor, reg->hal_handle, chx, &attr);
 				} else {
+					/* Hide before resize to prevent IPU seeing
+					 * inconsistent position+dimensions (causes
+					 * IPU timeout on T20). */
+					int grp = st->streams[s].chn;
+					if (reg->shown)
+						RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx,
+							     reg->hal_handle, grp, 0, r + 1);
 					RSS_HAL_CALL(st->ops, osd_set_region_attr, st->hal_ctx,
 						     reg->hal_handle, &attr);
+					if (reg->shown)
+						RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx,
+							     reg->hal_handle, grp, 1, r + 1);
 				}
 				RSS_DEBUG("osd %s: resized %ux%u → %ux%u at (%d,%d)", name, old_w,
 					  old_h, new_w, new_h, x, y);
