@@ -192,8 +192,6 @@ int rod_expand_template(rod_state_t *st, const char *tmpl, char *out, int out_si
 			format_uptime(val, sizeof(val));
 		} else if (strcmp(varname, "hostname") == 0) {
 			rss_strlcpy(val, st->hostname, sizeof(val));
-		} else if (strcmp(varname, "text") == 0) {
-			rss_strlcpy(val, st->settings.text_string, sizeof(val));
 		} else {
 			/* Custom variable lookup */
 			for (int i = 0; i < st->var_count; i++) {
@@ -228,31 +226,12 @@ static void load_config(rod_state_t *st)
 		    rss_config_get_str(cfg, "osd", "font", "/usr/share/fonts/default.ttf"),
 		    sizeof(c->font_path));
 	c->font_size = rss_config_get_int(cfg, "osd", "font_size", 24);
-	c->time_font_size = rss_config_get_int(cfg, "osd", "time_font_size", 0);
-	c->uptime_font_size = rss_config_get_int(cfg, "osd", "uptime_font_size", 0);
-	c->text_font_size = rss_config_get_int(cfg, "osd", "text_font_size", 0);
 	c->font_color = parse_color(rss_config_get_str(cfg, "osd", "font_color", "0xFFFFFFFF"));
 	c->stroke_color = parse_color(rss_config_get_str(cfg, "osd", "stroke_color", "0xFF000000"));
 	c->font_stroke = rss_config_get_int(cfg, "osd", "font_stroke", 1);
-
-	c->time_enabled = rss_config_get_bool(cfg, "osd", "time_enabled", true);
 	rss_strlcpy(c->time_format,
 		    rss_config_get_str(cfg, "osd", "time_format", "%Y-%m-%d %H:%M:%S"),
 		    sizeof(c->time_format));
-
-	c->uptime_enabled = rss_config_get_bool(cfg, "osd", "uptime_enabled", true);
-
-	c->text_enabled = rss_config_get_bool(cfg, "osd", "text_enabled", true);
-	rss_strlcpy(c->text_string, rss_config_get_str(cfg, "osd", "text_string", "Camera"),
-		    sizeof(c->text_string));
-
-	c->logo_enabled = rss_config_get_bool(cfg, "osd", "logo_enabled", true);
-	rss_strlcpy(c->logo_path,
-		    rss_config_get_str(cfg, "osd", "logo_path",
-				       "/usr/share/images/thingino_100x30.bgra"),
-		    sizeof(c->logo_path));
-	c->logo_width = rss_config_get_int(cfg, "osd", "logo_width", 100);
-	c->logo_height = rss_config_get_int(cfg, "osd", "logo_height", 30);
 
 	st->stream_w[0] = rss_config_get_int(cfg, "stream0", "width", 1920);
 	st->stream_h[0] = rss_config_get_int(cfg, "stream0", "height", 1080);
@@ -373,69 +352,25 @@ static void load_osd_section(const char *section, void *userdata)
 	RSS_DEBUG("osd element from config: [%s] name=%s type=%s", section, name, type_str);
 }
 
-/*
- * Populate the element registry from config.
- * New format: [osd.name] sections take priority.
- * Old format: time_enabled/text_string keys as fallback.
- */
 static void init_elements_from_config(rod_state_t *st)
 {
-	/* Check for new [osd.*] sections */
 	struct osd_section_ctx ctx = {.st = st, .count = 0};
 	rss_config_foreach_section(st->cfg, "osd.", load_osd_section, &ctx);
 
-	if (ctx.count > 0) {
-		RSS_INFO("loaded %d OSD elements from [osd.*] config sections", ctx.count);
+	if (ctx.count == 0)
+		RSS_WARN("no [osd.*] sections found in config — OSD will be empty");
+	else
+		RSS_INFO("loaded %d OSD elements from config", ctx.count);
 
-		/* Always add privacy if not defined in config */
-		if (!rod_find_element(st, "privacy")) {
-			rod_add_element(st, "privacy", ROD_ELEM_TEXT, "Privacy Mode", "center", 1,
-					0, 20, ROD_UPDATE_CHANGE);
-			rod_element_t *e = rod_find_element(st, "privacy");
-			if (e)
-				e->visible = false;
-		}
-		return;
-	}
-
-	/* Fall back to old [osd] keys */
-	rod_config_t *c = &st->settings;
-
-	if (c->time_enabled) {
-		rod_add_element(st, "time", ROD_ELEM_TEXT, "%time%", "top_left", 0,
-				c->time_font_size, 20, ROD_UPDATE_TICK);
-	}
-
-	if (c->uptime_enabled) {
-		rod_add_element(st, "uptime", ROD_ELEM_TEXT, "%uptime%", "top_right", 2,
-				c->uptime_font_size, 16, ROD_UPDATE_TICK);
-	}
-
-	if (c->text_enabled) {
-		rod_add_element(st, "text", ROD_ELEM_TEXT, c->text_string, "top_center", 1,
-				c->text_font_size, 14, ROD_UPDATE_CHANGE);
-	}
-
-	if (c->logo_enabled) {
-		rod_add_element(st, "logo", ROD_ELEM_IMAGE, NULL, "bottom_right", 0, 0, 0,
+	if (!rod_find_element(st, "privacy")) {
+		rod_add_element(st, "privacy", ROD_ELEM_TEXT, "Privacy Mode", "center", 1, 0, 20,
 				ROD_UPDATE_CHANGE);
-		rod_element_t *e = rod_find_element(st, "logo");
-		if (e) {
-			rss_strlcpy(e->image_path, c->logo_path, sizeof(e->image_path));
-			e->image_w = c->logo_width;
-			e->image_h = c->logo_height;
-		}
-	}
-
-	rod_add_element(st, "privacy", ROD_ELEM_TEXT, "Privacy Mode", "center", 1, 0, 20,
-			ROD_UPDATE_CHANGE);
-	{
 		rod_element_t *e = rod_find_element(st, "privacy");
 		if (e)
 			e->visible = false;
 	}
 
-	if (st->detect_enabled) {
+	if (st->detect_enabled && !rod_find_element(st, "detect")) {
 		rod_add_element(st, "detect", ROD_ELEM_OVERLAY, NULL, "0,0", 0, 0, 0,
 				ROD_UPDATE_TICK);
 		rod_element_t *e = rod_find_element(st, "detect");
@@ -685,29 +620,6 @@ static void mark_element_dirty(rod_element_t *e, int stream_count)
 		e->streams[s].needs_update = true;
 }
 
-static int handle_set_text(rod_state_t *st, const char *cmd_json, char *resp, int resp_size)
-{
-	char val[128];
-	if (rss_json_get_str(cmd_json, "value", val, sizeof(val)) != 0)
-		return rss_ctrl_resp_error(resp, resp_size, "missing value");
-
-	for (int i = 0; val[i]; i++) {
-		if ((unsigned char)val[i] < 0x20)
-			val[i] = ' ';
-	}
-
-	rss_strlcpy(st->settings.text_string, val, sizeof(st->settings.text_string));
-	rss_config_set_str(st->cfg, "osd", "text_string", val);
-
-	/* Update the "text" element's template if it's a literal (no % vars) */
-	rod_element_t *e = rod_find_element(st, "text");
-	if (e && !strchr(e->tmpl, '%')) {
-		rss_strlcpy(e->tmpl, val, sizeof(e->tmpl));
-		mark_element_dirty(e, st->stream_count);
-	}
-	return rss_ctrl_resp_ok(resp, resp_size);
-}
-
 static int handle_color_change(rod_state_t *st, const char *cmd_json, char *resp, int resp_size,
 			       const char *key, uint32_t *target)
 {
@@ -718,71 +630,6 @@ static int handle_color_change(rod_state_t *st, const char *cmd_json, char *resp
 	*target = parse_color(val);
 	rss_config_set_str(st->cfg, "osd", key, val);
 	mark_all_dirty(st);
-	return rss_ctrl_resp_ok(resp, resp_size);
-}
-
-static int handle_enable(rod_state_t *st, const char *cmd_json, char *resp, int resp_size,
-			 const char *cmd)
-{
-	int val;
-	if (rss_json_get_int(cmd_json, "value", &val) != 0)
-		return rss_ctrl_resp_error(resp, resp_size, "need value (0/1)");
-
-	bool enable = !!val;
-	const char *elem_name;
-	bool *setting;
-	const char *key;
-
-	if (strcmp(cmd, "enable-time") == 0) {
-		elem_name = "time";
-		setting = &st->settings.time_enabled;
-		key = "time_enabled";
-	} else if (strcmp(cmd, "enable-uptime") == 0) {
-		elem_name = "uptime";
-		setting = &st->settings.uptime_enabled;
-		key = "uptime_enabled";
-	} else if (strcmp(cmd, "enable-logo") == 0) {
-		elem_name = "logo";
-		setting = &st->settings.logo_enabled;
-		key = "logo_enabled";
-	} else {
-		elem_name = "text";
-		setting = &st->settings.text_enabled;
-		key = "text_enabled";
-	}
-
-	int target_stream = -1;
-	rss_json_get_int(cmd_json, "stream", &target_stream);
-
-	if (target_stream < 0) {
-		if (*setting == enable)
-			return rss_ctrl_resp_ok(resp, resp_size);
-		*setting = enable;
-		rss_config_set_str(st->cfg, "osd", key, enable ? "true" : "false");
-	}
-
-	/* Tell RVD to show/hide the HAL region */
-	for (int s = 0; s < st->stream_count; s++) {
-		if (target_stream >= 0 && s != target_stream)
-			continue;
-		char fwd[128];
-		{
-			cJSON *j = cJSON_CreateObject();
-			if (!j)
-				continue;
-			cJSON_AddStringToObject(j, "cmd", "osd-show");
-			cJSON_AddNumberToObject(j, "stream", s);
-			cJSON_AddStringToObject(j, "region", elem_name);
-			cJSON_AddNumberToObject(j, "show", enable ? 1 : 0);
-			cJSON_PrintPreallocated(j, fwd, sizeof(fwd), 0);
-			cJSON_Delete(j);
-		}
-		char rvd_resp[256];
-		rss_ctrl_send_command("/var/run/rss/rvd.sock", fwd, rvd_resp, sizeof(rvd_resp),
-				      1000);
-	}
-
-	RSS_INFO("%s: %s", key, enable ? "on" : "off");
 	return rss_ctrl_resp_ok(resp, resp_size);
 }
 
@@ -821,55 +668,22 @@ static int handle_set_position(rod_state_t *st, const char *cmd_json, char *resp
 	return rss_ctrl_resp_ok(resp, resp_size);
 }
 
-static int handle_font_size_change(rod_state_t *st, const char *cmd_json, char *resp, int resp_size,
-				   const char *cmd)
+static int handle_font_size_change(rod_state_t *st, const char *cmd_json, char *resp, int resp_size)
 {
 	int val;
 	if (rss_json_get_int(cmd_json, "value", &val) != 0 || val < 10 || val > 72)
 		return rss_ctrl_resp_error(resp, resp_size, "need value 10-72");
 
-	bool is_global = strcmp(cmd, "set-font-size") == 0;
-	const char *elem_name = NULL;
-	int *setting = NULL;
-	const char *key = NULL;
+	RSS_INFO("set-font-size: %d -> %d", st->settings.font_size, val);
+	st->settings.font_size = val;
+	rss_config_set_int(st->cfg, "osd", "font_size", val);
 
-	if (!is_global) {
-		if (strcmp(cmd, "set-time-font-size") == 0) {
-			elem_name = "time";
-			setting = &st->settings.time_font_size;
-			key = "time_font_size";
-		} else if (strcmp(cmd, "set-uptime-font-size") == 0) {
-			elem_name = "uptime";
-			setting = &st->settings.uptime_font_size;
-			key = "uptime_font_size";
-		} else {
-			elem_name = "text";
-			setting = &st->settings.text_font_size;
-			key = "text_font_size";
-		}
-	}
-
-	if (is_global) {
-		RSS_INFO("set-font-size: %d -> %d", st->settings.font_size, val);
-		st->settings.font_size = val;
-		rss_config_set_int(st->cfg, "osd", "font_size", val);
-	} else {
-		RSS_INFO("set-%s: -> %d", key, val);
-		*setting = val;
-		rss_config_set_int(st->cfg, "osd", key, val);
-	}
-
-	/* Rebuild font contexts and SHMs for affected elements */
 	for (int i = 0; i < st->elem_count; i++) {
 		rod_element_t *e = &st->elements[i];
 		if (!e->active || e->type != ROD_ELEM_TEXT)
 			continue;
-		if (!is_global && elem_name && strcmp(e->name, elem_name) != 0)
-			continue;
 
-		int new_size = e->font_size > 0 ? e->font_size : st->settings.font_size;
-		if (!is_global && elem_name && strcmp(e->name, elem_name) == 0)
-			new_size = val;
+		int new_size = e->font_size > 0 ? e->font_size : val;
 
 		for (int s = 0; s < st->stream_count; s++) {
 			int fs = new_size;
@@ -895,12 +709,6 @@ static int handle_font_size_change(rod_state_t *st, const char *cmd_json, char *
 		}
 	}
 
-	if (!is_global && elem_name) {
-		rod_element_t *target = rod_find_element(st, elem_name);
-		if (target)
-			target->font_size = val;
-	}
-
 	/* Notify RVD to pick up new SHM dimensions */
 	{
 		char fwd[96];
@@ -908,8 +716,7 @@ static int handle_font_size_change(rod_state_t *st, const char *cmd_json, char *
 		if (j) {
 			cJSON_AddStringToObject(j, "cmd", "osd-restart");
 			cJSON_AddNumberToObject(j, "pool_kb", 0);
-			if (is_global)
-				cJSON_AddNumberToObject(j, "font_size", val);
+			cJSON_AddNumberToObject(j, "font_size", val);
 			cJSON_PrintPreallocated(j, fwd, sizeof(fwd), 0);
 			cJSON_Delete(j);
 		}
@@ -1157,9 +964,6 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	if (rss_json_get_str(cmd_json, "cmd", cmd, sizeof(cmd)) != 0)
 		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "missing cmd");
 
-	if (strcmp(cmd, "set-text") == 0)
-		return handle_set_text(st, cmd_json, resp_buf, resp_buf_size);
-
 	if (strcmp(cmd, "set-font-color") == 0)
 		return handle_color_change(st, cmd_json, resp_buf, resp_buf_size, "font_color",
 					   &st->settings.font_color);
@@ -1181,13 +985,8 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	if (strcmp(cmd, "set-position") == 0)
 		return handle_set_position(st, cmd_json, resp_buf, resp_buf_size);
 
-	if (strcmp(cmd, "enable-time") == 0 || strcmp(cmd, "enable-uptime") == 0 ||
-	    strcmp(cmd, "enable-text") == 0 || strcmp(cmd, "enable-logo") == 0)
-		return handle_enable(st, cmd_json, resp_buf, resp_buf_size, cmd);
-
-	if (strcmp(cmd, "set-font-size") == 0 || strcmp(cmd, "set-time-font-size") == 0 ||
-	    strcmp(cmd, "set-uptime-font-size") == 0 || strcmp(cmd, "set-text-font-size") == 0)
-		return handle_font_size_change(st, cmd_json, resp_buf, resp_buf_size, cmd);
+	if (strcmp(cmd, "set-font-size") == 0)
+		return handle_font_size_change(st, cmd_json, resp_buf, resp_buf_size);
 
 	if (strcmp(cmd, "elements") == 0)
 		return handle_elements_list(st, resp_buf, resp_buf_size);

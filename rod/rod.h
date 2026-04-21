@@ -106,30 +106,15 @@ typedef struct {
 	char value[128];
 } rod_var_t;
 
-/* Config from [osd] section (backward compat) */
+/* Global OSD settings from [osd] section */
 typedef struct {
 	bool enabled;
 	char font_path[128];
 	int font_size;
-	int time_font_size;
-	int uptime_font_size;
-	int text_font_size;
 	uint32_t font_color;
 	uint32_t stroke_color;
 	int font_stroke;
-
-	bool time_enabled;
 	char time_format[64];
-
-	bool uptime_enabled;
-
-	bool text_enabled;
-	char text_string[128];
-
-	bool logo_enabled;
-	char logo_path[256];
-	int logo_width;
-	int logo_height;
 } rod_config_t;
 
 /* Global state */

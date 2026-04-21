@@ -33,9 +33,10 @@
  *   raptorctl rsd config                   Show running config
  *
  * ROD commands:
- *   raptorctl rod status                   Show OSD region status
- *   raptorctl rod config                   Show running config
- *   raptorctl rod set-text <text>          Change OSD text string
+ *   raptorctl rod status                   Show OSD element status
+ *   raptorctl rod elements                 List all OSD elements
+ *   raptorctl rod add-element <n> [k=v]    Create OSD element
+ *   raptorctl rod set-element <n> [k=v]    Modify element property
  */
 
 #include <stdio.h>
@@ -238,19 +239,6 @@ const struct help_entry help_entries[] = {
 	{"rad", "ao-mute                             Mute speaker (soft fade)"},
 	{"rad", "ao-unmute                           Unmute speaker (soft fade)"},
 	{"rod", "privacy [on|off] [channel]          Toggle privacy mode"},
-	{"rod", "set-text <text>                     Change OSD text"},
-	{"rod", "set-font-color <0xAARRGGBB>         Text color"},
-	{"rod", "set-stroke-color <0xAARRGGBB>       Stroke color"},
-	{"rod", "set-stroke-size <0-5>               Stroke width"},
-	{"rod", "enable-time <0|1>                   Show/hide timestamp"},
-	{"rod", "enable-uptime <0|1>                 Show/hide uptime"},
-	{"rod", "enable-text <0|1>                   Show/hide camera text"},
-	{"rod", "enable-logo <0|1>                   Show/hide logo"},
-	{"rod", "set-position <elem> <pos>           Move element (named or x,y)"},
-	{"rod", "set-font-size <10-72>               Font size (all elements)"},
-	{"rod", "set-time-font-size <10-72>          Time font size"},
-	{"rod", "set-uptime-font-size <10-72>        Uptime font size"},
-	{"rod", "set-text-font-size <10-72>          Text font size"},
 	{"rod", "elements                            List all OSD elements"},
 	{"rod", "add-element <name> [key=val]...     Create OSD element"},
 	{"rod", "remove-element <name>               Remove OSD element"},
@@ -258,6 +246,11 @@ const struct help_entry help_entries[] = {
 	{"rod", "show-element <name>                 Show element"},
 	{"rod", "hide-element <name>                 Hide element"},
 	{"rod", "set-var <name> <value>              Set template variable"},
+	{"rod", "set-position <elem> <pos>           Move element (named or x,y)"},
+	{"rod", "set-font-size <10-72>               Global font size"},
+	{"rod", "set-font-color <0xAARRGGBB>         Global text color"},
+	{"rod", "set-stroke-color <0xAARRGGBB>       Global stroke color"},
+	{"rod", "set-stroke-size <0-5>               Global stroke width"},
 	{"ric", "mode <auto|day|night>               Set day/night mode (GPIO + ISP)"},
 	{"ric", "isp-mode <day|night>                Set ISP mode only (no GPIO)"},
 	{"rhd", "clients                             List connected clients"},
@@ -1098,15 +1091,6 @@ int main(int argc, char **argv)
 			jadd_i(j, "pool_kb", argv[3]);
 		jstr(j, json, sizeof(json));
 
-	} else if (strcmp(cmd, "set-text") == 0) {
-		if (argc < 4) {
-			fprintf(stderr, "Usage: raptorctl %s set-text <text>\n", daemon);
-			return 1;
-		}
-		cJSON *j = jcmd("set-text");
-		jadd_s(j, "value", argv[3]);
-		jstr(j, json, sizeof(json));
-
 	} else if (strcmp(cmd, "mode") == 0) {
 		if (argc < 4) {
 			fprintf(stderr, "Usage: raptorctl %s mode <auto|day|night>\n", daemon);
@@ -1181,22 +1165,7 @@ int main(int argc, char **argv)
 			jadd_i(j, "stream", argv[5]);
 		jstr(j, json, sizeof(json));
 
-	} else if (strcmp(cmd, "enable-time") == 0 || strcmp(cmd, "enable-uptime") == 0 ||
-		   strcmp(cmd, "enable-text") == 0 || strcmp(cmd, "enable-logo") == 0) {
-		if (argc < 4) {
-			fprintf(stderr, "Usage: raptorctl %s %s <0|1>\n", daemon, cmd);
-			return 1;
-		}
-		cJSON *j = jcmd(cmd);
-		jadd_i(j, "value", argv[3]);
-		if (argc > 4)
-			jadd_i(j, "stream", argv[4]);
-		jstr(j, json, sizeof(json));
-
-	} else if (strcmp(cmd, "set-font-size") == 0 || strcmp(cmd, "set-stroke-size") == 0 ||
-		   strcmp(cmd, "set-time-font-size") == 0 ||
-		   strcmp(cmd, "set-uptime-font-size") == 0 ||
-		   strcmp(cmd, "set-text-font-size") == 0) {
+	} else if (strcmp(cmd, "set-font-size") == 0 || strcmp(cmd, "set-stroke-size") == 0) {
 		if (argc < 4) {
 			fprintf(stderr, "Usage: raptorctl %s %s <value>\n", daemon, cmd);
 			return 1;
