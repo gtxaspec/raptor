@@ -209,41 +209,37 @@ static int measure_text(rod_font_t *f, const char *text)
 }
 
 void rod_draw_text(rod_state_t *st, int stream_idx, int font_idx, uint8_t *buf, uint32_t buf_w,
-		   uint32_t buf_h, const char *text, int align)
+		   uint32_t buf_h, const char *text, int align, uint32_t color,
+		   uint32_t stroke_color, int stroke_size)
 {
 	rod_font_t *f = &st->fonts[stream_idx][font_idx];
-	int stroke = st->settings.font_stroke;
+	int stroke = stroke_size;
 	int baseline = f->ascender + (stroke > 0 ? stroke : 0);
 
-	/* Clear buffer to transparent */
 	memset(buf, 0, buf_w * buf_h * 4);
 
-	/* Extract BGRA color components */
-	uint32_t c = st->settings.font_color;
-	uint8_t txt_b = (uint8_t)(c & 0xFF);
-	uint8_t txt_g = (uint8_t)((c >> 8) & 0xFF);
-	uint8_t txt_r = (uint8_t)((c >> 16) & 0xFF);
+	uint8_t txt_b = (uint8_t)(color & 0xFF);
+	uint8_t txt_g = (uint8_t)((color >> 8) & 0xFF);
+	uint8_t txt_r = (uint8_t)((color >> 16) & 0xFF);
 
 	int pad = stroke > 0 ? stroke : 0;
 	int text_w = measure_text(f, text);
 	int pen_x;
 
-	if (align == 2) /* right */
+	if (align == 2)
 		pen_x = (int)buf_w - text_w - pad;
-	else if (align == 1) /* center */
+	else if (align == 1)
 		pen_x = ((int)buf_w - text_w) / 2;
-	else /* left */
+	else
 		pen_x = pad;
 
 	if (pen_x < pad)
 		pen_x = pad;
 
 	if (stroke > 0) {
-		/* Stroke: render text at offsets in stroke color */
-		uint32_t sc = st->settings.stroke_color;
-		uint8_t s_b = (uint8_t)(sc & 0xFF);
-		uint8_t s_g = (uint8_t)((sc >> 8) & 0xFF);
-		uint8_t s_r = (uint8_t)((sc >> 16) & 0xFF);
+		uint8_t s_b = (uint8_t)(stroke_color & 0xFF);
+		uint8_t s_g = (uint8_t)((stroke_color >> 8) & 0xFF);
+		uint8_t s_r = (uint8_t)((stroke_color >> 16) & 0xFF);
 		for (int sy = -stroke; sy <= stroke; sy++) {
 			for (int sx = -stroke; sx <= stroke; sx++) {
 				if (sx == 0 && sy == 0)

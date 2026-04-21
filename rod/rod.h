@@ -148,7 +148,8 @@ int rod_render_init(rod_state_t *st, int stream_idx, int font_idx, int font_size
 void rod_render_deinit(rod_state_t *st, int stream_idx, int font_idx);
 rod_glyph_t *rod_glyph_lookup(rod_font_t *font, uint32_t codepoint);
 void rod_draw_text(rod_state_t *st, int stream_idx, int font_idx, uint8_t *buf, uint32_t buf_w,
-		   uint32_t buf_h, const char *text, int align);
+		   uint32_t buf_h, const char *text, int align, uint32_t color,
+		   uint32_t stroke_color, int stroke_size);
 int rod_load_logo(const char *path, int expected_w, int expected_h, uint8_t **out_data);
 void rod_draw_rect_outline(uint8_t *buf, uint32_t buf_w, uint32_t buf_h, int x0, int y0, int x1,
 			   int y1, uint32_t color_bgra, int thickness);

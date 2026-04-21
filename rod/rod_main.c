@@ -476,7 +476,12 @@ static void render_text_element(rod_state_t *st, rod_element_t *e, int s, const 
 	if (!buf)
 		return;
 
-	rod_draw_text(st, s, es->font_idx, buf, es->width, es->height, text, e->align);
+	uint32_t col = e->color ? e->color : st->settings.font_color;
+	uint32_t scol = e->stroke_color ? e->stroke_color : st->settings.stroke_color;
+	int ssz = e->stroke_size >= 0 ? e->stroke_size : st->settings.font_stroke;
+
+	rod_draw_text(st, s, es->font_idx, buf, es->width, es->height, text, e->align, col, scol,
+		      ssz);
 	rss_osd_publish(es->shm);
 }
 
@@ -904,6 +909,54 @@ static int handle_set_element(rod_state_t *st, const char *cmd_json, char *resp,
 	if (rss_json_get_str(cmd_json, "color", val, sizeof(val)) == 0) {
 		e->color = (uint32_t)strtoul(val, NULL, 0);
 		mark_element_dirty(e, st->stream_count);
+	}
+
+	if (rss_json_get_str(cmd_json, "stroke_color", val, sizeof(val)) == 0) {
+		e->stroke_color = (uint32_t)strtoul(val, NULL, 0);
+		mark_element_dirty(e, st->stream_count);
+	}
+
+	if (rss_json_get_int(cmd_json, "stroke_size", &ival) == 0 && ival >= 0 && ival <= 5) {
+		e->stroke_size = ival;
+		mark_element_dirty(e, st->stream_count);
+	}
+
+	int new_font_size = 0;
+	if (rss_json_get_int(cmd_json, "font_size", &new_font_size) == 0 && new_font_size >= 10 &&
+	    new_font_size <= 72 && new_font_size != e->font_size && e->type == ROD_ELEM_TEXT) {
+		e->font_size = new_font_size;
+		for (int s = 0; s < st->stream_count; s++) {
+			int fs = new_font_size;
+			if (s > 0 && st->stream_h[0] > 0) {
+				fs = fs * st->stream_h[s] / st->stream_h[0];
+				if (fs < 12)
+					fs = 12;
+			}
+			release_font(st, s, e->streams[s].font_idx);
+			int fi = rod_alloc_font(st, s, fs);
+			if (fi < 0) {
+				RSS_ERROR("font alloc failed s%d elem %s", s, e->name);
+				e->streams[s].font_idx = -1;
+				continue;
+			}
+			e->streams[s].font_idx = fi;
+			if (e->streams[s].shm) {
+				rss_osd_destroy(e->streams[s].shm);
+				e->streams[s].shm = NULL;
+			}
+			create_elem_shm(st, e, s);
+		}
+		char fwd[96];
+		cJSON *j = cJSON_CreateObject();
+		if (j) {
+			cJSON_AddStringToObject(j, "cmd", "osd-restart");
+			cJSON_AddNumberToObject(j, "pool_kb", 0);
+			cJSON_PrintPreallocated(j, fwd, sizeof(fwd), 0);
+			cJSON_Delete(j);
+		}
+		char rvd_resp[256];
+		rss_ctrl_send_command("/var/run/rss/rvd.sock", fwd, rvd_resp, sizeof(rvd_resp),
+				      5000);
 	}
 
 	return rss_ctrl_resp_ok(resp, resp_size);
