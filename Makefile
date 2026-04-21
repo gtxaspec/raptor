@@ -176,7 +176,7 @@ LDFLAGS_HAL += -Wl,-rpath-link,$(CURDIR)/$(IPC_DIR) -Wl,-rpath-link,$(CURDIR)/$(
 LDFLAGS     += -Wl,-rpath-link,$(CURDIR)/$(IPC_DIR) -Wl,-rpath-link,$(CURDIR)/$(COMMON_DIR)
 
 # Targets
-DAEMONS := rvd rsd rad rhd rod ric rmr rmd rwd rwc
+DAEMONS := rvd rsd rad rhd rod ric rmr rmd rwd rwc rfs
 TOOLS   := raptorctl ringdump rac rlatency
 
 .PHONY: all clean libs $(DAEMONS) $(TOOLS) install
@@ -264,6 +264,16 @@ rwc: $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_BUILD_OBJ)
 	$(Q)$(MAKE) -C rwc CC="$(CC)" CFLAGS="$(CFLAGS)" \
 		LIBS="$(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS)" Q="$(Q)"
+
+LIBMOV_DIR := $(CURDIR)/.deps/media-server/libmov
+
+rfs: $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_BUILD_OBJ)
+	@echo "  BUILD   rfs"
+	$(Q)$(MAKE) -C rfs CC="$(CC)" \
+		CFLAGS="$(CFLAGS) -I$(CURDIR)/rad -I$(LIBMOV_DIR)/include -I$(LIBMOV_DIR)/source" \
+		LIBS="$(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_LIBS)" \
+		LDFLAGS="$(LDFLAGS) $(LDFLAGS_AAC_ENC) $(LDFLAGS_OPUS) $(LDFLAGS_MP3) $(LDFLAGS_AAC_DEC)" \
+		RAD_DIR="$(CURDIR)/rad" LIBMOV_DIR="$(LIBMOV_DIR)" Q="$(Q)"
 
 # -- Tools --
 

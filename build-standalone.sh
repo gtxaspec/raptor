@@ -733,7 +733,7 @@ echo "Building raptor daemons..."
 COMPY_CFLAGS="-I$SYSROOT_DIR/usr/include"
 [ "$OPT_TLS" = 1 ] && COMPY_CFLAGS="$COMPY_CFLAGS -DCOMPY_HAS_TLS"
 
-TARGETS="rvd rsd rad rhd rod ric rmr rmd raptorctl ringdump rac"
+TARGETS="rvd rsd rad rhd rod ric rmr rmd rfs raptorctl ringdump rac"
 [ "$OPT_TLS" = 1 ] && TARGETS="$TARGETS rwd"
 
 make -j"$JOBS" \
@@ -762,7 +762,7 @@ make -j"$JOBS" \
 
 # Collect binaries
 mkdir -p "$SCRIPT_DIR/build"
-for d in rvd rsd rad rhd rod ric rmr rmd rwd raptorctl ringdump rac; do
+for d in rvd rsd rad rhd rod ric rmr rmd rfs rwd raptorctl ringdump rac; do
     [ -f "$SCRIPT_DIR/$d/$d" ] && cp -f "$SCRIPT_DIR/$d/$d" "$SCRIPT_DIR/build/"
 done
 
