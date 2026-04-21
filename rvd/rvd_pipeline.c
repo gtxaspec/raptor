@@ -306,40 +306,104 @@ int rvd_pipeline_init(rvd_state_t *st)
 	}
 
 	/* ── 3. OSD pool sizing — must be set before HAL init (SDK requirement).
-	 * Streams aren't configured yet, so read dimensions from config.
-	 * Scale with font_size (base values at font_size=24). */
+	 * Scan [osd.*] config sections to estimate total region bytes.
+	 * Pool cannot be resized after init, so we must get it right here. */
 	{
 		int font_size = rss_config_get_int(cfg, "osd", "font_size", 24);
 		if (font_size < 10)
 			font_size = 10;
-		uint32_t tw = (uint32_t)(450 * font_size / 24);
-		uint32_t uw = (uint32_t)(280 * font_size / 24);
-		uint32_t xw = (uint32_t)(320 * font_size / 24);
+		int main_w = rss_config_get_int(cfg, "stream0", "width", 1920);
+		int main_h = rss_config_get_int(cfg, "stream0", "height", 1080);
+		int sub_w = rss_config_get_int(cfg, "stream1", "width", 640);
+		int sub_h = rss_config_get_int(cfg, "stream1", "height", 360);
+		bool has_sub = rss_config_get_bool(cfg, "stream1", "enabled", true);
+
+		/* Base text height from font size */
 		uint32_t th = (uint32_t)(36 * font_size / 24);
 		if (th < 36)
 			th = 36;
+		uint32_t sub_th = th * sub_h / main_h;
+		if (sub_th < 20)
+			sub_th = 20;
 
+		/* Estimate per-element region size from config sections */
 		uint32_t osd_pool = 0;
-		/* Main stream OSD: time + uptime + text + privacy + logo */
-		osd_pool += (tw + uw + xw + tw) * th * 4 + 100 * 30 * 4;
-		/* Sub stream OSD (if enabled): scaled text + logo */
-		if (rss_config_get_bool(cfg, "stream1", "enabled", true)) {
-			uint32_t sub_th = th / 2;
-			if (sub_th < 20)
-				sub_th = 20;
-			osd_pool += (240 + 150 + 170 + tw) * sub_th * 4 + 100 * 30 * 4;
-			/* Detection overlay: full sub-stream BGRA */
-			if (rss_config_get_bool(cfg, "motion", "enabled", false)) {
-				int sub_w = rss_config_get_int(cfg, "stream1", "width", 640);
-				int sub_h = rss_config_get_int(cfg, "stream1", "height", 360);
-				osd_pool += (uint32_t)sub_w * sub_h * 4;
+		struct pool_ctx {
+			rss_config_t *cfg;
+			int font_size;
+			int main_w;
+			int main_h;
+			int sub_w;
+			int sub_h;
+			uint32_t th;
+			uint32_t sub_th;
+			bool has_sub;
+			uint32_t total;
+		} pctx = {cfg, font_size, main_w, main_h, sub_w, sub_h, th, sub_th, has_sub, 0};
+
+		void pool_cb(const char *section, void *ud)
+		{
+			struct pool_ctx *c = ud;
+			const char *dot = strchr(section, '.');
+			if (!dot)
+				return;
+			const char *type = rss_config_get_str(c->cfg, section, "type", "text");
+			int efs = rss_config_get_int(c->cfg, section, "font_size", 0);
+			if (efs <= 0)
+				efs = c->font_size;
+			uint32_t adv = (uint32_t)(efs * 10 / 24);
+			if (adv < 10)
+				adv = 10;
+			uint32_t eh = (uint32_t)(efs * 36 / 24);
+			if (eh < 36)
+				eh = 36;
+
+			if (strcmp(type, "text") == 0) {
+				int mc = rss_config_get_int(c->cfg, section, "max_chars", 20);
+				uint32_t ew = mc * adv;
+				c->total += ew * eh * 4;
+				if (c->has_sub) {
+					uint32_t sew = ew * c->sub_w / c->main_w;
+					uint32_t seh = eh * c->sub_h / c->main_h;
+					if (seh < 16)
+						seh = 16;
+					c->total += sew * seh * 4;
+				}
+			} else if (strcmp(type, "image") == 0) {
+				int iw = rss_config_get_int(c->cfg, section, "width", 100);
+				int ih = rss_config_get_int(c->cfg, section, "height", 30);
+				c->total += (uint32_t)(iw * ih * 4);
+				if (c->has_sub)
+					c->total += (uint32_t)(iw * ih * 4);
+			} else if (strcmp(type, "receipt") == 0) {
+				int ml = rss_config_get_int(c->cfg, section, "max_lines", 20);
+				int mll =
+					rss_config_get_int(c->cfg, section, "max_line_length", 80);
+				uint32_t rw = mll * adv;
+				uint32_t rh = ml * eh;
+				c->total += rw * rh * 4;
+				if (c->has_sub) {
+					uint32_t srw = rw * c->sub_w / c->main_w;
+					uint32_t srh = rh * c->sub_h / c->main_h;
+					c->total += srw * srh * 4;
+				}
+			} else if (strcmp(type, "overlay") == 0) {
+				if (c->has_sub)
+					c->total += (uint32_t)(c->sub_w * c->sub_h * 4);
 			}
 		}
+
+		rss_config_foreach_section(cfg, "osd.", pool_cb, &pctx);
+		osd_pool = pctx.total;
+
+		/* Privacy cover regions (no bitmap, just color — negligible) */
 		/* 25% headroom for SDK alignment + metadata */
 		osd_pool = osd_pool * 5 / 4;
 		if (st->osd_pool_override > osd_pool)
 			osd_pool = st->osd_pool_override;
-		osd_pool = (osd_pool + 0xFFFF) & ~0xFFFF; /* align to 64KB */
+		if (osd_pool < 448 * 1024)
+			osd_pool = 448 * 1024;
+		osd_pool = (osd_pool + 0xFFFF) & ~0xFFFF;
 		RSS_HAL_CALL(st->ops, osd_set_pool_size, st->hal_ctx, osd_pool);
 		RSS_DEBUG("osd pool: %u KB (font_size=%d)", osd_pool / 1024, font_size);
 	}
