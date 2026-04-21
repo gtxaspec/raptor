@@ -1320,6 +1320,29 @@ int main(int argc, char **argv)
 
 	create_all_shms(&st);
 
+	/* Push all element positions to RVD so it uses the correct
+	 * placement when discovering SHM regions via /dev/shm scan. */
+	for (int i = 0; i < st.elem_count; i++) {
+		rod_element_t *e = &st.elements[i];
+		if (!e->active || !e->position[0])
+			continue;
+		for (int s = 0; s < st.stream_count; s++) {
+			char fwd[128];
+			cJSON *j = cJSON_CreateObject();
+			if (!j)
+				continue;
+			cJSON_AddStringToObject(j, "cmd", "osd-position");
+			cJSON_AddNumberToObject(j, "stream", s);
+			cJSON_AddStringToObject(j, "region", e->name);
+			cJSON_AddStringToObject(j, "pos", e->position);
+			cJSON_PrintPreallocated(j, fwd, sizeof(fwd), 0);
+			cJSON_Delete(j);
+			char rvd_resp[256];
+			rss_ctrl_send_command("/var/run/rss/rvd.sock", fwd, rvd_resp,
+					      sizeof(rvd_resp), 1000);
+		}
+	}
+
 	rss_mkdir_p("/var/run/rss");
 	st.ctrl = rss_ctrl_listen("/var/run/rss/rod.sock");
 
