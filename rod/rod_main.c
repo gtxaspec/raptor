@@ -7,9 +7,8 @@
  * ROD has no HAL dependency -- it is purely a bitmap producer.
  * RVD handles OSD group/region creation and hardware updates.
  *
- * Elements are created from the [osd] config section at startup
- * (backward compatible with the old fixed-slot format) and can
- * be added/removed at runtime via control socket commands.
+ * Elements are defined via [osd.*] config sections and can be
+ * added/removed at runtime via control socket commands.
  */
 
 #include <errno.h>
@@ -19,7 +18,6 @@
 #include <unistd.h>
 #include <time.h>
 #include <sys/epoll.h>
-#include <dirent.h>
 
 #include "rod.h"
 
@@ -82,10 +80,19 @@ int rod_add_element(rod_state_t *st, const char *name, rod_elem_type_t type, con
 {
 	if (rod_find_element(st, name))
 		return -1;
-	if (st->elem_count >= ROD_MAX_ELEMENTS)
-		return -1;
 
-	rod_element_t *e = &st->elements[st->elem_count];
+	rod_element_t *e = NULL;
+	for (int i = 0; i < st->elem_count; i++) {
+		if (!st->elements[i].active) {
+			e = &st->elements[i];
+			break;
+		}
+	}
+	if (!e) {
+		if (st->elem_count >= ROD_MAX_ELEMENTS)
+			return -1;
+		e = &st->elements[st->elem_count++];
+	}
 	memset(e, 0, sizeof(*e));
 	rss_strlcpy(e->name, name, sizeof(e->name));
 	e->type = type;
@@ -99,10 +106,12 @@ int rod_add_element(rod_state_t *st, const char *name, rod_elem_type_t type, con
 	e->font_size = font_size;
 	e->stroke_size = -1;
 	e->max_chars = max_chars > 0 ? max_chars : 20;
+	if (e->max_chars > 128)
+		e->max_chars = 128;
 	e->update_mode = update_mode;
-	e->font_idx = -1;
+	for (int s = 0; s < ROD_MAX_STREAMS; s++)
+		e->streams[s].font_idx = -1;
 
-	st->elem_count++;
 	return 0;
 }
 
@@ -118,7 +127,8 @@ void rod_remove_element(rod_state_t *st, const char *name)
 				rss_osd_destroy(e->streams[s].shm);
 				e->streams[s].shm = NULL;
 			}
-			release_font(st, s, e->font_idx);
+			release_font(st, s, e->streams[s].font_idx);
+			e->streams[s].font_idx = -1;
 		}
 		free(e->image_data);
 		free(e->image_sub_data);
@@ -262,6 +272,7 @@ static void load_config(rod_state_t *st)
 
 	st->detect_enabled = rss_config_get_bool(cfg, "motion", "enabled", false);
 	gethostname(st->hostname, sizeof(st->hostname));
+	st->hostname[sizeof(st->hostname) - 1] = '\0';
 }
 
 /* ── New [osd.*] section format ── */
@@ -358,7 +369,7 @@ static void init_elements_from_config(rod_state_t *st)
 	rss_config_foreach_section(st->cfg, "osd.", load_osd_section, &ctx);
 
 	if (ctx.count == 0)
-		RSS_WARN("no [osd.*] sections found in config — OSD will be empty");
+		RSS_WARN("no [osd.*] sections found in config -- OSD will be empty");
 	else
 		RSS_INFO("loaded %d OSD elements from config", ctx.count);
 
@@ -399,10 +410,11 @@ static void create_elem_shm(rod_state_t *st, rod_element_t *e, int s)
 	uint32_t w, h;
 
 	if (e->type == ROD_ELEM_TEXT) {
-		if (e->font_idx < 0)
+		if (e->streams[s].font_idx < 0)
 			return;
 		int stroke = e->stroke_size >= 0 ? e->stroke_size : st->settings.font_stroke;
-		font_region_dims(&st->fonts[s][e->font_idx], e->max_chars, stroke, &w, &h);
+		font_region_dims(&st->fonts[s][e->streams[s].font_idx], e->max_chars, stroke, &w,
+				 &h);
 	} else if (e->type == ROD_ELEM_IMAGE) {
 		if (s == 0) {
 			w = e->image_w;
@@ -457,14 +469,14 @@ static void create_all_shms(rod_state_t *st)
 static void render_text_element(rod_state_t *st, rod_element_t *e, int s, const char *text)
 {
 	rod_elem_stream_t *es = &e->streams[s];
-	if (!es->shm)
+	if (!es->shm || es->font_idx < 0)
 		return;
 
 	uint8_t *buf = rss_osd_get_draw_buffer(es->shm);
 	if (!buf)
 		return;
 
-	rod_draw_text(st, s, e->font_idx, buf, es->width, es->height, text, e->align);
+	rod_draw_text(st, s, es->font_idx, buf, es->width, es->height, text, e->align);
 	rss_osd_publish(es->shm);
 }
 
@@ -486,8 +498,9 @@ static void render_image_element(rod_state_t *st, rod_element_t *e, int s)
 		return;
 
 	memset(buf, 0, es->width * es->height * 4);
+	int copy_w = img_w < (int)es->width ? img_w : (int)es->width;
 	for (int row = 0; row < img_h && row < (int)es->height; row++)
-		memcpy(buf + row * es->width * 4, img + row * img_w * 4, img_w * 4);
+		memcpy(buf + row * es->width * 4, img + row * img_w * 4, copy_w * 4);
 
 	rss_osd_publish(es->shm);
 	es->needs_update = false;
@@ -693,13 +706,13 @@ static int handle_font_size_change(rod_state_t *st, const char *cmd_json, char *
 					fs = 12;
 			}
 
-			release_font(st, s, e->font_idx);
+			release_font(st, s, e->streams[s].font_idx);
 			int fi = rod_alloc_font(st, s, fs);
 			if (fi < 0) {
 				RSS_ERROR("font alloc failed s%d elem %s", s, e->name);
 				continue;
 			}
-			e->font_idx = fi;
+			e->streams[s].font_idx = fi;
 
 			if (e->streams[s].shm) {
 				rss_osd_destroy(e->streams[s].shm);
@@ -802,7 +815,7 @@ static int handle_add_element(rod_state_t *st, const char *cmd_json, char *resp,
 			}
 			int fi = rod_alloc_font(st, s, fs);
 			if (fi >= 0) {
-				e->font_idx = fi;
+				e->streams[s].font_idx = fi;
 				create_elem_shm(st, e, s);
 			}
 		}
@@ -1087,7 +1100,7 @@ int main(int argc, char **argv)
 				RSS_FATAL("font init failed for stream %d element %s", s, e->name);
 				goto cleanup;
 			}
-			e->font_idx = fi;
+			e->streams[s].font_idx = fi;
 		}
 	}
 

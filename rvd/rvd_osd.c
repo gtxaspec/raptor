@@ -333,7 +333,14 @@ void rvd_osd_init_stream(rvd_state_t *st, int s)
 				if (merged_w < (int)time_reg->width)
 					merged_w = (int)time_reg->width;
 				time_reg->width = ((uint32_t)merged_w + 1) & ~1u;
-				/* Uptime is virtual — no HAL region */
+				if (time_reg->local_buf) {
+					uint8_t *nb = calloc(1, (size_t)time_reg->width *
+									time_reg->height * 4);
+					if (nb) {
+						free(time_reg->local_buf);
+						time_reg->local_buf = nb;
+					}
+				}
 				reg->active = true;
 				reg->hal_handle = -1;
 				is_uptime_merged = true;
@@ -352,8 +359,11 @@ void rvd_osd_init_stream(rvd_state_t *st, int s)
 		}
 
 		if (!is_uptime_merged) {
-			if (create_region(st, s, reg))
+			if (create_region(st, s, reg)) {
 				region_count++;
+			} else {
+				reg->name[0] = '\0';
+			}
 		}
 	}
 	closedir(dir);
@@ -461,6 +471,8 @@ static void push_region(rvd_state_t *st, int s, rvd_osd_region_t *reg)
 
 static void read_shm_and_push(rvd_state_t *st, int s, rvd_osd_region_t *reg)
 {
+	if (!reg->local_buf)
+		return;
 	uint32_t w, h;
 	const uint8_t *bitmap = rss_osd_get_active_buffer(reg->shm, &w, &h);
 	if (!bitmap || w > reg->width || h > reg->height)
@@ -689,9 +701,12 @@ static void scan_new_shm(rvd_state_t *st, int s)
 		}
 
 		if (!is_merged) {
-			if (create_region(st, s, reg))
+			if (create_region(st, s, reg)) {
 				RSS_INFO("osd stream%d: discovered new element '%s' (%ux%u)", s,
 					 name, w, h);
+			} else {
+				reg->name[0] = '\0';
+			}
 		}
 	}
 	closedir(dir);
@@ -947,6 +962,7 @@ void *rvd_osd_thread(void *arg)
 		usleep(100000);
 
 	/* Show initial regions */
+	pthread_mutex_lock(&st->osd_lock);
 	for (int s = 0; s < st->stream_count; s++) {
 		if (st->streams[s].is_jpeg)
 			continue;
@@ -986,6 +1002,7 @@ void *rvd_osd_thread(void *arg)
 			reg->shown = true;
 		}
 	}
+	pthread_mutex_unlock(&st->osd_lock);
 	RSS_INFO("osd regions shown");
 
 	while (*st->running) {

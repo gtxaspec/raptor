@@ -58,12 +58,13 @@ typedef struct {
 	int refcount;
 } rod_font_t;
 
-/* Per-stream per-element SHM state */
+/* Per-stream per-element state */
 typedef struct {
 	rss_osd_shm_t *shm;
 	uint32_t width;
 	uint32_t height;
 	bool needs_update;
+	int font_idx;
 } rod_elem_stream_t;
 
 /* Dynamic OSD element */
@@ -83,8 +84,6 @@ typedef struct {
 	int align;
 	char position[32];
 	int max_chars;
-
-	int font_idx;
 
 	char image_path[256];
 	uint8_t *image_data;
@@ -154,7 +153,7 @@ int rod_load_logo(const char *path, int expected_w, int expected_h, uint8_t **ou
 void rod_draw_rect_outline(uint8_t *buf, uint32_t buf_w, uint32_t buf_h, int x0, int y0, int x1,
 			   int y1, uint32_t color_bgra, int thickness);
 
-/* rod_main.c — element registry */
+/* rod_main.c -- element registry */
 rod_element_t *rod_find_element(rod_state_t *st, const char *name);
 int rod_add_element(rod_state_t *st, const char *name, rod_elem_type_t type, const char *tmpl,
 		    const char *position, int align, int font_size, int max_chars,
