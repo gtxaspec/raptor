@@ -1,38 +1,37 @@
 # Raptor Streaming System (RSS)
 
-A modular microservice camera streamer for Ingenic T-series SoCs. Raptor
-replaces the traditional monolithic streamer with independent daemons that
-communicate through POSIX shared-memory ring buffers and Unix domain control
-sockets.
+A modular microservice camera streamer for Ingenic SoCs. Raptor replaces the
+traditional monolithic streamer with independent daemons that communicate
+through POSIX shared-memory ring buffers and Unix domain control sockets.
 
 ## Architecture
 
-Each daemon runs as a separate process. RVD owns the hardware and publishes
+Each daemon runs as a separate process. Producers (RVD, RAD, or RFS) publish
 encoded frames to SHM rings; all other daemons are pure consumers or support
-services with no direct HAL dependency (except RAD for audio capture and RIC
-for ISP exposure queries via RVD's control socket).
+services. On camera platforms, RVD owns the ISP/encoder hardware. On platforms
+without ISP (A1, x86 testing), RFS replaces RVD+RAD by reading from files.
 
 Raptor is fully modular -- run only the daemons your application requires.
 A headless recorder might run just RVD and RMR. A cloud-connected doorbell
 might run RVD, RSD, RAD, RIC, and ROD. A minimal RTSP-only camera needs
-just RVD and RSD. Each daemon starts independently and discovers available
-ring buffers at runtime, gracefully skipping any that don't exist.
+just RVD and RSD. On an A1 media processor, RFS + RSD streams video from
+MP4 files. Each daemon starts independently and discovers available ring
+buffers at runtime, gracefully skipping any that don't exist.
 
 ```
- sensor
+ sensor                              .mp4 / .h264 file
+   |                                        |
+  [RVD] --shm rings--+              [RFS] --shm rings--+
+   |  \               |                |               |
+   |   \              +--> [RSD] RTSP/RTSPS server (via compy)
+   |    \             +--> [RHD] HTTP snapshots / MJPEG / audio
+   |     \            +--> [RMR] fragmented MP4 recording
+   |      \           +--> [RWD] WebRTC/WHIP server (DTLS-SRTP)
+   |       \          +--> [RWC] USB webcam (UVC + UAC1)
+   |        `--osd shm <-- [ROD] OSD text / logo renderer
+   |        `--ivs ------> [RMD] motion detection → triggers RMR
    |
-  [RVD] --shm rings--> [RSD] RTSP/RTSPS server (via compy)
-   |  \                 [RHD] HTTP snapshots / MJPEG
-   |   \                [RMR] fragmented MP4 recording
-   |    \               [RWD] WebRTC/WHIP server (DTLS-SRTP via mbedTLS + compy)
-   |     \              [RWC] USB webcam (UVC bulk + UAC1 mic)
-   |      `--osd shm <-- [ROD] OSD text / logo renderer
-   |      `--ivs ------> [RMD] motion detection → triggers RMR
-   |
-  [RAD] --audio ring--> [RSD] (interleaved A/V)
-   |                    [RMR] (muxed A/V)
-   |                    [RWD] (WebRTC A/V)
-   |                    [RWC] (USB mic via /dev/uac_mic)
+  [RAD] --audio ring--+--> (all consumers above)
    |
   [RIC] ---- ctrl sock --> [RVD] (exposure queries, ISP mode switch)
 ```
@@ -51,6 +50,7 @@ ring buffers at runtime, gracefully skipping any that don't exist.
 | RMD  | `rmd`  | Motion Detection Daemon. Queries RVD for IVS hardware motion results (configurable grid ROI), manages idle/active/cooldown state machine, triggers recording via RMR and GPIO output on motion events. |
 | RWD  | `rwd`  | WebRTC Daemon. Sends live H.264 + Opus to browsers and go2rtc via WHIP signaling with sub-second latency. ICE-lite, DTLS-SRTP (mbedTLS), SRTP (compy). Two-way audio backchannel (browser mic → camera speaker via Opus decode). HTTPS by default for signaling (enables `getUserMedia` Talk button). Embedded player at `/webrtc`. Optional WebTorrent sharing (`WEBTORRENT=1`) enables external viewing without port forwarding via public tracker signaling + STUN NAT traversal. Requires `TLS=1` and `MBEDTLS_SSL_DTLS_SRTP`. |
 | RWC  | `rwc`  | USB Webcam Daemon. Reads JPEG (or H.264) video from rings and raw PCM audio, feeds them to the Linux UVC+UAC gadget via V4L2 and `/dev/uac_mic`. Camera appears as a standard USB webcam with microphone on any connected host. MJPEG + H.264 at 1080p/720p/360p, 16kHz mono mic. Bulk video endpoint (works through USB hubs), isochronous audio. No ALSA dependency — custom minimal UAC1 kernel function. Requires `CONFIG_USB_G_WEBCAM=m` and the thingino kernel webcam patches. |
+| RFS  | `rfs`  | File Source Daemon. Reads video+audio from MP4/MOV containers or raw Annex B H.264/H.265 files, publishes to ring buffers at real-time rate. Replaces RVD+RAD on platforms without ISP/encoder hardware (A1, x86 testing). MP4 demuxing via libmov (zero-copy mmap, AVCC→Annex B on-the-fly). B-frame display reorder for raw files. Audio: direct passthrough for AAC/Opus/G.711, MP3 transcode via libhelix, raw PCM encoding via RAD codec plugins (L16/PCMU/PCMA/AAC/Opus). Control socket: status, pause/resume, seek. No HAL dependency. |
 
 ### Tools
 
@@ -86,6 +86,7 @@ Runtime shared libraries from the Ingenic SDK / Buildroot sysroot:
 - `libopus` -- Opus codec (optional, `OPUS=1`)
 - `libaudioProcess` -- Ingenic audio effects (optional, `AUDIO_EFFECTS=1`)
 - `libmbedtls` / `libmbedcrypto` / `libmbedx509` -- TLS/DTLS (optional, `TLS=1`, required for RTSPS and WebRTC)
+- `libmov` -- MP4 demuxer (statically compiled into RFS from [ireader/media-server](https://github.com/ireader/media-server), MIT license)
 
 ## Build
 
@@ -99,7 +100,7 @@ Raptor cross-compiles with a MIPS toolchain from a thingino Buildroot output.
 ./build.sh t31 /path/to/buildroot/output clean          # clean only
 ```
 
-Supported platforms: `t20`, `t21`, `t23`, `t30`, `t31`, `t32`, `t40`, `t41`.
+Supported platforms: `t20`, `t21`, `t23`, `t30`, `t31`, `t32`, `t40`, `t41`, `a1`.
 
 `build.sh` takes the Buildroot output directory as the second argument. It
 auto-detects the sysroot tuple and TLS support (mbedTLS).
@@ -112,7 +113,7 @@ make PLATFORM=T31 CROSS_COMPILE=mipsel-linux- SYSROOT=/path/to/sysroot
 
 Required variables:
 
-- `PLATFORM` -- target SoC: `T20`, `T21`, `T23`, `T30`, `T31`, `T32`, `T40`, `T41`
+- `PLATFORM` -- target SoC: `T20`, `T21`, `T23`, `T30`, `T31`, `T32`, `T40`, `T41`, `A1`
 - `CROSS_COMPILE` -- toolchain prefix (e.g., `mipsel-linux-`)
 
 Optional variables:
@@ -149,7 +150,7 @@ All daemons share a single INI-style config file: `/etc/raptor.conf`.
 
 Sections: `[sensor]`, `[stream0]`, `[stream1]`, `[image]`, `[jpeg]`, `[ring]`,
 `[audio]`, `[rtsp]`, `[http]`, `[osd]`, `[ircut]`, `[recording]`, `[webrtc]`,
-`[webcam]`, `[webtorrent]`, `[motion]`, `[log]`.
+`[webcam]`, `[webtorrent]`, `[motion]`, `[filesource]`, `[log]`.
 
 See `config/raptor.conf` for the full reference with defaults and comments.
 
@@ -380,10 +381,12 @@ clock. Reports min/avg/max/stddev/P50/P95/P99.
 | T32 | New (IMP v2)  | Supported |
 | T40 | IMPVI         | Supported |
 | T41 | IMPVI         | Supported |
+| A1  | VDEC/VENC     | RFS only (no ISP HAL) |
 
 Platform differences are handled by raptor-hal, which abstracts the three SDK
 generations behind a common API. The `PLATFORM` build variable selects the
-correct HAL backend at compile time.
+correct HAL backend at compile time. On A1, HAL is not built — RFS serves as
+the video/audio producer instead of RVD+RAD.
 
 ## License
 
