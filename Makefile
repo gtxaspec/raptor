@@ -6,7 +6,7 @@
 #   make clean
 #
 # Required:
-#   PLATFORM       - Target SoC: T20, T21, T23, T30, T31, T32, T40, T41
+#   PLATFORM       - Target SoC: T20, T21, T23, T30, T31, T32, T40, T41, A1
 #   CROSS_COMPILE  - Cross-compiler prefix
 
 ifeq ($(filter clean distclean build,$(MAKECMDGOALS)),)
@@ -37,9 +37,9 @@ CFLAGS += -I$(CURDIR)/$(HAL_DIR)/include
 CFLAGS += -I$(CURDIR)/$(IPC_DIR)/include
 CFLAGS += -I$(CURDIR)/$(COMMON_DIR)/include
 
-# xburst2 (T40/T41) toolchain uses -mfp64 ABI by default.
+# xburst2 (T40/T41/A1) toolchain uses -mfp64 ABI by default.
 # Ensure largefile support matches buildroot target flags.
-ifneq ($(filter T40 T41,$(PLATFORM)),)
+ifneq ($(filter T40 T41 A1,$(PLATFORM)),)
 CFLAGS += -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE -D_FILE_OFFSET_BITS=64
 endif
 

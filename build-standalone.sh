@@ -125,7 +125,7 @@ JOBS="${JOBS:-$(nproc)}"
 
 usage() {
     echo "Usage: $0 <platform> [options]"
-    echo "  platform: t20, t21, t23, t30, t31, t32, t40, t41"
+    echo "  platform: t20, t21, t23, t30, t31, t32, t40, t41, a1"
     echo ""
     echo "Options:"
     echo "  --no-tls       Disable TLS/WebRTC"
@@ -144,7 +144,7 @@ usage() {
 
 for arg in "$@"; do
     case "$arg" in
-        t10|t20|t21|t23|t30|t31|t32|t40|t41) PLATFORM="$arg" ;;
+        t10|t20|t21|t23|t30|t31|t32|t40|t41|a1) PLATFORM="$arg" ;;
         --no-tls)    OPT_TLS=0 ;;
         --alt)       OPT_ALT=1 ;;
         --no-aac)    OPT_AAC=0 ;;
@@ -202,6 +202,7 @@ case "$PLATFORM" in
     t32)     SDK_VERSION=1.0.6;  GCC_VER=5.4.0 ;;
     t40)     SDK_VERSION=1.3.1;  GCC_VER=7.2.0 ;;
     t41)     SDK_VERSION=1.2.5;  GCC_VER=7.2.0 ;;
+    a1)      SDK_VERSION=1.7.0;  GCC_VER=7.2.0 ;;
 esac
 
 # ── Toolchain ──
@@ -227,7 +228,7 @@ setup_toolchain() {
 
     # xburst1 = mips32r1, xburst2 = mips32r2
     case "$PLATFORM" in
-        t40|t41) SOC_ARCH=xburst2 ;;
+        t40|t41|a1) SOC_ARCH=xburst2 ;;
         *)       SOC_ARCH=xburst1 ;;
     esac
 
@@ -337,7 +338,7 @@ build_ingenic_lib() {
 
     # libalog: T40/T41 use their own, others use T31 1.1.6 uclibc
     case "$PLATFORM" in
-        t40|t41)
+        t40|t41|a1)
             cp -f "$libdir/libalog.so" "$SYSROOT_DIR/usr/lib/" ;;
         *)
             if [ "$sdk_libc" = "uclibc" ]; then
@@ -695,6 +696,7 @@ clone_repo raptor-ipc   https://github.com/gtxaspec/raptor-ipc       "$RAPTOR_IP
 clone_repo raptor-common https://github.com/gtxaspec/raptor-common   "$RAPTOR_COMMON_VERSION"
 clone_repo compy        https://github.com/gtxaspec/compy            "$COMPY_VERSION"
 clone_repo libschrift   https://github.com/tomolt/libschrift         "$SCHRIFT_VERSION"
+clone_repo media-server https://github.com/ireader/media-server      HEAD
 
 [ "$OPT_TLS" = 1 ] && clone_repo mbedtls https://github.com/Mbed-TLS/mbedtls "$MBEDTLS_VERSION" submodules
 [ "$OPT_TLS" = 1 ] && [ "$OPT_ALT" = 1 ] && clone_repo jz-crypto https://github.com/gtxaspec/jz-crypto "$JZ_CRYPTO_VERSION"
@@ -715,7 +717,12 @@ build_libc_shim
 build_schrift
 build_raptor_common
 build_raptor_ipc
-build_raptor_hal
+if [ "$PLATFORM" = "a1" ]; then
+    # A1 has no ISP — skip HAL build but install the header (needed for enums)
+    cp -f "$DEPS_DIR/raptor-hal/include/raptor_hal.h" "$SYSROOT_DIR/usr/include/"
+else
+    build_raptor_hal
+fi
 build_compy
 
 echo ""
@@ -733,8 +740,20 @@ echo "Building raptor daemons..."
 COMPY_CFLAGS="-I$SYSROOT_DIR/usr/include"
 [ "$OPT_TLS" = 1 ] && COMPY_CFLAGS="$COMPY_CFLAGS -DCOMPY_HAS_TLS"
 
-TARGETS="rvd rsd rad rhd rod ric rmr rmd rfs raptorctl ringdump rac"
+if [ "$PLATFORM" = "a1" ]; then
+    # A1 has no ISP/encoder — skip HAL daemons (rvd, rad), use RFS as producer
+    TARGETS="rfs rsd rhd rmr rmd raptorctl ringdump"
+else
+    TARGETS="rvd rsd rad rhd rod ric rmr rmd rfs raptorctl ringdump rac"
+fi
 [ "$OPT_TLS" = 1 ] && TARGETS="$TARGETS rwd"
+
+HAL_VIDEO="$SYSROOT_DIR/usr/lib/libraptor_hal_video.a"
+HAL_AUDIO="$SYSROOT_DIR/usr/lib/libraptor_hal_audio.a"
+if [ "$PLATFORM" = "a1" ]; then
+    HAL_VIDEO="/dev/null"
+    HAL_AUDIO="/dev/null"
+fi
 
 make -j"$JOBS" \
     PLATFORM="$PLATFORM_UPPER" \
@@ -744,8 +763,8 @@ make -j"$JOBS" \
     IPC_DIR=".deps/raptor-ipc" \
     COMMON_DIR=".deps/raptor-common" \
     COMPY_DIR=".deps/compy" \
-    LIB_HAL_VIDEO="$SYSROOT_DIR/usr/lib/libraptor_hal_video.a" \
-    LIB_HAL_AUDIO="$SYSROOT_DIR/usr/lib/libraptor_hal_audio.a" \
+    LIB_HAL_VIDEO="$HAL_VIDEO" \
+    LIB_HAL_AUDIO="$HAL_AUDIO" \
     LIB_IPC="$SYSROOT_DIR/usr/lib/librss_ipc.a" \
     LIB_IPC_FILE="$SYSROOT_DIR/usr/lib/librss_ipc.a" \
     LIB_COMMON="$SYSROOT_DIR/usr/lib/librss_common.a" \
