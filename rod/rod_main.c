@@ -591,8 +591,8 @@ static void render_image_element(rod_state_t *st, rod_element_t *e, int s)
 static void render_detections(rod_state_t *st, rod_element_t *e)
 {
 	char resp[2048];
-	int ret = rss_ctrl_send_command("/var/run/rss/rvd.sock", "{\"cmd\":\"ivs-detections\"}",
-					resp, sizeof(resp), 500);
+	int ret = rss_ctrl_send_command(ROD_RVD_SOCK, "{\"cmd\":\"ivs-detections\"}", resp,
+					sizeof(resp), 500);
 	if (ret < 0)
 		return;
 
@@ -755,8 +755,7 @@ static int handle_set_position(rod_state_t *st, const char *cmd_json, char *resp
 			cJSON_Delete(j);
 		}
 		char rvd_resp[256];
-		rss_ctrl_send_command("/var/run/rss/rvd.sock", fwd, rvd_resp, sizeof(rvd_resp),
-				      1000);
+		rss_ctrl_send_command(ROD_RVD_SOCK, fwd, rvd_resp, sizeof(rvd_resp), 1000);
 	}
 
 	RSS_INFO("set-position: %s -> %s", element, pos);
@@ -815,8 +814,7 @@ static int handle_font_size_change(rod_state_t *st, const char *cmd_json, char *
 			cJSON_PrintPreallocated(j, fwd, sizeof(fwd), 0);
 			cJSON_Delete(j);
 			char rvd_resp[256];
-			rss_ctrl_send_command("/var/run/rss/rvd.sock", fwd, rvd_resp,
-					      sizeof(rvd_resp), 5000);
+			rss_ctrl_send_command(ROD_RVD_SOCK, fwd, rvd_resp, sizeof(rvd_resp), 5000);
 		}
 	}
 
@@ -917,8 +915,7 @@ static int handle_add_element(rod_state_t *st, const char *cmd_json, char *resp,
 		cJSON_PrintPreallocated(j, fwd, sizeof(fwd), 0);
 		cJSON_Delete(j);
 		char rvd_resp[256];
-		rss_ctrl_send_command("/var/run/rss/rvd.sock", fwd, rvd_resp, sizeof(rvd_resp),
-				      1000);
+		rss_ctrl_send_command(ROD_RVD_SOCK, fwd, rvd_resp, sizeof(rvd_resp), 1000);
 	}
 
 	RSS_INFO("add-element: %s type=%s template=\"%s\" pos=%s", name, type_str, tmpl, position);
@@ -972,8 +969,7 @@ static int handle_set_element(rod_state_t *st, const char *cmd_json, char *resp,
 			cJSON_PrintPreallocated(j, fwd, sizeof(fwd), 0);
 			cJSON_Delete(j);
 			char rvd_resp[256];
-			rss_ctrl_send_command("/var/run/rss/rvd.sock", fwd, rvd_resp,
-					      sizeof(rvd_resp), 1000);
+			rss_ctrl_send_command(ROD_RVD_SOCK, fwd, rvd_resp, sizeof(rvd_resp), 1000);
 		}
 	}
 
@@ -1033,8 +1029,7 @@ static int handle_set_element(rod_state_t *st, const char *cmd_json, char *resp,
 			cJSON_PrintPreallocated(j, fwd, sizeof(fwd), 0);
 			cJSON_Delete(j);
 			char rvd_resp[256];
-			rss_ctrl_send_command("/var/run/rss/rvd.sock", fwd, rvd_resp,
-					      sizeof(rvd_resp), 5000);
+			rss_ctrl_send_command(ROD_RVD_SOCK, fwd, rvd_resp, sizeof(rvd_resp), 5000);
 		}
 	}
 
@@ -1090,8 +1085,7 @@ static int handle_show_hide(rod_state_t *st, const char *cmd_json, char *resp, i
 		cJSON_PrintPreallocated(j, fwd, sizeof(fwd), 0);
 		cJSON_Delete(j);
 		char rvd_resp[256];
-		rss_ctrl_send_command("/var/run/rss/rvd.sock", fwd, rvd_resp, sizeof(rvd_resp),
-				      1000);
+		rss_ctrl_send_command(ROD_RVD_SOCK, fwd, rvd_resp, sizeof(rvd_resp), 1000);
 	}
 	return rss_ctrl_resp_ok(resp, resp_size);
 }
@@ -1282,8 +1276,7 @@ int main(int argc, char **argv)
 			cJSON_PrintPreallocated(j, fwd, sizeof(fwd), 0);
 			cJSON_Delete(j);
 			char rvd_resp[256];
-			rss_ctrl_send_command("/var/run/rss/rvd.sock", fwd, rvd_resp,
-					      sizeof(rvd_resp), 1000);
+			rss_ctrl_send_command(ROD_RVD_SOCK, fwd, rvd_resp, sizeof(rvd_resp), 1000);
 		}
 	}
 

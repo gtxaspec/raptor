@@ -15,6 +15,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#define ROD_RVD_SOCK	     "/var/run/rss/rvd.sock"
 #define ROD_MAX_STREAMS	     6 /* up to 3 sensors x 2 (main+sub) */
 #define ROD_MAX_ELEMENTS     16
 #define ROD_ELEM_NAME_LEN    32
