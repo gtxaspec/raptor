@@ -760,10 +760,13 @@ static void render_tick(rod_state_t *st)
 					e->receipt.accum_pos = 0;
 				}
 			}
-			for (int s = 0; s < st->stream_count; s++) {
-				if (e->sub_streams_only && s == 0)
-					continue;
-				rod_render_receipt(st, e, s);
+			if (e->receipt.dirty) {
+				for (int s = 0; s < st->stream_count; s++) {
+					if (e->sub_streams_only && s == 0)
+						continue;
+					rod_render_receipt(st, e, s);
+				}
+				e->receipt.dirty = false;
 			}
 		}
 		/* OVERLAY handled separately at different cadence */

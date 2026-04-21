@@ -93,6 +93,12 @@ void rvd_osd_calc_position(int stream_w, int stream_h, int region_w, int region_
 	} else if (strcmp(p, "bottom_right") == 0) {
 		*out_x = stream_w - region_w - OSD_MARGIN;
 		*out_y = stream_h - region_h - OSD_MARGIN;
+	} else if (strcmp(p, "left_center") == 0) {
+		*out_x = OSD_MARGIN;
+		*out_y = (stream_h - region_h) / 2;
+	} else if (strcmp(p, "right_center") == 0) {
+		*out_x = stream_w - region_w - OSD_MARGIN;
+		*out_y = (stream_h - region_h) / 2;
 	} else if (strcmp(p, "center") == 0) {
 		*out_x = (stream_w - region_w) / 2;
 		*out_y = (stream_h - region_h) / 2;

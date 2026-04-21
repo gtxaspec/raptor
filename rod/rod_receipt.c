@@ -84,8 +84,6 @@ void rod_render_receipt(rod_state_t *st, rod_element_t *e, int s)
 	rod_elem_stream_t *es = &e->streams[s];
 	if (!es->shm || es->font_idx < 0)
 		return;
-	if (!e->receipt.dirty)
-		return;
 
 	uint8_t *buf = rss_osd_get_draw_buffer(es->shm);
 	if (!buf)
@@ -95,25 +93,17 @@ void rod_render_receipt(rod_state_t *st, rod_element_t *e, int s)
 	uint32_t bh = es->height;
 	rod_font_t *f = &st->fonts[s][es->font_idx];
 
-	/* Fill background */
-	uint32_t bg = e->receipt.bg_color;
-	if (bg) {
-		uint8_t *p = buf;
-		for (uint32_t i = 0; i < bw * bh; i++) {
-			p[0] = (uint8_t)(bg & 0xFF);
-			p[1] = (uint8_t)((bg >> 8) & 0xFF);
-			p[2] = (uint8_t)((bg >> 16) & 0xFF);
-			p[3] = (uint8_t)((bg >> 24) & 0xFF);
-			p += 4;
-		}
-	} else {
+	/* Empty receipt = fully transparent */
+	if (e->receipt.count == 0) {
 		memset(buf, 0, bw * bh * 4);
+		rss_osd_publish(es->shm);
+		e->receipt.dirty = false;
+		return;
 	}
 
-	if (e->receipt.count == 0)
-		goto publish;
+	/* Clear to transparent, then fill background only for active lines */
+	memset(buf, 0, bw * bh * 4);
 
-	/* Resolve colors */
 	uint32_t col = e->has_color ? e->color : st->settings.font_color;
 	uint32_t scol = e->has_stroke_color ? e->stroke_color : st->settings.stroke_color;
 	int ssz = e->stroke_size >= 0 ? e->stroke_size : st->settings.font_stroke;
@@ -121,6 +111,21 @@ void rod_render_receipt(rod_state_t *st, rod_element_t *e, int s)
 	int line_h = f->text_height;
 	if (line_h <= 0)
 		line_h = 16;
+
+	uint32_t bg = e->receipt.bg_color;
+	if (bg) {
+		uint32_t fill_h = (uint32_t)(e->receipt.count * line_h);
+		if (fill_h > bh)
+			fill_h = bh;
+		uint8_t *p = buf;
+		for (uint32_t i = 0; i < bw * fill_h; i++) {
+			p[0] = (uint8_t)(bg & 0xFF);
+			p[1] = (uint8_t)((bg >> 8) & 0xFF);
+			p[2] = (uint8_t)((bg >> 16) & 0xFF);
+			p[3] = (uint8_t)((bg >> 24) & 0xFF);
+			p += 4;
+		}
+	}
 
 	/* Draw lines from oldest to newest */
 	int start = (e->receipt.head - e->receipt.count + ROD_RECEIPT_MAX_LINES) %
@@ -144,12 +149,11 @@ void rod_render_receipt(rod_state_t *st, rod_element_t *e, int s)
 		/* Use rod_draw_text's rendering but we need to avoid its memset
 		 * clearing the entire region. Instead, draw text directly using
 		 * the draw_string path via rod_draw_text on a line-sized slice. */
-		rod_draw_text(st, s, es->font_idx, row_buf, bw, row_h, line, 0, col, scol, ssz);
+		rod_draw_text(st, s, es->font_idx, row_buf, bw, row_h, line, e->align, col, scol,
+			      ssz);
 
 		y_offset += line_h;
 	}
 
-publish:
 	rss_osd_publish(es->shm);
-	e->receipt.dirty = false;
 }
