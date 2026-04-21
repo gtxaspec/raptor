@@ -898,6 +898,24 @@ static int handle_add_element(rod_state_t *st, const char *cmd_json, char *resp,
 		}
 	}
 
+	/* Tell RVD the position for this element (saved in RVD's config
+	 * so scan_new_shm uses it when creating the HAL region) */
+	for (int s = 0; s < st->stream_count; s++) {
+		char fwd[128];
+		cJSON *j = cJSON_CreateObject();
+		if (!j)
+			continue;
+		cJSON_AddStringToObject(j, "cmd", "osd-position");
+		cJSON_AddNumberToObject(j, "stream", s);
+		cJSON_AddStringToObject(j, "region", name);
+		cJSON_AddStringToObject(j, "pos", position);
+		cJSON_PrintPreallocated(j, fwd, sizeof(fwd), 0);
+		cJSON_Delete(j);
+		char rvd_resp[256];
+		rss_ctrl_send_command("/var/run/rss/rvd.sock", fwd, rvd_resp, sizeof(rvd_resp),
+				      1000);
+	}
+
 	RSS_INFO("add-element: %s type=%s template=\"%s\" pos=%s", name, type_str, tmpl, position);
 	return rss_ctrl_resp_ok(resp, resp_size);
 }

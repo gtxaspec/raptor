@@ -1451,19 +1451,24 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		if (stream < 0 || stream >= st->stream_count || !region[0] || !pos[0])
 			return rss_ctrl_resp_error(resp, resp_size, "need stream, region, pos");
 
+		/* Always save position to config — even if region doesn't
+		 * exist yet. scan_new_shm reads it when creating the region. */
+		char pos_key[64];
+		snprintf(pos_key, sizeof(pos_key), "stream%d_%s_pos", stream, region);
+		rss_config_set_str(st->cfg, "osd", pos_key, pos);
+
 		rvd_osd_region_t *reg = rvd_osd_find_region(st, stream, region);
-		if (!reg || reg->hal_handle < 0)
-			return rss_ctrl_resp_error(resp, resp_size, "region not active");
+		if (!reg || reg->hal_handle < 0) {
+			RSS_DEBUG("osd-position: stream %d %s -> %s (saved, region pending)",
+				  stream, region, pos);
+			return rss_ctrl_resp_ok(resp, resp_size);
+		}
 
 		int stream_w = st->streams[stream].enc_cfg.width;
 		int stream_h = st->streams[stream].enc_cfg.height;
 		int x, y;
 		rvd_osd_calc_position(stream_w, stream_h, (int)reg->width, (int)reg->height, pos,
 				      &x, &y);
-
-		char pos_key[64];
-		snprintf(pos_key, sizeof(pos_key), "stream%d_%s_pos", stream, reg->name);
-		rss_config_set_str(st->cfg, "osd", pos_key, pos);
 
 		pthread_mutex_lock(&st->osd_lock);
 		rss_osd_region_t attr = {
