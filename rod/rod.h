@@ -133,6 +133,9 @@ typedef struct {
 	int var_count;
 
 	char hostname[64];
+	char ip[46];
+	char ip6[46];
+	int64_t ip_refresh_ts;
 
 	bool detect_enabled;
 

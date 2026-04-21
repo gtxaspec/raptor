@@ -18,6 +18,10 @@
 #include <unistd.h>
 #include <time.h>
 #include <sys/epoll.h>
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #include "rod.h"
 
@@ -137,6 +141,69 @@ void rod_remove_element(rod_state_t *st, const char *name)
 	}
 }
 
+/* ── IP address resolution ── */
+
+static void resolve_default_iface(char *out, int out_size)
+{
+	FILE *f = fopen("/proc/net/route", "r");
+	if (!f) {
+		out[0] = '\0';
+		return;
+	}
+	char line[256];
+	out[0] = '\0';
+	while (fgets(line, sizeof(line), f)) {
+		char iface[16];
+		unsigned dest;
+		if (sscanf(line, "%15s %x", iface, &dest) == 2 && dest == 0) {
+			rss_strlcpy(out, iface, out_size);
+			break;
+		}
+	}
+	fclose(f);
+}
+
+static void refresh_ip_addrs(rod_state_t *st)
+{
+	int64_t now = rss_timestamp_us();
+	if (st->ip_refresh_ts && now - st->ip_refresh_ts < 60000000)
+		return;
+	st->ip_refresh_ts = now;
+
+	char iface[16] = "";
+	resolve_default_iface(iface, sizeof(iface));
+
+	st->ip[0] = '\0';
+	st->ip6[0] = '\0';
+
+	struct ifaddrs *ifa_list, *ifa;
+	if (getifaddrs(&ifa_list) < 0)
+		return;
+
+	for (ifa = ifa_list; ifa; ifa = ifa->ifa_next) {
+		if (!ifa->ifa_addr || (ifa->ifa_flags & IFF_LOOPBACK))
+			continue;
+
+		bool match = iface[0] ? strcmp(ifa->ifa_name, iface) == 0 : true;
+		if (!match)
+			continue;
+
+		if (ifa->ifa_addr->sa_family == AF_INET && !st->ip[0]) {
+			struct sockaddr_in *sa = (struct sockaddr_in *)ifa->ifa_addr;
+			inet_ntop(AF_INET, &sa->sin_addr, st->ip, sizeof(st->ip));
+		} else if (ifa->ifa_addr->sa_family == AF_INET6 && !st->ip6[0]) {
+			struct sockaddr_in6 *sa6 = (struct sockaddr_in6 *)ifa->ifa_addr;
+			if (!IN6_IS_ADDR_LINKLOCAL(&sa6->sin6_addr)) {
+				inet_ntop(AF_INET6, &sa6->sin6_addr, st->ip6, sizeof(st->ip6));
+			}
+		}
+
+		if (st->ip[0] && st->ip6[0])
+			break;
+	}
+	freeifaddrs(ifa_list);
+}
+
 /* ── Template variable expansion ── */
 
 static void format_uptime(char *buf, size_t bufsz)
@@ -202,6 +269,12 @@ int rod_expand_template(rod_state_t *st, const char *tmpl, char *out, int out_si
 			format_uptime(val, sizeof(val));
 		} else if (strcmp(varname, "hostname") == 0) {
 			rss_strlcpy(val, st->hostname, sizeof(val));
+		} else if (strcmp(varname, "ip") == 0) {
+			refresh_ip_addrs(st);
+			rss_strlcpy(val, st->ip, sizeof(val));
+		} else if (strcmp(varname, "ip6") == 0) {
+			refresh_ip_addrs(st);
+			rss_strlcpy(val, st->ip6, sizeof(val));
 		} else {
 			/* Custom variable lookup */
 			for (int i = 0; i < st->var_count; i++) {
