@@ -1190,6 +1190,69 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		return rss_ctrl_resp_ok(resp, resp_size);
 	}
 
+	if (strcmp(cmd, "stream-stop") == 0) {
+		if (validate_video_channel(st, cmd_json, &chn, resp, resp_size) < 0)
+			return (int)strlen(resp);
+		if (!atomic_load(&st->stream_active[chn]))
+			return rss_ctrl_resp_ok(resp, resp_size);
+
+		int jpeg = find_jpeg_for_video_ctrl(st, chn);
+		bool has_ivs = (st->streams[chn].fs_chn == 1 && st->ivs_active);
+
+		RSS_INFO("stream-stop: channel %d (jpeg=%d ivs=%d)", chn, jpeg, has_ivs);
+
+		if (has_ivs) {
+			rvd_ivs_pause(st);
+			atomic_store(&st->ivs_active, false);
+			if (st->ivs_tid) {
+				pthread_join(st->ivs_tid, NULL);
+				st->ivs_tid = 0;
+			}
+		}
+		if (jpeg >= 0 && atomic_load(&st->stream_active[jpeg]))
+			rvd_stream_stop(st, jpeg);
+		rvd_stream_stop(st, chn);
+
+		RSS_INFO("stream-stop: channel %d stopped", chn);
+		return rss_ctrl_resp_ok(resp, resp_size);
+	}
+
+	if (strcmp(cmd, "stream-start") == 0) {
+		if (validate_video_channel(st, cmd_json, &chn, resp, resp_size) < 0)
+			return (int)strlen(resp);
+		if (atomic_load(&st->stream_active[chn]))
+			return rss_ctrl_resp_ok(resp, resp_size);
+		if (!st->streams[chn].ring)
+			return rss_ctrl_resp_error(resp, resp_size, "stream not initialized");
+
+		int jpeg = find_jpeg_for_video_ctrl(st, chn);
+		bool has_ivs = (st->streams[chn].fs_chn == 1 && st->ivs_enabled &&
+				!st->ivs_active);
+
+		RSS_INFO("stream-start: channel %d (jpeg=%d ivs=%d)", chn, jpeg, has_ivs);
+
+		rvd_stream_start(st, chn);
+		if (jpeg >= 0 && st->streams[jpeg].ring &&
+		    !atomic_load(&st->stream_active[jpeg]))
+			rvd_stream_start(st, jpeg);
+
+		if (has_ivs) {
+			atomic_store(&st->ivs_active, true);
+			rvd_ivs_resume(st);
+			pthread_attr_t ivs_attr;
+			pthread_attr_init(&ivs_attr);
+			pthread_attr_setstacksize(&ivs_attr, 64 * 1024);
+			if (pthread_create(&st->ivs_tid, &ivs_attr, rvd_ivs_thread, st) != 0) {
+				RSS_ERROR("ivs thread create failed");
+				atomic_store(&st->ivs_active, false);
+			}
+			pthread_attr_destroy(&ivs_attr);
+		}
+
+		RSS_INFO("stream-start: channel %d started", chn);
+		return rss_ctrl_resp_ok(resp, resp_size);
+	}
+
 	if (strcmp(cmd, "set-codec") == 0) {
 		char val[8];
 		if (validate_video_channel(st, cmd_json, &chn, resp, resp_size) < 0)

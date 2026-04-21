@@ -198,6 +198,8 @@ const struct help_entry help_entries[] = {
 	{"rvd", "get-qp-bounds <ch>                  Show QP range"},
 	{"rvd", "get-rc-mode <ch>                    Show rate control mode"},
 	{"rvd", "request-idr [channel]               Request keyframe"},
+	{"rvd", "stream-stop <ch>                    Stop stream pipeline"},
+	{"rvd", "stream-start <ch>                   Start stopped stream"},
 	{"rvd", "stream-restart <ch>                 Restart stream pipeline"},
 	{"rvd", "set-codec <ch> <h264|h265>          Change codec (requires restart)"},
 	{"rvd", "set-resolution <ch> <w> <h>         Change resolution (requires restart)"},
@@ -902,6 +904,24 @@ int main(int argc, char **argv)
 			jadd_s(j, "value", argv[3]);
 		if (argc > 4)
 			jadd_i(j, "channel", argv[4]);
+		jstr(j, json, sizeof(json));
+
+	} else if (strcmp(cmd, "stream-stop") == 0) {
+		if (argc < 4) {
+			fprintf(stderr, "Usage: raptorctl %s stream-stop <channel>\n", daemon);
+			return 1;
+		}
+		cJSON *j = jcmd("stream-stop");
+		jadd_i(j, "channel", argv[3]);
+		jstr(j, json, sizeof(json));
+
+	} else if (strcmp(cmd, "stream-start") == 0) {
+		if (argc < 4) {
+			fprintf(stderr, "Usage: raptorctl %s stream-start <channel>\n", daemon);
+			return 1;
+		}
+		cJSON *j = jcmd("stream-start");
+		jadd_i(j, "channel", argv[3]);
 		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "stream-restart") == 0) {
