@@ -1,5 +1,8 @@
 /*
  * rod.h -- ROD internal shared state
+ *
+ * Dynamic element registry: arbitrary named OSD elements with
+ * template variable expansion, replacing the fixed 6-slot system.
  */
 
 #ifndef ROD_H
@@ -12,43 +15,38 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define ROD_MAX_STREAMS	     6 /* up to 3 sensors × 2 (main+sub) */
-#define ROD_MAX_REGIONS	     6
+#define ROD_MAX_STREAMS	     6 /* up to 3 sensors x 2 (main+sub) */
+#define ROD_MAX_ELEMENTS     16
+#define ROD_ELEM_NAME_LEN    32
 #define ROD_GLYPH_CACHE_SIZE 95 /* ASCII 0x20-0x7E */
-#define ROD_TIME_CHARS	     20 /* "2026-03-23 23:59:59" */
-#define ROD_UPTIME_CHARS     12 /* "12345d 23h 59m" */
-#define ROD_TEXT_CHARS	     14 /* camera name */
+#define ROD_MAX_FONTS	     8	/* font context pool per stream */
+#define ROD_MAX_VARS	     16
+#define ROD_TMPL_LEN	     256
+#define ROD_EXPANDED_LEN     256
 
-/* Region roles — determines position in RVD */
-#define ROD_REGION_TIME	   0 /* top-left */
-#define ROD_REGION_UPTIME  1 /* top-right */
-#define ROD_REGION_TEXT	   2 /* bottom-left */
-#define ROD_REGION_LOGO	   3 /* bottom-right */
-#define ROD_REGION_PRIVACY 4 /* center (hidden until privacy mode) */
-#define ROD_REGION_DETECT  5 /* full-frame detection bounding boxes */
+typedef enum {
+	ROD_ELEM_TEXT,
+	ROD_ELEM_IMAGE,
+	ROD_ELEM_OVERLAY,
+} rod_elem_type_t;
+
+typedef enum {
+	ROD_UPDATE_TICK,
+	ROD_UPDATE_CHANGE,
+} rod_update_mode_t;
 
 /* Cached glyph */
 typedef struct {
 	uint32_t codepoint;
 	int width;
 	int height;
-	int x_offset;	/* left side bearing */
-	int y_offset;	/* baseline offset */
-	int advance;	/* horizontal advance */
-	uint8_t *alpha; /* single-channel bitmap (width * height) */
+	int x_offset;
+	int y_offset;
+	int advance;
+	uint8_t *alpha;
 } rod_glyph_t;
 
-/* Per-region state */
-typedef struct {
-	int role;
-	bool enabled;
-	uint32_t width;
-	uint32_t height;
-	rss_osd_shm_t *shm;
-	bool needs_update;
-} rod_region_t;
-
-/* Per-stream font context (different sizes per stream) */
+/* Per-stream font context */
 typedef struct {
 	SFT sft;
 	rod_glyph_t glyphs[ROD_GLYPH_CACHE_SIZE];
@@ -56,24 +54,68 @@ typedef struct {
 	int max_text_width;
 	int text_height;
 	int ascender;
+	int size; /* requested pixel size (for dedup) */
+	int refcount;
 } rod_font_t;
 
-/* Per-element font index (for fonts[][]) */
-#define ROD_FONT_TIME	0
-#define ROD_FONT_UPTIME 1
-#define ROD_FONT_TEXT	2
-#define ROD_FONT_COUNT	3
+/* Per-stream per-element SHM state */
+typedef struct {
+	rss_osd_shm_t *shm;
+	uint32_t width;
+	uint32_t height;
+	bool needs_update;
+} rod_elem_stream_t;
 
-/* Config from [osd] section */
+/* Dynamic OSD element */
+typedef struct {
+	char name[ROD_ELEM_NAME_LEN];
+	rod_elem_type_t type;
+	bool active;
+	bool visible;
+
+	char tmpl[ROD_TMPL_LEN];
+	char last_expanded[ROD_EXPANDED_LEN];
+
+	int font_size;
+	uint32_t color;
+	uint32_t stroke_color;
+	int stroke_size;
+	int align;
+	char position[32];
+	int max_chars;
+
+	int font_idx;
+
+	char image_path[256];
+	uint8_t *image_data;
+	int image_w;
+	int image_h;
+	uint8_t *image_sub_data;
+	int image_sub_w;
+	int image_sub_h;
+
+	rod_update_mode_t update_mode;
+	bool sub_streams_only;
+
+	rod_elem_stream_t streams[ROD_MAX_STREAMS];
+} rod_element_t;
+
+/* Custom template variable */
+typedef struct {
+	char name[32];
+	char value[128];
+} rod_var_t;
+
+/* Config from [osd] section (backward compat) */
 typedef struct {
 	bool enabled;
 	char font_path[128];
-	int font_size;	    /* global default */
-	int time_font_size; /* per-element overrides (0 = use global) */
+	int font_size;
+	int time_font_size;
 	int uptime_font_size;
 	int text_font_size;
-	uint32_t font_color;   /* BGRA packed */
-	uint32_t stroke_color; /* BGRA packed (default: black) */
+	uint32_t font_color;
+	uint32_t stroke_color;
 	int font_stroke;
 
 	bool time_enabled;
@@ -94,29 +136,22 @@ typedef struct {
 typedef struct {
 	rod_config_t settings;
 
-	/* Fonts: [stream][element] — per-element sizing */
-	rod_font_t fonts[ROD_MAX_STREAMS][ROD_FONT_COUNT];
+	rod_font_t fonts[ROD_MAX_STREAMS][ROD_MAX_FONTS];
 	int stream_count;
 
-	/* Stream dimensions (read from config) */
 	int stream_w[ROD_MAX_STREAMS];
 	int stream_h[ROD_MAX_STREAMS];
 
-	/* Regions: [stream][role] */
-	rod_region_t regions[ROD_MAX_STREAMS][ROD_MAX_REGIONS];
+	rod_element_t elements[ROD_MAX_ELEMENTS];
+	int elem_count;
 
-	/* Logo data (loaded once) */
-	uint8_t *logo_data;
-	uint32_t logo_data_size;
-	/* Sub-stream logo */
-	uint8_t *logo_sub_data;
-	int logo_sub_w;
-	int logo_sub_h;
+	rod_var_t vars[ROD_MAX_VARS];
+	int var_count;
 
-	/* Detection overlay */
+	char hostname[64];
+
 	bool detect_enabled;
 
-	/* Control */
 	rss_ctrl_t *ctrl;
 	rss_config_t *cfg;
 	const char *config_path;
@@ -128,11 +163,19 @@ typedef struct {
 int rod_render_init(rod_state_t *st, int stream_idx, int font_idx, int font_size);
 void rod_render_deinit(rod_state_t *st, int stream_idx, int font_idx);
 rod_glyph_t *rod_glyph_lookup(rod_font_t *font, uint32_t codepoint);
-/* align: 0=left, 1=center, 2=right */
 void rod_draw_text(rod_state_t *st, int stream_idx, int font_idx, uint8_t *buf, uint32_t buf_w,
 		   uint32_t buf_h, const char *text, int align);
 int rod_load_logo(const char *path, int expected_w, int expected_h, uint8_t **out_data);
 void rod_draw_rect_outline(uint8_t *buf, uint32_t buf_w, uint32_t buf_h, int x0, int y0, int x1,
 			   int y1, uint32_t color_bgra, int thickness);
+
+/* rod_main.c — element registry */
+rod_element_t *rod_find_element(rod_state_t *st, const char *name);
+int rod_add_element(rod_state_t *st, const char *name, rod_elem_type_t type, const char *tmpl,
+		    const char *position, int align, int font_size, int max_chars,
+		    rod_update_mode_t update_mode);
+void rod_remove_element(rod_state_t *st, const char *name);
+int rod_expand_template(rod_state_t *st, const char *tmpl, char *out, int out_size);
+int rod_alloc_font(rod_state_t *st, int stream_idx, int font_size);
 
 #endif /* ROD_H */
