@@ -38,21 +38,26 @@
 
 #define OSD_MARGIN	      10
 
-/* Default positions for well-known element names */
-static const char *default_position_for(const char *name)
+/*
+ * Resolve position for an element. Lookup chain:
+ *   1. stream{N}_{name}_pos in [osd] (set by ROD's osd-position IPC)
+ *   2. position key in [osd.{name}] section (from config file)
+ *   3. hardcoded fallback for well-known names
+ */
+static const char *resolve_position(rss_config_t *cfg, int s, const char *name)
 {
-	if (strcmp(name, "time") == 0)
-		return "top_left";
-	if (strcmp(name, "uptime") == 0)
-		return "top_right";
-	if (strcmp(name, "text") == 0)
-		return "top_center";
-	if (strcmp(name, "logo") == 0)
-		return "bottom_right";
-	if (strcmp(name, "privacy") == 0)
-		return "center";
-	if (strcmp(name, "detect") == 0)
-		return "0,0";
+	char pos_key[64];
+	snprintf(pos_key, sizeof(pos_key), "stream%d_%s_pos", s, name);
+	const char *pos = rss_config_get_str(cfg, "osd", pos_key, NULL);
+	if (pos)
+		return pos;
+
+	char section[64];
+	snprintf(section, sizeof(section), "osd.%s", name);
+	pos = rss_config_get_str(cfg, section, "position", NULL);
+	if (pos)
+		return pos;
+
 	return "top_left";
 }
 
@@ -170,8 +175,8 @@ static bool create_region(rvd_state_t *st, int s, rvd_osd_region_t *reg)
 
 	char pos_key[64];
 	snprintf(pos_key, sizeof(pos_key), "stream%d_%s_pos", s, reg->name);
-	const char *pos_str =
-		rss_config_get_str(st->cfg, "osd", pos_key, default_position_for(reg->name));
+	const char *pos_str = rss_config_get_str(st->cfg, "osd", pos_key,
+						 resolve_position(st->cfg, s, reg->name));
 
 	int x, y;
 	rvd_osd_calc_position(stream_w, stream_h, (int)w, (int)h, pos_str, &x, &y);
@@ -439,7 +444,7 @@ static void push_region(rvd_state_t *st, int s, rvd_osd_region_t *reg)
 		char pos_key[64];
 		snprintf(pos_key, sizeof(pos_key), "stream%d_%s_pos", s, reg->name);
 		const char *pos_str = rss_config_get_str(st->cfg, "osd", pos_key,
-							 default_position_for(reg->name));
+							 resolve_position(st->cfg, s, reg->name));
 		int x, y;
 		rvd_osd_calc_position(stream_w, stream_h, (int)reg->width, (int)reg->height,
 				      pos_str, &x, &y);
@@ -531,8 +536,9 @@ static void try_open_shm(rvd_state_t *st, int s, rvd_osd_region_t *reg)
 				int stream_h = st->streams[s].enc_cfg.height;
 				char pos_key[64];
 				snprintf(pos_key, sizeof(pos_key), "stream%d_%s_pos", s, reg->name);
-				const char *pos_str = rss_config_get_str(
-					st->cfg, "osd", pos_key, default_position_for(reg->name));
+				const char *pos_str =
+					rss_config_get_str(st->cfg, "osd", pos_key,
+							   resolve_position(st->cfg, s, reg->name));
 				int x, y;
 				rvd_osd_calc_position(stream_w, stream_h, (int)new_w, (int)new_h,
 						      pos_str, &x, &y);
@@ -592,8 +598,8 @@ static void try_open_shm(rvd_state_t *st, int s, rvd_osd_region_t *reg)
 			int stream_h = st->streams[s].enc_cfg.height;
 			char pos_key[64];
 			snprintf(pos_key, sizeof(pos_key), "stream%d_%s_pos", s, reg->name);
-			const char *pos_str = rss_config_get_str(st->cfg, "osd", pos_key,
-								 default_position_for(reg->name));
+			const char *pos_str = rss_config_get_str(
+				st->cfg, "osd", pos_key, resolve_position(st->cfg, s, reg->name));
 			int x, y;
 			rvd_osd_calc_position(stream_w, stream_h, (int)reg->width, (int)reg->height,
 					      pos_str, &x, &y);
@@ -853,9 +859,9 @@ push_updates:
 					char pos_key[64];
 					snprintf(pos_key, sizeof(pos_key), "stream%d_%s_pos", s,
 						 reg->name);
-					const char *pos_str =
-						rss_config_get_str(st->cfg, "osd", pos_key,
-								   default_position_for(reg->name));
+					const char *pos_str = rss_config_get_str(
+						st->cfg, "osd", pos_key,
+						resolve_position(st->cfg, s, reg->name));
 					int x, y;
 					rvd_osd_calc_position(stream_w, stream_h, (int)reg->width,
 							      (int)reg->height, pos_str, &x, &y);
@@ -974,8 +980,9 @@ void *rvd_osd_thread(void *arg)
 				int stream_h = st->streams[s].enc_cfg.height;
 				char pos_key[64];
 				snprintf(pos_key, sizeof(pos_key), "stream%d_%s_pos", s, reg->name);
-				const char *pos_str = rss_config_get_str(
-					st->cfg, "osd", pos_key, default_position_for(reg->name));
+				const char *pos_str =
+					rss_config_get_str(st->cfg, "osd", pos_key,
+							   resolve_position(st->cfg, s, reg->name));
 				int x, y;
 				rvd_osd_calc_position(stream_w, stream_h, (int)reg->width,
 						      (int)reg->height, pos_str, &x, &y);
