@@ -14,16 +14,9 @@
 #define RVD_MAX_SENSORS	       3
 #define RVD_MAX_STREAMS	       (RVD_MAX_SENSORS * 4) /* main+sub+jpeg0+jpeg1 per sensor */
 #define RVD_MAX_JPEG	       (RVD_MAX_SENSORS * 2)
-#define RVD_OSD_REGIONS	       6
+#define RVD_OSD_MAX_REGIONS    16
 #define RVD_OSD_RETRY_INTERVAL 50 /* check ticks (~5s at 10Hz) */
-
-/* OSD region roles (must match ROD naming) */
-#define RVD_OSD_TIME	0
-#define RVD_OSD_UPTIME	1
-#define RVD_OSD_TEXT	2
-#define RVD_OSD_LOGO	3
-#define RVD_OSD_PRIVACY 4
-#define RVD_OSD_DETECT	5
+#define RVD_OSD_NAME_LEN       32
 
 typedef struct {
 	rss_video_config_t enc_cfg;
@@ -34,22 +27,24 @@ typedef struct {
 	int sensor_idx;	   /* which sensor (0, 1, 2) */
 	char cfg_sect[32]; /* config section name (e.g. "stream0", "sensor1_stream0") */
 	bool enabled;
-	bool is_jpeg;	/* true for snapshot channel */
-	bool jpeg_idle; /* true = stop encoder when no consumers */
+	bool is_jpeg;		    /* true for snapshot channel */
+	bool jpeg_idle;		    /* true = stop encoder when no consumers */
 	uintptr_t enc_buf_addrs[8]; /* refmode: unique virAddr bases seen */
-	uint8_t enc_buf_count;     /* refmode: number of unique buffers discovered */
+	uint8_t enc_buf_count;	    /* refmode: number of unique buffers discovered */
 } rvd_stream_t;
 
-/* Per-OSD-region state */
+/* Per-OSD-region state (dynamic, name-based) */
 typedef struct {
+	char name[RVD_OSD_NAME_LEN];
 	rss_osd_shm_t *shm;
-	int hal_handle; /* -1 if not created */
+	int hal_handle;
 	uint32_t width;
 	uint32_t height;
-	uint8_t *local_buf; /* local copy for HAL (IMP DMA needs non-SHM memory) */
+	uint8_t *local_buf;
 	bool active;
-	bool shown;	     /* true after first ShowRgn(1) from update thread */
-	int no_update_ticks; /* ticks since last dirty — detect dead producer */
+	bool shown;
+	int no_update_ticks;
+	int layer;
 } rvd_osd_region_t;
 
 /* Encoder thread argument (stable lifetime in rvd_state_t) */
@@ -76,7 +71,7 @@ struct rvd_state {
 
 	/* Ring reference mode (zero-copy) */
 	bool refmode;
-	bool refmode_shm;             /* true = SHM injection, false = /dev/rmem */
+	bool refmode_shm; /* true = SHM injection, false = /dev/rmem */
 	uintptr_t rmem_virt_base;
 	uint32_t rmem_size;
 	uint32_t rmem_mmap_offset;
@@ -94,7 +89,8 @@ struct rvd_state {
 	/* OSD */
 	bool osd_enabled;
 	bool use_isp_osd; /* true = ISP OSD (no bind chain), false = IPU OSD */
-	rvd_osd_region_t osd_regions[RVD_MAX_STREAMS][RVD_OSD_REGIONS];
+	rvd_osd_region_t osd_regions[RVD_MAX_STREAMS][RVD_OSD_MAX_REGIONS];
+	int osd_region_count[RVD_MAX_STREAMS];
 	int osd_retry_counter;
 	pthread_mutex_t osd_lock; /* held during OSD region create/destroy */
 
@@ -159,6 +155,7 @@ void *rvd_encoder_thread(void *arg);
 /* rvd_osd.c */
 void rvd_osd_calc_position(int stream_w, int stream_h, int region_w, int region_h,
 			   const char *pos_str, int *out_x, int *out_y);
+rvd_osd_region_t *rvd_osd_find_region(rvd_state_t *st, int stream, const char *name);
 void rvd_osd_init(rvd_state_t *st);
 void rvd_osd_init_stream(rvd_state_t *st, int idx);
 void rvd_osd_deinit_stream(rvd_state_t *st, int idx);

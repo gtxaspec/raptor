@@ -1226,14 +1226,12 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 			return rss_ctrl_resp_error(resp, resp_size, "stream not initialized");
 
 		int jpeg = find_jpeg_for_video_ctrl(st, chn);
-		bool has_ivs = (st->streams[chn].fs_chn == 1 && st->ivs_enabled &&
-				!st->ivs_active);
+		bool has_ivs = (st->streams[chn].fs_chn == 1 && st->ivs_enabled && !st->ivs_active);
 
 		RSS_INFO("stream-start: channel %d (jpeg=%d ivs=%d)", chn, jpeg, has_ivs);
 
 		rvd_stream_start(st, chn);
-		if (jpeg >= 0 && st->streams[jpeg].ring &&
-		    !atomic_load(&st->stream_active[jpeg]))
+		if (jpeg >= 0 && st->streams[jpeg].ring && !atomic_load(&st->stream_active[jpeg]))
 			rvd_stream_start(st, jpeg);
 
 		if (has_ivs) {
@@ -1414,33 +1412,17 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 
 	if (strcmp(cmd, "osd-show") == 0) {
 		int stream = -1, show = -1;
-		char region[16] = "";
+		char region[RVD_OSD_NAME_LEN] = "";
 		rss_json_get_int(cmd_json, "stream", &stream);
 		rss_json_get_int(cmd_json, "show", &show);
 		rss_json_get_str(cmd_json, "region", region, sizeof(region));
 
-		if (stream < 0 || stream >= st->stream_count || show < 0 || !region[0]) {
+		if (stream < 0 || stream >= st->stream_count || show < 0 || !region[0])
 			return rss_ctrl_resp_error(resp, resp_size, "need stream, region, show");
-		}
 
-		/* Map region name to index */
-		static const char *names[] = {"time", "uptime",	 "text",
-					      "logo", "privacy", "detect"};
-		int r = -1;
-		for (int i = 0; i < 6; i++) {
-			if (strcmp(region, names[i]) == 0) {
-				r = i;
-				break;
-			}
-		}
-		if (r < 0) {
-			return rss_ctrl_resp_error(resp, resp_size, "unknown region");
-		}
-
-		rvd_osd_region_t *reg = &st->osd_regions[stream][r];
-		if (!reg->active || reg->hal_handle < 0) {
+		rvd_osd_region_t *reg = rvd_osd_find_region(st, stream, region);
+		if (!reg || reg->hal_handle < 0)
 			return rss_ctrl_resp_error(resp, resp_size, "region not active");
-		}
 
 		pthread_mutex_lock(&st->osd_lock);
 		if (st->use_isp_osd && st->streams[stream].fs_chn % 3 == 0) {
@@ -1450,7 +1432,7 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		} else {
 			int grp = st->streams[stream].chn;
 			RSS_HAL_CALL(st->ops, osd_show_region, st->hal_ctx, reg->hal_handle, grp,
-				     show, r + 1);
+				     show, reg->layer + 1);
 		}
 		reg->shown = !!show;
 		pthread_mutex_unlock(&st->osd_lock);
@@ -1461,32 +1443,17 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 
 	if (strcmp(cmd, "osd-position") == 0) {
 		int stream = -1;
-		char region[16] = "", pos[32] = "";
+		char region[RVD_OSD_NAME_LEN] = "", pos[32] = "";
 		rss_json_get_int(cmd_json, "stream", &stream);
 		rss_json_get_str(cmd_json, "region", region, sizeof(region));
 		rss_json_get_str(cmd_json, "pos", pos, sizeof(pos));
 
-		if (stream < 0 || stream >= st->stream_count || !region[0] || !pos[0]) {
+		if (stream < 0 || stream >= st->stream_count || !region[0] || !pos[0])
 			return rss_ctrl_resp_error(resp, resp_size, "need stream, region, pos");
-		}
 
-		static const char *names[] = {"time", "uptime",	 "text",
-					      "logo", "privacy", "detect"};
-		int r = -1;
-		for (int i = 0; i < 6; i++) {
-			if (strcmp(region, names[i]) == 0) {
-				r = i;
-				break;
-			}
-		}
-		if (r < 0) {
-			return rss_ctrl_resp_error(resp, resp_size, "unknown region");
-		}
-
-		rvd_osd_region_t *reg = &st->osd_regions[stream][r];
-		if (!reg->active || reg->hal_handle < 0) {
+		rvd_osd_region_t *reg = rvd_osd_find_region(st, stream, region);
+		if (!reg || reg->hal_handle < 0)
 			return rss_ctrl_resp_error(resp, resp_size, "region not active");
-		}
 
 		int stream_w = st->streams[stream].enc_cfg.width;
 		int stream_h = st->streams[stream].enc_cfg.height;
@@ -1494,8 +1461,8 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		rvd_osd_calc_position(stream_w, stream_h, (int)reg->width, (int)reg->height, pos,
 				      &x, &y);
 
-		char pos_key[32];
-		snprintf(pos_key, sizeof(pos_key), "stream%d_%s_pos", stream, names[r]);
+		char pos_key[64];
+		snprintf(pos_key, sizeof(pos_key), "stream%d_%s_pos", stream, reg->name);
 		rss_config_set_str(st->cfg, "osd", pos_key, pos);
 
 		pthread_mutex_lock(&st->osd_lock);
@@ -1519,7 +1486,7 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		}
 		pthread_mutex_unlock(&st->osd_lock);
 
-		RSS_DEBUG("osd-position: stream %d %s → %s (%d,%d)", stream, names[r], pos, x, y);
+		RSS_DEBUG("osd-position: stream %d %s -> %s (%d,%d)", stream, reg->name, pos, x, y);
 		return rss_ctrl_resp_ok(resp, resp_size);
 	}
 
