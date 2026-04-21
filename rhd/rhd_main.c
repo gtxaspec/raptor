@@ -315,6 +315,15 @@ static void handle_request(rhd_server_t *srv, rhd_client_t *c)
 		return; /* keep alive */
 	} else if (strcmp(path, "/audio") == 0) {
 		if (!srv->audio_ring) {
+			srv->audio_ring = rss_ring_open("audio");
+			if (srv->audio_ring) {
+				const rss_ring_header_t *ahdr =
+					rss_ring_get_header(srv->audio_ring);
+				srv->audio_codec = ahdr->codec;
+				srv->audio_sample_rate = ahdr->fps_num;
+			}
+		}
+		if (!srv->audio_ring) {
 			http_error(c, "404 Not Found", "Audio not available");
 		} else {
 			if (rhd_audio_send_header(c, srv->audio_codec, srv->audio_sample_rate) < 0)
@@ -459,6 +468,8 @@ static void server_run(rhd_server_t *srv)
 
 	/* Audio ring state */
 	uint64_t audio_read_seq = 0;
+	uint64_t audio_last_write_seq = 0;
+	int audio_idle_count = 0;
 	uint8_t audio_buf[4096];
 	uint8_t *frame_buf = NULL;
 	uint32_t frame_buf_size = 0;
@@ -477,14 +488,15 @@ static void server_run(rhd_server_t *srv)
 			if (srv->jpeg_rings[j]) {
 				uint32_t rv;
 				if (!rss_ring_version_ok(srv->jpeg_rings[j], &rv))
-					RSS_WARN("%s ring version mismatch: %u vs %u",
-						 name, rv, RSS_RING_VERSION);
+					RSS_WARN("%s ring version mismatch: %u vs %u", name, rv,
+						 RSS_RING_VERSION);
 				const rss_ring_header_t *hdr =
 					rss_ring_get_header(srv->jpeg_rings[j]);
 				RSS_DEBUG("%s ring available: %ux%u", name, hdr->width,
 					  hdr->height);
 				srv->jpeg_ring_count++;
-				uint32_t mfs = rss_ring_max_frame_size(srv->jpeg_rings[srv->jpeg_ring_count - 1]);
+				uint32_t mfs = rss_ring_max_frame_size(
+					srv->jpeg_rings[srv->jpeg_ring_count - 1]);
 				if (mfs > frame_buf_size)
 					frame_buf_size = mfs;
 			}
@@ -576,24 +588,54 @@ static void server_run(rhd_server_t *srv)
 				break;
 			}
 
+		if (has_audio_clients && !srv->audio_ring) {
+			srv->audio_ring = rss_ring_open("audio");
+			if (srv->audio_ring) {
+				uint32_t rv;
+				if (!rss_ring_version_ok(srv->audio_ring, &rv))
+					RSS_WARN("audio ring version mismatch: %u vs %u", rv,
+						 RSS_RING_VERSION);
+				const rss_ring_header_t *ahdr =
+					rss_ring_get_header(srv->audio_ring);
+				srv->audio_codec = ahdr->codec;
+				srv->audio_sample_rate = ahdr->fps_num;
+				audio_read_seq = ahdr->write_seq;
+				audio_last_write_seq = 0;
+				audio_idle_count = 0;
+				RSS_INFO("audio ring reconnected (codec=%d rate=%d)",
+					 srv->audio_codec, srv->audio_sample_rate);
+			}
+		}
+
 		if (has_audio_clients && srv->audio_ring) {
-			/* Drain all available audio frames — audio arrives faster
-			 * than the epoll loop period (20ms frames vs 50ms poll). */
-			for (int af = 0; af < 20; af++) {
+			/* Detect stale ring (RAD restarted) */
+			const rss_ring_header_t *ahdr = rss_ring_get_header(srv->audio_ring);
+			if (ahdr->write_seq == audio_last_write_seq)
+				audio_idle_count++;
+			else
+				audio_idle_count = 0;
+			audio_last_write_seq = ahdr->write_seq;
+
+			if (audio_idle_count >= 40) {
+				RSS_INFO("audio ring idle, closing for reconnect");
+				rss_ring_close(srv->audio_ring);
+				srv->audio_ring = NULL;
+				audio_idle_count = 0;
+			}
+
+			/* Drain all available audio frames */
+			for (int af = 0; af < 20 && srv->audio_ring; af++) {
 				uint32_t alen;
 				rss_ring_slot_t meta;
 				int ret = rss_ring_read(srv->audio_ring, &audio_read_seq, audio_buf,
 							sizeof(audio_buf), &alen, &meta);
 				if (ret == RSS_EOVERFLOW) {
-					/* Jump to latest frame */
-					const rss_ring_header_t *ahdr =
-						rss_ring_get_header(srv->audio_ring);
 					audio_read_seq =
 						ahdr->write_seq > 0 ? ahdr->write_seq - 1 : 0;
 					continue;
 				}
 				if (ret != 0 || alen == 0)
-					break; /* no more frames */
+					break;
 
 				for (int i = srv->client_count - 1; i >= 0; i--) {
 					rhd_client_t *ac = srv->clients[i];
@@ -751,12 +793,15 @@ static void server_run(rhd_server_t *srv)
 					if (srv->jpeg_rings[j]) {
 						uint32_t rv;
 						if (!rss_ring_version_ok(srv->jpeg_rings[j], &rv))
-							RSS_WARN("%s ring version mismatch: %u vs %u",
-								 jpeg_ring_names[j], rv, RSS_RING_VERSION);
+							RSS_WARN("%s ring version mismatch: %u vs "
+								 "%u",
+								 jpeg_ring_names[j], rv,
+								 RSS_RING_VERSION);
 						if (was_streaming)
 							rss_ring_acquire(srv->jpeg_rings[j]);
 						jpeg_read_seqs[j] = 0;
-						uint32_t mfs = rss_ring_max_frame_size(srv->jpeg_rings[j]);
+						uint32_t mfs =
+							rss_ring_max_frame_size(srv->jpeg_rings[j]);
 						if (mfs > frame_buf_size) {
 							free(frame_buf);
 							frame_buf_size = mfs;
