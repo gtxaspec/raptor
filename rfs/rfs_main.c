@@ -529,6 +529,35 @@ int main(int argc, char **argv)
 		 st.codec == RSS_CODEC_H265 ? "H.265" : "H.264", st.width, st.height,
 		 st.settings.fps, st.settings.loop ? "yes" : "no");
 
+	/* Seed the ring with the first keyframe so new RTSP clients don't
+	 * have to wait for the next IDR in the pacing loop. */
+	if (st.video_ring) {
+		if (st.is_mp4) {
+			for (uint32_t i = 0; i < st.frame_count; i++) {
+				rfs_mp4_frame_t *mf = &st.mp4.video_frames[i];
+				if (!mf->is_key)
+					continue;
+				int len =
+					rfs_mp4_to_annexb(&st.mp4, mf, st.scratch, st.scratch_cap);
+				if (len > 0)
+					rss_ring_publish(st.video_ring, st.scratch, (uint32_t)len,
+							 rss_timestamp_us(), mf->nal_type,
+							 mf->is_key);
+				break;
+			}
+		} else if (st.frames) {
+			for (uint32_t i = 0; i < st.frame_count; i++) {
+				rfs_frame_t *f = &st.frames[i];
+				if (!f->is_key)
+					continue;
+				rss_ring_publish(st.video_ring, st.video_data + f->offset,
+						 f->length, rss_timestamp_us(), f->nal_type,
+						 f->is_key);
+				break;
+			}
+		}
+	}
+
 	st.epoch = rss_timestamp_us();
 
 	/* ── Main loop ── */
