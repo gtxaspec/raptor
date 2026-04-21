@@ -285,12 +285,120 @@ static void load_config(rod_state_t *st)
 	gethostname(st->hostname, sizeof(st->hostname));
 }
 
+/* ── New [osd.*] section format ── */
+
+static int parse_align(const char *s)
+{
+	if (!s || !s[0])
+		return 0;
+	if (strcmp(s, "right") == 0)
+		return 2;
+	if (strcmp(s, "center") == 0)
+		return 1;
+	return 0;
+}
+
+struct osd_section_ctx {
+	rod_state_t *st;
+	int count;
+};
+
+static void load_osd_section(const char *section, void *userdata)
+{
+	struct osd_section_ctx *ctx = userdata;
+	rod_state_t *st = ctx->st;
+	rss_config_t *cfg = st->cfg;
+
+	/* Extract element name from "osd.name" */
+	const char *dot = strchr(section, '.');
+	if (!dot)
+		return;
+	const char *name = dot + 1;
+	if (!name[0] || strlen(name) >= ROD_ELEM_NAME_LEN)
+		return;
+
+	const char *type_str = rss_config_get_str(cfg, section, "type", "text");
+	const char *tmpl = rss_config_get_str(cfg, section, "template", "");
+	const char *position = rss_config_get_str(cfg, section, "position", "top_left");
+	const char *align_str = rss_config_get_str(cfg, section, "align", "");
+	int font_size = rss_config_get_int(cfg, section, "font_size", 0);
+	int max_chars = rss_config_get_int(cfg, section, "max_chars", 20);
+	bool visible = rss_config_get_bool(cfg, section, "visible", true);
+	bool sub_only = rss_config_get_bool(cfg, section, "sub_only", false);
+	const char *update_str = rss_config_get_str(cfg, section, "update", "tick");
+
+	rod_elem_type_t type = ROD_ELEM_TEXT;
+	if (strcmp(type_str, "image") == 0)
+		type = ROD_ELEM_IMAGE;
+	else if (strcmp(type_str, "overlay") == 0)
+		type = ROD_ELEM_OVERLAY;
+
+	int align = parse_align(align_str);
+	rod_update_mode_t update = ROD_UPDATE_TICK;
+	if (strcmp(update_str, "change") == 0)
+		update = ROD_UPDATE_CHANGE;
+
+	if (rod_add_element(st, name, type, tmpl, position, align, font_size, max_chars, update) <
+	    0)
+		return;
+
+	rod_element_t *e = rod_find_element(st, name);
+	if (!e)
+		return;
+
+	e->visible = visible;
+	e->sub_streams_only = sub_only;
+
+	if (type == ROD_ELEM_IMAGE) {
+		const char *path = rss_config_get_str(cfg, section, "path", "");
+		if (path[0])
+			rss_strlcpy(e->image_path, path, sizeof(e->image_path));
+		e->image_w = rss_config_get_int(cfg, section, "width", 0);
+		e->image_h = rss_config_get_int(cfg, section, "height", 0);
+	}
+
+	int stroke = rss_config_get_int(cfg, section, "stroke_size", -1);
+	if (stroke >= 0)
+		e->stroke_size = stroke;
+
+	const char *color_str = rss_config_get_str(cfg, section, "color", NULL);
+	if (color_str)
+		e->color = (uint32_t)strtoul(color_str, NULL, 0);
+
+	const char *sc_str = rss_config_get_str(cfg, section, "stroke_color", NULL);
+	if (sc_str)
+		e->stroke_color = (uint32_t)strtoul(sc_str, NULL, 0);
+
+	ctx->count++;
+	RSS_DEBUG("osd element from config: [%s] name=%s type=%s", section, name, type_str);
+}
+
 /*
- * Populate the element registry from the old [osd] config keys.
- * Element names match the old region_names[] for SHM compatibility.
+ * Populate the element registry from config.
+ * New format: [osd.name] sections take priority.
+ * Old format: time_enabled/text_string keys as fallback.
  */
 static void init_elements_from_config(rod_state_t *st)
 {
+	/* Check for new [osd.*] sections */
+	struct osd_section_ctx ctx = {.st = st, .count = 0};
+	rss_config_foreach_section(st->cfg, "osd.", load_osd_section, &ctx);
+
+	if (ctx.count > 0) {
+		RSS_INFO("loaded %d OSD elements from [osd.*] config sections", ctx.count);
+
+		/* Always add privacy if not defined in config */
+		if (!rod_find_element(st, "privacy")) {
+			rod_add_element(st, "privacy", ROD_ELEM_TEXT, "Privacy Mode", "center", 1,
+					0, 20, ROD_UPDATE_CHANGE);
+			rod_element_t *e = rod_find_element(st, "privacy");
+			if (e)
+				e->visible = false;
+		}
+		return;
+	}
+
+	/* Fall back to old [osd] keys */
 	rod_config_t *c = &st->settings;
 
 	if (c->time_enabled) {
@@ -309,13 +417,9 @@ static void init_elements_from_config(rod_state_t *st)
 	}
 
 	if (c->logo_enabled) {
-		rod_element_t *e =
-			rod_find_element(st, "logo"); /* shouldn't exist yet, but be safe */
-		if (!e) {
-			rod_add_element(st, "logo", ROD_ELEM_IMAGE, NULL, "bottom_right", 0, 0, 0,
-					ROD_UPDATE_CHANGE);
-			e = rod_find_element(st, "logo");
-		}
+		rod_add_element(st, "logo", ROD_ELEM_IMAGE, NULL, "bottom_right", 0, 0, 0,
+				ROD_UPDATE_CHANGE);
+		rod_element_t *e = rod_find_element(st, "logo");
 		if (e) {
 			rss_strlcpy(e->image_path, c->logo_path, sizeof(e->image_path));
 			e->image_w = c->logo_width;
@@ -323,7 +427,6 @@ static void init_elements_from_config(rod_state_t *st)
 		}
 	}
 
-	/* Privacy element is always created (hidden until activated) */
 	rod_add_element(st, "privacy", ROD_ELEM_TEXT, "Privacy Mode", "center", 1, 0, 20,
 			ROD_UPDATE_CHANGE);
 	{
@@ -935,6 +1038,57 @@ static int handle_remove_element(rod_state_t *st, const char *cmd_json, char *re
 	return rss_ctrl_resp_ok(resp, resp_size);
 }
 
+static int handle_set_element(rod_state_t *st, const char *cmd_json, char *resp, int resp_size)
+{
+	char name[ROD_ELEM_NAME_LEN] = "";
+	rss_json_get_str(cmd_json, "name", name, sizeof(name));
+	if (!name[0])
+		return rss_ctrl_resp_error(resp, resp_size, "need name");
+
+	rod_element_t *e = rod_find_element(st, name);
+	if (!e)
+		return rss_ctrl_resp_error(resp, resp_size, "not found");
+
+	char val[ROD_TMPL_LEN];
+	if (rss_json_get_str(cmd_json, "template", val, sizeof(val)) == 0) {
+		rss_strlcpy(e->tmpl, val, sizeof(e->tmpl));
+		e->last_expanded[0] = '\0';
+		mark_element_dirty(e, st->stream_count);
+	}
+
+	if (rss_json_get_str(cmd_json, "position", val, sizeof(val)) == 0) {
+		rss_strlcpy(e->position, val, sizeof(e->position));
+		for (int s = 0; s < st->stream_count; s++) {
+			char fwd[128];
+			cJSON *j = cJSON_CreateObject();
+			if (!j)
+				continue;
+			cJSON_AddStringToObject(j, "cmd", "osd-position");
+			cJSON_AddNumberToObject(j, "stream", s);
+			cJSON_AddStringToObject(j, "region", name);
+			cJSON_AddStringToObject(j, "pos", val);
+			cJSON_PrintPreallocated(j, fwd, sizeof(fwd), 0);
+			cJSON_Delete(j);
+			char rvd_resp[256];
+			rss_ctrl_send_command("/var/run/rss/rvd.sock", fwd, rvd_resp,
+					      sizeof(rvd_resp), 1000);
+		}
+	}
+
+	int ival;
+	if (rss_json_get_int(cmd_json, "align", &ival) == 0 && ival >= 0 && ival <= 2) {
+		e->align = ival;
+		mark_element_dirty(e, st->stream_count);
+	}
+
+	if (rss_json_get_str(cmd_json, "color", val, sizeof(val)) == 0) {
+		e->color = (uint32_t)strtoul(val, NULL, 0);
+		mark_element_dirty(e, st->stream_count);
+	}
+
+	return rss_ctrl_resp_ok(resp, resp_size);
+}
+
 static int handle_set_var(rod_state_t *st, const char *cmd_json, char *resp, int resp_size)
 {
 	char name[32] = "", value[128] = "";
@@ -1043,6 +1197,9 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 
 	if (strcmp(cmd, "remove-element") == 0)
 		return handle_remove_element(st, cmd_json, resp_buf, resp_buf_size);
+
+	if (strcmp(cmd, "set-element") == 0)
+		return handle_set_element(st, cmd_json, resp_buf, resp_buf_size);
 
 	if (strcmp(cmd, "set-var") == 0)
 		return handle_set_var(st, cmd_json, resp_buf, resp_buf_size);

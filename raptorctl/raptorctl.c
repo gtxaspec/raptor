@@ -254,6 +254,7 @@ const struct help_entry help_entries[] = {
 	{"rod", "elements                            List all OSD elements"},
 	{"rod", "add-element <name> [key=val]...     Create OSD element"},
 	{"rod", "remove-element <name>               Remove OSD element"},
+	{"rod", "set-element <name> [key=val]...     Modify element property"},
 	{"rod", "show-element <name>                 Show element"},
 	{"rod", "hide-element <name>                 Hide element"},
 	{"rod", "set-var <name> <value>              Set template variable"},
@@ -1229,6 +1230,24 @@ int main(int argc, char **argv)
 		}
 		cJSON *j = jcmd("remove-element");
 		jadd_s(j, "name", argv[3]);
+		jstr(j, json, sizeof(json));
+
+	} else if (strcmp(cmd, "set-element") == 0) {
+		if (argc < 4) {
+			fprintf(stderr, "Usage: raptorctl %s set-element <name> [key=val]...\n",
+				daemon);
+			return 1;
+		}
+		cJSON *j = jcmd("set-element");
+		jadd_s(j, "name", argv[3]);
+		for (int a = 4; a < argc; a++) {
+			char *eq = strchr(argv[a], '=');
+			if (!eq)
+				continue;
+			*eq = '\0';
+			jadd_s(j, argv[a], eq + 1);
+			*eq = '=';
+		}
 		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "show-element") == 0 || strcmp(cmd, "hide-element") == 0) {
