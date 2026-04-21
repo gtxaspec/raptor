@@ -433,8 +433,14 @@ static void *ao_playback_thread(void *arg)
 				RSS_DEBUG("ao: flushed hardware buffer");
 			}
 			ring = rss_ring_open("speaker");
-			if (!ring)
+			if (ring) {
+				uint32_t rv;
+				if (!rss_ring_version_ok(ring, &rv))
+					RSS_WARN("speaker ring version mismatch: %u vs %u",
+						 rv, RSS_RING_VERSION);
+			} else {
 				usleep(50000);
+			}
 		}
 		if (!ring)
 			break;

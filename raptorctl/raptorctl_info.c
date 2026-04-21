@@ -9,6 +9,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <rss_ipc.h>
+
 #include <rss_common.h>
 
 #include "raptorctl.h"
@@ -279,13 +281,23 @@ void cmd_memory(void)
 		while ((ent = readdir(dir))) {
 			if (strncmp(ent->d_name, "rss_ring_", 9) != 0)
 				continue;
+			const char *ring_name = ent->d_name + 9;
 			char path[280];
 			snprintf(path, sizeof(path), "/dev/shm/%s", ent->d_name);
 			struct stat st;
 			if (stat(path, &st) != 0)
 				continue;
 			long sz = (long)st.st_size / 1024;
-			printf("  %-20s %6ld KB\n", ent->d_name + 9, sz);
+			rss_ring_t *ring = rss_ring_open(ring_name);
+			if (ring) {
+				uint32_t rv;
+				bool ok = rss_ring_version_ok(ring, &rv);
+				printf("  %-20s %6ld KB  v%u%s\n", ring_name, sz, rv,
+				       ok ? "" : " (MISMATCH — rebuild producer)");
+				rss_ring_close(ring);
+			} else {
+				printf("  %-20s %6ld KB\n", ring_name, sz);
+			}
 			shm_rings += sz;
 		}
 
