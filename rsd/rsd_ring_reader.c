@@ -174,7 +174,8 @@ int rsd_sendq_init(rsd_sendq_t *q)
 
 static void sendq_release_entry(rsd_sendq_entry_t *e)
 {
-	free(e->data);
+	if (!e->zerocopy)
+		free((void *)e->data);
 	e->data = NULL;
 }
 
@@ -243,6 +244,39 @@ static int rsd_sendq_push_video(rsd_sendq_t *q, const uint8_t *data, uint32_t le
 	return dropped ? RSD_SENDQ_DROPPED : RSD_SENDQ_OK;
 }
 
+static int rsd_sendq_push_zerocopy(rsd_sendq_t *q, const uint8_t *data, uint32_t len,
+				   uint32_t rtp_ts, uint8_t buf_idx, uint32_t buf_gen)
+{
+	pthread_mutex_lock(&q->lock);
+	if (q->shutdown) {
+		pthread_mutex_unlock(&q->lock);
+		return -1;
+	}
+
+	bool dropped = false;
+	if (q->count >= RSD_SENDQ_SLOTS) {
+		sendq_flush_locked(q);
+		dropped = true;
+	}
+
+	rsd_sendq_entry_t *slot = &q->entries[q->head];
+	slot->data = data;
+	slot->len = len;
+	slot->rtp_ts = rtp_ts;
+	slot->type = RSD_FRAME_VIDEO;
+	slot->codec = 0;
+	slot->zerocopy = true;
+	slot->buf_idx = buf_idx;
+	slot->buf_gen = buf_gen;
+
+	q->head = (q->head + 1) % RSD_SENDQ_SLOTS;
+	q->count++;
+
+	pthread_cond_signal(&q->cond);
+	pthread_mutex_unlock(&q->lock);
+	return dropped ? RSD_SENDQ_DROPPED : RSD_SENDQ_OK;
+}
+
 /* Per-client send thread — drains sendq through compy (blocking I/O) */
 void *rsd_client_send_thread(void *arg)
 {
@@ -264,6 +298,21 @@ void *rsd_client_send_thread(void *arg)
 		q->tail = (q->tail + 1) % RSD_SENDQ_SLOTS;
 		q->count--;
 		pthread_mutex_unlock(&q->lock);
+
+		/* Zero-copy: validate encoder buffer wasn't recycled */
+		if (entry.zerocopy && c->srv) {
+			rss_ring_t *ring = c->srv->video[c->stream_idx].ring;
+			const rss_ring_header_t *hdr = rss_ring_get_header(ring);
+			if (hdr && entry.buf_idx < RSS_RING_MAX_REF_BUFS) {
+				uint32_t cur = atomic_load_explicit(
+					&hdr->ref_buf_gen[entry.buf_idx],
+					memory_order_acquire);
+				if (cur != entry.buf_gen) {
+					sendq_release_entry(&entry);
+					continue;
+				}
+			}
+		}
 
 		pthread_mutex_lock(&c->write_lock);
 		if (entry.type == RSD_FRAME_VIDEO)
@@ -402,6 +451,7 @@ void *rsd_video_reader_thread(void *arg)
 		 * preserves every frame; the reader is fast enough to catch up
 		 * (measured <2ms per frame vs 33ms budget on T20). */
 		const rss_ring_header_t *rhdr = rss_ring_get_header(rctx->ring);
+		bool use_zerocopy = (rhdr->flags & RSS_RING_FLAG_REFMODE);
 		uint32_t fps = (rhdr->fps_num > 0 && rhdr->fps_den > 0)
 				      ? rhdr->fps_num / rhdr->fps_den
 				      : 30;
@@ -410,11 +460,18 @@ void *rsd_video_reader_thread(void *arg)
 		for (int burst = 0; burst < 8; burst++) {
 			uint32_t length;
 			rss_ring_slot_t meta;
+			const uint8_t *frame_data;
 			uint64_t read_seq = rctx->read_seq;
 			uint64_t pre_seq = read_seq;
 
-			ret = rss_ring_read(rctx->ring, &read_seq, rctx->frame_buf,
-					    rctx->frame_buf_size, &length, &meta);
+			if (use_zerocopy) {
+				ret = rss_ring_peek(rctx->ring, &read_seq,
+						    &frame_data, &length, &meta);
+			} else {
+				ret = rss_ring_read(rctx->ring, &read_seq, rctx->frame_buf,
+						    rctx->frame_buf_size, &length, &meta);
+				frame_data = rctx->frame_buf;
+			}
 			if (ret == RSS_EOVERFLOW) {
 				uint64_t skipped = read_seq - pre_seq;
 				total_overflow += skipped;
@@ -444,7 +501,7 @@ void *rsd_video_reader_thread(void *arg)
 
 			if (meta.is_key &&
 			    atomic_load_explicit(&rctx->sps_len, memory_order_relaxed) == 0)
-				rsd_cache_sps_pps(rctx, rctx->frame_buf, length);
+				rsd_cache_sps_pps(rctx, frame_data, length);
 
 			pthread_mutex_lock(&srv->clients_lock);
 			for (int i = 0; i < srv->client_count; i++) {
@@ -471,8 +528,15 @@ void *rsd_video_reader_thread(void *arg)
 				c->last_video_client_ts = client_ts;
 				c->has_last_video_client_ts = true;
 
-				int qret = rsd_sendq_push_video(&c->sendq, rctx->frame_buf,
-								length, client_ts);
+				int qret;
+				if (use_zerocopy) {
+					qret = rsd_sendq_push_zerocopy(&c->sendq, frame_data,
+								       length, client_ts,
+								       meta.buf_idx, meta.buf_gen);
+				} else {
+					qret = rsd_sendq_push_video(&c->sendq, frame_data,
+								    length, client_ts);
+				}
 				if (qret == RSD_SENDQ_OK)
 					total_pushed++;
 				else if (qret == RSD_SENDQ_DROPPED) {
