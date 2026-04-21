@@ -660,11 +660,47 @@ static void scan_new_shm(rvd_state_t *st, int s)
 		reg->hal_handle = -1;
 		reg->width = w;
 		reg->height = h;
-		reg->layer = st->osd_region_count[s]; /* use slot index as layer */
+		reg->layer = st->osd_region_count[s];
 
-		if (create_region(st, s, reg))
-			RSS_INFO("osd stream%d: discovered new element '%s' (%ux%u)", s, name, w,
-				 h);
+		/* T20 time+uptime merge: avoid two OSD channels spanning
+		 * opposite edges of the same scanline (causes IPU stall). */
+		bool is_merged = false;
+		if (strcmp(name, "uptime") == 0) {
+			rvd_osd_region_t *treg = rvd_osd_find_region(st, s, "time");
+			if (treg) {
+				int sw = st->streams[s].enc_cfg.width;
+				int mw = sw - 2 * OSD_MARGIN;
+				if (mw > (int)treg->width) {
+					treg->width = ((uint32_t)mw + 1) & ~1u;
+					/* Reallocate time's local_buf for new width */
+					uint8_t *nb =
+						calloc(1, (size_t)treg->width * treg->height * 4);
+					if (nb) {
+						free(treg->local_buf);
+						treg->local_buf = nb;
+					}
+				}
+				reg->active = true;
+				reg->hal_handle = -1;
+				is_merged = true;
+				RSS_INFO("osd stream%d: discovered '%s' (merged into time)", s,
+					 name);
+			}
+		} else if (strcmp(name, "time") == 0) {
+			uint32_t uw, uh;
+			if (probe_shm_dims(s, "uptime", &uw, &uh)) {
+				int sw = st->streams[s].enc_cfg.width;
+				int mw = sw - 2 * OSD_MARGIN;
+				if (mw > (int)w)
+					reg->width = ((uint32_t)mw + 1) & ~1u;
+			}
+		}
+
+		if (!is_merged) {
+			if (create_region(st, s, reg))
+				RSS_INFO("osd stream%d: discovered new element '%s' (%ux%u)", s,
+					 name, w, h);
+		}
 	}
 	closedir(dir);
 }

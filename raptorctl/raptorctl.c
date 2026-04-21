@@ -58,12 +58,12 @@ static const char *find_daemon_for_section(const char *section)
 		const char *section;
 		const char *daemon;
 	} map[] = {
-		{"sensor", "rvd"}, {"stream0", "rvd"},	  {"stream1", "rvd"},	{"jpeg", "rvd"},
-		{"ring", "rvd"},   {"audio", "rad"},	  {"rtsp", "rsd"},	{"http", "rhd"},
-		{"osd", "rod"},	   {"ircut", "ric"},	  {"recording", "rmr"}, {"motion", "rmd"},
-		{"webrtc", "rwd"}, {"webtorrent", "rwd"}, {"webcam", "rwc"},
-	{"filesource", "rfs"},						{"log", "rvd"},
-		{NULL, NULL},
+		{"sensor", "rvd"},     {"stream0", "rvd"},    {"stream1", "rvd"},
+		{"jpeg", "rvd"},       {"ring", "rvd"},	      {"audio", "rad"},
+		{"rtsp", "rsd"},       {"http", "rhd"},	      {"osd", "rod"},
+		{"ircut", "ric"},      {"recording", "rmr"},  {"motion", "rmd"},
+		{"webrtc", "rwd"},     {"webtorrent", "rwd"}, {"webcam", "rwc"},
+		{"filesource", "rfs"}, {"log", "rvd"},	      {NULL, NULL},
 	};
 	for (int i = 0; map[i].section; i++) {
 		if (strcmp(section, map[i].section) == 0)
@@ -251,6 +251,12 @@ const struct help_entry help_entries[] = {
 	{"rod", "set-time-font-size <10-72>          Time font size"},
 	{"rod", "set-uptime-font-size <10-72>        Uptime font size"},
 	{"rod", "set-text-font-size <10-72>          Text font size"},
+	{"rod", "elements                            List all OSD elements"},
+	{"rod", "add-element <name> [key=val]...     Create OSD element"},
+	{"rod", "remove-element <name>               Remove OSD element"},
+	{"rod", "show-element <name>                 Show element"},
+	{"rod", "hide-element <name>                 Hide element"},
+	{"rod", "set-var <name> <value>              Set template variable"},
 	{"ric", "mode <auto|day|night>               Set day/night mode (GPIO + ISP)"},
 	{"ric", "isp-mode <day|night>                Set ISP mode only (no GPIO)"},
 	{"rhd", "clients                             List connected clients"},
@@ -299,9 +305,11 @@ static void usage(FILE *out)
 		else
 			fprintf(out, "  %s\n", e->text);
 	}
-	fprintf(out, "\nJSON mode:\n"
-		     "  -j '{\"daemon\":\"rvd\",\"cmd\":\"...\"}'\n"
-		     "  -j '[{\"daemon\":\"rvd\",\"cmd\":\"...\"},{\"daemon\":\"rad\",\"cmd\":\"...\"}]'\n");
+	fprintf(out,
+		"\nJSON mode:\n"
+		"  -j '{\"daemon\":\"rvd\",\"cmd\":\"...\"}'\n"
+		"  -j "
+		"'[{\"daemon\":\"rvd\",\"cmd\":\"...\"},{\"daemon\":\"rad\",\"cmd\":\"...\"}]'\n");
 	fprintf(out, "\nDaemons: rvd, rsd, rad, rod, rhd, ric, rmr, rmd, rwd, rwc\n");
 }
 
@@ -338,8 +346,7 @@ static int send_cmd_json(const char *daemon, const char *json, char *resp, int r
 
 	int ret = rss_ctrl_send_command(sock_path, json, resp, resp_size, 5000);
 	if (ret < 0) {
-		snprintf(resp, (size_t)resp_size,
-			 "{\"status\":\"error\",\"reason\":\"%s\"}",
+		snprintf(resp, (size_t)resp_size, "{\"status\":\"error\",\"reason\":\"%s\"}",
 			 ret == -2 ? "timeout" : "connection failed");
 	}
 	return ret < 0 ? 1 : 0;
@@ -399,8 +406,7 @@ static int handle_json_mode(const char *input)
 
 	if (cJSON_IsArray(root)) {
 		cJSON *item = NULL;
-		cJSON_ArrayForEach(item, root)
-			errors += run_json_cmd(item, results);
+		cJSON_ArrayForEach(item, root) errors += run_json_cmd(item, results);
 	} else if (cJSON_IsObject(root)) {
 		errors = run_json_cmd(root, results);
 	} else {
@@ -1196,6 +1202,52 @@ int main(int argc, char **argv)
 		}
 		cJSON *j = jcmd(cmd);
 		jadd_i(j, "value", argv[3]);
+		jstr(j, json, sizeof(json));
+
+	} else if (strcmp(cmd, "add-element") == 0) {
+		if (argc < 4) {
+			fprintf(stderr, "Usage: raptorctl %s add-element <name> [key=val]...\n",
+				daemon);
+			return 1;
+		}
+		cJSON *j = jcmd("add-element");
+		jadd_s(j, "name", argv[3]);
+		for (int a = 4; a < argc; a++) {
+			char *eq = strchr(argv[a], '=');
+			if (!eq)
+				continue;
+			*eq = '\0';
+			jadd_s(j, argv[a], eq + 1);
+			*eq = '=';
+		}
+		jstr(j, json, sizeof(json));
+
+	} else if (strcmp(cmd, "remove-element") == 0) {
+		if (argc < 4) {
+			fprintf(stderr, "Usage: raptorctl %s remove-element <name>\n", daemon);
+			return 1;
+		}
+		cJSON *j = jcmd("remove-element");
+		jadd_s(j, "name", argv[3]);
+		jstr(j, json, sizeof(json));
+
+	} else if (strcmp(cmd, "show-element") == 0 || strcmp(cmd, "hide-element") == 0) {
+		if (argc < 4) {
+			fprintf(stderr, "Usage: raptorctl %s %s <name>\n", daemon, cmd);
+			return 1;
+		}
+		cJSON *j = jcmd(cmd);
+		jadd_s(j, "name", argv[3]);
+		jstr(j, json, sizeof(json));
+
+	} else if (strcmp(cmd, "set-var") == 0) {
+		if (argc < 5) {
+			fprintf(stderr, "Usage: raptorctl %s set-var <name> <value>\n", daemon);
+			return 1;
+		}
+		cJSON *j = jcmd("set-var");
+		jadd_s(j, "name", argv[3]);
+		jadd_s(j, "value", argv[4]);
 		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "sensitivity") == 0) {
