@@ -425,12 +425,16 @@ static void load_osd_section(const char *section, void *userdata)
 		e->stroke_size = stroke;
 
 	const char *color_str = rss_config_get_str(cfg, section, "color", NULL);
-	if (color_str)
+	if (color_str) {
 		e->color = (uint32_t)strtoul(color_str, NULL, 0);
+		e->has_color = true;
+	}
 
 	const char *sc_str = rss_config_get_str(cfg, section, "stroke_color", NULL);
-	if (sc_str)
+	if (sc_str) {
 		e->stroke_color = (uint32_t)strtoul(sc_str, NULL, 0);
+		e->has_stroke_color = true;
+	}
 
 	ctx->count++;
 	RSS_DEBUG("osd element from config: [%s] name=%s type=%s", section, name, type_str);
@@ -549,8 +553,8 @@ static void render_text_element(rod_state_t *st, rod_element_t *e, int s, const 
 	if (!buf)
 		return;
 
-	uint32_t col = e->color ? e->color : st->settings.font_color;
-	uint32_t scol = e->stroke_color ? e->stroke_color : st->settings.stroke_color;
+	uint32_t col = e->has_color ? e->color : st->settings.font_color;
+	uint32_t scol = e->has_stroke_color ? e->stroke_color : st->settings.stroke_color;
 	int ssz = e->stroke_size >= 0 ? e->stroke_size : st->settings.font_stroke;
 
 	rod_draw_text(st, s, es->font_idx, buf, es->width, es->height, text, e->align, col, scol,
@@ -802,18 +806,18 @@ static int handle_font_size_change(rod_state_t *st, const char *cmd_json, char *
 
 	/* Notify RVD to pick up new SHM dimensions */
 	{
-		char fwd[96];
 		cJSON *j = cJSON_CreateObject();
 		if (j) {
+			char fwd[96];
 			cJSON_AddStringToObject(j, "cmd", "osd-restart");
 			cJSON_AddNumberToObject(j, "pool_kb", 0);
 			cJSON_AddNumberToObject(j, "font_size", val);
 			cJSON_PrintPreallocated(j, fwd, sizeof(fwd), 0);
 			cJSON_Delete(j);
+			char rvd_resp[256];
+			rss_ctrl_send_command("/var/run/rss/rvd.sock", fwd, rvd_resp,
+					      sizeof(rvd_resp), 5000);
 		}
-		char rvd_resp[256];
-		rss_ctrl_send_command("/var/run/rss/rvd.sock", fwd, rvd_resp, sizeof(rvd_resp),
-				      5000);
 	}
 
 	return rss_ctrl_resp_ok(resp, resp_size);
@@ -981,11 +985,13 @@ static int handle_set_element(rod_state_t *st, const char *cmd_json, char *resp,
 
 	if (rss_json_get_str(cmd_json, "color", val, sizeof(val)) == 0) {
 		e->color = (uint32_t)strtoul(val, NULL, 0);
+		e->has_color = true;
 		mark_element_dirty(e, st->stream_count);
 	}
 
 	if (rss_json_get_str(cmd_json, "stroke_color", val, sizeof(val)) == 0) {
 		e->stroke_color = (uint32_t)strtoul(val, NULL, 0);
+		e->has_stroke_color = true;
 		mark_element_dirty(e, st->stream_count);
 	}
 
@@ -1019,17 +1025,17 @@ static int handle_set_element(rod_state_t *st, const char *cmd_json, char *resp,
 			}
 			create_elem_shm(st, e, s);
 		}
-		char fwd[96];
 		cJSON *j = cJSON_CreateObject();
 		if (j) {
+			char fwd[96];
 			cJSON_AddStringToObject(j, "cmd", "osd-restart");
 			cJSON_AddNumberToObject(j, "pool_kb", 0);
 			cJSON_PrintPreallocated(j, fwd, sizeof(fwd), 0);
 			cJSON_Delete(j);
+			char rvd_resp[256];
+			rss_ctrl_send_command("/var/run/rss/rvd.sock", fwd, rvd_resp,
+					      sizeof(rvd_resp), 5000);
 		}
-		char rvd_resp[256];
-		rss_ctrl_send_command("/var/run/rss/rvd.sock", fwd, rvd_resp, sizeof(rvd_resp),
-				      5000);
 	}
 
 	return rss_ctrl_resp_ok(resp, resp_size);

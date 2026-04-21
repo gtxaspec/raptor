@@ -95,8 +95,12 @@ static void jadd_s(cJSON *j, const char *key, const char *val)
 
 static void jadd_auto(cJSON *j, const char *key, const char *val)
 {
+	if (val[0] == '0' && (val[1] == 'x' || val[1] == 'X')) {
+		cJSON_AddStringToObject(j, key, val);
+		return;
+	}
 	char *end;
-	long lv = strtol(val, &end, 0);
+	long lv = strtol(val, &end, 10);
 	if (*end == '\0' && end != val)
 		cJSON_AddNumberToObject(j, key, (double)lv);
 	else

@@ -81,6 +81,8 @@ typedef struct {
 	uint32_t color;
 	uint32_t stroke_color;
 	int stroke_size;
+	bool has_color;
+	bool has_stroke_color;
 	int align;
 	char position[32];
 	int max_chars;
