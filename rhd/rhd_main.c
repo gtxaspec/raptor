@@ -475,6 +475,10 @@ static void server_run(rhd_server_t *srv)
 			const char *name = jpeg_ring_names[j];
 			srv->jpeg_rings[j] = rss_ring_open(name);
 			if (srv->jpeg_rings[j]) {
+				uint32_t rv;
+				if (!rss_ring_version_ok(srv->jpeg_rings[j], &rv))
+					RSS_WARN("%s ring version mismatch: %u vs %u",
+						 name, rv, RSS_RING_VERSION);
 				const rss_ring_header_t *hdr =
 					rss_ring_get_header(srv->jpeg_rings[j]);
 				RSS_DEBUG("%s ring available: %ux%u", name, hdr->width,
@@ -494,6 +498,9 @@ static void server_run(rhd_server_t *srv)
 	/* Try to open audio ring */
 	srv->audio_ring = rss_ring_open("audio");
 	if (srv->audio_ring) {
+		uint32_t rv;
+		if (!rss_ring_version_ok(srv->audio_ring, &rv))
+			RSS_WARN("audio ring version mismatch: %u vs %u", rv, RSS_RING_VERSION);
 		const rss_ring_header_t *ahdr = rss_ring_get_header(srv->audio_ring);
 		srv->audio_codec = ahdr->codec;
 		srv->audio_sample_rate = ahdr->fps_num;
@@ -742,6 +749,10 @@ static void server_run(rhd_server_t *srv)
 				if (!srv->jpeg_rings[j]) {
 					srv->jpeg_rings[j] = rss_ring_open(jpeg_ring_names[j]);
 					if (srv->jpeg_rings[j]) {
+						uint32_t rv;
+						if (!rss_ring_version_ok(srv->jpeg_rings[j], &rv))
+							RSS_WARN("%s ring version mismatch: %u vs %u",
+								 jpeg_ring_names[j], rv, RSS_RING_VERSION);
 						if (was_streaming)
 							rss_ring_acquire(srv->jpeg_rings[j]);
 						jpeg_read_seqs[j] = 0;

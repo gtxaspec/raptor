@@ -425,6 +425,9 @@ static void record_loop(rmr_state_t *st)
 			audio_retry = 0;
 			st->audio_ring = rss_ring_open("audio");
 			if (st->audio_ring) {
+				uint32_t rv;
+				if (!rss_ring_version_ok(st->audio_ring, &rv))
+					RSS_WARN("audio ring version mismatch: %u vs %u", rv, RSS_RING_VERSION);
 				const rss_ring_header_t *ahdr = rss_ring_get_header(st->audio_ring);
 				st->audio_codec = ahdr->codec;
 				st->audio_sample_rate = ahdr->fps_num;
@@ -449,6 +452,9 @@ static void record_loop(rmr_state_t *st)
 		if (!st->video_ring) {
 			st->video_ring = rss_ring_open(st->video_ring_name);
 			if (st->video_ring) {
+				uint32_t rv;
+				if (!rss_ring_version_ok(st->video_ring, &rv))
+					RSS_WARN("video ring version mismatch: %u vs %u", rv, RSS_RING_VERSION);
 				const rss_ring_header_t *vhdr = rss_ring_get_header(st->video_ring);
 				uint32_t mfs = rss_ring_max_frame_size(st->video_ring);
 				if (mfs > st->frame_buf_size) {
@@ -806,6 +812,11 @@ int main(int argc, char **argv)
 		RSS_FATAL("video ring not available");
 		goto cleanup;
 	}
+	{
+		uint32_t rv;
+		if (!rss_ring_version_ok(st.video_ring, &rv))
+			RSS_WARN("video ring version mismatch: %u vs %u", rv, RSS_RING_VERSION);
+	}
 
 	/* Read ring metadata */
 	const rss_ring_header_t *vhdr = rss_ring_get_header(st.video_ring);
@@ -830,6 +841,9 @@ int main(int argc, char **argv)
 	if (st.audio_enabled) {
 		st.audio_ring = rss_ring_open("audio");
 		if (st.audio_ring) {
+			uint32_t rv;
+			if (!rss_ring_version_ok(st.audio_ring, &rv))
+				RSS_WARN("audio ring version mismatch: %u vs %u", rv, RSS_RING_VERSION);
 			const rss_ring_header_t *ahdr = rss_ring_get_header(st.audio_ring);
 			st.audio_codec = ahdr->codec;
 			st.audio_sample_rate = ahdr->fps_num;
