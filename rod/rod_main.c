@@ -25,6 +25,17 @@
 
 #include "rod.h"
 
+static void sanitize_text(char *s)
+{
+	for (int i = 0; s[i]; i++) {
+		unsigned char c = (unsigned char)s[i];
+		if (c < 0x20 && c != '\0')
+			s[i] = ' ';
+		if (c > 0x7E)
+			s[i] = '?';
+	}
+}
+
 static uint32_t parse_color(const char *s)
 {
 	if (!s)
@@ -869,6 +880,8 @@ static int handle_add_element(rod_state_t *st, const char *cmd_json, char *resp,
 	if (!name[0])
 		return rss_ctrl_resp_error(resp, resp_size, "need name");
 
+	sanitize_text(tmpl);
+
 	rod_elem_type_t type = ROD_ELEM_TEXT;
 	if (strcmp(type_str, "image") == 0)
 		type = ROD_ELEM_IMAGE;
@@ -950,6 +963,7 @@ static int handle_set_element(rod_state_t *st, const char *cmd_json, char *resp,
 
 	char val[ROD_TMPL_LEN];
 	if (rss_json_get_str(cmd_json, "template", val, sizeof(val)) == 0) {
+		sanitize_text(val);
 		rss_strlcpy(e->tmpl, val, sizeof(e->tmpl));
 		e->last_expanded[0] = '\0';
 		mark_element_dirty(e, st->stream_count);
@@ -1043,6 +1057,8 @@ static int handle_set_var(rod_state_t *st, const char *cmd_json, char *resp, int
 	rss_json_get_str(cmd_json, "value", value, sizeof(value));
 	if (!name[0])
 		return rss_ctrl_resp_error(resp, resp_size, "need name");
+
+	sanitize_text(value);
 
 	for (int i = 0; i < st->var_count; i++) {
 		if (strcmp(st->vars[i].name, name) == 0) {
