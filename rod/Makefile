@@ -1,4 +1,5 @@
-SRCS := rod_main.c rod_render.c rod_receipt.c
+SRCS := rod_main.c rod_elem.c rod_config.c rod_template.c rod_ctrl.c \
+       rod_render.c rod_receipt.c
 OBJS := $(SRCS:.c=.o)
 BIN  := rod
 

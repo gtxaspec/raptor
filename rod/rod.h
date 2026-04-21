@@ -188,13 +188,29 @@ void rod_receipt_clear(rod_element_t *e);
 void rod_receipt_feed_bytes(rod_state_t *st, rod_element_t *e, const char *data, int len);
 void rod_render_receipt(rod_state_t *st, rod_element_t *e, int s);
 
-/* rod_main.c -- element registry */
+/* rod_elem.c -- element registry and utilities */
 rod_element_t *rod_find_element(rod_state_t *st, const char *name);
 int rod_add_element(rod_state_t *st, const char *name, rod_elem_type_t type, const char *tmpl,
 		    const char *position, int align, int font_size, int max_chars,
 		    rod_update_mode_t update_mode);
 void rod_remove_element(rod_state_t *st, const char *name);
-int rod_expand_template(rod_state_t *st, const char *tmpl, char *out, int out_size);
 int rod_alloc_font(rod_state_t *st, int stream_idx, int font_size);
+void release_font(rod_state_t *st, int stream_idx, int font_idx);
+void sanitize_text(char *s);
+uint32_t parse_color(const char *s);
+void mark_all_dirty(rod_state_t *st);
+void mark_element_dirty(rod_element_t *e, int stream_count);
+void create_elem_shm(rod_state_t *st, rod_element_t *e, int s);
+void create_all_shms(rod_state_t *st);
+
+/* rod_template.c -- template variable expansion */
+int rod_expand_template(rod_state_t *st, const char *tmpl, char *out, int out_size);
+
+/* rod_config.c */
+void load_config(rod_state_t *st);
+void init_elements_from_config(rod_state_t *st);
+
+/* rod_ctrl.c */
+int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, void *userdata);
 
 #endif /* ROD_H */
