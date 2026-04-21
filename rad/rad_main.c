@@ -49,6 +49,8 @@ typedef struct {
 	bool hpf_enabled;
 	bool agc_enabled;
 #endif
+	bool muted;
+	bool ao_muted;
 	/* Pipeline state — updated by ctrl handler on restart */
 	rss_ring_t **ring;
 	const rad_codec_ops_t **codec_ops;
@@ -122,6 +124,20 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 							   : "failed");
 		}
 		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value 0-7");
+	}
+
+	if (strcmp(cmd, "mute") == 0) {
+		int ret = RSS_HAL_CALL(ctx->ops, audio_set_mute, ctx->hal_ctx, ctx->ai_dev, 0, 1);
+		if (ret == 0)
+			ctx->muted = true;
+		return rad_fmt_result(resp_buf, resp_buf_size, ret);
+	}
+
+	if (strcmp(cmd, "unmute") == 0) {
+		int ret = RSS_HAL_CALL(ctx->ops, audio_set_mute, ctx->hal_ctx, ctx->ai_dev, 0, 0);
+		if (ret == 0)
+			ctx->muted = false;
+		return rad_fmt_result(resp_buf, resp_buf_size, ret);
 	}
 
 #ifdef RAPTOR_AUDIO_EFFECTS
@@ -219,6 +235,24 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		}
 		return rss_ctrl_resp_error(resp_buf, resp_buf_size,
 					   ctx->ao_enabled ? "need value" : "ao disabled");
+	}
+
+	if (strcmp(cmd, "ao-mute") == 0) {
+		if (!ctx->ao_enabled)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "ao disabled");
+		int ret = RSS_HAL_CALL(ctx->ops, ao_soft_mute, ctx->hal_ctx, 0, 0);
+		if (ret == 0)
+			ctx->ao_muted = true;
+		return rad_fmt_result(resp_buf, resp_buf_size, ret);
+	}
+
+	if (strcmp(cmd, "ao-unmute") == 0) {
+		if (!ctx->ao_enabled)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "ao disabled");
+		int ret = RSS_HAL_CALL(ctx->ops, ao_soft_unmute, ctx->hal_ctx, 0, 0);
+		if (ret == 0)
+			ctx->ao_muted = false;
+		return rad_fmt_result(resp_buf, resp_buf_size, ret);
 	}
 
 	if (strcmp(cmd, "ao-flush") == 0) {
@@ -392,10 +426,12 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		cJSON_AddNumberToObject(r, "sample_rate", ctx->sample_rate);
 		cJSON_AddNumberToObject(r, "volume", ctx->volume);
 		cJSON_AddNumberToObject(r, "gain", ctx->gain);
+		cJSON_AddBoolToObject(r, "muted", ctx->muted);
 		cJSON_AddBoolToObject(r, "ao_enabled", ctx->ao_enabled);
 		if (ctx->ao_enabled) {
 			cJSON_AddNumberToObject(r, "ao_volume", ctx->ao_volume);
 			cJSON_AddNumberToObject(r, "ao_gain", ctx->ao_gain);
+			cJSON_AddBoolToObject(r, "ao_muted", ctx->ao_muted);
 		}
 #ifdef RAPTOR_AUDIO_EFFECTS
 		cJSON_AddBoolToObject(r, "ns", ctx->ns_enabled);
