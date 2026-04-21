@@ -299,6 +299,9 @@ static void usage(FILE *out)
 		else
 			fprintf(out, "  %s\n", e->text);
 	}
+	fprintf(out, "\nJSON mode:\n"
+		     "  -j '{\"daemon\":\"rvd\",\"cmd\":\"...\"}'\n"
+		     "  -j '[{\"daemon\":\"rvd\",\"cmd\":\"...\"},{\"daemon\":\"rad\",\"cmd\":\"...\"}]'\n");
 	fprintf(out, "\nDaemons: rvd, rsd, rad, rod, rhd, ric, rmr, rmd, rwd, rwc\n");
 }
 
@@ -328,6 +331,105 @@ static int send_cmd(const char *daemon, const char *json)
 	return 0;
 }
 
+static int send_cmd_json(const char *daemon, const char *json, char *resp, int resp_size)
+{
+	char sock_path[64];
+	snprintf(sock_path, sizeof(sock_path), "/var/run/rss/%s.sock", daemon);
+
+	int ret = rss_ctrl_send_command(sock_path, json, resp, resp_size, 5000);
+	if (ret < 0) {
+		snprintf(resp, (size_t)resp_size,
+			 "{\"status\":\"error\",\"reason\":\"%s\"}",
+			 ret == -2 ? "timeout" : "connection failed");
+	}
+	return ret < 0 ? 1 : 0;
+}
+
+static cJSON *json_error(const char *reason)
+{
+	cJSON *e = cJSON_CreateObject();
+	cJSON_AddStringToObject(e, "status", "error");
+	cJSON_AddStringToObject(e, "reason", reason);
+	return e;
+}
+
+static int run_json_cmd(cJSON *item, cJSON *results)
+{
+	cJSON *daemon_obj = cJSON_DetachItemFromObjectCaseSensitive(item, "daemon");
+	if (!daemon_obj || !cJSON_IsString(daemon_obj)) {
+		cJSON_AddItemToArray(results, json_error("missing daemon"));
+		cJSON_Delete(daemon_obj);
+		return 1;
+	}
+
+	const char *daemon = daemon_obj->valuestring;
+	if (!is_daemon(daemon)) {
+		cJSON_AddItemToArray(results, json_error("unknown daemon"));
+		cJSON_Delete(daemon_obj);
+		return 1;
+	}
+
+	char *payload = cJSON_PrintUnformatted(item);
+	if (!payload) {
+		cJSON_AddItemToArray(results, json_error("out of memory"));
+		cJSON_Delete(daemon_obj);
+		return 1;
+	}
+
+	char resp[2048];
+	int ret = send_cmd_json(daemon, payload, resp, sizeof(resp));
+	free(payload);
+	cJSON_Delete(daemon_obj);
+
+	cJSON *parsed = cJSON_Parse(resp);
+	cJSON_AddItemToArray(results, parsed ? parsed : cJSON_CreateString(resp));
+	return ret;
+}
+
+static int handle_json_mode(const char *input)
+{
+	cJSON *root = cJSON_Parse(input);
+	if (!root) {
+		fprintf(stderr, "Invalid JSON\n");
+		return 1;
+	}
+
+	cJSON *results = cJSON_CreateArray();
+	int errors = 0;
+
+	if (cJSON_IsArray(root)) {
+		cJSON *item = NULL;
+		cJSON_ArrayForEach(item, root)
+			errors += run_json_cmd(item, results);
+	} else if (cJSON_IsObject(root)) {
+		errors = run_json_cmd(root, results);
+	} else {
+		fprintf(stderr, "JSON must be an object or array\n");
+		cJSON_Delete(root);
+		cJSON_Delete(results);
+		return 1;
+	}
+
+	/* Single command: print response directly; batch: print array */
+	char *s;
+	if (cJSON_GetArraySize(results) == 1 && !cJSON_IsArray(root))
+		s = cJSON_PrintUnformatted(cJSON_GetArrayItem(results, 0));
+	else
+		s = cJSON_PrintUnformatted(results);
+
+	if (s) {
+		printf("%s\n", s);
+		free(s);
+	} else {
+		fprintf(stderr, "Failed to format response\n");
+		errors = 1;
+	}
+
+	cJSON_Delete(root);
+	cJSON_Delete(results);
+	return errors ? 1 : 0;
+}
+
 int main(int argc, char **argv)
 {
 	if (argc < 2) {
@@ -344,6 +446,14 @@ int main(int argc, char **argv)
 		fprintf(stderr, "Raptor Streaming System — raptorctl [%s] built %s\n",
 			rss_build_hash, rss_build_time);
 		return 0;
+	}
+
+	if (strcmp(argv[1], "-j") == 0) {
+		if (argc < 3) {
+			fprintf(stderr, "Usage: raptorctl -j '<json>'\n");
+			return 1;
+		}
+		return handle_json_mode(argv[2]);
 	}
 
 	if (strcmp(argv[1], "status") == 0) {
