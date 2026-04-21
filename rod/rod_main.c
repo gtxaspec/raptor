@@ -1126,7 +1126,8 @@ static int handle_set_element(rod_state_t *st, const char *cmd_json, char *resp,
 
 	int new_font_size = 0;
 	if (rss_json_get_int(cmd_json, "font_size", &new_font_size) == 0 && new_font_size >= 10 &&
-	    new_font_size <= 72 && new_font_size != e->font_size && e->type == ROD_ELEM_TEXT) {
+	    new_font_size <= 72 && new_font_size != e->font_size &&
+	    (e->type == ROD_ELEM_TEXT || e->type == ROD_ELEM_RECEIPT)) {
 		e->font_size = new_font_size;
 		for (int s = 0; s < st->stream_count; s++) {
 			int fs = new_font_size;

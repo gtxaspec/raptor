@@ -1552,10 +1552,11 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 			rvd_stream_deinit(st, video_indices[j]);
 		/* IVS group stays alive (SDK limitation — can't recreate) */
 
-		/* All OSD groups destroyed. Try resizing the pool. */
+		/* Store ROD's requested pool size so rvd_stream_init uses it */
 		if (pool_kb > 0) {
 			uint32_t new_pool = (uint32_t)pool_kb * 1024;
-			RSS_INFO("osd-restart: resizing OSD pool to %u KB", pool_kb);
+			st->osd_pool_override = new_pool;
+			RSS_INFO("osd-restart: pool override %u KB", pool_kb);
 			int ret = RSS_HAL_CALL(st->ops, osd_set_pool_size, st->hal_ctx, new_pool);
 			RSS_INFO("osd-restart: osd_set_pool_size returned %d", ret);
 		}

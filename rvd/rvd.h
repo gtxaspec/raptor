@@ -92,7 +92,8 @@ struct rvd_state {
 	rvd_osd_region_t osd_regions[RVD_MAX_STREAMS][RVD_OSD_MAX_REGIONS];
 	int osd_region_count[RVD_MAX_STREAMS];
 	int osd_retry_counter;
-	pthread_mutex_t osd_lock; /* held during OSD region create/destroy */
+	uint32_t osd_pool_override; /* ROD-requested pool size in bytes, 0 = use default */
+	pthread_mutex_t osd_lock;
 
 	/* Privacy mode (full-frame cover, per-stream) */
 	int privacy_handles[RVD_MAX_STREAMS]; /* HAL region handles, -1 if none */

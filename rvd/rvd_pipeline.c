@@ -337,6 +337,8 @@ int rvd_pipeline_init(rvd_state_t *st)
 		}
 		/* 25% headroom for SDK alignment + metadata */
 		osd_pool = osd_pool * 5 / 4;
+		if (st->osd_pool_override > osd_pool)
+			osd_pool = st->osd_pool_override;
 		osd_pool = (osd_pool + 0xFFFF) & ~0xFFFF; /* align to 64KB */
 		RSS_HAL_CALL(st->ops, osd_set_pool_size, st->hal_ctx, osd_pool);
 		RSS_DEBUG("osd pool: %u KB (font_size=%d)", osd_pool / 1024, font_size);
