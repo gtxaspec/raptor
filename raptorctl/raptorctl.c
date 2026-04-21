@@ -93,6 +93,16 @@ static void jadd_s(cJSON *j, const char *key, const char *val)
 	cJSON_AddStringToObject(j, key, val);
 }
 
+static void jadd_auto(cJSON *j, const char *key, const char *val)
+{
+	char *end;
+	long lv = strtol(val, &end, 0);
+	if (*end == '\0' && end != val)
+		cJSON_AddNumberToObject(j, key, (double)lv);
+	else
+		cJSON_AddStringToObject(j, key, val);
+}
+
 static void jadd_i(cJSON *j, const char *key, const char *val)
 {
 	cJSON_AddNumberToObject(j, key, (double)strtol(val, NULL, 10));
@@ -1187,7 +1197,7 @@ int main(int argc, char **argv)
 			if (!eq)
 				continue;
 			*eq = '\0';
-			jadd_s(j, argv[a], eq + 1);
+			jadd_auto(j, argv[a], eq + 1);
 			*eq = '=';
 		}
 		jstr(j, json, sizeof(json));
@@ -1214,7 +1224,7 @@ int main(int argc, char **argv)
 			if (!eq)
 				continue;
 			*eq = '\0';
-			jadd_s(j, argv[a], eq + 1);
+			jadd_auto(j, argv[a], eq + 1);
 			*eq = '=';
 		}
 		jstr(j, json, sizeof(json));
