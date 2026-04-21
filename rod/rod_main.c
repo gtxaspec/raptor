@@ -1048,8 +1048,6 @@ static int handle_add_element(rod_state_t *st, const char *cmd_json, char *resp,
 		char rvd_resp[256];
 		rss_ctrl_send_command(ROD_RVD_SOCK, fwd, rvd_resp, sizeof(rvd_resp), 1000);
 	}
-	notify_rvd_osd_restart(st);
-
 	RSS_INFO("add-element: %s type=%s template=\"%s\" pos=%s", name, type_str, tmpl, position);
 	return rss_ctrl_resp_ok(resp, resp_size);
 }
