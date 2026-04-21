@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "rod.h"
 
@@ -130,6 +131,10 @@ void rod_remove_element(rod_state_t *st, const char *name)
 		}
 		free(e->image_data);
 		free(e->image_sub_data);
+		if (e->receipt.input_fd >= 0) {
+			close(e->receipt.input_fd);
+			e->receipt.input_fd = -1;
+		}
 		e->active = false;
 		return;
 	}
