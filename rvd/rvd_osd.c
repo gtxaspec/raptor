@@ -173,11 +173,7 @@ static bool create_region(rvd_state_t *st, int s, rvd_osd_region_t *reg)
 	int stream_w = st->streams[s].enc_cfg.width;
 	int stream_h = st->streams[s].enc_cfg.height;
 
-	char pos_key[64];
-	snprintf(pos_key, sizeof(pos_key), "stream%d_%s_pos", s, reg->name);
-	const char *pos_str = rss_config_get_str(st->cfg, "osd", pos_key,
-						 resolve_position(st->cfg, s, reg->name));
-
+	const char *pos_str = resolve_position(st->cfg, s, reg->name);
 	int x, y;
 	rvd_osd_calc_position(stream_w, stream_h, (int)w, (int)h, pos_str, &x, &y);
 
@@ -441,10 +437,7 @@ static void push_region(rvd_state_t *st, int s, rvd_osd_region_t *reg)
 		int sensor = st->streams[s].sensor_idx;
 		int stream_w = st->streams[s].enc_cfg.width;
 		int stream_h = st->streams[s].enc_cfg.height;
-		char pos_key[64];
-		snprintf(pos_key, sizeof(pos_key), "stream%d_%s_pos", s, reg->name);
-		const char *pos_str = rss_config_get_str(st->cfg, "osd", pos_key,
-							 resolve_position(st->cfg, s, reg->name));
+		const char *pos_str = resolve_position(st->cfg, s, reg->name);
 		int x, y;
 		rvd_osd_calc_position(stream_w, stream_h, (int)reg->width, (int)reg->height,
 				      pos_str, &x, &y);
@@ -534,11 +527,7 @@ static void try_open_shm(rvd_state_t *st, int s, rvd_osd_region_t *reg)
 
 				int stream_w = st->streams[s].enc_cfg.width;
 				int stream_h = st->streams[s].enc_cfg.height;
-				char pos_key[64];
-				snprintf(pos_key, sizeof(pos_key), "stream%d_%s_pos", s, reg->name);
-				const char *pos_str =
-					rss_config_get_str(st->cfg, "osd", pos_key,
-							   resolve_position(st->cfg, s, reg->name));
+				const char *pos_str = resolve_position(st->cfg, s, reg->name);
 				int x, y;
 				rvd_osd_calc_position(stream_w, stream_h, (int)new_w, (int)new_h,
 						      pos_str, &x, &y);
@@ -596,10 +585,7 @@ static void try_open_shm(rvd_state_t *st, int s, rvd_osd_region_t *reg)
 			int sensor = st->streams[s].sensor_idx;
 			int stream_w = st->streams[s].enc_cfg.width;
 			int stream_h = st->streams[s].enc_cfg.height;
-			char pos_key[64];
-			snprintf(pos_key, sizeof(pos_key), "stream%d_%s_pos", s, reg->name);
-			const char *pos_str = rss_config_get_str(
-				st->cfg, "osd", pos_key, resolve_position(st->cfg, s, reg->name));
+			const char *pos_str = resolve_position(st->cfg, s, reg->name);
 			int x, y;
 			rvd_osd_calc_position(stream_w, stream_h, (int)reg->width, (int)reg->height,
 					      pos_str, &x, &y);
@@ -856,12 +842,8 @@ push_updates:
 					int sensor = st->streams[s].sensor_idx;
 					int stream_w = st->streams[s].enc_cfg.width;
 					int stream_h = st->streams[s].enc_cfg.height;
-					char pos_key[64];
-					snprintf(pos_key, sizeof(pos_key), "stream%d_%s_pos", s,
-						 reg->name);
-					const char *pos_str = rss_config_get_str(
-						st->cfg, "osd", pos_key,
-						resolve_position(st->cfg, s, reg->name));
+					const char *pos_str =
+						resolve_position(st->cfg, s, reg->name);
 					int x, y;
 					rvd_osd_calc_position(stream_w, stream_h, (int)reg->width,
 							      (int)reg->height, pos_str, &x, &y);
@@ -978,11 +960,7 @@ void *rvd_osd_thread(void *arg)
 				int sensor = st->streams[s].sensor_idx;
 				int stream_w = st->streams[s].enc_cfg.width;
 				int stream_h = st->streams[s].enc_cfg.height;
-				char pos_key[64];
-				snprintf(pos_key, sizeof(pos_key), "stream%d_%s_pos", s, reg->name);
-				const char *pos_str =
-					rss_config_get_str(st->cfg, "osd", pos_key,
-							   resolve_position(st->cfg, s, reg->name));
+				const char *pos_str = resolve_position(st->cfg, s, reg->name);
 				int x, y;
 				rvd_osd_calc_position(stream_w, stream_h, (int)reg->width,
 						      (int)reg->height, pos_str, &x, &y);
