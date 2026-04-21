@@ -323,6 +323,10 @@ int rsd_server_init(rsd_server_t *srv)
 	srv->ring_audio = rss_ring_open("audio");
 	if (srv->ring_audio) {
 		srv->has_audio = true;
+		uint32_t aver;
+		if (!rss_ring_version_ok(srv->ring_audio, &aver))
+			RSS_WARN("audio ring version mismatch: ring=%u expected=%u (rebuild RAD?)",
+				 aver, RSS_RING_VERSION);
 		RSS_INFO("audio ring available");
 	}
 
@@ -338,10 +342,15 @@ int rsd_server_init(rsd_server_t *srv)
 				break;
 		}
 	}
-	if (srv->video[RSD_STREAM_MAIN].ring)
+	if (srv->video[RSD_STREAM_MAIN].ring) {
+		uint32_t vver;
+		if (!rss_ring_version_ok(srv->video[RSD_STREAM_MAIN].ring, &vver))
+			RSS_WARN("main ring version mismatch: ring=%u expected=%u (rebuild RVD?)",
+				 vver, RSS_RING_VERSION);
 		RSS_INFO("stream 0 (main) ring available");
-	else
+	} else {
 		RSS_WARN("main video ring not available (is RVD running?)");
+	}
 	srv->video[RSD_STREAM_MAIN].idx = RSD_STREAM_MAIN;
 	srv->video[RSD_STREAM_MAIN].ring_name = ring_names[RSD_STREAM_MAIN];
 

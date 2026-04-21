@@ -184,6 +184,10 @@ int main(int argc, char **argv)
 		fprintf(stderr, "Cannot open ring '%s' -- not created yet?\n", ring_name);
 		return 1;
 	}
+	uint32_t ring_ver;
+	if (!rss_ring_version_ok(ring, &ring_ver))
+		fprintf(stderr, "WARNING: ring version %u != expected %u (binary/producer mismatch)\n",
+			ring_ver, RSS_RING_VERSION);
 	rss_ring_acquire(ring);
 
 	const rss_ring_header_t *hdr = rss_ring_get_header(ring);

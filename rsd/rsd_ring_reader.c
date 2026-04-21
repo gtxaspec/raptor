@@ -365,6 +365,10 @@ void *rsd_video_reader_thread(void *arg)
 				usleep(200000);
 				continue;
 			}
+			uint32_t ring_ver;
+			if (!rss_ring_version_ok(rctx->ring, &ring_ver))
+				RSS_WARN("video[%d] ring version mismatch: ring=%u expected=%u",
+					 stream_idx, ring_ver, RSS_RING_VERSION);
 			uint32_t max_frame = rss_ring_max_frame_size(rctx->ring);
 			if (rctx->frame_buf_size < max_frame) {
 				uint8_t *new_buf = malloc(max_frame);
@@ -636,6 +640,10 @@ void *rsd_audio_reader_thread(void *arg)
 				usleep(200000);
 				continue;
 			}
+			uint32_t aring_ver;
+			if (!rss_ring_version_ok(srv->ring_audio, &aring_ver))
+				RSS_WARN("audio ring version mismatch: ring=%u expected=%u",
+					 aring_ver, RSS_RING_VERSION);
 			const rss_ring_header_t *ahdr = rss_ring_get_header(srv->ring_audio);
 			audio_codec = ahdr->codec;
 			uint32_t audio_clock = ahdr->fps_num;
