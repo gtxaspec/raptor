@@ -225,6 +225,69 @@ static void get_ring_name(int sensor_idx, const char *type, char *buf, size_t le
 		snprintf(buf, len, "s%d_%s", sensor_idx, type);
 }
 
+/* OSD pool sizing callback — estimates per-element region bytes */
+struct osd_pool_ctx {
+	rss_config_t *cfg;
+	int font_size;
+	int main_w;
+	int main_h;
+	int sub_w;
+	int sub_h;
+	bool has_sub;
+	uint32_t total;
+};
+
+static void osd_pool_cb(const char *section, void *ud)
+{
+	struct osd_pool_ctx *c = ud;
+	const char *dot = strchr(section, '.');
+	if (!dot)
+		return;
+	const char *type = rss_config_get_str(c->cfg, section, "type", "text");
+	int efs = rss_config_get_int(c->cfg, section, "font_size", 0);
+	if (efs <= 0)
+		efs = c->font_size;
+	uint32_t adv = (uint32_t)(efs * 10 / 24);
+	if (adv < 10)
+		adv = 10;
+	uint32_t eh = (uint32_t)(efs * 36 / 24);
+	if (eh < 36)
+		eh = 36;
+
+	if (strcmp(type, "text") == 0) {
+		int mc = rss_config_get_int(c->cfg, section, "max_chars", 20);
+		uint32_t ew = mc * adv;
+		c->total += ew * eh * 4;
+		if (c->has_sub && c->main_w > 0 && c->main_h > 0) {
+			uint32_t sew = ew * c->sub_w / c->main_w;
+			uint32_t seh = eh * c->sub_h / c->main_h;
+			if (seh < 16)
+				seh = 16;
+			c->total += sew * seh * 4;
+		}
+	} else if (strcmp(type, "image") == 0) {
+		int iw = rss_config_get_int(c->cfg, section, "width", 100);
+		int ih = rss_config_get_int(c->cfg, section, "height", 30);
+		c->total += (uint32_t)(iw * ih * 4);
+		if (c->has_sub)
+			c->total += (uint32_t)(iw * ih * 4);
+	} else if (strcmp(type, "receipt") == 0) {
+		int ml = rss_config_get_int(c->cfg, section, "max_lines", 20);
+		int mll = rss_config_get_int(c->cfg, section, "max_line_length", 80);
+		uint32_t rw = mll * adv;
+		uint32_t rh = ml * eh;
+		c->total += rw * rh * 4;
+		if (c->has_sub && c->main_w > 0 && c->main_h > 0) {
+			uint32_t srw = rw * c->sub_w / c->main_w;
+			uint32_t srh = rh * c->sub_h / c->main_h;
+			c->total += srw * srh * 4;
+		}
+	} else if (strcmp(type, "overlay") == 0) {
+		if (c->has_sub)
+			c->total += (uint32_t)(c->sub_w * c->sub_h * 4);
+	}
+}
+
 int rvd_pipeline_init(rvd_state_t *st)
 {
 	rss_config_t *cfg = st->cfg;
@@ -318,82 +381,18 @@ int rvd_pipeline_init(rvd_state_t *st)
 		int sub_h = rss_config_get_int(cfg, "stream1", "height", 360);
 		bool has_sub = rss_config_get_bool(cfg, "stream1", "enabled", true);
 
-		/* Base text height from font size */
-		uint32_t th = (uint32_t)(36 * font_size / 24);
-		if (th < 36)
-			th = 36;
-		uint32_t sub_th = th * sub_h / main_h;
-		if (sub_th < 20)
-			sub_th = 20;
-
-		/* Estimate per-element region size from config sections */
 		uint32_t osd_pool = 0;
-		struct pool_ctx {
-			rss_config_t *cfg;
-			int font_size;
-			int main_w;
-			int main_h;
-			int sub_w;
-			int sub_h;
-			uint32_t th;
-			uint32_t sub_th;
-			bool has_sub;
-			uint32_t total;
-		} pctx = {cfg, font_size, main_w, main_h, sub_w, sub_h, th, sub_th, has_sub, 0};
-
-		void pool_cb(const char *section, void *ud)
-		{
-			struct pool_ctx *c = ud;
-			const char *dot = strchr(section, '.');
-			if (!dot)
-				return;
-			const char *type = rss_config_get_str(c->cfg, section, "type", "text");
-			int efs = rss_config_get_int(c->cfg, section, "font_size", 0);
-			if (efs <= 0)
-				efs = c->font_size;
-			uint32_t adv = (uint32_t)(efs * 10 / 24);
-			if (adv < 10)
-				adv = 10;
-			uint32_t eh = (uint32_t)(efs * 36 / 24);
-			if (eh < 36)
-				eh = 36;
-
-			if (strcmp(type, "text") == 0) {
-				int mc = rss_config_get_int(c->cfg, section, "max_chars", 20);
-				uint32_t ew = mc * adv;
-				c->total += ew * eh * 4;
-				if (c->has_sub) {
-					uint32_t sew = ew * c->sub_w / c->main_w;
-					uint32_t seh = eh * c->sub_h / c->main_h;
-					if (seh < 16)
-						seh = 16;
-					c->total += sew * seh * 4;
-				}
-			} else if (strcmp(type, "image") == 0) {
-				int iw = rss_config_get_int(c->cfg, section, "width", 100);
-				int ih = rss_config_get_int(c->cfg, section, "height", 30);
-				c->total += (uint32_t)(iw * ih * 4);
-				if (c->has_sub)
-					c->total += (uint32_t)(iw * ih * 4);
-			} else if (strcmp(type, "receipt") == 0) {
-				int ml = rss_config_get_int(c->cfg, section, "max_lines", 20);
-				int mll =
-					rss_config_get_int(c->cfg, section, "max_line_length", 80);
-				uint32_t rw = mll * adv;
-				uint32_t rh = ml * eh;
-				c->total += rw * rh * 4;
-				if (c->has_sub) {
-					uint32_t srw = rw * c->sub_w / c->main_w;
-					uint32_t srh = rh * c->sub_h / c->main_h;
-					c->total += srw * srh * 4;
-				}
-			} else if (strcmp(type, "overlay") == 0) {
-				if (c->has_sub)
-					c->total += (uint32_t)(c->sub_w * c->sub_h * 4);
-			}
-		}
-
-		rss_config_foreach_section(cfg, "osd.", pool_cb, &pctx);
+		struct osd_pool_ctx pctx = {
+			.cfg = cfg,
+			.font_size = font_size,
+			.main_w = main_w,
+			.main_h = main_h,
+			.sub_w = sub_w,
+			.sub_h = sub_h,
+			.has_sub = has_sub,
+			.total = 0,
+		};
+		rss_config_foreach_section(cfg, "osd.", osd_pool_cb, &pctx);
 		osd_pool = pctx.total;
 
 		/* Privacy cover regions (no bitmap, just color — negligible) */

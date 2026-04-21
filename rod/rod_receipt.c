@@ -138,17 +138,13 @@ void rod_render_receipt(rod_state_t *st, rod_element_t *e, int s)
 		if (!line[0])
 			continue;
 
-		/* Render into a temporary row region within the buffer.
-		 * rod_draw_text clears its target, so we render line-by-line
+		/* rod_draw_text clears its target, so render line-by-line
 		 * into offset slices of the main buffer. */
 		uint8_t *row_buf = buf + y_offset * bw * 4;
 		int row_h = line_h;
 		if (y_offset + row_h > (int)bh)
 			row_h = (int)bh - y_offset;
 
-		/* Use rod_draw_text's rendering but we need to avoid its memset
-		 * clearing the entire region. Instead, draw text directly using
-		 * the draw_string path via rod_draw_text on a line-sized slice. */
 		rod_draw_text(st, s, es->font_idx, row_buf, bw, row_h, line, e->align, col, scol,
 			      ssz);
 

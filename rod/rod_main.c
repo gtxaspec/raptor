@@ -31,7 +31,7 @@ static void sanitize_text(char *s)
 {
 	for (int i = 0; s[i]; i++) {
 		unsigned char c = (unsigned char)s[i];
-		if (c < 0x20 && c != '\0')
+		if (c < 0x20)
 			s[i] = ' ';
 		if (c > 0x7E)
 			s[i] = '?';
@@ -465,6 +465,8 @@ static void load_osd_section(const char *section, void *userdata)
 		} else if (strcmp(source, "uart") == 0) {
 			const char *dev = rss_config_get_str(cfg, section, "device", "");
 			if (dev[0]) {
+				rss_strlcpy(e->receipt.input_path, dev,
+					    sizeof(e->receipt.input_path));
 				int fd = open(dev, O_RDONLY | O_NOCTTY | O_NONBLOCK);
 				if (fd >= 0) {
 					e->receipt.input_fd = fd;
@@ -1368,6 +1370,20 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 
 /* ── Entry point ── */
 
+static void reopen_receipt_input(rod_element_t *e, int epoll_fd)
+{
+	if (!e->receipt.input_path[0])
+		return;
+	int nfd = open(e->receipt.input_path, O_RDONLY | O_NONBLOCK);
+	if (nfd < 0)
+		return;
+	e->receipt.input_fd = nfd;
+	if (epoll_fd >= 0) {
+		struct epoll_event ev = {.events = EPOLLIN, .data.fd = nfd};
+		epoll_ctl(epoll_fd, EPOLL_CTL_ADD, nfd, &ev);
+	}
+}
+
 int main(int argc, char **argv)
 {
 	rss_daemon_ctx_t ctx;
@@ -1524,27 +1540,7 @@ int main(int argc, char **argv)
 									  fd, NULL);
 								close(fd);
 								re->receipt.input_fd = -1;
-								if (re->receipt.input_path[0]) {
-									int nfd = open(
-										re->receipt
-											.input_path,
-										O_RDONLY |
-											O_NONBLOCK);
-									if (nfd >= 0) {
-										re->receipt
-											.input_fd =
-											nfd;
-										struct epoll_event nev =
-											{.events =
-												 EPOLLIN,
-											 .data.fd =
-												 nfd};
-										epoll_ctl(
-											epoll_fd,
-											EPOLL_CTL_ADD,
-											nfd, &nev);
-									}
-								}
+								reopen_receipt_input(re, epoll_fd);
 							}
 							break;
 						}
