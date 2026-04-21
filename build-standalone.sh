@@ -14,6 +14,7 @@
 #   --no-aac       Disable AAC codec
 #   --no-opus      Disable Opus codec
 #   --no-mp3       Disable MP3 codec
+#   --no-audio-effects  Disable audio effects (NS/HPF/AGC)
 #   --clean        Clean all build artifacts
 #   --deps-only    Only build dependencies, not raptor
 #   --libc=TYPE    uclibc (default), musl, or glibc
@@ -116,6 +117,7 @@ OPT_ALT=0
 OPT_AAC=1
 OPT_OPUS=1
 OPT_MP3=1
+OPT_AUDIO_EFFECTS=1
 OPT_CLEAN=0
 OPT_CLEAN_ALL=0
 OPT_DEPS_ONLY=0
@@ -133,6 +135,7 @@ usage() {
     echo "  --no-aac       Disable AAC codec"
     echo "  --no-opus      Disable Opus codec"
     echo "  --no-mp3       Disable MP3 codec"
+    echo "  --no-audio-effects  Disable audio effects (NS/HPF/AGC)"
     echo "  --static       Statically link optional deps (fewer .so files needed)"
     echo "  --clean        Clean build artifacts (keep downloaded deps)"
     echo "  --clean-all    Remove everything (.deps/ + build/)"
@@ -145,11 +148,12 @@ usage() {
 for arg in "$@"; do
     case "$arg" in
         t10|t20|t21|t23|t30|t31|t32|t40|t41|a1) PLATFORM="$arg" ;;
-        --no-tls)    OPT_TLS=0 ;;
+        --no-tls)    OPT_TLS= ;;
         --alt)       OPT_ALT=1 ;;
-        --no-aac)    OPT_AAC=0 ;;
-        --no-opus)   OPT_OPUS=0 ;;
-        --no-mp3)    OPT_MP3=0 ;;
+        --no-aac)    OPT_AAC= ;;
+        --no-opus)   OPT_OPUS= ;;
+        --no-mp3)    OPT_MP3= ;;
+        --no-audio-effects) OPT_AUDIO_EFFECTS= ;;
         --static)    OPT_STATIC=1 ;;
         --local)     OPT_LOCAL=1 ;;
         --clean)     OPT_CLEAN=1 ;;
@@ -679,7 +683,7 @@ build_compy() {
 
 echo "=== Raptor standalone build ==="
 echo "Platform:  $PLATFORM_UPPER (SDK $SDK_VERSION)"
-echo "Features:  TLS=$OPT_TLS ALT=$OPT_ALT AAC=$OPT_AAC OPUS=$OPT_OPUS MP3=$OPT_MP3 STATIC=$OPT_STATIC LOCAL=$OPT_LOCAL"
+echo "Features:  TLS=$OPT_TLS ALT=$OPT_ALT AAC=$OPT_AAC OPUS=$OPT_OPUS MP3=$OPT_MP3 EFFECTS=$OPT_AUDIO_EFFECTS STATIC=$OPT_STATIC LOCAL=$OPT_LOCAL"
 echo "Deps dir:  $DEPS_DIR"
 echo ""
 
@@ -777,6 +781,7 @@ make -j"$JOBS" \
     ${OPT_AAC:+AAC=1} \
     ${OPT_OPUS:+OPUS=1} \
     ${OPT_MP3:+MP3=1} \
+    ${OPT_AUDIO_EFFECTS:+AUDIO_EFFECTS=1} \
     $TARGETS
 
 # Collect binaries
