@@ -243,41 +243,6 @@ static int rsd_sendq_push_video(rsd_sendq_t *q, const uint8_t *data, uint32_t le
 	return dropped ? RSD_SENDQ_DROPPED : RSD_SENDQ_OK;
 }
 
-/* Push an audio frame onto the client's sendq (small malloc copy). */
-static int rsd_sendq_push_audio(rsd_sendq_t *q, const uint8_t *data, uint32_t len, uint32_t rtp_ts,
-				uint32_t codec)
-{
-	pthread_mutex_lock(&q->lock);
-	if (q->shutdown) {
-		pthread_mutex_unlock(&q->lock);
-		return -1;
-	}
-
-	if (q->count >= RSD_SENDQ_SLOTS)
-		sendq_flush_locked(q);
-
-	uint8_t *copy = malloc(len);
-	if (!copy) {
-		pthread_mutex_unlock(&q->lock);
-		return -1;
-	}
-	memcpy(copy, data, len);
-
-	rsd_sendq_entry_t *slot = &q->entries[q->head];
-	slot->data = copy;
-	slot->len = len;
-	slot->rtp_ts = rtp_ts;
-	slot->type = RSD_FRAME_AUDIO;
-	slot->codec = codec;
-
-	q->head = (q->head + 1) % RSD_SENDQ_SLOTS;
-	q->count++;
-
-	pthread_cond_signal(&q->cond);
-	pthread_mutex_unlock(&q->lock);
-	return RSD_SENDQ_OK;
-}
-
 /* Per-client send thread — drains sendq through compy (blocking I/O) */
 void *rsd_client_send_thread(void *arg)
 {
@@ -667,17 +632,26 @@ void *rsd_audio_reader_thread(void *arg)
 
 			srv->audio_read_seq = read_seq;
 
-			/* Derive RTP timestamp from wall-clock (µs since
-			 * IMP_System_Init, CLOCK_MONOTONIC_RAW). */
+			/* Synthetic audio timestamps at exact frame cadence,
+			 * anchored to CLOCK_MONOTONIC — the unified timebase
+			 * shared by video RTP and RTCP NTP. */
+			int64_t now_us = rss_timestamp_us();
 			if (audio_ts_epoch == 0)
-				audio_ts_epoch = meta.timestamp;
-			uint32_t rtp_ts = (uint32_t)((uint64_t)(meta.timestamp - audio_ts_epoch) *
-						     rtp_clock / 1000000);
-
-			/* Enforce monotonic audio timestamps with one frame
-			 * duration as the correction step (1024 samples for AAC). */
-			if (has_last_audio_rtp_ts && (int32_t)(rtp_ts - last_audio_rtp_ts) <= 0)
-				rtp_ts = last_audio_rtp_ts + 1024;
+				audio_ts_epoch = now_us;
+			uint32_t frame_samples;
+			switch (audio_codec) {
+			case RSD_CODEC_AAC:  frame_samples = 1024; break;
+			case RSD_CODEC_OPUS: frame_samples = 960;  break;
+			case RSD_CODEC_L16:  frame_samples = length / 2; break;
+			default:             frame_samples = length; break;
+			}
+			uint32_t rtp_ts;
+			if (!has_last_audio_rtp_ts) {
+				rtp_ts = (uint32_t)((uint64_t)(now_us - audio_ts_epoch) *
+						    rtp_clock / 1000000);
+			} else {
+				rtp_ts = last_audio_rtp_ts + frame_samples;
+			}
 			last_audio_rtp_ts = rtp_ts;
 			has_last_audio_rtp_ts = true;
 
@@ -699,8 +673,9 @@ void *rsd_audio_reader_thread(void *arg)
 					c->audio_ts_base_set = true;
 				}
 				uint32_t client_ts = rtp_ts - c->audio_ts_offset;
-				rsd_sendq_push_audio(&c->sendq, audio_buf, length, client_ts,
-						     audio_codec);
+				pthread_mutex_lock(&c->write_lock);
+				rsd_send_audio_frame(c, audio_codec, audio_buf, length, client_ts);
+				pthread_mutex_unlock(&c->write_lock);
 			}
 			pthread_mutex_unlock(&srv->clients_lock);
 		}

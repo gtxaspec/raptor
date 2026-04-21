@@ -790,13 +790,12 @@ int main(int argc, char **argv)
 		if (samples > max_samples)
 			samples = max_samples;
 
-		/* T20 SDK doesn't populate IMPAudioFrame.timeStamp —
-		 * synthesize from sample count when the SDK returns 0. */
-		int64_t ts = frame.timestamp;
-		if (ts <= 0) {
-			ts = synth_audio_ts;
-			synth_audio_ts += (int64_t)samples * 1000000 / ctrl_ctx.sample_rate;
-		}
+		/* Always use synthetic timestamps from IMP_System_GetTimeStamp.
+		 * SDK audio timestamps use a different clock than the encoder
+		 * on some SoCs (T31), causing A-V sync drift. Synthetic
+		 * timestamps share the encoder's clock source. */
+		int64_t ts = synth_audio_ts;
+		synth_audio_ts += (int64_t)samples * 1000000 / ctrl_ctx.sample_rate;
 
 		const int16_t *pcm = frame.data;
 		int out_len;

@@ -237,6 +237,7 @@ static void accept_client(rsd_server_t *srv)
 	 * so error paths don't need to tear down a running thread. */
 	pthread_mutex_init(&client->write_lock, NULL);
 	if (rsd_sendq_init(&client->sendq) != 0) {
+		pthread_mutex_destroy(&client->write_lock);
 		pthread_mutex_unlock(&srv->clients_lock);
 		epoll_ctl(srv->epoll_fd, EPOLL_CTL_DEL, fd, NULL);
 #ifdef COMPY_HAS_TLS

@@ -334,11 +334,11 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 
 	COMPY_SDP_DESCRIBE(
 		ret, sdp_w, (COMPY_SDP_VERSION, "0"),
-		(COMPY_SDP_ORIGIN, "Raptor %lld 1 IN IP4 0.0.0.0", (long long)rss_timestamp_us()),
+		(COMPY_SDP_ORIGIN, "- 0 0 IN IP4 0.0.0.0"),
 		(COMPY_SDP_SESSION_NAME, "%s", self->srv->session_name),
 		(COMPY_SDP_CONNECTION, "IN IP4 0.0.0.0"), (COMPY_SDP_TIME, "0 0"),
-		(COMPY_SDP_ATTR, "tool:Raptor RSS"), (COMPY_SDP_ATTR, "control:*"),
-		(COMPY_SDP_ATTR, "range:npt=now-"));
+		(COMPY_SDP_ATTR, "tool:Raptor RSS"), (COMPY_SDP_ATTR, "type:broadcast"),
+		(COMPY_SDP_ATTR, "control:*"), (COMPY_SDP_ATTR, "range:npt=now-"));
 
 	if (self->srv->session_info[0])
 		COMPY_SDP_DESCRIBE(ret, sdp_w, (COMPY_SDP_INFO, "%s", self->srv->session_info));
@@ -732,8 +732,9 @@ static void rsd_client_t_play(VSelf, Compy_Context *ctx, const Compy_Request *re
 			compy_header(ctx, COMPY_HEADER_RTP_INFO, "%s", rtp_info);
 	}
 
-	/* Range for live stream (RFC 2326 Section 12.29) */
-	compy_header(ctx, COMPY_HEADER_RANGE, "npt=now-");
+	/* Range for live stream — use npt=0.000- (same as live555) so
+	 * clients compute stream position from the RTP-Info rtptime. */
+	compy_header(ctx, COMPY_HEADER_RANGE, "npt=0.000-");
 	compy_header(ctx, COMPY_HEADER_SESSION, "%" PRIu64, self->session_id);
 	compy_respond_ok(ctx);
 
