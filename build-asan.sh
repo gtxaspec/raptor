@@ -240,7 +240,8 @@ if [ ! -f "$OUT/schrift.o" ]; then
 fi
 $CC $CFLAGS -I"$SCHRIFT_DIR" -c "$RAPTOR_DIR/rod/rod_main.c" -o "$OUT/rod_main.o"
 $CC $CFLAGS -I"$SCHRIFT_DIR" -c "$RAPTOR_DIR/rod/rod_render.c" -o "$OUT/rod_render.o"
-$CC -o "$OUT/rod" "$OUT/rod_main.o" "$OUT/rod_render.o" "$OUT/schrift.o" $LIBS -lm $LDFLAGS
+$CC $CFLAGS -I"$SCHRIFT_DIR" -c "$RAPTOR_DIR/rod/rod_receipt.c" -o "$OUT/rod_receipt.o"
+$CC -o "$OUT/rod" "$OUT/rod_main.o" "$OUT/rod_render.o" "$OUT/rod_receipt.o" "$OUT/schrift.o" $LIBS -lm $LDFLAGS
 echo "  -> rod"
 
 echo "=== RMR ==="

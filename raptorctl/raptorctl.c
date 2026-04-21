@@ -260,6 +260,8 @@ const struct help_entry help_entries[] = {
 	{"rod", "show-element <name>                 Show element"},
 	{"rod", "hide-element <name>                 Hide element"},
 	{"rod", "set-var <name> <value>              Set template variable"},
+	{"rod", "receipt [name] <text>               Append receipt line"},
+	{"rod", "receipt-clear [name]                Clear receipt display"},
 	{"rod", "set-position <elem> <pos>           Move element (named or x,y)"},
 	{"rod", "set-font-size <10-72>               Global font size"},
 	{"rod", "set-font-color <0xAARRGGBB>         Global text color"},
@@ -1240,6 +1242,26 @@ int main(int argc, char **argv)
 		}
 		cJSON *j = jcmd(cmd);
 		jadd_s(j, "name", argv[3]);
+		jstr(j, json, sizeof(json));
+
+	} else if (strcmp(cmd, "receipt") == 0) {
+		if (argc < 4) {
+			fprintf(stderr, "Usage: raptorctl %s receipt [name] <text>\n", daemon);
+			return 1;
+		}
+		cJSON *j = jcmd("receipt");
+		if (argc >= 5) {
+			jadd_s(j, "name", argv[3]);
+			jadd_s(j, "text", argv[4]);
+		} else {
+			jadd_s(j, "text", argv[3]);
+		}
+		jstr(j, json, sizeof(json));
+
+	} else if (strcmp(cmd, "receipt-clear") == 0) {
+		cJSON *j = jcmd("receipt-clear");
+		if (argc >= 4)
+			jadd_s(j, "name", argv[3]);
 		jstr(j, json, sizeof(json));
 
 	} else if (strcmp(cmd, "set-var") == 0) {

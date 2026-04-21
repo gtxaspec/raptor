@@ -18,6 +18,8 @@
 #include <unistd.h>
 #include <time.h>
 #include <sys/epoll.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <ifaddrs.h>
 #include <net/if.h>
 #include <netinet/in.h>
@@ -406,6 +408,8 @@ static void load_osd_section(const char *section, void *userdata)
 		type = ROD_ELEM_IMAGE;
 	else if (strcmp(type_str, "overlay") == 0)
 		type = ROD_ELEM_OVERLAY;
+	else if (strcmp(type_str, "receipt") == 0)
+		type = ROD_ELEM_RECEIPT;
 
 	int align = parse_align(align_str);
 	rod_update_mode_t update = ROD_UPDATE_TICK;
@@ -429,6 +433,48 @@ static void load_osd_section(const char *section, void *userdata)
 			rss_strlcpy(e->image_path, path, sizeof(e->image_path));
 		e->image_w = rss_config_get_int(cfg, section, "width", 0);
 		e->image_h = rss_config_get_int(cfg, section, "height", 0);
+	}
+
+	if (type == ROD_ELEM_RECEIPT) {
+		e->receipt.max_lines = rss_config_get_int(cfg, section, "max_lines", 20);
+		if (e->receipt.max_lines > ROD_RECEIPT_MAX_LINES)
+			e->receipt.max_lines = ROD_RECEIPT_MAX_LINES;
+		e->receipt.max_line_len = rss_config_get_int(cfg, section, "max_line_length", 80);
+		if (e->receipt.max_line_len > ROD_RECEIPT_MAX_LINE)
+			e->receipt.max_line_len = ROD_RECEIPT_MAX_LINE;
+		e->receipt.accum_timeout = rss_config_get_int(cfg, section, "timeout", 0);
+		e->receipt.bg_color =
+			parse_color(rss_config_get_str(cfg, section, "bg_color", "0x80000000"));
+		e->receipt.input_fd = -1;
+		const char *source = rss_config_get_str(cfg, section, "source", "");
+		if (strcmp(source, "fifo") == 0) {
+			const char *dev = rss_config_get_str(cfg, section, "device", "");
+			if (dev[0]) {
+				rss_strlcpy(e->receipt.input_path, dev,
+					    sizeof(e->receipt.input_path));
+				mkfifo(dev, 0666);
+				int fd = open(dev, O_RDONLY | O_NONBLOCK);
+				if (fd >= 0) {
+					e->receipt.input_fd = fd;
+					RSS_INFO("receipt '%s': opened FIFO %s", name, dev);
+				} else {
+					RSS_WARN("receipt '%s': failed to open FIFO %s: %s", name,
+						 dev, strerror(errno));
+				}
+			}
+		} else if (strcmp(source, "uart") == 0) {
+			const char *dev = rss_config_get_str(cfg, section, "device", "");
+			if (dev[0]) {
+				int fd = open(dev, O_RDONLY | O_NOCTTY | O_NONBLOCK);
+				if (fd >= 0) {
+					e->receipt.input_fd = fd;
+					RSS_INFO("receipt '%s': opened UART %s", name, dev);
+				} else {
+					RSS_WARN("receipt '%s': failed to open %s: %s", name, dev,
+						 strerror(errno));
+				}
+			}
+		}
 	}
 
 	int stroke = rss_config_get_int(cfg, section, "stroke_size", -1);
@@ -513,6 +559,17 @@ static void create_elem_shm(rod_state_t *st, rod_element_t *e, int s)
 		}
 		if (w == 0 || h == 0)
 			return;
+	} else if (e->type == ROD_ELEM_RECEIPT) {
+		if (e->streams[s].font_idx < 0)
+			return;
+		rod_font_t *f = &st->fonts[s][e->streams[s].font_idx];
+		int adv = f->max_text_width / 24;
+		if (adv < 10)
+			adv = 10;
+		int max_ll = e->receipt.max_line_len > 0 ? e->receipt.max_line_len : 80;
+		w = max_ll * adv;
+		int max_ln = e->receipt.max_lines > 0 ? e->receipt.max_lines : 20;
+		h = max_ln * f->text_height;
 	} else if (e->type == ROD_ELEM_OVERLAY) {
 		w = st->stream_w[s];
 		h = st->stream_h[s];
@@ -692,6 +749,22 @@ static void render_tick(rod_state_t *st)
 				if (e->streams[s].needs_update)
 					render_image_element(st, e, s);
 			}
+		} else if (e->type == ROD_ELEM_RECEIPT) {
+			if (e->receipt.accum_timeout > 0 && e->receipt.accum_pos > 0 &&
+			    e->receipt.accum_last_byte_ts > 0) {
+				int64_t now = rss_timestamp_us();
+				int64_t timeout_us = (int64_t)e->receipt.accum_timeout * 1000000;
+				if (now - e->receipt.accum_last_byte_ts >= timeout_us) {
+					e->receipt.accum[e->receipt.accum_pos] = '\0';
+					rod_receipt_add_line(e, e->receipt.accum);
+					e->receipt.accum_pos = 0;
+				}
+			}
+			for (int s = 0; s < st->stream_count; s++) {
+				if (e->sub_streams_only && s == 0)
+					continue;
+				rod_render_receipt(st, e, s);
+			}
 		}
 		/* OVERLAY handled separately at different cadence */
 	}
@@ -834,7 +907,7 @@ static int handle_font_size_change(rod_state_t *st, const char *cmd_json, char *
 
 static int handle_elements_list(rod_state_t *st, char *resp, int resp_size)
 {
-	static const char *type_names[] = {"text", "image", "overlay"};
+	static const char *type_names[] = {"text", "image", "overlay", "receipt"};
 
 	cJSON *r = cJSON_CreateObject();
 	if (!r)
@@ -887,6 +960,8 @@ static int handle_add_element(rod_state_t *st, const char *cmd_json, char *resp,
 		type = ROD_ELEM_IMAGE;
 	else if (strcmp(type_str, "overlay") == 0)
 		type = ROD_ELEM_OVERLAY;
+	else if (strcmp(type_str, "receipt") == 0)
+		type = ROD_ELEM_RECEIPT;
 
 	int ret = rod_add_element(st, name, type, tmpl, position, align, font_size, max_chars,
 				  ROD_UPDATE_TICK);
@@ -1075,6 +1150,55 @@ static int handle_set_var(rod_state_t *st, const char *cmd_json, char *resp, int
 	return rss_ctrl_resp_ok(resp, resp_size);
 }
 
+static int handle_receipt(rod_state_t *st, const char *cmd_json, char *resp, int resp_size)
+{
+	char name[ROD_ELEM_NAME_LEN] = "";
+	char text[ROD_RECEIPT_MAX_LINE + 1] = "";
+	rss_json_get_str(cmd_json, "name", name, sizeof(name));
+	rss_json_get_str(cmd_json, "text", text, sizeof(text));
+
+	rod_element_t *e = NULL;
+	if (name[0]) {
+		e = rod_find_element(st, name);
+	} else {
+		for (int i = 0; i < st->elem_count; i++) {
+			if (st->elements[i].active && st->elements[i].type == ROD_ELEM_RECEIPT) {
+				e = &st->elements[i];
+				break;
+			}
+		}
+	}
+	if (!e || e->type != ROD_ELEM_RECEIPT)
+		return rss_ctrl_resp_error(resp, resp_size, "no receipt element");
+
+	if (text[0])
+		rod_receipt_add_line(e, text);
+	return rss_ctrl_resp_ok(resp, resp_size);
+}
+
+static int handle_receipt_clear(rod_state_t *st, const char *cmd_json, char *resp, int resp_size)
+{
+	char name[ROD_ELEM_NAME_LEN] = "";
+	rss_json_get_str(cmd_json, "name", name, sizeof(name));
+
+	rod_element_t *e = NULL;
+	if (name[0]) {
+		e = rod_find_element(st, name);
+	} else {
+		for (int i = 0; i < st->elem_count; i++) {
+			if (st->elements[i].active && st->elements[i].type == ROD_ELEM_RECEIPT) {
+				e = &st->elements[i];
+				break;
+			}
+		}
+	}
+	if (!e || e->type != ROD_ELEM_RECEIPT)
+		return rss_ctrl_resp_error(resp, resp_size, "no receipt element");
+
+	rod_receipt_clear(e);
+	return rss_ctrl_resp_ok(resp, resp_size);
+}
+
 static int handle_show_hide(rod_state_t *st, const char *cmd_json, char *resp, int resp_size,
 			    bool show)
 {
@@ -1157,6 +1281,12 @@ static int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 
 	if (strcmp(cmd, "set-var") == 0)
 		return handle_set_var(st, cmd_json, resp_buf, resp_buf_size);
+
+	if (strcmp(cmd, "receipt") == 0)
+		return handle_receipt(st, cmd_json, resp_buf, resp_buf_size);
+
+	if (strcmp(cmd, "receipt-clear") == 0)
+		return handle_receipt_clear(st, cmd_json, resp_buf, resp_buf_size);
 
 	if (strcmp(cmd, "show-element") == 0)
 		return handle_show_hide(st, cmd_json, resp_buf, resp_buf_size, true);
@@ -1299,14 +1429,22 @@ int main(int argc, char **argv)
 	rss_mkdir_p("/var/run/rss");
 	st.ctrl = rss_ctrl_listen("/var/run/rss/rod.sock");
 
-	int epoll_fd = -1;
+	int epoll_fd = epoll_create1(0);
 	int ctrl_fd = st.ctrl ? rss_ctrl_get_fd(st.ctrl) : -1;
-	if (ctrl_fd >= 0) {
-		epoll_fd = epoll_create1(0);
-		if (epoll_fd >= 0) {
-			struct epoll_event ev = {.events = EPOLLIN, .data.fd = ctrl_fd};
-			if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, ctrl_fd, &ev) < 0)
-				RSS_ERROR("epoll_ctl add ctrl_fd: %s", strerror(errno));
+	if (epoll_fd >= 0 && ctrl_fd >= 0) {
+		struct epoll_event ev = {.events = EPOLLIN, .data.fd = ctrl_fd};
+		if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, ctrl_fd, &ev) < 0)
+			RSS_ERROR("epoll_ctl add ctrl_fd: %s", strerror(errno));
+	}
+
+	/* Register receipt input fds with epoll */
+	for (int i = 0; i < st.elem_count; i++) {
+		rod_element_t *e = &st.elements[i];
+		if (e->active && e->type == ROD_ELEM_RECEIPT && e->receipt.input_fd >= 0 &&
+		    epoll_fd >= 0) {
+			struct epoll_event ev = {.events = EPOLLIN, .data.fd = e->receipt.input_fd};
+			if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, e->receipt.input_fd, &ev) < 0)
+				RSS_ERROR("epoll_ctl add receipt fd: %s", strerror(errno));
 		}
 	}
 
@@ -1330,10 +1468,55 @@ int main(int argc, char **argv)
 		}
 
 		if (epoll_fd >= 0) {
-			struct epoll_event ev;
-			int n = epoll_wait(epoll_fd, &ev, 1, 100);
-			if (n > 0 && st.ctrl)
-				rss_ctrl_accept_and_handle(st.ctrl, rod_ctrl_handler, &st);
+			struct epoll_event evs[4];
+			int n = epoll_wait(epoll_fd, evs, 4, 100);
+			for (int ei = 0; ei < n; ei++) {
+				int fd = evs[ei].data.fd;
+				if (fd == ctrl_fd && st.ctrl) {
+					rss_ctrl_accept_and_handle(st.ctrl, rod_ctrl_handler, &st);
+				} else {
+					/* Receipt input fd */
+					for (int ri = 0; ri < st.elem_count; ri++) {
+						rod_element_t *re = &st.elements[ri];
+						if (re->active && re->type == ROD_ELEM_RECEIPT &&
+						    re->receipt.input_fd == fd) {
+							char rbuf[256];
+							int rn = read(fd, rbuf, sizeof(rbuf));
+							if (rn > 0) {
+								rod_receipt_feed_bytes(&st, re,
+										       rbuf, rn);
+							} else if (rn == 0) {
+								epoll_ctl(epoll_fd, EPOLL_CTL_DEL,
+									  fd, NULL);
+								close(fd);
+								re->receipt.input_fd = -1;
+								if (re->receipt.input_path[0]) {
+									int nfd = open(
+										re->receipt
+											.input_path,
+										O_RDONLY |
+											O_NONBLOCK);
+									if (nfd >= 0) {
+										re->receipt
+											.input_fd =
+											nfd;
+										struct epoll_event nev =
+											{.events =
+												 EPOLLIN,
+											 .data.fd =
+												 nfd};
+										epoll_ctl(
+											epoll_fd,
+											EPOLL_CTL_ADD,
+											nfd, &nev);
+									}
+								}
+							}
+							break;
+						}
+					}
+				}
+			}
 		} else {
 			usleep(100000);
 		}
@@ -1356,6 +1539,8 @@ int main(int argc, char **argv)
 		}
 		free(e->image_data);
 		free(e->image_sub_data);
+		if (e->receipt.input_fd >= 0)
+			close(e->receipt.input_fd);
 	}
 
 cleanup:

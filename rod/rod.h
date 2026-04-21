@@ -15,20 +15,23 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define ROD_RVD_SOCK	     "/var/run/rss/rvd.sock"
-#define ROD_MAX_STREAMS	     6 /* up to 3 sensors x 2 (main+sub) */
-#define ROD_MAX_ELEMENTS     16
-#define ROD_ELEM_NAME_LEN    32
-#define ROD_GLYPH_CACHE_SIZE 95 /* ASCII 0x20-0x7E */
-#define ROD_MAX_FONTS	     8	/* font context pool per stream */
-#define ROD_MAX_VARS	     16
-#define ROD_TMPL_LEN	     256
-#define ROD_EXPANDED_LEN     256
+#define ROD_RVD_SOCK	      "/var/run/rss/rvd.sock"
+#define ROD_MAX_STREAMS	      6 /* up to 3 sensors x 2 (main+sub) */
+#define ROD_MAX_ELEMENTS      16
+#define ROD_ELEM_NAME_LEN     32
+#define ROD_GLYPH_CACHE_SIZE  95 /* ASCII 0x20-0x7E */
+#define ROD_MAX_FONTS	      8	 /* font context pool per stream */
+#define ROD_MAX_VARS	      16
+#define ROD_TMPL_LEN	      256
+#define ROD_EXPANDED_LEN      256
+#define ROD_RECEIPT_MAX_LINES 32
+#define ROD_RECEIPT_MAX_LINE  80
 
 typedef enum {
 	ROD_ELEM_TEXT,
 	ROD_ELEM_IMAGE,
 	ROD_ELEM_OVERLAY,
+	ROD_ELEM_RECEIPT,
 } rod_elem_type_t;
 
 typedef enum {
@@ -99,6 +102,25 @@ typedef struct {
 	rod_update_mode_t update_mode;
 	bool sub_streams_only;
 
+	/* Receipt element state */
+	struct {
+		char lines[ROD_RECEIPT_MAX_LINES][ROD_RECEIPT_MAX_LINE + 1];
+		int head;
+		int count;
+		int max_lines;
+		int max_line_len;
+		bool dirty;
+		/* Line accumulator for streaming input */
+		char accum[ROD_RECEIPT_MAX_LINE + 1];
+		int accum_pos;
+		int64_t accum_last_byte_ts;
+		int accum_timeout;
+		/* Input source */
+		int input_fd;
+		char input_path[128];
+		uint32_t bg_color;
+	} receipt;
+
 	rod_elem_stream_t streams[ROD_MAX_STREAMS];
 } rod_element_t;
 
@@ -159,6 +181,12 @@ void rod_draw_text(rod_state_t *st, int stream_idx, int font_idx, uint8_t *buf, 
 int rod_load_logo(const char *path, int expected_w, int expected_h, uint8_t **out_data);
 void rod_draw_rect_outline(uint8_t *buf, uint32_t buf_w, uint32_t buf_h, int x0, int y0, int x1,
 			   int y1, uint32_t color_bgra, int thickness);
+
+/* rod_receipt.c -- receipt element */
+void rod_receipt_add_line(rod_element_t *e, const char *line);
+void rod_receipt_clear(rod_element_t *e);
+void rod_receipt_feed_bytes(rod_state_t *st, rod_element_t *e, const char *data, int len);
+void rod_render_receipt(rod_state_t *st, rod_element_t *e, int s);
 
 /* rod_main.c -- element registry */
 rod_element_t *rod_find_element(rod_state_t *st, const char *name);
