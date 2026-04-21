@@ -668,8 +668,9 @@ int main(int argc, char **argv)
 	const char *cmd = argv[2];
 	char json[512];
 
-	/* Privacy is implemented by RVD but exposed under ROD for UX */
-	if (strcmp(daemon, "rod") == 0 && strcmp(cmd, "privacy") == 0)
+	/* Privacy: send to both RVD (cover) and ROD (text element) */
+	bool is_privacy = strcmp(daemon, "rod") == 0 && strcmp(cmd, "privacy") == 0;
+	if (is_privacy)
 		daemon = "rvd";
 
 	if (strcmp(cmd, "status") == 0) {
@@ -1318,5 +1319,23 @@ int main(int argc, char **argv)
 		jstr(jcmd(cmd), json, sizeof(json));
 	}
 
-	return send_cmd(daemon, json);
+	int rc = send_cmd(daemon, json);
+
+	/* Toggle ROD privacy text element visibility */
+	if (is_privacy && rc == 0) {
+		bool on = argc > 3 && strcmp(argv[3], "off") != 0;
+		cJSON *j = cJSON_CreateObject();
+		if (j) {
+			cJSON_AddStringToObject(j, "cmd", on ? "show-element" : "hide-element");
+			cJSON_AddStringToObject(j, "name", "privacy");
+			char rod_json[128];
+			cJSON_PrintPreallocated(j, rod_json, sizeof(rod_json), 0);
+			cJSON_Delete(j);
+			char rod_resp[256];
+			rss_ctrl_send_command("/var/run/rss/rod.sock", rod_json, rod_resp,
+					      sizeof(rod_resp), 1000);
+		}
+	}
+
+	return rc;
 }
