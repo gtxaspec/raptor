@@ -783,6 +783,41 @@ static void render_tick(rod_state_t *st)
 
 /* ── Control socket ── */
 
+static uint32_t calc_osd_pool_kb(rod_state_t *st)
+{
+	uint32_t total = 0;
+	for (int i = 0; i < st->elem_count; i++) {
+		rod_element_t *e = &st->elements[i];
+		if (!e->active)
+			continue;
+		for (int s = 0; s < st->stream_count; s++) {
+			if (e->streams[s].shm)
+				total += e->streams[s].width * e->streams[s].height * 4;
+		}
+	}
+	total = total * 5 / 4;
+	uint32_t kb = (total + 1023) / 1024;
+	if (kb < 448)
+		kb = 448;
+	return kb;
+}
+
+static void notify_rvd_osd_restart(rod_state_t *st)
+{
+	uint32_t pool_kb = calc_osd_pool_kb(st);
+	cJSON *j = cJSON_CreateObject();
+	if (j) {
+		char fwd[96];
+		cJSON_AddStringToObject(j, "cmd", "osd-restart");
+		cJSON_AddNumberToObject(j, "pool_kb", pool_kb);
+		cJSON_PrintPreallocated(j, fwd, sizeof(fwd), 0);
+		cJSON_Delete(j);
+		char rvd_resp[256];
+		rss_ctrl_send_command(ROD_RVD_SOCK, fwd, rvd_resp, sizeof(rvd_resp), 5000);
+		RSS_INFO("osd-restart: pool_kb=%u", pool_kb);
+	}
+}
+
 static void mark_all_dirty(rod_state_t *st)
 {
 	for (int i = 0; i < st->elem_count; i++) {
@@ -887,20 +922,7 @@ static int handle_font_size_change(rod_state_t *st, const char *cmd_json, char *
 		}
 	}
 
-	/* Notify RVD to pick up new SHM dimensions */
-	{
-		cJSON *j = cJSON_CreateObject();
-		if (j) {
-			char fwd[96];
-			cJSON_AddStringToObject(j, "cmd", "osd-restart");
-			cJSON_AddNumberToObject(j, "pool_kb", 0);
-			cJSON_AddNumberToObject(j, "font_size", val);
-			cJSON_PrintPreallocated(j, fwd, sizeof(fwd), 0);
-			cJSON_Delete(j);
-			char rvd_resp[256];
-			rss_ctrl_send_command(ROD_RVD_SOCK, fwd, rvd_resp, sizeof(rvd_resp), 5000);
-		}
-	}
+	notify_rvd_osd_restart(st);
 
 	return rss_ctrl_resp_ok(resp, resp_size);
 }
@@ -973,7 +995,24 @@ static int handle_add_element(rod_state_t *st, const char *cmd_json, char *resp,
 		return rss_ctrl_resp_error(resp, resp_size, "internal error");
 
 	/* Allocate fonts and SHMs */
-	if (e->type == ROD_ELEM_TEXT) {
+	if (e->type == ROD_ELEM_TEXT || e->type == ROD_ELEM_RECEIPT) {
+		if (e->type == ROD_ELEM_RECEIPT) {
+			e->receipt.max_lines = max_chars > 0 ? max_chars : 10;
+			if (e->receipt.max_lines > ROD_RECEIPT_MAX_LINES)
+				e->receipt.max_lines = ROD_RECEIPT_MAX_LINES;
+			e->receipt.max_line_len = ROD_RECEIPT_MAX_LINE;
+			e->receipt.bg_color = 0x80000000;
+			e->receipt.input_fd = -1;
+
+			/* Parse receipt-specific key=val args */
+			int ml = 0, mll = 0;
+			rss_json_get_int(cmd_json, "max_lines", &ml);
+			rss_json_get_int(cmd_json, "max_line_length", &mll);
+			if (ml > 0 && ml <= ROD_RECEIPT_MAX_LINES)
+				e->receipt.max_lines = ml;
+			if (mll > 0 && mll <= ROD_RECEIPT_MAX_LINE)
+				e->receipt.max_line_len = mll;
+		}
 		for (int s = 0; s < st->stream_count; s++) {
 			int fs = e->font_size > 0 ? e->font_size : st->settings.font_size;
 			if (s > 0 && st->stream_h[0] > 0) {
@@ -989,8 +1028,7 @@ static int handle_add_element(rod_state_t *st, const char *cmd_json, char *resp,
 		}
 	}
 
-	/* Tell RVD the position for this element (saved in RVD's config
-	 * so scan_new_shm uses it when creating the HAL region) */
+	/* Push position to RVD config, then restart with updated pool */
 	for (int s = 0; s < st->stream_count; s++) {
 		char fwd[128];
 		cJSON *j = cJSON_CreateObject();
@@ -1005,6 +1043,7 @@ static int handle_add_element(rod_state_t *st, const char *cmd_json, char *resp,
 		char rvd_resp[256];
 		rss_ctrl_send_command(ROD_RVD_SOCK, fwd, rvd_resp, sizeof(rvd_resp), 1000);
 	}
+	notify_rvd_osd_restart(st);
 
 	RSS_INFO("add-element: %s type=%s template=\"%s\" pos=%s", name, type_str, tmpl, position);
 	return rss_ctrl_resp_ok(resp, resp_size);
@@ -1110,16 +1149,7 @@ static int handle_set_element(rod_state_t *st, const char *cmd_json, char *resp,
 			}
 			create_elem_shm(st, e, s);
 		}
-		cJSON *j = cJSON_CreateObject();
-		if (j) {
-			char fwd[96];
-			cJSON_AddStringToObject(j, "cmd", "osd-restart");
-			cJSON_AddNumberToObject(j, "pool_kb", 0);
-			cJSON_PrintPreallocated(j, fwd, sizeof(fwd), 0);
-			cJSON_Delete(j);
-			char rvd_resp[256];
-			rss_ctrl_send_command(ROD_RVD_SOCK, fwd, rvd_resp, sizeof(rvd_resp), 5000);
-		}
+		notify_rvd_osd_restart(st);
 	}
 
 	return rss_ctrl_resp_ok(resp, resp_size);
@@ -1354,10 +1384,10 @@ int main(int argc, char **argv)
 	load_config(&st);
 	init_elements_from_config(&st);
 
-	/* Init fonts for all text elements */
+	/* Init fonts for text and receipt elements */
 	for (int i = 0; i < st.elem_count; i++) {
 		rod_element_t *e = &st.elements[i];
-		if (!e->active || e->type != ROD_ELEM_TEXT)
+		if (!e->active || (e->type != ROD_ELEM_TEXT && e->type != ROD_ELEM_RECEIPT))
 			continue;
 
 		for (int s = 0; s < st.stream_count; s++) {
