@@ -144,7 +144,7 @@ int handle_config(int argc, char **argv)
 		}
 
 		/* Fallback: read from config file */
-		const char *cfgpath = "/etc/raptor.conf";
+		const char *cfgpath = RSS_CONFIG_PATH;
 		rss_config_t *cfg = rss_config_load(cfgpath);
 		if (!cfg) {
 			fprintf(stderr, "Config not found\n");
@@ -177,7 +177,7 @@ int handle_config(int argc, char **argv)
 			fprintf(stderr, "Usage: raptorctl config set <section> <key> <value>\n");
 			return 1;
 		}
-		const char *cfgpath = "/etc/raptor.conf";
+		const char *cfgpath = RSS_CONFIG_PATH;
 		rss_config_t *cfg = rss_config_load(cfgpath);
 		if (!cfg) {
 			fprintf(stderr, "Failed to load %s\n", cfgpath);

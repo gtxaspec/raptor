@@ -294,7 +294,7 @@ void rvd_osd_init_stream(rvd_state_t *st, int s)
 	snprintf(prefix, sizeof(prefix), "rss_osd_osd_%d_", s);
 	int prefix_len = (int)strlen(prefix);
 
-	DIR *dir = opendir("/dev/shm");
+	DIR *dir = opendir(RSS_SHM_DIR);
 	if (!dir)
 		return;
 
@@ -431,7 +431,7 @@ void rvd_osd_init(rvd_state_t *st)
 static bool shm_is_stale(rss_osd_shm_t *shm, int s, const char *name)
 {
 	char path[128];
-	snprintf(path, sizeof(path), "/dev/shm/rss_osd_osd_%d_%s", s, name);
+	snprintf(path, sizeof(path), RSS_SHM_DIR "/rss_osd_osd_%d_%s", s, name);
 
 	struct stat cur;
 	if (stat(path, &cur) < 0)
@@ -641,7 +641,7 @@ static void scan_new_shm(rvd_state_t *st, int s)
 	snprintf(prefix, sizeof(prefix), "rss_osd_osd_%d_", s);
 	int prefix_len = (int)strlen(prefix);
 
-	DIR *dir = opendir("/dev/shm");
+	DIR *dir = opendir(RSS_SHM_DIR);
 	if (!dir)
 		return;
 
@@ -782,7 +782,7 @@ void rvd_osd_check(rvd_state_t *st)
 				RSS_INFO("osd %d/%s: producer gone, clearing", s, reg->name);
 				if (!any_alive) {
 					char path[128];
-					snprintf(path, sizeof(path), "/dev/shm/rss_osd_osd_%d_%s",
+					snprintf(path, sizeof(path), RSS_SHM_DIR "/rss_osd_osd_%d_%s",
 						 s, reg->name);
 					unlink(path);
 				}

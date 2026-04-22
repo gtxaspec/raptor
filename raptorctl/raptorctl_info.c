@@ -273,7 +273,7 @@ void cmd_memory(void)
 	printf("%-6s  %6ld KB  %6ld KB\n", "TOTAL", total_priv, total_shared);
 
 	/* List SHM files with opendir/stat instead of popen("ls -l ...") */
-	DIR *dir = opendir("/dev/shm");
+	DIR *dir = opendir(RSS_SHM_DIR);
 	if (dir) {
 		struct dirent *ent;
 
@@ -283,7 +283,7 @@ void cmd_memory(void)
 				continue;
 			const char *ring_name = ent->d_name + 9;
 			char path[280];
-			snprintf(path, sizeof(path), "/dev/shm/%s", ent->d_name);
+			snprintf(path, sizeof(path), RSS_SHM_DIR "/%s", ent->d_name);
 			struct stat st;
 			if (stat(path, &st) != 0)
 				continue;
@@ -308,7 +308,7 @@ void cmd_memory(void)
 			if (strncmp(ent->d_name, "rss_osd_", 8) != 0)
 				continue;
 			char path[280];
-			snprintf(path, sizeof(path), "/dev/shm/%s", ent->d_name);
+			snprintf(path, sizeof(path), RSS_SHM_DIR "/%s", ent->d_name);
 			struct stat st;
 			if (stat(path, &st) != 0)
 				continue;
