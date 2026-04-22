@@ -438,6 +438,12 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 	}
 
 	if (strcmp(cmd, "enc-list") == 0) {
+		int list_chn = -1;
+		rss_json_get_int(cmd_json, "channel", &list_chn);
+		int hw_list_chn = -1;
+		if (list_chn >= 0 && list_chn < st->stream_count)
+			hw_list_chn = st->streams[list_chn].chn;
+
 		cJSON *r = cJSON_CreateObject();
 		if (!r)
 			return rss_ctrl_resp_error(resp, resp_size, "alloc");
@@ -456,6 +462,36 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 				p->get_off && *(void **)((char *)st->ops + p->get_off) != NULL;
 			cJSON_AddBoolToObject(obj, "set", has_set);
 			cJSON_AddBoolToObject(obj, "get", has_get);
+
+			if (hw_list_chn >= 0 && has_get) {
+				void *fn = *(void **)((char *)st->ops + p->get_off);
+				switch (p->type) {
+				case EP_INT: {
+					int out = 0;
+					if (((enc_get_int_fn)fn)(st->hal_ctx, hw_list_chn, &out) ==
+					    0)
+						cJSON_AddNumberToObject(obj, "value", (double)out);
+					break;
+				}
+				case EP_U32: {
+					uint32_t out = 0;
+					if (((enc_get_u32_fn)fn)(st->hal_ctx, hw_list_chn, &out) ==
+					    0)
+						cJSON_AddNumberToObject(obj, "value", (double)out);
+					break;
+				}
+				case EP_BOOL: {
+					bool out = false;
+					if (((enc_get_bool_fn)fn)(st->hal_ctx, hw_list_chn, &out) ==
+					    0)
+						cJSON_AddBoolToObject(obj, "value", out);
+					break;
+				}
+				default:
+					break;
+				}
+			}
+
 			cJSON_AddItemToArray(arr, obj);
 		}
 		return rss_ctrl_resp_json(resp, resp_size, r);

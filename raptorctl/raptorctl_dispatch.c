@@ -333,10 +333,21 @@ static int build_receipt(const char *daemon, int argc, char **argv, char *json, 
 /* Public interface                                                   */
 /* ------------------------------------------------------------------ */
 
-static int handle_enc_list(const char *daemon)
+static int handle_enc_list(const char *daemon, int argc, char **argv)
 {
-	char resp[2048];
-	if (send_cmd_json(daemon, "{\"cmd\":\"enc-list\"}", resp, sizeof(resp)) != 0) {
+	char cmd_json[128];
+	if (argc >= 4) {
+		cJSON *j = jcmd("enc-list");
+		if (!j)
+			return 1;
+		jadd_i(j, "channel", argv[3]);
+		jstr(j, cmd_json, sizeof(cmd_json));
+	} else {
+		snprintf(cmd_json, sizeof(cmd_json), "{\"cmd\":\"enc-list\"}");
+	}
+
+	char resp[4096];
+	if (send_cmd_json(daemon, cmd_json, resp, sizeof(resp)) != 0) {
 		fprintf(stderr, "Failed to send to %s\n", daemon);
 		return 1;
 	}
@@ -354,8 +365,24 @@ static int handle_enc_list(const char *daemon)
 		return 0;
 	}
 
-	printf("%-20s  %-5s  %-3s  %-3s\n", "PARAM", "TYPE", "SET", "GET");
-	printf("%-20s  %-5s  %-3s  %-3s\n", "--------------------", "-----", "---", "---");
+	bool has_values = false;
+	cJSON *scan;
+	cJSON_ArrayForEach(scan, params)
+	{
+		if (cJSON_GetObjectItem(scan, "value")) {
+			has_values = true;
+			break;
+		}
+	}
+
+	if (has_values) {
+		printf("%-20s  %-5s  %-3s  %-3s  %s\n", "PARAM", "TYPE", "SET", "GET", "VALUE");
+		printf("%-20s  %-5s  %-3s  %-3s  %s\n", "--------------------", "-----", "---",
+		       "---", "----------");
+	} else {
+		printf("%-20s  %-5s  %-3s  %-3s\n", "PARAM", "TYPE", "SET", "GET");
+		printf("%-20s  %-5s  %-3s  %-3s\n", "--------------------", "-----", "---", "---");
+	}
 
 	cJSON *p;
 	cJSON_ArrayForEach(p, params)
@@ -369,8 +396,20 @@ static int handle_enc_list(const char *daemon)
 
 		if (!name)
 			continue;
-		printf("%-20s  %-5s  %-3s  %-3s\n", name, type ? type : "?", has_set ? "yes" : "-",
+
+		printf("%-20s  %-5s  %-3s  %-3s", name, type ? type : "?", has_set ? "yes" : "-",
 		       has_get ? "yes" : "-");
+
+		if (has_values) {
+			cJSON *val = cJSON_GetObjectItem(p, "value");
+			if (val) {
+				if (cJSON_IsBool(val))
+					printf("  %s", cJSON_IsTrue(val) ? "true" : "false");
+				else if (cJSON_IsNumber(val))
+					printf("  %.0f", cJSON_GetNumberValue(val));
+			}
+		}
+		printf("\n");
 	}
 
 	cJSON_Delete(root);
@@ -391,7 +430,7 @@ int dispatch_daemon_cmd(const char *daemon, const char *cmd, int argc, char **ar
 {
 	/* Special handlers */
 	if (strcmp(cmd, "enc-list") == 0)
-		return handle_enc_list(daemon) == 0 ? 2 : -1;
+		return handle_enc_list(daemon, argc, argv) == 0 ? 2 : -1;
 	if (strcmp(cmd, "set-codec") == 0)
 		return build_set_codec(daemon, argc, argv, json, json_size);
 	if (strcmp(cmd, "add-element") == 0 || strcmp(cmd, "set-element") == 0)

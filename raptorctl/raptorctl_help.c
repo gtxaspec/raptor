@@ -36,7 +36,7 @@ const struct help_entry help_entries[] = {
 	{"rvd", "set-enc-crop <ch> <en> <x y w h>    Encoder crop"},
 	{"rvd", "enc-set <ch> <param> <value>        Set encoder parameter"},
 	{"rvd", "enc-get <ch> <param>                Get encoder parameter"},
-	{"rvd", "enc-list                            List encoder parameters"},
+	{"rvd", "enc-list [ch]                       List encoder parameters"},
 	{"rvd", "get-enc-caps                        Show encoder capabilities"},
 	{"rvd", "get-h264-trans <ch>                 Show H.264 chroma QP offset"},
 	{"rvd", "get-h265-trans <ch>                 Show H.265 chroma QP offsets"},
