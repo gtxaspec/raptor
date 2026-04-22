@@ -116,6 +116,11 @@ static const struct cmd_arg args_position[] = {
 
 static const struct cmd_arg args_pool_kb[] = {{"pool_kb", A_INT}, {NULL, A_END}};
 
+static const struct cmd_arg args_enc_set[] = {
+	{"channel", A_INT}, {"param", A_STR}, {"value", A_INT}, {NULL, A_END}};
+
+static const struct cmd_arg args_enc_get[] = {{"channel", A_INT}, {"param", A_STR}, {NULL, A_END}};
+
 /* ------------------------------------------------------------------ */
 /* Dispatch table                                                     */
 /*                                                                    */
@@ -136,22 +141,10 @@ static const struct cmd_def cmd_table[] = {
 	/* Optional channel */
 	{"request-idr", NULL, 0, args_ch},
 
-	/* Video encoder: channel + value */
+	/* Video encoder: channel + value (config-persisting) */
 	{"set-bitrate", NULL, 2, args_ch_val},
 	{"set-gop", NULL, 2, args_ch_val},
 	{"set-fps", NULL, 2, args_ch_val},
-	{"set-qp", NULL, 2, args_ch_val},
-	{"set-qp-ip-delta", NULL, 2, args_ch_val},
-	{"set-gop-mode", NULL, 2, args_ch_val},
-	{"set-rc-options", NULL, 2, args_ch_val},
-	{"set-max-same-scene", NULL, 2, args_ch_val},
-	{"set-qpg-mode", NULL, 2, args_ch_val},
-	{"set-entropy-mode", NULL, 2, args_ch_val},
-	{"set-stream-buf-size", NULL, 2, args_ch_val},
-	{"set-jpeg-qp", NULL, 2, args_ch_val},
-	{"set-color2grey", NULL, 2, args_ch_val},
-	{"set-mbrc", NULL, 2, args_ch_val},
-	{"set-resize-mode", NULL, 2, args_ch_val},
 	{"set-h264-trans", NULL, 2, args_ch_val},
 
 	/* Video encoder: multi-arg set commands */
@@ -167,19 +160,12 @@ static const struct cmd_def cmd_table[] = {
 	{"set-gdr", NULL, 3, args_gdr},
 	{"set-enc-crop", NULL, 6, args_enc_crop},
 
-	/* Video encoder: channel-only get commands */
+	/* Video encoder: channel-only get commands (struct/custom response) */
 	{"get-bitrate", NULL, 1, args_ch},
 	{"get-fps", NULL, 1, args_ch},
 	{"get-gop", NULL, 1, args_ch},
 	{"get-qp-bounds", NULL, 1, args_ch},
 	{"get-rc-mode", NULL, 1, args_ch},
-	{"get-gop-mode", NULL, 1, args_ch},
-	{"get-rc-options", NULL, 1, args_ch},
-	{"get-max-same-scene", NULL, 1, args_ch},
-	{"get-color2grey", NULL, 1, args_ch},
-	{"get-mbrc", NULL, 1, args_ch},
-	{"get-qpg-mode", NULL, 1, args_ch},
-	{"get-stream-buf-size", NULL, 1, args_ch},
 	{"get-h264-trans", NULL, 1, args_ch},
 	{"get-h265-trans", NULL, 1, args_ch},
 	{"get-super-frame", NULL, 1, args_ch},
@@ -188,10 +174,14 @@ static const struct cmd_def cmd_table[] = {
 	{"get-enc-denoise", NULL, 1, args_ch},
 	{"get-gdr", NULL, 1, args_ch},
 	{"get-enc-crop", NULL, 1, args_ch},
-	{"get-jpeg-qp", NULL, 1, args_ch},
 	{"get-roi", NULL, 2, args_ch_idx},
 	{"request-pskip", NULL, 1, args_ch},
 	{"request-gdr", NULL, 2, args_ch_val},
+
+	/* Table-driven encoder params */
+	{"enc-set", NULL, 3, args_enc_set},
+	{"enc-get", NULL, 2, args_enc_get},
+	{"enc-list", NULL, 0, args_none},
 
 	/* Stream control */
 	{"stream-stop", NULL, 1, args_ch},

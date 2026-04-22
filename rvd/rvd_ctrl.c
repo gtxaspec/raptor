@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stddef.h>
 #include <errno.h>
 #include <limits.h>
 #include <inttypes.h>
@@ -288,136 +289,179 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 	int chn, val, val2;
 	const rss_hal_caps_t *caps = st->ops->get_caps ? st->ops->get_caps(st->hal_ctx) : NULL;
 
-/* Simple set: channel + value → HAL call with int arg */
-#define ENC_SET_INT(name, fn)                                                                      \
-	if (strcmp(cmd, name) == 0) {                                                              \
-		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&                            \
-		    rss_json_get_int(cmd_json, "value", &val) == 0 && chn >= 0 &&                  \
-		    chn < st->stream_count) {                                                      \
-			int ret =                                                                  \
-				RSS_HAL_CALL(st->ops, fn, st->hal_ctx, st->streams[chn].chn, val); \
-			return fmt_hal_result(resp, resp_size, ret);                               \
-		}                                                                                  \
-		return rss_ctrl_resp_error(resp, resp_size, "need channel and value");             \
-	}
+	/* ── Table-driven encoder params (enc-set / enc-get / enc-list) ── */
 
-/* Simple set: channel + bool value */
-#define ENC_SET_BOOL(name, fn)                                                                     \
-	if (strcmp(cmd, name) == 0) {                                                              \
-		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&                            \
-		    rss_json_get_int(cmd_json, "value", &val) == 0 && chn >= 0 &&                  \
-		    chn < st->stream_count) {                                                      \
-			int ret = RSS_HAL_CALL(st->ops, fn, st->hal_ctx, st->streams[chn].chn,     \
-					       (bool)val);                                         \
-			return fmt_hal_result(resp, resp_size, ret);                               \
-		}                                                                                  \
-		return rss_ctrl_resp_error(resp, resp_size, "need channel and value");             \
-	}
+	typedef enum { EP_INT, EP_U32, EP_BOOL } enc_param_type_t;
 
-/* Simple get: channel → HAL call returning uint32_t */
-#define ENC_GET_U32(name, fn, field)                                                               \
-	if (strcmp(cmd, name) == 0) {                                                              \
-		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&                \
-		    chn < st->stream_count) {                                                      \
-			uint32_t out = 0;                                                          \
-			int ret = RSS_HAL_CALL(st->ops, fn, st->hal_ctx, st->streams[chn].chn,     \
-					       &out);                                              \
-			if (ret == 0) {                                                            \
-				cJSON *r = cJSON_CreateObject();                                   \
-				cJSON_AddStringToObject(r, "status", "ok");                        \
-				cJSON_AddNumberToObject(r, field, (double)out);                    \
-				return rss_ctrl_resp_json(resp, resp_size, r);                     \
-			}                                                                          \
-			return fmt_hal_result(resp, resp_size, ret);                               \
-		}                                                                                  \
-		return rss_ctrl_resp_error(resp, resp_size, "need channel");                       \
-	}
+	typedef struct {
+		const char *name;
+		enc_param_type_t type;
+		size_t set_off;
+		size_t get_off;
+	} enc_param_t;
 
-/* Simple get: channel → HAL call returning int */
-#define ENC_GET_INT(name, fn, field)                                                               \
-	if (strcmp(cmd, name) == 0) {                                                              \
-		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&                \
-		    chn < st->stream_count) {                                                      \
-			int out = 0;                                                               \
-			int ret = RSS_HAL_CALL(st->ops, fn, st->hal_ctx, st->streams[chn].chn,     \
-					       &out);                                              \
-			if (ret == 0) {                                                            \
-				cJSON *r = cJSON_CreateObject();                                   \
-				cJSON_AddStringToObject(r, "status", "ok");                        \
-				cJSON_AddNumberToObject(r, field, (double)out);                    \
-				return rss_ctrl_resp_json(resp, resp_size, r);                     \
-			}                                                                          \
-			return fmt_hal_result(resp, resp_size, ret);                               \
-		}                                                                                  \
-		return rss_ctrl_resp_error(resp, resp_size, "need channel");                       \
-	}
+	/* Typed function pointer signatures for the generic dispatch */
+	typedef int (*enc_set_int_fn)(void *, int, int);
+	typedef int (*enc_set_u32_fn)(void *, int, uint32_t);
+	typedef int (*enc_set_bool_fn)(void *, int, bool);
+	typedef int (*enc_get_int_fn)(void *, int, int *);
+	typedef int (*enc_get_u32_fn)(void *, int, uint32_t *);
+	typedef int (*enc_get_bool_fn)(void *, int, bool *);
 
-/* Simple get: channel → HAL call returning bool */
-#define ENC_GET_BOOL(name, fn, field)                                                              \
-	if (strcmp(cmd, name) == 0) {                                                              \
-		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&                \
-		    chn < st->stream_count) {                                                      \
-			bool out = false;                                                          \
-			int ret = RSS_HAL_CALL(st->ops, fn, st->hal_ctx, st->streams[chn].chn,     \
-					       &out);                                              \
-			if (ret == 0) {                                                            \
-				cJSON *r = cJSON_CreateObject();                                   \
-				cJSON_AddStringToObject(r, "status", "ok");                        \
-				cJSON_AddBoolToObject(r, field, out);                              \
-				return rss_ctrl_resp_json(resp, resp_size, r);                     \
-			}                                                                          \
-			return fmt_hal_result(resp, resp_size, ret);                               \
-		}                                                                                  \
-		return rss_ctrl_resp_error(resp, resp_size, "need channel");                       \
-	}
+#define EP_OFF(field) offsetof(rss_hal_ops_t, field)
 
-	/* ── Simple int/bool set commands ── */
-	ENC_SET_INT("set-qp", enc_set_qp)
-	ENC_SET_INT("set-qp-ip-delta", enc_set_qp_ip_delta)
-	ENC_SET_INT("set-qp-pb-delta", enc_set_qp_pb_delta)
-	ENC_SET_INT("set-max-psnr", enc_set_max_psnr)
-	ENC_SET_INT("set-gop-mode", enc_set_gop_mode)
-	ENC_SET_INT("set-rc-options", enc_set_rc_options)
-	ENC_SET_INT("set-max-same-scene", enc_set_max_same_scene_cnt)
-	ENC_SET_INT("set-qpg-mode", enc_set_qpg_mode)
-	ENC_SET_INT("set-entropy-mode", enc_set_chn_entropy_mode)
-	ENC_SET_INT("set-stream-buf-size", enc_set_stream_buf_size)
-	ENC_SET_INT("set-jpeg-qp", enc_set_jpeg_qp)
-	ENC_SET_BOOL("set-color2grey", enc_set_color2grey)
-	ENC_SET_BOOL("set-mbrc", enc_set_mbrc)
-	ENC_SET_BOOL("set-resize-mode", enc_set_resize_mode)
+	static const enc_param_t enc_params[] = {
+		{"qp", EP_INT, EP_OFF(enc_set_qp), 0},
+		{"qp_ip_delta", EP_INT, EP_OFF(enc_set_qp_ip_delta), 0},
+		{"qp_pb_delta", EP_INT, EP_OFF(enc_set_qp_pb_delta), 0},
+		{"max_psnr", EP_INT, EP_OFF(enc_set_max_psnr), 0},
+		{"gop_mode", EP_INT, EP_OFF(enc_set_gop_mode), EP_OFF(enc_get_gop_mode)},
+		{"rc_options", EP_U32, EP_OFF(enc_set_rc_options), EP_OFF(enc_get_rc_options)},
+		{"max_same_scene", EP_U32, EP_OFF(enc_set_max_same_scene_cnt),
+		 EP_OFF(enc_get_max_same_scene_cnt)},
+		{"qpg_mode", EP_INT, EP_OFF(enc_set_qpg_mode), EP_OFF(enc_get_qpg_mode)},
+		{"entropy_mode", EP_INT, EP_OFF(enc_set_chn_entropy_mode), 0},
+		{"stream_buf_size", EP_U32, EP_OFF(enc_set_stream_buf_size),
+		 EP_OFF(enc_get_stream_buf_size)},
+		{"jpeg_qp", EP_INT, EP_OFF(enc_set_jpeg_qp), EP_OFF(enc_get_jpeg_qp)},
+		{"color2grey", EP_BOOL, EP_OFF(enc_set_color2grey), EP_OFF(enc_get_color2grey)},
+		{"mbrc", EP_BOOL, EP_OFF(enc_set_mbrc), EP_OFF(enc_get_mbrc)},
+		{"resize_mode", EP_INT, EP_OFF(enc_set_resize_mode), 0},
+	};
 
-	/* ── Simple get commands ── */
-	/* gop_mode: use dedicated handler for correct enum type */
-	if (strcmp(cmd, "get-gop-mode") == 0) {
-		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
-		    chn < st->stream_count) {
-			rss_gop_mode_t mode = RSS_GOP_DEFAULT;
-			int ret = RSS_HAL_CALL(st->ops, enc_get_gop_mode, st->hal_ctx,
-					       st->streams[chn].chn, &mode);
-			if (ret == 0) {
-				cJSON *r = cJSON_CreateObject();
-				cJSON_AddStringToObject(r, "status", "ok");
-				cJSON_AddNumberToObject(r, "gop_mode", (double)(int)mode);
-				return rss_ctrl_resp_json(resp, resp_size, r);
+#undef EP_OFF
+
+#define ENC_PARAM_COUNT (sizeof(enc_params) / sizeof(enc_params[0]))
+
+	static const char *ep_type_str[] = {"int", "uint", "bool"};
+
+	if (strcmp(cmd, "enc-set") == 0) {
+		char param[32] = "";
+		rss_json_get_str(cmd_json, "param", param, sizeof(param));
+		if (rss_json_get_int(cmd_json, "channel", &chn) != 0 || chn < 0 ||
+		    chn >= st->stream_count || !param[0])
+			return rss_ctrl_resp_error(resp, resp_size, "need channel, param, value");
+		if (rss_json_get_int(cmd_json, "value", &val) != 0)
+			return rss_ctrl_resp_error(resp, resp_size, "need value");
+		for (unsigned i = 0; i < ENC_PARAM_COUNT; i++) {
+			if (strcmp(param, enc_params[i].name) != 0)
+				continue;
+			if (enc_params[i].set_off == 0)
+				return rss_ctrl_resp_error(resp, resp_size, "no setter");
+			void *fn = *(void **)((char *)st->ops + enc_params[i].set_off);
+			if (!fn)
+				return rss_ctrl_resp_error(resp, resp_size,
+							   "not supported on this SoC");
+			int ret;
+			int hw_chn = st->streams[chn].chn;
+			switch (enc_params[i].type) {
+			case EP_INT:
+				ret = ((enc_set_int_fn)fn)(st->hal_ctx, hw_chn, val);
+				break;
+			case EP_U32:
+				ret = ((enc_set_u32_fn)fn)(st->hal_ctx, hw_chn, (uint32_t)val);
+				break;
+			case EP_BOOL:
+				ret = ((enc_set_bool_fn)fn)(st->hal_ctx, hw_chn, (bool)val);
+				break;
+			default:
+				ret = RSS_ERR;
+				break;
 			}
 			return fmt_hal_result(resp, resp_size, ret);
 		}
-		return rss_ctrl_resp_error(resp, resp_size, "need channel");
+		return rss_ctrl_resp_error(resp, resp_size, "unknown param");
 	}
-	ENC_GET_U32("get-rc-options", enc_get_rc_options, "rc_options")
-	ENC_GET_U32("get-max-same-scene", enc_get_max_same_scene_cnt, "max_same_scene")
-	ENC_GET_U32("get-stream-buf-size", enc_get_stream_buf_size, "buf_size")
-	ENC_GET_INT("get-qpg-mode", enc_get_qpg_mode, "qpg_mode")
-	ENC_GET_INT("get-jpeg-qp", enc_get_jpeg_qp, "jpeg_qp")
-	ENC_GET_BOOL("get-color2grey", enc_get_color2grey, "color2grey")
-	ENC_GET_BOOL("get-mbrc", enc_get_mbrc, "mbrc")
 
-#undef ENC_SET_INT
-#undef ENC_SET_BOOL
-#undef ENC_GET_U32
-#undef ENC_GET_INT
-#undef ENC_GET_BOOL
+	if (strcmp(cmd, "enc-get") == 0) {
+		char param[32] = "";
+		rss_json_get_str(cmd_json, "param", param, sizeof(param));
+		if (rss_json_get_int(cmd_json, "channel", &chn) != 0 || chn < 0 ||
+		    chn >= st->stream_count || !param[0])
+			return rss_ctrl_resp_error(resp, resp_size, "need channel and param");
+		for (unsigned i = 0; i < ENC_PARAM_COUNT; i++) {
+			if (strcmp(param, enc_params[i].name) != 0)
+				continue;
+			if (enc_params[i].get_off == 0)
+				return rss_ctrl_resp_error(resp, resp_size, "no getter");
+			void *fn = *(void **)((char *)st->ops + enc_params[i].get_off);
+			if (!fn)
+				return rss_ctrl_resp_error(resp, resp_size,
+							   "not supported on this SoC");
+			int hw_chn = st->streams[chn].chn;
+			int ret;
+			cJSON *r = cJSON_CreateObject();
+			if (!r)
+				return rss_ctrl_resp_error(resp, resp_size, "alloc");
+			switch (enc_params[i].type) {
+			case EP_INT: {
+				int out = 0;
+				ret = ((enc_get_int_fn)fn)(st->hal_ctx, hw_chn, &out);
+				if (ret == 0) {
+					cJSON_AddStringToObject(r, "status", "ok");
+					cJSON_AddStringToObject(r, "param", param);
+					cJSON_AddNumberToObject(r, "value", (double)out);
+					return rss_ctrl_resp_json(resp, resp_size, r);
+				}
+				break;
+			}
+			case EP_U32: {
+				uint32_t out = 0;
+				ret = ((enc_get_u32_fn)fn)(st->hal_ctx, hw_chn, &out);
+				if (ret == 0) {
+					cJSON_AddStringToObject(r, "status", "ok");
+					cJSON_AddStringToObject(r, "param", param);
+					cJSON_AddNumberToObject(r, "value", (double)out);
+					return rss_ctrl_resp_json(resp, resp_size, r);
+				}
+				break;
+			}
+			case EP_BOOL: {
+				bool out = false;
+				ret = ((enc_get_bool_fn)fn)(st->hal_ctx, hw_chn, &out);
+				if (ret == 0) {
+					cJSON_AddStringToObject(r, "status", "ok");
+					cJSON_AddStringToObject(r, "param", param);
+					cJSON_AddBoolToObject(r, "value", out);
+					return rss_ctrl_resp_json(resp, resp_size, r);
+				}
+				break;
+			}
+			default:
+				ret = RSS_ERR;
+				break;
+			}
+			cJSON_Delete(r);
+			return fmt_hal_result(resp, resp_size, ret);
+		}
+		return rss_ctrl_resp_error(resp, resp_size, "unknown param");
+	}
+
+	if (strcmp(cmd, "enc-list") == 0) {
+		cJSON *r = cJSON_CreateObject();
+		if (!r)
+			return rss_ctrl_resp_error(resp, resp_size, "alloc");
+		cJSON_AddStringToObject(r, "status", "ok");
+		cJSON *arr = cJSON_AddArrayToObject(r, "params");
+		for (unsigned i = 0; i < ENC_PARAM_COUNT; i++) {
+			const enc_param_t *p = &enc_params[i];
+			cJSON *obj = cJSON_CreateObject();
+			if (!obj)
+				continue;
+			cJSON_AddStringToObject(obj, "name", p->name);
+			cJSON_AddStringToObject(obj, "type", ep_type_str[p->type]);
+			bool has_set =
+				p->set_off && *(void **)((char *)st->ops + p->set_off) != NULL;
+			bool has_get =
+				p->get_off && *(void **)((char *)st->ops + p->get_off) != NULL;
+			cJSON_AddBoolToObject(obj, "set", has_set);
+			cJSON_AddBoolToObject(obj, "get", has_get);
+			cJSON_AddItemToArray(arr, obj);
+		}
+		return rss_ctrl_resp_json(resp, resp_size, r);
+	}
+
+#undef ENC_PARAM_COUNT
 
 	/* ── QP bounds per frame (I/P separate) ── */
 	if (strcmp(cmd, "set-qp-bounds-per-frame") == 0) {
