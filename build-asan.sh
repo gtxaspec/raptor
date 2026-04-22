@@ -60,16 +60,19 @@ echo "Building with $SAN_LABEL ($SANITIZE)"
 
 mkdir -p "$OUT" "$DEPS"
 
-# Auto-clean when switching between ASAN and TSAN — cached .o and .a
-# files contain incompatible instrumentation and cause link errors.
+# Always clean raptor .o files — no dependency tracking, stale objects
+# cause silent bugs. Dep libs (mbedtls, compy, schrift) are cached.
+rm -f "$OUT"/*.o "$OUT"/rss_build_info.c
+
+# Auto-clean dep libs when switching between ASAN and TSAN —
+# incompatible instrumentation causes link errors.
 STAMP="$OUT/.sanitizer"
 PREV_SAN=""
 [ -f "$STAMP" ] && PREV_SAN=$(cat "$STAMP")
 if [ -n "$PREV_SAN" ] && [ "$PREV_SAN" != "$SAN_LABEL" ]; then
-    echo "  sanitizer changed ($PREV_SAN -> $SAN_LABEL), cleaning cached objects"
-    rm -f "$OUT"/*.o "$OUT"/*.a "$OUT"/rss_build_info.c
+    echo "  sanitizer changed ($PREV_SAN -> $SAN_LABEL), cleaning dep libs"
     rm -rf "$OUT"/mbedtls-build "$OUT"/mbedtls-install "$OUT"/compy-build
-    rm -f "$OUT"/schrift.o
+    rm -f "$OUT"/schrift.o "$OUT"/*.a
 fi
 echo "$SAN_LABEL" > "$STAMP"
 

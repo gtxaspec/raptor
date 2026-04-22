@@ -535,9 +535,12 @@ void *rwd_video_reader_thread(void *arg)
 	for (int s = 0; s < RWD_STREAM_COUNT; s++) {
 		if (!srv->video_rings[s])
 			continue;
-		uint32_t rv;
-		if (!rss_ring_version_ok(srv->video_rings[s], &rv))
-			RSS_WARN("video[%d] ring version mismatch: %u vs %u", s, rv, RSS_RING_VERSION);
+		{
+			uint32_t rv;
+			if (!rss_ring_version_ok(srv->video_rings[s], &rv))
+				RSS_WARN("video[%d] ring version mismatch: %u vs %u", s, rv,
+					 RSS_RING_VERSION);
+		}
 		const rss_ring_header_t *vhdr = rss_ring_get_header(srv->video_rings[s]);
 		srv->video_buf_sizes[s] = rss_ring_max_frame_size(srv->video_rings[s]);
 		if (srv->video_buf_sizes[s] < 256 * 1024)
@@ -565,8 +568,9 @@ void *rwd_video_reader_thread(void *arg)
 				if (srv->video_rings[s]) {
 					uint32_t rv;
 					if (!rss_ring_version_ok(srv->video_rings[s], &rv))
-						RSS_WARN("video[%d] ring version mismatch: %u vs %u",
-							 s, rv, RSS_RING_VERSION);
+						RSS_WARN(
+							"video[%d] ring version mismatch: %u vs %u",
+							s, rv, RSS_RING_VERSION);
 					const rss_ring_header_t *h =
 						rss_ring_get_header(srv->video_rings[s]);
 					uint32_t ds = rss_ring_max_frame_size(srv->video_rings[s]);
@@ -874,9 +878,12 @@ void *rwd_audio_reader_thread(void *arg)
 				usleep(200000);
 				continue;
 			}
-			uint32_t rv;
-			if (!rss_ring_version_ok(srv->audio_ring, &rv))
-				RSS_WARN("audio ring version mismatch: %u vs %u", rv, RSS_RING_VERSION);
+			{
+				uint32_t rv;
+				if (!rss_ring_version_ok(srv->audio_ring, &rv))
+					RSS_WARN("audio ring version mismatch: %u vs %u", rv,
+						 RSS_RING_VERSION);
+			}
 			const rss_ring_header_t *ahdr = rss_ring_get_header(srv->audio_ring);
 			audio_codec = ahdr->codec;
 			sample_rate = ahdr->fps_num;
