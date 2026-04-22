@@ -470,10 +470,7 @@ static void *ao_playback_thread(void *arg)
 			}
 			ring = rss_ring_open("speaker");
 			if (ring) {
-				uint32_t rv;
-				if (!rss_ring_version_ok(ring, &rv))
-					RSS_WARN("speaker ring version mismatch: %u vs %u",
-						 rv, RSS_RING_VERSION);
+				rss_ring_check_version(ring, "speaker");
 			} else {
 				usleep(50000);
 			}

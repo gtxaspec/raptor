@@ -305,8 +305,7 @@ void *rsd_client_send_thread(void *arg)
 			const rss_ring_header_t *hdr = rss_ring_get_header(ring);
 			if (hdr && entry.buf_idx < RSS_RING_MAX_REF_BUFS) {
 				uint32_t cur = atomic_load_explicit(
-					&hdr->ref_buf_gen[entry.buf_idx],
-					memory_order_acquire);
+					&hdr->ref_buf_gen[entry.buf_idx], memory_order_acquire);
 				if (cur != entry.buf_gen) {
 					sendq_release_entry(&entry);
 					continue;
@@ -365,10 +364,7 @@ void *rsd_video_reader_thread(void *arg)
 				usleep(200000);
 				continue;
 			}
-			uint32_t ring_ver;
-			if (!rss_ring_version_ok(rctx->ring, &ring_ver))
-				RSS_WARN("video[%d] ring version mismatch: ring=%u expected=%u",
-					 stream_idx, ring_ver, RSS_RING_VERSION);
+			rss_ring_check_version(rctx->ring, rctx->ring_name);
 			uint32_t max_frame = rss_ring_max_frame_size(rctx->ring);
 			if (rctx->frame_buf_size < max_frame) {
 				uint8_t *new_buf = malloc(max_frame);
@@ -457,8 +453,8 @@ void *rsd_video_reader_thread(void *arg)
 		const rss_ring_header_t *rhdr = rss_ring_get_header(rctx->ring);
 		bool use_zerocopy = (rhdr->flags & RSS_RING_FLAG_REFMODE);
 		uint32_t fps = (rhdr->fps_num > 0 && rhdr->fps_den > 0)
-				      ? rhdr->fps_num / rhdr->fps_den
-				      : 30;
+				       ? rhdr->fps_num / rhdr->fps_den
+				       : 30;
 		uint32_t frame_dur = 90000 / fps;
 
 		for (int burst = 0; burst < 8; burst++) {
@@ -469,8 +465,8 @@ void *rsd_video_reader_thread(void *arg)
 			uint64_t pre_seq = read_seq;
 
 			if (use_zerocopy) {
-				ret = rss_ring_peek(rctx->ring, &read_seq,
-						    &frame_data, &length, &meta);
+				ret = rss_ring_peek(rctx->ring, &read_seq, &frame_data, &length,
+						    &meta);
 			} else {
 				ret = rss_ring_read(rctx->ring, &read_seq, rctx->frame_buf,
 						    rctx->frame_buf_size, &length, &meta);
@@ -481,8 +477,7 @@ void *rsd_video_reader_thread(void *arg)
 				total_overflow += skipped;
 				RSS_WARN("video[%d] EOVERFLOW: seq %llu -> %llu (skipped %llu)",
 					 stream_idx, (unsigned long long)pre_seq,
-					 (unsigned long long)read_seq,
-					 (unsigned long long)skipped);
+					 (unsigned long long)read_seq, (unsigned long long)skipped);
 				rctx->read_seq = read_seq;
 				rsd_maybe_request_idr(rctx->ring, &last_idr_req_us);
 				break;
@@ -538,8 +533,8 @@ void *rsd_video_reader_thread(void *arg)
 								       length, client_ts,
 								       meta.buf_idx, meta.buf_gen);
 				} else {
-					qret = rsd_sendq_push_video(&c->sendq, frame_data,
-								    length, client_ts);
+					qret = rsd_sendq_push_video(&c->sendq, frame_data, length,
+								    client_ts);
 				}
 				if (qret == RSD_SENDQ_OK)
 					total_pushed++;
@@ -640,10 +635,7 @@ void *rsd_audio_reader_thread(void *arg)
 				usleep(200000);
 				continue;
 			}
-			uint32_t aring_ver;
-			if (!rss_ring_version_ok(srv->ring_audio, &aring_ver))
-				RSS_WARN("audio ring version mismatch: ring=%u expected=%u",
-					 aring_ver, RSS_RING_VERSION);
+			rss_ring_check_version(srv->ring_audio, "audio");
 			const rss_ring_header_t *ahdr = rss_ring_get_header(srv->ring_audio);
 			audio_codec = ahdr->codec;
 			uint32_t audio_clock = ahdr->fps_num;
@@ -712,10 +704,18 @@ void *rsd_audio_reader_thread(void *arg)
 				audio_ts_epoch = now_us;
 			uint32_t frame_samples;
 			switch (audio_codec) {
-			case RSD_CODEC_AAC:  frame_samples = 1024; break;
-			case RSD_CODEC_OPUS: frame_samples = 960;  break;
-			case RSD_CODEC_L16:  frame_samples = length / 2; break;
-			default:             frame_samples = length; break;
+			case RSD_CODEC_AAC:
+				frame_samples = 1024;
+				break;
+			case RSD_CODEC_OPUS:
+				frame_samples = 960;
+				break;
+			case RSD_CODEC_L16:
+				frame_samples = length / 2;
+				break;
+			default:
+				frame_samples = length;
+				break;
 			}
 			uint32_t rtp_ts;
 			if (!has_last_audio_rtp_ts) {

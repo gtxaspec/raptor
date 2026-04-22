@@ -491,9 +491,7 @@ static rss_ring_t *try_open_ring(const char *name)
 {
 	rss_ring_t *ring = rss_ring_open(name);
 	if (ring) {
-		uint32_t rv;
-		if (!rss_ring_version_ok(ring, &rv))
-			RSS_WARN("%s ring version mismatch: %u vs %u", name, rv, RSS_RING_VERSION);
+		rss_ring_check_version(ring, name);
 		const rss_ring_header_t *hdr = rss_ring_get_header(ring);
 		RSS_INFO("ring %s: %ux%u codec=%u fps=%u/%u", name, hdr->width, hdr->height,
 			 hdr->codec, hdr->fps_num, hdr->fps_den);

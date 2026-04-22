@@ -290,10 +290,12 @@ void cmd_memory(void)
 			long sz = (long)st.st_size / 1024;
 			rss_ring_t *ring = rss_ring_open(ring_name);
 			if (ring) {
-				uint32_t rv;
-				bool ok = rss_ring_version_ok(ring, &rv);
-				printf("  %-20s %6ld KB  v%u%s\n", ring_name, sz, rv,
-				       ok ? "" : " (MISMATCH — rebuild producer)");
+				{
+					uint32_t rv = 0;
+					bool ok = rss_ring_version_ok(ring, &rv);
+					printf("  %-20s %6ld KB  v%u%s\n", ring_name, sz, rv,
+					       ok ? "" : " (MISMATCH -- rebuild producer)");
+				}
 				rss_ring_close(ring);
 			} else {
 				printf("  %-20s %6ld KB\n", ring_name, sz);

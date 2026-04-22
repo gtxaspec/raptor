@@ -64,9 +64,7 @@ int cmd_record(const char *dest, int max_seconds)
 			fclose(out);
 		return 1;
 	}
-	uint32_t rv;
-	if (!rss_ring_version_ok(ring, &rv))
-		fprintf(stderr, "rac: audio ring version mismatch: %u vs %u\n", rv, RSS_RING_VERSION);
+	rss_ring_check_version(ring, "audio");
 
 	const rss_ring_header_t *hdr = rss_ring_get_header(ring);
 	int codec = hdr->codec;
@@ -100,7 +98,8 @@ int cmd_record(const char *dest, int max_seconds)
 
 		uint32_t length = 0;
 		rss_ring_slot_t meta;
-		ret = rss_ring_read(ring, &read_seq, frame_buf, rss_ring_max_frame_size(ring), &length, &meta);
+		ret = rss_ring_read(ring, &read_seq, frame_buf, rss_ring_max_frame_size(ring),
+				    &length, &meta);
 		if (ret != 0)
 			continue;
 

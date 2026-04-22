@@ -165,7 +165,7 @@ COMPY_CFLAGS="$COMPY_CFLAGS -I$COMPY_BUILD/_deps/metalang99-src/include"
 # ── Compiler setup ──
 
 CC=gcc
-CFLAGS="-Wall -Wextra -std=gnu11 -D_GNU_SOURCE -DPLATFORM_T31 -O1 -g $SANITIZE"
+CFLAGS="-Wall -Wextra -Werror -std=gnu11 -D_GNU_SOURCE -DPLATFORM_T31 -O1 -g $SANITIZE"
 CFLAGS="$CFLAGS -I$IPC_DIR/include -I$COMMON_DIR/include $MBEDTLS_CFLAGS"
 LDFLAGS="$SANITIZE -lpthread -lrt -lm"
 
