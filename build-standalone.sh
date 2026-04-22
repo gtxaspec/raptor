@@ -307,7 +307,7 @@ clone_repo() {
         if [ "$current" != "$version" ]; then
             echo "Checking out $name @ ${version:0:10}..."
             git -C "$dir" fetch --quiet origin
-            git -C "$dir" checkout --quiet "$version"
+            git -C "$dir" checkout --quiet --force "$version"
         fi
     fi
 
