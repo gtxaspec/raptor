@@ -7,6 +7,7 @@
  * special-case handlers.
  */
 
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -178,10 +179,9 @@ static const struct cmd_def cmd_table[] = {
 	{"request-pskip", NULL, 1, args_ch},
 	{"request-gdr", NULL, 2, args_ch_val},
 
-	/* Table-driven encoder params */
+	/* Table-driven encoder params (enc-list handled by special handler) */
 	{"enc-set", NULL, 3, args_enc_set},
 	{"enc-get", NULL, 2, args_enc_get},
-	{"enc-list", NULL, 0, args_none},
 
 	/* Stream control */
 	{"stream-stop", NULL, 1, args_ch},
@@ -333,10 +333,55 @@ static int build_receipt(const char *daemon, int argc, char **argv, char *json, 
 /* Public interface                                                   */
 /* ------------------------------------------------------------------ */
 
+static int handle_enc_list(const char *daemon)
+{
+	char resp[2048];
+	if (send_cmd_json(daemon, "{\"cmd\":\"enc-list\"}", resp, sizeof(resp)) != 0) {
+		fprintf(stderr, "Failed to send to %s\n", daemon);
+		return 1;
+	}
+
+	cJSON *root = cJSON_Parse(resp);
+	if (!root) {
+		printf("%s\n", resp);
+		return 0;
+	}
+
+	cJSON *params = cJSON_GetObjectItemCaseSensitive(root, "params");
+	if (!params || !cJSON_IsArray(params)) {
+		printf("%s\n", resp);
+		cJSON_Delete(root);
+		return 0;
+	}
+
+	printf("%-20s  %-5s  %-3s  %-3s\n", "PARAM", "TYPE", "SET", "GET");
+	printf("%-20s  %-5s  %-3s  %-3s\n", "--------------------", "-----", "---", "---");
+
+	cJSON *p;
+	cJSON_ArrayForEach(p, params)
+	{
+		const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(p, "name"));
+		const char *type = cJSON_GetStringValue(cJSON_GetObjectItem(p, "type"));
+		cJSON *set_obj = cJSON_GetObjectItem(p, "set");
+		cJSON *get_obj = cJSON_GetObjectItem(p, "get");
+		bool has_set = set_obj && cJSON_IsTrue(set_obj);
+		bool has_get = get_obj && cJSON_IsTrue(get_obj);
+
+		if (!name)
+			continue;
+		printf("%-20s  %-5s  %-3s  %-3s\n", name, type ? type : "?", has_set ? "yes" : "-",
+		       has_get ? "yes" : "-");
+	}
+
+	cJSON_Delete(root);
+	return 0;
+}
+
 /*
  * dispatch_daemon_cmd — build JSON for a daemon command.
  *
  * Returns:
+ *   2  — fully handled (sent + printed), caller should not send
  *   1  — command found, json buffer filled
  *   0  — command not in table (caller should try generic fallback)
  *  -1  — command found but arg count wrong (usage printed to stderr)
@@ -344,7 +389,9 @@ static int build_receipt(const char *daemon, int argc, char **argv, char *json, 
 int dispatch_daemon_cmd(const char *daemon, const char *cmd, int argc, char **argv, char *json,
 			int json_size)
 {
-	/* Special handlers for commands with non-regular arg layouts */
+	/* Special handlers */
+	if (strcmp(cmd, "enc-list") == 0)
+		return handle_enc_list(daemon) == 0 ? 2 : -1;
 	if (strcmp(cmd, "set-codec") == 0)
 		return build_set_codec(daemon, argc, argv, json, json_size);
 	if (strcmp(cmd, "add-element") == 0 || strcmp(cmd, "set-element") == 0)

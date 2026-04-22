@@ -115,6 +115,8 @@ int main(int argc, char **argv)
 
 	/* Dispatch: try table, then generic fallback */
 	int drc = dispatch_daemon_cmd(daemon, cmd, argc, argv, json, sizeof(json));
+	if (drc == 2)
+		return 0;
 	if (drc < 0)
 		return 1;
 	if (drc == 0) {
