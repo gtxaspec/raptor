@@ -2,6 +2,13 @@
  * rhd_http.c -- HTTP I/O helpers for Raptor HTTP Daemon
  *
  * TLS-aware read/write, HTTP response formatting, MJPEG framing.
+ *
+ * All responses include Access-Control-Allow-Origin: * because the
+ * primary consumers (dashboards, NVRs, Home Assistant, custom apps)
+ * embed camera feeds cross-origin via <img>, <video>, or fetch().
+ * Restricting CORS would break most integrations. Authentication
+ * (Basic over TLS, or future digest) protects against unauthorized
+ * access regardless of CORS policy.
  */
 
 #include <stdio.h>
@@ -79,8 +86,8 @@ static void http_write_all(int fd, const void *buf, size_t len, const char *what
 		if (n < 0) {
 			if (errno == EINTR)
 				continue;
-			RSS_DEBUG("http_send_fd: %s write failed after %zu/%zu bytes: %s",
-				  what, len - remaining, len, strerror(errno));
+			RSS_DEBUG("http_send_fd: %s write failed after %zu/%zu bytes: %s", what,
+				  len - remaining, len, strerror(errno));
 			return;
 		}
 		p += n;

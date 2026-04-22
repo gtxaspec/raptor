@@ -64,6 +64,9 @@ static void http_send(int fd, const char *status, const char *content_type, cons
 			       "HTTP/1.1 %s\r\n"
 			       "Content-Type: %s\r\n"
 			       "Content-Length: %zu\r\n"
+			       /* CORS: wildcard required -- WHIP clients (go2rtc, HA,
+				  browsers) connect cross-origin by design. Auth
+				  headers protect against unauthorized access. */
 			       "Access-Control-Allow-Origin: *\r\n"
 			       "Access-Control-Allow-Methods: POST, DELETE, OPTIONS\r\n"
 			       "Access-Control-Allow-Headers: Content-Type\r\n"
@@ -326,8 +329,7 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 	/* Basic auth check (if configured) */
 	if (srv->auth_user[0] && srv->auth_pass[0]) {
 		if (!rss_http_check_basic_auth(buf, srv->auth_user, srv->auth_pass)) {
-			http_send(client_fd, "401 Unauthorized", "text/plain",
-				  "Unauthorized", 12,
+			http_send(client_fd, "401 Unauthorized", "text/plain", "Unauthorized", 12,
 				  "WWW-Authenticate: Basic realm=\"Raptor WebRTC\"\r\n");
 			goto done;
 		}
@@ -343,17 +345,17 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 		if (!webrtc_html) {
 			webrtc_html = rss_read_file(WEBRTC_HTML_PATH, &webrtc_html_len);
 			if (webrtc_html)
-				RSS_DEBUG("loaded %s (%d bytes)", WEBRTC_HTML_PATH, webrtc_html_len);
+				RSS_DEBUG("loaded %s (%d bytes)", WEBRTC_HTML_PATH,
+					  webrtc_html_len);
 			else
 				RSS_WARN("%s not found", WEBRTC_HTML_PATH);
 		}
 		if (webrtc_html)
-			http_send(client_fd, "200 OK", "text/html; charset=utf-8",
-				  webrtc_html, (size_t)webrtc_html_len,
-				  "Cache-Control: no-cache\r\n");
+			http_send(client_fd, "200 OK", "text/html; charset=utf-8", webrtc_html,
+				  (size_t)webrtc_html_len, "Cache-Control: no-cache\r\n");
 		else
-			http_send(client_fd, "404 Not Found", "text/plain",
-				  "player not installed", 20, NULL);
+			http_send(client_fd, "404 Not Found", "text/plain", "player not installed",
+				  20, NULL);
 		goto done;
 	}
 
