@@ -689,8 +689,8 @@ int main(int argc, char **argv)
 	pthread_cond_init(&srv.clients_cond, NULL);
 
 	/* Basic auth — enabled when both username and password are set */
-	const char *webrtc_user = rss_config_get_str(dctx.cfg, "webrtc", "username", "admin");
-	const char *webrtc_pass = rss_config_get_str(dctx.cfg, "webrtc", "password", "secret");
+	const char *webrtc_user = rss_config_get_str(dctx.cfg, "webrtc", "username", "");
+	const char *webrtc_pass = rss_config_get_str(dctx.cfg, "webrtc", "password", "");
 	if (webrtc_user[0] && webrtc_pass[0]) {
 		rss_base64_init();
 		rss_strlcpy(srv.auth_user, webrtc_user, sizeof(srv.auth_user));

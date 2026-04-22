@@ -873,8 +873,8 @@ int main(int argc, char **argv)
 		srv.max_clients = RHD_MAX_CLIENTS;
 
 	/* Basic auth — enabled when both username and password are set */
-	const char *http_user = rss_config_get_str(ctx.cfg, "http", "username", "admin");
-	const char *http_pass = rss_config_get_str(ctx.cfg, "http", "password", "secret");
+	const char *http_user = rss_config_get_str(ctx.cfg, "http", "username", "");
+	const char *http_pass = rss_config_get_str(ctx.cfg, "http", "password", "");
 	if (http_user[0] && http_pass[0]) {
 		rss_strlcpy(srv.auth_user, http_user, sizeof(srv.auth_user));
 		rss_strlcpy(srv.auth_pass, http_pass, sizeof(srv.auth_pass));
