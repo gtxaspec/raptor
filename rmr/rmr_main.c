@@ -905,8 +905,8 @@ int main(int argc, char **argv)
 	}
 
 	/* Control socket */
-	rss_mkdir_p("/var/run/rss");
-	st.ctrl = rss_ctrl_listen("/var/run/rss/rmr.sock");
+	rss_mkdir_p(RSS_RUN_DIR);
+	st.ctrl = rss_ctrl_listen(RSS_RUN_DIR "/rmr.sock");
 	if (!st.ctrl)
 		RSS_WARN("control socket failed (non-fatal)");
 

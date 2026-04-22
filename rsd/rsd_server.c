@@ -451,8 +451,8 @@ int rsd_server_init(rsd_server_t *srv)
 		RSS_ERROR("epoll_ctl add listen_fd: %s", strerror(errno));
 
 	/* Control socket */
-	rss_mkdir_p("/var/run/rss");
-	srv->ctrl = rss_ctrl_listen("/var/run/rss/rsd.sock");
+	rss_mkdir_p(RSS_RUN_DIR);
+	srv->ctrl = rss_ctrl_listen(RSS_RUN_DIR "/rsd.sock");
 
 	if (srv->ctrl) {
 		int ctrl_fd = rss_ctrl_get_fd(srv->ctrl);

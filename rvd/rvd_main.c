@@ -53,8 +53,8 @@ int main(int argc, char **argv)
 	RSS_INFO("pipeline initialized, entering frame loop");
 
 	/* Set up control socket */
-	rss_mkdir_p("/var/run/rss");
-	st.ctrl = rss_ctrl_listen("/var/run/rss/rvd.sock");
+	rss_mkdir_p(RSS_RUN_DIR);
+	st.ctrl = rss_ctrl_listen(RSS_RUN_DIR "/rvd.sock");
 	if (!st.ctrl)
 		RSS_WARN("control socket failed (non-fatal)");
 

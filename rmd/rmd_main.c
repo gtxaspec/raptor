@@ -42,7 +42,7 @@ static void rmd_apply_ivs_config(rmd_ctx_t *ctx)
 		cJSON_PrintPreallocated(j, cmd, sizeof(cmd), 0);
 		cJSON_Delete(j);
 	}
-	if (rss_ctrl_send_command("/var/run/rss/rvd.sock", cmd, resp, sizeof(resp), 1000) >= 0)
+	if (rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", cmd, resp, sizeof(resp), 1000) >= 0)
 		ok++;
 	else
 		RSS_WARN("failed to set RVD sensitivity");
@@ -54,7 +54,7 @@ static void rmd_apply_ivs_config(rmd_ctx_t *ctx)
 		cJSON_PrintPreallocated(j, cmd, sizeof(cmd), 0);
 		cJSON_Delete(j);
 	}
-	if (rss_ctrl_send_command("/var/run/rss/rvd.sock", cmd, resp, sizeof(resp), 1000) >= 0)
+	if (rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", cmd, resp, sizeof(resp), 1000) >= 0)
 		ok++;
 	else
 		RSS_WARN("failed to set RVD skip_frames");
@@ -68,7 +68,7 @@ static void rmd_apply_ivs_config(rmd_ctx_t *ctx)
 static bool rmd_poll_motion(rmd_ctx_t *ctx)
 {
 	char resp[256];
-	int ret = rss_ctrl_send_command("/var/run/rss/rvd.sock", "{\"cmd\":\"ivs-status\"}", resp,
+	int ret = rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", "{\"cmd\":\"ivs-status\"}", resp,
 					sizeof(resp), 1000);
 	if (ret < 0)
 		return false;
@@ -166,7 +166,7 @@ static int rmd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				cJSON_PrintPreallocated(j, cmd, sizeof(cmd), 0);
 				cJSON_Delete(j);
 			}
-			rss_ctrl_send_command("/var/run/rss/rvd.sock", cmd, resp, sizeof(resp),
+			rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", cmd, resp, sizeof(resp),
 					      1000);
 			cJSON *r = cJSON_CreateObject();
 			cJSON_AddStringToObject(r, "status", "ok");
@@ -190,7 +190,7 @@ static int rmd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				cJSON_PrintPreallocated(j, cmd, sizeof(cmd), 0);
 				cJSON_Delete(j);
 			}
-			rss_ctrl_send_command("/var/run/rss/rvd.sock", cmd, resp, sizeof(resp),
+			rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", cmd, resp, sizeof(resp),
 					      1000);
 			cJSON *r = cJSON_CreateObject();
 			cJSON_AddStringToObject(r, "status", "ok");
@@ -237,7 +237,7 @@ int main(int argc, char **argv)
 	RSS_INFO("waiting for RVD...");
 	for (int i = 0; i < 100 && *ctx.running; i++) {
 		char resp[128];
-		if (rss_ctrl_send_command("/var/run/rss/rvd.sock", "{\"cmd\":\"ivs-status\"}", resp,
+		if (rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", "{\"cmd\":\"ivs-status\"}", resp,
 					  sizeof(resp), 500) >= 0) {
 			cJSON *root = cJSON_Parse(resp);
 			if (root) {
@@ -259,8 +259,8 @@ int main(int argc, char **argv)
 	rmd_gpio_init(&ctx);
 
 	/* Control socket */
-	rss_mkdir_p("/var/run/rss");
-	ctx.ctrl = rss_ctrl_listen("/var/run/rss/rmd.sock");
+	rss_mkdir_p(RSS_RUN_DIR);
+	ctx.ctrl = rss_ctrl_listen(RSS_RUN_DIR "/rmd.sock");
 
 	epoll_fd = epoll_create1(0);
 	int ctrl_fd = -1;

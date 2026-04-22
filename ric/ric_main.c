@@ -191,7 +191,7 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 
 	if (strcmp(cmd, "config-show") == 0) {
 		char exp_resp[256] = {0};
-		rss_ctrl_send_command("/var/run/rss/rvd.sock", "{\"cmd\":\"get-exposure\"}",
+		rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", "{\"cmd\":\"get-exposure\"}",
 				      exp_resp, sizeof(exp_resp), 1000);
 		cJSON *r = cJSON_CreateObject();
 		cJSON_AddStringToObject(r, "status", "ok");
@@ -211,7 +211,7 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 
 	/* Default: status */
 	char exp_resp[256] = {0};
-	rss_ctrl_send_command("/var/run/rss/rvd.sock", "{\"cmd\":\"get-exposure\"}", exp_resp,
+	rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", "{\"cmd\":\"get-exposure\"}", exp_resp,
 			      sizeof(exp_resp), 1000);
 	cJSON *r = cJSON_CreateObject();
 	cJSON_AddStringToObject(r, "status", "ok");
@@ -253,7 +253,7 @@ int main(int argc, char **argv)
 	RSS_DEBUG("waiting for RVD...");
 	for (int i = 0; i < 100 && *st.running; i++) {
 		char resp[256];
-		if (rss_ctrl_send_command("/var/run/rss/rvd.sock", "{\"cmd\":\"get-exposure\"}",
+		if (rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", "{\"cmd\":\"get-exposure\"}",
 					  resp, sizeof(resp), 1000) >= 0) {
 			RSS_INFO("RVD ready (%s)", resp);
 			break;
@@ -283,8 +283,8 @@ int main(int argc, char **argv)
 		ric_set_mode(&st, RIC_MODE_DAY); /* start in day, auto will adjust */
 
 	/* Control socket */
-	rss_mkdir_p("/var/run/rss");
-	st.ctrl = rss_ctrl_listen("/var/run/rss/ric.sock");
+	rss_mkdir_p(RSS_RUN_DIR);
+	st.ctrl = rss_ctrl_listen(RSS_RUN_DIR "/ric.sock");
 
 	int ctrl_fd = st.ctrl ? rss_ctrl_get_fd(st.ctrl) : -1;
 	if (ctrl_fd >= 0) {

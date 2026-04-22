@@ -71,7 +71,7 @@ static void render_image_element(rod_state_t *st, rod_element_t *e, int s)
 static void render_detections(rod_state_t *st, rod_element_t *e)
 {
 	char resp[2048];
-	int ret = rss_ctrl_send_command(ROD_RVD_SOCK, "{\"cmd\":\"ivs-detections\"}", resp,
+	int ret = rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", "{\"cmd\":\"ivs-detections\"}", resp,
 					sizeof(resp), 500);
 	if (ret < 0)
 		return;
@@ -294,12 +294,12 @@ int main(int argc, char **argv)
 			cJSON_PrintPreallocated(j, fwd, sizeof(fwd), 0);
 			cJSON_Delete(j);
 			char rvd_resp[256];
-			rss_ctrl_send_command(ROD_RVD_SOCK, fwd, rvd_resp, sizeof(rvd_resp), 1000);
+			rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", fwd, rvd_resp, sizeof(rvd_resp), 1000);
 		}
 	}
 
-	rss_mkdir_p("/var/run/rss");
-	st.ctrl = rss_ctrl_listen("/var/run/rss/rod.sock");
+	rss_mkdir_p(RSS_RUN_DIR);
+	st.ctrl = rss_ctrl_listen(RSS_RUN_DIR "/rod.sock");
 
 	int epoll_fd = epoll_create1(0);
 	int ctrl_fd = st.ctrl ? rss_ctrl_get_fd(st.ctrl) : -1;

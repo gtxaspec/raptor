@@ -144,7 +144,7 @@ int main(int argc, char **argv)
 			cJSON_PrintPreallocated(j, rod_json, sizeof(rod_json), 0);
 			cJSON_Delete(j);
 			char rod_resp[256];
-			rss_ctrl_send_command("/var/run/rss/rod.sock", rod_json, rod_resp,
+			rss_ctrl_send_command(RSS_RUN_DIR "/rod.sock", rod_json, rod_resp,
 					      sizeof(rod_resp), 1000);
 		}
 	}

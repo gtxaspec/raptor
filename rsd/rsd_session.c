@@ -759,7 +759,7 @@ static void rsd_client_t_play(VSelf, Compy_Context *ctx, const Compy_Request *re
 	/* Request IDR from RVD so the client gets a keyframe ASAP */
 	if (self->video.nal) {
 		char resp[128];
-		rss_ctrl_send_command("/var/run/rss/rvd.sock", "{\"cmd\":\"request-idr\"}", resp,
+		rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", "{\"cmd\":\"request-idr\"}", resp,
 				      sizeof(resp), 1000);
 	}
 

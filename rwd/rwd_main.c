@@ -524,8 +524,8 @@ static void rwd_run(rwd_server_t *srv)
 		RSS_ERROR("epoll_ctl add http_fd failed: %s", strerror(errno));
 
 	/* Register control socket */
-	rss_mkdir_p("/var/run/rss");
-	srv->ctrl = rss_ctrl_listen("/var/run/rss/rwd.sock");
+	rss_mkdir_p(RSS_RUN_DIR);
+	srv->ctrl = rss_ctrl_listen(RSS_RUN_DIR "/rwd.sock");
 	int ctrl_fd = -1;
 	if (srv->ctrl) {
 		ctrl_fd = rss_ctrl_get_fd(srv->ctrl);

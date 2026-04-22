@@ -762,8 +762,8 @@ int main(int argc, char **argv)
 	codec_ctx.ring = ring;
 
 	/* Control socket */
-	rss_mkdir_p("/var/run/rss");
-	ctrl = rss_ctrl_listen("/var/run/rss/rad.sock");
+	rss_mkdir_p(RSS_RUN_DIR);
+	ctrl = rss_ctrl_listen(RSS_RUN_DIR "/rad.sock");
 	if (!ctrl)
 		RSS_WARN("control socket failed (non-fatal)");
 

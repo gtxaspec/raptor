@@ -67,7 +67,7 @@ void jstr(cJSON *j, char *buf, int size)
 int send_cmd(const char *daemon, const char *json)
 {
 	char sock_path[64];
-	snprintf(sock_path, sizeof(sock_path), "/var/run/rss/%s.sock", daemon);
+	snprintf(sock_path, sizeof(sock_path), RSS_SOCK_FMT, daemon);
 
 	char resp[2048];
 	int ret = rss_ctrl_send_command(sock_path, json, resp, sizeof(resp), 5000);
@@ -84,7 +84,7 @@ int send_cmd(const char *daemon, const char *json)
 int send_cmd_json(const char *daemon, const char *json, char *resp, int resp_size)
 {
 	char sock_path[64];
-	snprintf(sock_path, sizeof(sock_path), "/var/run/rss/%s.sock", daemon);
+	snprintf(sock_path, sizeof(sock_path), RSS_SOCK_FMT, daemon);
 
 	int ret = rss_ctrl_send_command(sock_path, json, resp, resp_size, 5000);
 	if (ret < 0) {

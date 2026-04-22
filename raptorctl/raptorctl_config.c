@@ -72,7 +72,7 @@ int handle_config(int argc, char **argv)
 		for (int i = 0; daemons[i]; i++) {
 			char sock_path[64];
 			char resp[2048];
-			snprintf(sock_path, sizeof(sock_path), "/var/run/rss/%s.sock", daemons[i]);
+			snprintf(sock_path, sizeof(sock_path), RSS_SOCK_FMT, daemons[i]);
 			int ret = rss_ctrl_send_command(sock_path, "{\"cmd\":\"config-save\"}",
 							resp, sizeof(resp), 2000);
 			if (ret >= 0) {
@@ -103,7 +103,7 @@ int handle_config(int argc, char **argv)
 				char sock_path[64];
 				char resp[2048];
 				char cmd_json[256];
-				snprintf(sock_path, sizeof(sock_path), "/var/run/rss/%s.sock",
+				snprintf(sock_path, sizeof(sock_path), RSS_SOCK_FMT,
 					 target);
 				cJSON *j = jcmd("config-get");
 				if (!j)
@@ -127,7 +127,7 @@ int handle_config(int argc, char **argv)
 				char sock_path[64];
 				char resp[2048];
 				char cmd_json[256];
-				snprintf(sock_path, sizeof(sock_path), "/var/run/rss/%s.sock",
+				snprintf(sock_path, sizeof(sock_path), RSS_SOCK_FMT,
 					 target);
 				cJSON *j = jcmd("config-get-section");
 				if (!j)

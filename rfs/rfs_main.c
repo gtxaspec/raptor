@@ -512,8 +512,8 @@ int main(int argc, char **argv)
 	}
 
 	/* Control socket */
-	rss_mkdir_p("/var/run/rss");
-	st.ctrl = rss_ctrl_listen("/var/run/rss/rfs.sock");
+	rss_mkdir_p(RSS_RUN_DIR);
+	st.ctrl = rss_ctrl_listen(RSS_RUN_DIR "/rfs.sock");
 
 	int ctrl_fd = st.ctrl ? rss_ctrl_get_fd(st.ctrl) : -1;
 	if (ctrl_fd >= 0) {

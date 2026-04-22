@@ -73,7 +73,7 @@ int rmd_trigger_recording(rmd_ctx_t *ctx, bool start)
 	(void)ctx;
 	char resp[128];
 	const char *cmd = start ? "{\"cmd\":\"start\"}" : "{\"cmd\":\"stop\"}";
-	int ret = rss_ctrl_send_command("/var/run/rss/rmr.sock", cmd, resp, sizeof(resp), 2000);
+	int ret = rss_ctrl_send_command(RSS_RUN_DIR "/rmr.sock", cmd, resp, sizeof(resp), 2000);
 	if (ret < 0)
 		RSS_WARN("recording %s command failed (RMR not running?)",
 			 start ? "start" : "stop");

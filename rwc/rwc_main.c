@@ -729,8 +729,8 @@ int main(int argc, char **argv)
 		audio_init(&st, audio_name);
 
 	/* Control socket */
-	rss_mkdir_p("/var/run/rss");
-	st.ctrl = rss_ctrl_listen("/var/run/rss/rwc.sock");
+	rss_mkdir_p(RSS_RUN_DIR);
+	st.ctrl = rss_ctrl_listen(RSS_RUN_DIR "/rwc.sock");
 
 	RSS_INFO("rwc running (jpeg=%s video=%s audio=%s)", st.jpeg_ring ? "yes" : "no",
 		 st.video_ring ? "yes" : "no", st.audio_enabled ? "yes" : "no");

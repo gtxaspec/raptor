@@ -151,7 +151,7 @@ void ric_gpio_init(ric_state_t *st)
 void ric_set_isp_mode(ric_mode_t mode)
 {
 	char resp[128];
-	rss_ctrl_send_command("/var/run/rss/rvd.sock",
+	rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock",
 			      mode == RIC_MODE_NIGHT
 				      ? "{\"cmd\":\"set-running-mode\",\"value\":\"night\"}"
 				      : "{\"cmd\":\"set-running-mode\",\"value\":\"day\"}",
@@ -230,7 +230,7 @@ void ric_poll_exposure(ric_state_t *st)
 
 	/* Query RVD for ISP exposure data via control socket */
 	char resp[256];
-	int ret = rss_ctrl_send_command("/var/run/rss/rvd.sock", "{\"cmd\":\"get-exposure\"}", resp,
+	int ret = rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", "{\"cmd\":\"get-exposure\"}", resp,
 					sizeof(resp), 1000);
 	if (ret < 0)
 		return;

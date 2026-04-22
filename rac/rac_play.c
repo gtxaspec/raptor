@@ -164,7 +164,7 @@ int cmd_play(const char *src, int sample_rate)
 	/* Tell RAD to flush stale hardware audio and prepare for new playback */
 	{
 		char resp[256];
-		rss_ctrl_send_command("/var/run/rss/rad.sock", "{\"cmd\":\"ao-flush\"}", resp,
+		rss_ctrl_send_command(RSS_RUN_DIR "/rad.sock", "{\"cmd\":\"ao-flush\"}", resp,
 				      sizeof(resp), 500);
 	}
 

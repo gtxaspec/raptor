@@ -33,7 +33,7 @@ int cmd_ctrl(const char *cmd_json)
 {
 	char resp[1024] = {0};
 	int ret =
-		rss_ctrl_send_command("/var/run/rss/rad.sock", cmd_json, resp, sizeof(resp), 2000);
+		rss_ctrl_send_command(RSS_RUN_DIR "/rad.sock", cmd_json, resp, sizeof(resp), 2000);
 	if (ret < 0) {
 		fprintf(stderr, "rac: failed to send to RAD: %s\n",
 			ret == -ECONNREFUSED ? "not running" : "connection failed");
