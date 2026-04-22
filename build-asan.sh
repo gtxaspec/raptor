@@ -60,6 +60,19 @@ echo "Building with $SAN_LABEL ($SANITIZE)"
 
 mkdir -p "$OUT" "$DEPS"
 
+# Auto-clean when switching between ASAN and TSAN — cached .o and .a
+# files contain incompatible instrumentation and cause link errors.
+STAMP="$OUT/.sanitizer"
+PREV_SAN=""
+[ -f "$STAMP" ] && PREV_SAN=$(cat "$STAMP")
+if [ -n "$PREV_SAN" ] && [ "$PREV_SAN" != "$SAN_LABEL" ]; then
+    echo "  sanitizer changed ($PREV_SAN -> $SAN_LABEL), cleaning cached objects"
+    rm -f "$OUT"/*.o "$OUT"/*.a "$OUT"/rss_build_info.c
+    rm -rf "$OUT"/mbedtls-build "$OUT"/mbedtls-install "$OUT"/compy-build
+    rm -f "$OUT"/schrift.o
+fi
+echo "$SAN_LABEL" > "$STAMP"
+
 # ── Clone/update dependencies ──
 
 clone_or_pull() {
@@ -94,7 +107,7 @@ find_or_clone libschrift    https://github.com/tomolt/libschrift.git      SCHRIF
 find_or_clone faac          https://github.com/knik0/faac.git             FAAC_DIR
 
 # Build mbedTLS from source with DTLS-SRTP enabled
-MBEDTLS_VER="3.6.5"
+MBEDTLS_VER="3.6.6"
 MBEDTLS_DIR="$DEPS/mbedtls-$MBEDTLS_VER"
 MBEDTLS_BUILD="$OUT/mbedtls-build"
 MBEDTLS_PREFIX="$OUT/mbedtls-install"
@@ -238,10 +251,11 @@ if [ ! -f "$OUT/schrift.o" ]; then
     # _POSIX_C_SOURCE redefine). Our own code still builds with -Wall.
     $CC $CFLAGS -w -c "$SCHRIFT_DIR/schrift.c" -o "$OUT/schrift.o"
 fi
-$CC $CFLAGS -I"$SCHRIFT_DIR" -c "$RAPTOR_DIR/rod/rod_main.c" -o "$OUT/rod_main.o"
-$CC $CFLAGS -I"$SCHRIFT_DIR" -c "$RAPTOR_DIR/rod/rod_render.c" -o "$OUT/rod_render.o"
-$CC $CFLAGS -I"$SCHRIFT_DIR" -c "$RAPTOR_DIR/rod/rod_receipt.c" -o "$OUT/rod_receipt.o"
-$CC -o "$OUT/rod" "$OUT/rod_main.o" "$OUT/rod_render.o" "$OUT/rod_receipt.o" "$OUT/schrift.o" $LIBS -lm $LDFLAGS
+for f in rod_main rod_ctrl rod_elem rod_config rod_template rod_render rod_receipt; do
+    $CC $CFLAGS -I"$SCHRIFT_DIR" -c "$RAPTOR_DIR/rod/$f.c" -o "$OUT/$f.o"
+done
+$CC -o "$OUT/rod" "$OUT"/rod_main.o "$OUT"/rod_ctrl.o "$OUT"/rod_elem.o "$OUT"/rod_config.o \
+    "$OUT"/rod_template.o "$OUT"/rod_render.o "$OUT"/rod_receipt.o "$OUT/schrift.o" $LIBS -lm $LDFLAGS
 echo "  -> rod"
 
 echo "=== RMR ==="
@@ -254,9 +268,11 @@ $CC -o "$OUT/rmr" "$OUT"/rmr_main.o "$OUT"/rmr_mux.o "$OUT"/rmr_nal.o "$OUT"/rmr
 echo "  -> rmr"
 
 echo "=== raptorctl ==="
-$CC $CFLAGS -c "$RAPTOR_DIR/raptorctl/raptorctl.c" -o "$OUT/raptorctl.o"
-$CC $CFLAGS -c "$RAPTOR_DIR/raptorctl/raptorctl_info.c" -o "$OUT/raptorctl_info.o"
-$CC -o "$OUT/raptorctl" "$OUT/raptorctl.o" "$OUT/raptorctl_info.o" $LIBS $LDFLAGS
+for f in raptorctl raptorctl_dispatch raptorctl_config raptorctl_ipc raptorctl_help raptorctl_info; do
+    $CC $CFLAGS -c "$RAPTOR_DIR/raptorctl/$f.c" -o "$OUT/$f.o"
+done
+$CC -o "$OUT/raptorctl" "$OUT"/raptorctl.o "$OUT"/raptorctl_dispatch.o "$OUT"/raptorctl_config.o \
+    "$OUT"/raptorctl_ipc.o "$OUT"/raptorctl_help.o "$OUT"/raptorctl_info.o $LIBS $LDFLAGS
 echo "  -> raptorctl"
 
 echo "=== ringdump ==="
