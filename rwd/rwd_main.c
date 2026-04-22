@@ -733,6 +733,8 @@ int main(int argc, char **argv)
 	/* HTTPS for signaling — reuses the same cert/key as DTLS.
 	 * Enabled by default; disable with https = false in [webrtc]. */
 	bool https_enabled = rss_config_get_bool(dctx.cfg, "webrtc", "https", true);
+	if (!https_enabled && webrtc_user[0])
+		RSS_WARN("WebRTC Basic auth without TLS -- credentials sent in plaintext");
 	if (https_enabled) {
 		srv.tls = rss_tls_init(cert_path, key_path);
 		if (srv.tls)
@@ -740,6 +742,9 @@ int main(int argc, char **argv)
 		else
 			RSS_WARN("HTTPS init failed, falling back to HTTP");
 	}
+#else
+	if (webrtc_user[0])
+		RSS_WARN("WebRTC Basic auth without TLS -- credentials sent in plaintext");
 #endif
 
 	/* Create sockets */

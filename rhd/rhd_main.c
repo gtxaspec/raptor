@@ -883,6 +883,8 @@ int main(int argc, char **argv)
 
 #ifdef RSS_HAS_TLS
 	bool https = rss_config_get_bool(ctx.cfg, "http", "https", false);
+	if (!https && http_user[0])
+		RSS_WARN("HTTP Basic auth without TLS -- credentials sent in plaintext");
 	if (https) {
 		const char *cert =
 			rss_config_get_str(ctx.cfg, "http", "cert", "/etc/ssl/certs/uhttpd.crt");
@@ -894,6 +896,9 @@ int main(int argc, char **argv)
 		else
 			RSS_WARN("HTTPS init failed, falling back to HTTP");
 	}
+#else
+	if (http_user[0])
+		RSS_WARN("HTTP Basic auth without TLS -- credentials sent in plaintext");
 #endif
 
 	if (server_init(&srv) < 0)
