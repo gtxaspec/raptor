@@ -170,11 +170,13 @@ raptorctl rvd set-rc-mode 0 vbr       # rate control: fixqp/cbr/vbr/smart/capped
 raptorctl rvd set-qp-bounds 0 15 45   # QP range
 raptorctl rvd request-idr             # force keyframe
 
-# Encoder (advanced — 40+ commands, SoC-dependent)
-raptorctl rvd get-enc-caps            # show which features this SoC supports
-raptorctl rvd set-gop-mode 0 2        # GOP mode (0=default 1=pyramidal 2=smartP)
-raptorctl rvd set-roi 0 0 1 100 100 200 200 30  # ROI region
-raptorctl rvd set-color2grey 0 1      # greyscale mode
+# Encoder (advanced — table-driven, SoC-dependent)
+raptorctl rvd enc-list                # list all encoder params with support status
+raptorctl rvd enc-list 0              # list with current values for channel 0
+raptorctl rvd enc-set 0 gop_mode 2    # set encoder param (channel, name, value)
+raptorctl rvd enc-get 0 gop_mode      # get encoder param
+raptorctl rvd get-enc-caps            # show which struct features this SoC supports
+raptorctl rvd set-roi 0 0 1 100 100 200 200 30  # ROI region (struct command)
 raptorctl rvd get-bitrate 0           # query target + average bitrate
 
 # ISP
