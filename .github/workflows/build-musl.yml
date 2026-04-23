@@ -9,7 +9,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [t20, t21, t23, t30, t31, t32, t33, t40, t41]
+        platform: [t20, t21, t23, t30, t31, t32, t33, t40, t41, a1]
     steps:
       - uses: actions/checkout@v6
 
