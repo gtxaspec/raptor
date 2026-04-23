@@ -154,7 +154,7 @@ endif
 
 # System libs for HAL-linked daemons
 # Shim must come BEFORE Ingenic SDK libs — symbols must be resolved first.
-LDFLAGS_HAL := $(LDFLAGS_SYSROOT) $(SHIM_LIB) -limp -lalog -lsysutils -lpthread -lrt -lm -ldl -latomic
+LDFLAGS_HAL := $(LDFLAGS_SYSROOT) $(SHIM_LIB) -limp -lalog -lpthread -lrt -lm -ldl -latomic
 
 # IVS detection libs — optional, no MXU needed (statically linked in .so)
 ifeq ($(IVS_DETECT),1)

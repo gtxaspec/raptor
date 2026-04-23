@@ -3,9 +3,6 @@
  *
  * Supports single GPIO (one pin toggles) and dual GPIO (two pins
  * pulsed for motor-driven IR-cut filters).
- *
- * ADC support uses dlopen for libsysutils.so — graceful fallback
- * to luma mode if the library or hardware is unavailable.
  */
 
 #include <errno.h>
@@ -14,59 +11,41 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <dlfcn.h>
+#include <sys/ioctl.h>
 
 #include "ric.h"
 
-/* ── ADC via libsysutils (runtime-loaded) ── */
+/* ── ADC via kernel device nodes ── */
 
-static void *adc_lib;
-static int (*adc_init)(void);
-static int (*adc_exit)(void);
-static int (*adc_enable)(uint32_t chn);
-static int (*adc_disable)(uint32_t chn);
-static int (*adc_get_value)(uint32_t chn, int *value);
+static int adc_fd = -1;
 
-static bool adc_load(void)
+static int adc_open_channel(int channel)
 {
-	if (adc_lib)
-		return true;
+	char path[64];
 
-	adc_lib = dlopen("libsysutils.so", RTLD_LAZY);
-	if (!adc_lib) {
-		RSS_WARN("ADC: libsysutils.so not available (%s)", dlerror());
-		return false;
-	}
+	snprintf(path, sizeof(path), "/dev/ingenic_adc_aux_%d", channel);
+	int fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd >= 0)
+		return fd;
 
-	adc_init = dlsym(adc_lib, "SU_ADC_Init");
-	adc_exit = dlsym(adc_lib, "SU_ADC_Exit");
-	adc_enable = dlsym(adc_lib, "SU_ADC_EnableChn");
-	adc_disable = dlsym(adc_lib, "SU_ADC_DisableChn");
-	adc_get_value = dlsym(adc_lib, "SU_ADC_GetChnValue");
-
-	if (!adc_init || !adc_get_value || !adc_enable) {
-		RSS_WARN("ADC: missing symbols in libsysutils.so");
-		dlclose(adc_lib);
-		adc_lib = NULL;
-		return false;
-	}
-	return true;
+	snprintf(path, sizeof(path), "/dev/jz_adc_aux_%d", channel);
+	return open(path, O_RDONLY | O_CLOEXEC);
 }
 
 bool ric_adc_start(ric_state_t *st)
 {
-	if (!adc_load())
-		return false;
-
 	int channel = st->settings.adc_channel;
-	if (adc_init() != 0) {
-		RSS_WARN("ADC: SU_ADC_Init failed");
+
+	adc_fd = adc_open_channel(channel);
+	if (adc_fd < 0) {
+		RSS_WARN("ADC: no device for channel %d", channel);
 		return false;
 	}
-	if (adc_enable((uint32_t)channel) != 0) {
-		RSS_WARN("ADC: SU_ADC_EnableChn(%d) failed", channel);
-		if (adc_exit)
-			adc_exit();
+
+	if (ioctl(adc_fd, 0) < 0) {
+		RSS_WARN("ADC: enable channel %d failed: %s", channel, strerror(errno));
+		close(adc_fd);
+		adc_fd = -1;
 		return false;
 	}
 
@@ -76,25 +55,21 @@ bool ric_adc_start(ric_state_t *st)
 
 static int adc_read(int channel)
 {
-	int value = -1;
-	if (adc_get_value && adc_get_value((uint32_t)channel, &value) != 0)
+	(void)channel;
+	if (adc_fd < 0)
 		return -1;
-	return value;
+	int value;
+	return (read(adc_fd, &value, sizeof(value)) == sizeof(value)) ? value : -1;
 }
 
 void ric_adc_cleanup(ric_state_t *st)
 {
-	if (st->adc_initialized) {
-		if (adc_disable)
-			adc_disable((uint32_t)st->settings.adc_channel);
-		if (adc_exit)
-			adc_exit();
-		st->adc_initialized = false;
+	if (adc_fd >= 0) {
+		ioctl(adc_fd, 1);
+		close(adc_fd);
+		adc_fd = -1;
 	}
-	if (adc_lib) {
-		dlclose(adc_lib);
-		adc_lib = NULL;
-	}
+	st->adc_initialized = false;
 }
 
 /* Export a GPIO pin via sysfs (ignore errors if already exported) */
