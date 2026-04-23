@@ -300,8 +300,22 @@ int main(int argc, char **argv)
 		 st.settings.opmode == RIC_AUTO
 			 ? "auto"
 			 : (st.settings.opmode == RIC_FORCE_DAY ? "day" : "night"),
-		 st.settings.trigger == RIC_TRIGGER_LUMA ? "luma" : "gain", st.settings.gpio_ircut,
-		 st.settings.gpio_ircut2, st.settings.gpio_irled);
+		 st.settings.trigger == RIC_TRIGGER_LUMA
+			 ? "luma"
+			 : (st.settings.trigger == RIC_TRIGGER_ADC ? "adc" : "gain"),
+		 st.settings.gpio_ircut, st.settings.gpio_ircut2, st.settings.gpio_irled);
+	if (st.settings.trigger == RIC_TRIGGER_ADC) {
+		RSS_DEBUG("  adc: channel=%d night=%d day=%d", st.settings.adc_channel,
+			  st.settings.adc_night, st.settings.adc_day);
+	} else if (st.settings.trigger == RIC_TRIGGER_LUMA) {
+		RSS_DEBUG("  luma: night_luma=%d night_gain=%d day_gain_pct=%d",
+			  st.settings.night_luma, st.settings.night_gain, st.settings.day_gain_pct);
+	} else {
+		RSS_DEBUG("  gain: night=%d day=%d", st.settings.night_threshold,
+			  st.settings.day_threshold);
+	}
+	RSS_DEBUG("  hysteresis=%ds poll=%dms", st.settings.hysteresis_sec,
+		  st.settings.poll_interval_ms);
 
 	/* Main loop: poll exposure + handle control socket */
 	while (*st.running) {

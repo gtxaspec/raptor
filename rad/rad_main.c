@@ -657,6 +657,8 @@ int main(int argc, char **argv)
 
 	RSS_INFO("audio: dev=%d %d Hz %s vol=%d gain=%d", ai_dev, sample_rate, codec_str, volume,
 		 gain);
+	RSS_DEBUG("  samples/frame=%d (%dms) frame_depth=%d", audio_cfg.samples_per_frame,
+		  audio_cfg.samples_per_frame * 1000 / sample_rate, audio_cfg.frame_depth);
 
 	/* ── Codec init ── */
 	codec_ctx.codec_id = codec_id;

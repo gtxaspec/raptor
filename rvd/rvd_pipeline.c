@@ -84,6 +84,42 @@ static rss_rc_mode_t parse_rc_mode(const char *s)
 	return RSS_RC_VBR;
 }
 
+static const char *codec_str(rss_codec_t c)
+{
+	switch (c) {
+	case RSS_CODEC_H264:
+		return "H.264";
+	case RSS_CODEC_H265:
+		return "H.265";
+	case RSS_CODEC_JPEG:
+		return "JPEG";
+	case RSS_CODEC_MJPEG:
+		return "MJPEG";
+	default:
+		return "unknown";
+	}
+}
+
+static const char *rc_mode_str(rss_rc_mode_t m)
+{
+	switch (m) {
+	case RSS_RC_FIXQP:
+		return "fixqp";
+	case RSS_RC_CBR:
+		return "cbr";
+	case RSS_RC_VBR:
+		return "vbr";
+	case RSS_RC_SMART:
+		return "smart";
+	case RSS_RC_CAPPED_VBR:
+		return "capped_vbr";
+	case RSS_RC_CAPPED_QUALITY:
+		return "capped_quality";
+	default:
+		return "unknown";
+	}
+}
+
 /* Load one stream's config from INI section */
 static void load_stream_config(rss_config_t *cfg, const char *section, rvd_stream_t *s,
 			       int default_w, int default_h, int default_fps, int default_br)
@@ -458,45 +494,59 @@ int rvd_pipeline_init(rvd_state_t *st)
 	}
 
 	/* ── 3c. ISP tuning defaults (apply to all sensors) ── */
-	const char *img = "image";
-	RSS_HAL_CALL(st->ops, isp_set_brightness, st->hal_ctx,
-		     rss_config_get_int(cfg, img, "brightness", 128));
-	RSS_HAL_CALL(st->ops, isp_set_contrast, st->hal_ctx,
-		     rss_config_get_int(cfg, img, "contrast", 128));
-	RSS_HAL_CALL(st->ops, isp_set_saturation, st->hal_ctx,
-		     rss_config_get_int(cfg, img, "saturation", 128));
-	RSS_HAL_CALL(st->ops, isp_set_sharpness, st->hal_ctx,
-		     rss_config_get_int(cfg, img, "sharpness", 128));
-	RSS_HAL_CALL(st->ops, isp_set_sinter_strength, st->hal_ctx,
-		     rss_config_get_int(cfg, img, "sinter", 128));
-	RSS_HAL_CALL(st->ops, isp_set_temper_strength, st->hal_ctx,
-		     rss_config_get_int(cfg, img, "temper", 128));
-	RSS_HAL_CALL(st->ops, isp_set_hue, st->hal_ctx, rss_config_get_int(cfg, img, "hue", 128));
-	RSS_HAL_CALL(st->ops, isp_set_ae_comp, st->hal_ctx,
-		     rss_config_get_int(cfg, img, "ae_comp", 128));
-	RSS_HAL_CALL(st->ops, isp_set_max_again, st->hal_ctx,
-		     rss_config_get_int(cfg, img, "max_again", 160));
-	RSS_HAL_CALL(st->ops, isp_set_max_dgain, st->hal_ctx,
-		     rss_config_get_int(cfg, img, "max_dgain", 80));
-	RSS_HAL_CALL(st->ops, isp_set_dpc_strength, st->hal_ctx,
-		     rss_config_get_int(cfg, img, "dpc_strength", 128));
-	RSS_HAL_CALL(st->ops, isp_set_drc_strength, st->hal_ctx,
-		     rss_config_get_int(cfg, img, "drc_strength", 128));
-	RSS_HAL_CALL(st->ops, isp_set_highlight_depress, st->hal_ctx,
-		     rss_config_get_int(cfg, img, "highlight_depress", 0));
-	RSS_HAL_CALL(st->ops, isp_set_backlight_comp, st->hal_ctx,
-		     rss_config_get_int(cfg, img, "backlight_comp", 0));
 	{
-		uint8_t dv = (uint8_t)rss_config_get_int(cfg, img, "defog_strength", 128);
-		RSS_HAL_CALL(st->ops, isp_set_defog_strength_adv, st->hal_ctx, &dv);
+		const char *img = "image";
+		int brightness = rss_config_get_int(cfg, img, "brightness", 128);
+		int contrast = rss_config_get_int(cfg, img, "contrast", 128);
+		int saturation = rss_config_get_int(cfg, img, "saturation", 128);
+		int sharpness = rss_config_get_int(cfg, img, "sharpness", 128);
+		int sinter = rss_config_get_int(cfg, img, "sinter", 128);
+		int temper = rss_config_get_int(cfg, img, "temper", 128);
+		int hue = rss_config_get_int(cfg, img, "hue", 128);
+		int ae_comp = rss_config_get_int(cfg, img, "ae_comp", 128);
+		int max_again = rss_config_get_int(cfg, img, "max_again", 160);
+		int max_dgain = rss_config_get_int(cfg, img, "max_dgain", 80);
+		int dpc = rss_config_get_int(cfg, img, "dpc_strength", 128);
+		int drc = rss_config_get_int(cfg, img, "drc_strength", 128);
+		int highlight = rss_config_get_int(cfg, img, "highlight_depress", 0);
+		int backlight = rss_config_get_int(cfg, img, "backlight_comp", 0);
+		uint8_t defog = (uint8_t)rss_config_get_int(cfg, img, "defog_strength", 128);
+		int hflip = rss_config_get_int(cfg, img, "hflip", 0);
+		int vflip = rss_config_get_int(cfg, img, "vflip", 0);
+		int antiflicker =
+			rss_config_get_int(cfg, multi ? "sensor0" : "sensor", "antiflicker", 2);
+
+		RSS_HAL_CALL(st->ops, isp_set_brightness, st->hal_ctx, brightness);
+		RSS_HAL_CALL(st->ops, isp_set_contrast, st->hal_ctx, contrast);
+		RSS_HAL_CALL(st->ops, isp_set_saturation, st->hal_ctx, saturation);
+		RSS_HAL_CALL(st->ops, isp_set_sharpness, st->hal_ctx, sharpness);
+		RSS_HAL_CALL(st->ops, isp_set_sinter_strength, st->hal_ctx, sinter);
+		RSS_HAL_CALL(st->ops, isp_set_temper_strength, st->hal_ctx, temper);
+		RSS_HAL_CALL(st->ops, isp_set_hue, st->hal_ctx, hue);
+		RSS_HAL_CALL(st->ops, isp_set_ae_comp, st->hal_ctx, ae_comp);
+		RSS_HAL_CALL(st->ops, isp_set_max_again, st->hal_ctx, max_again);
+		RSS_HAL_CALL(st->ops, isp_set_max_dgain, st->hal_ctx, max_dgain);
+		RSS_HAL_CALL(st->ops, isp_set_dpc_strength, st->hal_ctx, dpc);
+		RSS_HAL_CALL(st->ops, isp_set_drc_strength, st->hal_ctx, drc);
+		RSS_HAL_CALL(st->ops, isp_set_highlight_depress, st->hal_ctx, highlight);
+		RSS_HAL_CALL(st->ops, isp_set_backlight_comp, st->hal_ctx, backlight);
+		RSS_HAL_CALL(st->ops, isp_set_defog_strength_adv, st->hal_ctx, &defog);
+		RSS_HAL_CALL(st->ops, isp_set_running_mode, st->hal_ctx, RSS_ISP_DAY);
+		ret = RSS_HAL_CALL(st->ops, isp_set_bypass, st->hal_ctx, 1);
+		RSS_HAL_CALL(st->ops, isp_set_antiflicker, st->hal_ctx, antiflicker);
+		RSS_HAL_CALL(st->ops, isp_set_hflip, st->hal_ctx, hflip);
+		RSS_HAL_CALL(st->ops, isp_set_vflip, st->hal_ctx, vflip);
+
+		RSS_DEBUG("isp tuning: brightness=%d contrast=%d saturation=%d "
+			  "sharpness=%d",
+			  brightness, contrast, saturation, sharpness);
+		RSS_DEBUG("  sinter=%d temper=%d hue=%d ae_comp=%d", sinter, temper, hue, ae_comp);
+		RSS_DEBUG("  max_again=%d max_dgain=%d dpc=%d drc=%d", max_again, max_dgain, dpc,
+			  drc);
+		RSS_DEBUG("  highlight=%d backlight=%d defog=%d", highlight, backlight, defog);
+		RSS_DEBUG("  hflip=%d vflip=%d antiflicker=%d bypass=%d", hflip, vflip, antiflicker,
+			  ret == RSS_OK);
 	}
-	RSS_HAL_CALL(st->ops, isp_set_running_mode, st->hal_ctx, RSS_ISP_DAY);
-	ret = RSS_HAL_CALL(st->ops, isp_set_bypass, st->hal_ctx, 1);
-	RSS_DEBUG("isp_set_bypass returned %d", ret);
-	int antiflicker = rss_config_get_int(cfg, multi ? "sensor0" : "sensor", "antiflicker", 2);
-	RSS_HAL_CALL(st->ops, isp_set_antiflicker, st->hal_ctx, antiflicker);
-	RSS_HAL_CALL(st->ops, isp_set_hflip, st->hal_ctx, rss_config_get_int(cfg, img, "hflip", 0));
-	RSS_HAL_CALL(st->ops, isp_set_vflip, st->hal_ctx, rss_config_get_int(cfg, img, "vflip", 0));
 
 	/* Dual-sensor: read sensor attrs + disable AeFreeze + set CustomMode (prudynt pattern).
 	 * GetSensorAttr may trigger ISP to initialize the sensor pipeline. */
@@ -792,6 +842,16 @@ int rvd_pipeline_init(rvd_state_t *st)
 			RSS_FATAL("fs_create_channel(%d) failed: %d", fsc, ret);
 			return ret;
 		}
+		{
+			rss_fs_config_t *fs = &st->streams[i].fs_cfg;
+			RSS_DEBUG("fs chn %d: %ux%u pixfmt=%d fps=%u/%u nr_vbs=%d type=%d", fsc,
+				  fs->width, fs->height, fs->pixfmt, fs->fps_num, fs->fps_den,
+				  fs->nr_vbs, fs->chn_type);
+			RSS_DEBUG("  crop: enable=%d %dx%d+%d+%d", fs->crop.enable, fs->crop.w,
+				  fs->crop.h, fs->crop.x, fs->crop.y);
+			RSS_DEBUG("  scaler: enable=%d out=%dx%d", fs->scaler.enable,
+				  fs->scaler.out_width, fs->scaler.out_height);
+		}
 		RSS_HAL_CALL(st->ops, fs_set_fifo, st->hal_ctx, fsc, 0);
 		RSS_HAL_CALL(st->ops, fs_set_frame_depth, st->hal_ctx, fsc, 0);
 	}
@@ -927,6 +987,10 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 				RSS_WARN("jpeg bufshare failed: %d (non-fatal)", ret);
 		}
 
+		RSS_DEBUG("stream%d encoder: JPEG %ux%u quality=%d fps=%u/%u", idx,
+			  s->enc_cfg.width, s->enc_cfg.height, s->enc_cfg.init_qp,
+			  s->enc_cfg.fps_num, s->enc_cfg.fps_den);
+
 		ret = RSS_HAL_CALL(st->ops, enc_create_channel, st->hal_ctx, s->chn, &s->enc_cfg);
 		if (ret != RSS_OK) {
 			RSS_ERROR("enc_create_channel(%d/JPEG) failed: %d", s->chn, ret);
@@ -1018,6 +1082,21 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 		} else if (st->low_latency) {
 			s->enc_cfg.max_stream_cnt = 1;
 		}
+
+		RSS_DEBUG("stream%d encoder: %s %ux%u profile=%d", idx, codec_str(s->enc_cfg.codec),
+			  s->enc_cfg.width, s->enc_cfg.height, s->enc_cfg.profile);
+		RSS_DEBUG("  rc: %s bitrate=%u max_bitrate=%u", rc_mode_str(s->enc_cfg.rc_mode),
+			  s->enc_cfg.bitrate, s->enc_cfg.max_bitrate);
+		RSS_DEBUG("  fps=%u/%u gop=%u gop_mode=%d", s->enc_cfg.fps_num, s->enc_cfg.fps_den,
+			  s->enc_cfg.gop_length, s->enc_cfg.gop_mode);
+		RSS_DEBUG("  qp: init=%d min=%d max=%d ip_delta=%d pb_delta=%d", s->enc_cfg.init_qp,
+			  s->enc_cfg.min_qp, s->enc_cfg.max_qp, s->enc_cfg.ip_delta,
+			  s->enc_cfg.pb_delta);
+		RSS_DEBUG("  max_psnr=%u rc_options=0x%x max_same_scene=%u", s->enc_cfg.max_psnr,
+			  s->enc_cfg.rc_options, s->enc_cfg.max_same_scene_cnt);
+		RSS_DEBUG("  buf_size=%u max_stream_cnt=%u stream_buf_size=%u ivdc=%d",
+			  s->enc_cfg.buf_size, s->enc_cfg.max_stream_cnt,
+			  s->enc_cfg.stream_buf_size, s->enc_cfg.ivdc);
 
 		ret = RSS_HAL_CALL(st->ops, enc_create_channel, st->hal_ctx, s->chn, &s->enc_cfg);
 		if (ret != RSS_OK) {

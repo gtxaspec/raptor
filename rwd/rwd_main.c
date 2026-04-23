@@ -761,6 +761,8 @@ int main(int argc, char **argv)
 		goto cleanup;
 	}
 	RSS_INFO("HTTP listening on port %d (GET /webrtc, POST /whip)", srv.http_port);
+	RSS_DEBUG("  max_clients=%d audio=%s opus_complexity=%d opus_bitrate=%d", srv.max_clients,
+		  audio_mode_str, srv.opus_complexity, srv.opus_bitrate);
 
 	/* WebTorrent external sharing (optional) */
 #ifdef RAPTOR_WEBTORRENT
@@ -784,6 +786,8 @@ int main(int argc, char **argv)
 		if (rwd_webtorrent_start(&wt, &srv) == 0) {
 			wt_started = true;
 			srv.webtorrent = &wt;
+			RSS_INFO("webtorrent: tracker=%s stun=%s:%d", wt.tracker_url,
+				 wt.stun_server, wt.stun_port);
 		} else {
 			RSS_ERROR("webtorrent: failed to start");
 		}

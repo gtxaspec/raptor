@@ -142,6 +142,10 @@ int main(int argc, char **argv)
 	}
 #endif
 
+	RSS_INFO("RTSP listening on port %d%s", srv.port, tls_enabled ? " (TLS)" : "");
+	RSS_DEBUG("  max_clients=%d session_timeout=%d tcp_sndbuf=%d rtcp_sr=%d", srv.max_clients,
+		  srv.session_timeout, srv.tcp_sndbuf, srv.rtcp_sr);
+
 	ret = rsd_server_init(&srv);
 	if (ret != 0) {
 		RSS_FATAL("server init failed");
