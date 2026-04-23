@@ -664,12 +664,21 @@ void *rwd_video_reader_thread(void *arg)
 			rss_ring_slot_t meta;
 			uint64_t read_seq = srv->video_read_seq[s];
 
-			/* Skip to latest frame to minimize latency */
+			/* Skip to latest when lag exceeds 10 frames.
+			 * Small lags (2-3 frames on slower SoCs) are read
+			 * sequentially to preserve the reference chain. */
 			const rss_ring_header_t *vhdr = rss_ring_get_header(srv->video_rings[s]);
 			uint64_t ws = vhdr->write_seq;
-			if (ws > read_seq + 1 && read_seq > 0) {
+			if (ws > read_seq + 10 && read_seq > 0) {
 				read_seq = ws - 1;
 				rwd_request_idr(srv, s);
+				pthread_mutex_lock(&srv->clients_lock);
+				for (int i = 0; i < RWD_MAX_CLIENTS; i++) {
+					rwd_client_t *c = srv->clients[i];
+					if (c && c->sending && c->stream_idx == s)
+						c->waiting_keyframe = true;
+				}
+				pthread_mutex_unlock(&srv->clients_lock);
 			}
 
 			ret = rss_ring_read(srv->video_rings[s], &read_seq, srv->video_bufs[s],
@@ -677,6 +686,13 @@ void *rwd_video_reader_thread(void *arg)
 			if (ret == RSS_EOVERFLOW) {
 				srv->video_read_seq[s] = read_seq;
 				rwd_request_idr(srv, s);
+				pthread_mutex_lock(&srv->clients_lock);
+				for (int i = 0; i < RWD_MAX_CLIENTS; i++) {
+					rwd_client_t *c = srv->clients[i];
+					if (c && c->sending && c->stream_idx == s)
+						c->waiting_keyframe = true;
+				}
+				pthread_mutex_unlock(&srv->clients_lock);
 				continue;
 			}
 			if (ret != 0)
@@ -699,11 +715,14 @@ void *rwd_video_reader_thread(void *arg)
 				if (c->waiting_keyframe) {
 					if (!meta.is_key)
 						continue;
+					bool initial = !c->video_ts_base_set;
 					c->waiting_keyframe = false;
-					c->video_ts_offset = rtp_ts;
-					c->video_ts_base_set = true;
-					RSS_DEBUG("media: client[%d] got keyframe, starting send",
-						  s);
+					if (initial) {
+						c->video_ts_offset = rtp_ts;
+						c->video_ts_base_set = true;
+					}
+					RSS_DEBUG("media: client[%d] keyframe, %s", s,
+						  initial ? "starting" : "resuming");
 				}
 
 				uint32_t client_ts = rtp_ts - c->video_ts_offset;
