@@ -30,6 +30,11 @@ static void hal_log_bridge(int level, const char *file, int line, const char *fm
 	va_end(ap);
 }
 
+void rss_post_banner_hook(const char *name)
+{
+	rss_hal_check_platform(name);
+}
+
 int main(int argc, char **argv)
 {
 	rss_daemon_ctx_t ctx;

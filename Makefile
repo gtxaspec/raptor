@@ -50,8 +50,8 @@ CFLAGS += $(EXTRA_CFLAGS)
 RSS_BUILD_HASH ?= $(shell git -C $(CURDIR) rev-parse --short HEAD 2>/dev/null || echo unknown)
 RSS_BUILD_TIME ?= $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
 RSS_BUILD_OBJ := $(CURDIR)/rss_build_info.o
-$(shell printf 'const char *rss_build_hash = "%s";\nconst char *rss_build_time = "%s";\n' \
-	'$(RSS_BUILD_HASH)' '$(RSS_BUILD_TIME)' > $(CURDIR)/rss_build_info.c)
+$(shell printf 'const char *rss_build_hash = "%s";\nconst char *rss_build_time = "%s";\nconst char *rss_build_platform = "%s";\n' \
+	'$(RSS_BUILD_HASH)' '$(RSS_BUILD_TIME)' '$(PLATFORM)' > $(CURDIR)/rss_build_info.c)
 $(RSS_BUILD_OBJ): $(CURDIR)/rss_build_info.c
 	@echo "  CC      rss_build_info.c"
 	$(Q)$(CC) $(CFLAGS) -c $< -o $@

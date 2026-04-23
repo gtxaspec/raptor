@@ -562,3 +562,13 @@ const char *rss_hal_get_cpu_info(void)
 {
 	return "MOCK-CPU";
 }
+
+const char *rss_hal_get_platform_name(void)
+{
+	return "MOCK";
+}
+
+void rss_hal_check_platform(const char *name)
+{
+	(void)name;
+}
