@@ -15,6 +15,7 @@
 #   --no-opus      Disable Opus codec
 #   --no-mp3       Disable MP3 codec
 #   --no-audio-effects  Disable audio effects (NS/HPF/AGC)
+#   --static-vendor-libs  Statically link vendor libs (libimp, libalog; requires --static)
 #   --clean        Clean all build artifacts
 #   --deps-only    Only build dependencies, not raptor
 #   --libc=TYPE    uclibc (default), musl, or glibc
@@ -122,6 +123,7 @@ OPT_CLEAN=0
 OPT_CLEAN_ALL=0
 OPT_DEPS_ONLY=0
 OPT_STATIC=0
+OPT_STATIC_VENDOR=0
 OPT_LOCAL=0
 JOBS="${JOBS:-$(nproc)}"
 
@@ -137,6 +139,7 @@ usage() {
     echo "  --no-mp3       Disable MP3 codec"
     echo "  --no-audio-effects  Disable audio effects (NS/HPF/AGC)"
     echo "  --static       Statically link optional deps (fewer .so files needed)"
+    echo "  --static-vendor-libs  Also statically link vendor libs (libimp, libalog; requires --static)"
     echo "  --clean        Clean build artifacts (keep downloaded deps)"
     echo "  --clean-all    Remove everything (.deps/ + build/)"
     echo "  --deps-only    Only build dependencies"
@@ -155,6 +158,7 @@ for arg in "$@"; do
         --no-mp3)    OPT_MP3= ;;
         --no-audio-effects) OPT_AUDIO_EFFECTS= ;;
         --static)    OPT_STATIC=1 ;;
+        --static-vendor-libs) OPT_STATIC_VENDOR=1 ;;
         --local)     OPT_LOCAL=1 ;;
         --clean)     OPT_CLEAN=1 ;;
         --clean-all) OPT_CLEAN_ALL=1 ;;
@@ -166,6 +170,11 @@ for arg in "$@"; do
 done
 
 [ -z "$PLATFORM" ] && usage
+
+if [ "$OPT_STATIC_VENDOR" = 1 ] && [ "$OPT_STATIC" != 1 ]; then
+    echo "ERROR: --static-vendor-libs requires --static"
+    exit 1
+fi
 
 PLATFORM_UPPER=$(echo "$PLATFORM" | tr a-z A-Z)
 
@@ -340,20 +349,30 @@ build_ingenic_lib() {
 
     echo "Installing Ingenic SDK libs from $SDK_VERSION/$sdk_libc/$GCC_VER"
     cp -f "$libdir"/*.so "$SYSROOT_DIR/usr/lib/"
+    for f in "$libdir"/*.a; do
+        [ -f "$f" ] && cp -f "$f" "$SYSROOT_DIR/usr/lib/"
+    done
 
     # libalog: T40/T41 use their own, others use T31 1.1.6 uclibc
     case "$PLATFORM" in
         t40|t41|a1)
-            cp -f "$libdir/libalog.so" "$SYSROOT_DIR/usr/lib/" ;;
+            cp -f "$libdir/libalog.so" "$SYSROOT_DIR/usr/lib/"
+            [ -f "$libdir/libalog.a" ] && cp -f "$libdir/libalog.a" "$SYSROOT_DIR/usr/lib/" ;;
         *)
+            local alog_dir
             if [ "$sdk_libc" = "uclibc" ]; then
-                local alog="$src/T31/lib/1.1.6/uclibc/$GCC_VER/libalog.so"
+                alog_dir="$src/T31/lib/1.1.6/uclibc/$GCC_VER"
             else
-                local alog="$libdir/libalog.so"
+                alog_dir="$libdir"
             fi
-            [ -f "$alog" ] && cp -f "$alog" "$SYSROOT_DIR/usr/lib/"
+            [ -f "$alog_dir/libalog.so" ] && cp -f "$alog_dir/libalog.so" "$SYSROOT_DIR/usr/lib/"
+            [ -f "$alog_dir/libalog.a" ] && cp -f "$alog_dir/libalog.a" "$SYSROOT_DIR/usr/lib/"
             ;;
     esac
+
+    if [ "$OPT_STATIC_VENDOR" = 1 ]; then
+        rm -f "$SYSROOT_DIR/usr/lib/libimp.so" "$SYSROOT_DIR/usr/lib/libalog.so"
+    fi
 }
 
 build_libc_shim() {
@@ -687,7 +706,7 @@ build_compy() {
 
 echo "=== Raptor standalone build ==="
 echo "Platform:  $PLATFORM_UPPER (SDK $SDK_VERSION)"
-echo "Features:  TLS=$OPT_TLS ALT=$OPT_ALT AAC=$OPT_AAC OPUS=$OPT_OPUS MP3=$OPT_MP3 EFFECTS=$OPT_AUDIO_EFFECTS STATIC=$OPT_STATIC LOCAL=$OPT_LOCAL"
+echo "Features:  TLS=$OPT_TLS ALT=$OPT_ALT AAC=$OPT_AAC OPUS=$OPT_OPUS MP3=$OPT_MP3 EFFECTS=$OPT_AUDIO_EFFECTS STATIC=$OPT_STATIC STATIC_VENDOR=$OPT_STATIC_VENDOR LOCAL=$OPT_LOCAL"
 echo "Deps dir:  $DEPS_DIR"
 echo ""
 
@@ -781,6 +800,7 @@ make -j"$JOBS" \
     LIB_COMPY_FILE="$SYSROOT_DIR/usr/lib/libcompy.a" \
     COMPY_CFLAGS="$COMPY_CFLAGS" \
     EXTRA_CFLAGS="-I$SYSROOT_DIR/usr/include" \
+    ${OPT_STATIC_VENDOR:+EXTRA_LDFLAGS="-no-pie"} \
     ${OPT_TLS:+TLS=1 WEBTORRENT=1} \
     ${OPT_AAC:+AAC=1} \
     ${OPT_OPUS:+OPUS=1} \

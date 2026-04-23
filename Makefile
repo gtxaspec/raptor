@@ -174,6 +174,9 @@ LDFLAGS     += -Wl,-z,max-page-size=0x1000 -Wl,--gc-sections -Wl,--as-needed -Wl
 # rpath-link for local builds (finding .so at link time)
 LDFLAGS_HAL += -Wl,-rpath-link,$(CURDIR)/$(IPC_DIR) -Wl,-rpath-link,$(CURDIR)/$(COMMON_DIR)
 LDFLAGS     += -Wl,-rpath-link,$(CURDIR)/$(IPC_DIR) -Wl,-rpath-link,$(CURDIR)/$(COMMON_DIR)
+EXTRA_LDFLAGS ?=
+LDFLAGS_HAL += $(EXTRA_LDFLAGS)
+LDFLAGS     += $(EXTRA_LDFLAGS)
 
 # Targets
 DAEMONS := rvd rsd rad rhd rod ric rmr rmd rwd rwc rfs
