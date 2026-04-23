@@ -432,6 +432,9 @@ build_mbedtls() {
         sed -i 's|^//#define MBEDTLS_SSL_DTLS_SRTP|#define MBEDTLS_SSL_DTLS_SRTP|' "$config_h" 2>/dev/null || \
         echo "#define MBEDTLS_SSL_DTLS_SRTP" >> "$config_h"
     fi
+    # Use /dev/urandom instead of /dev/random to avoid blocking on low-entropy devices
+    sed -i 's|#define MBEDTLS_PLATFORM_DEV_RANDOM "/dev/random"|#define MBEDTLS_PLATFORM_DEV_RANDOM "/dev/urandom"|' \
+        "$src/include/mbedtls/platform.h"
     [ "$OPT_ALT" = 1 ] && install_jz_crypto_alt
     local shared=ON static=OFF
     if [ "$OPT_STATIC" = 1 ]; then shared=OFF; static=ON; fi
