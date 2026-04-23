@@ -113,7 +113,7 @@ make PLATFORM=T31 CROSS_COMPILE=mipsel-linux- SYSROOT=/path/to/sysroot
 
 Required variables:
 
-- `PLATFORM` -- target SoC: `T20`, `T21`, `T23`, `T30`, `T31`, `T32`, `T40`, `T41`, `A1`
+- `PLATFORM` -- target SoC: `T20`, `T21`, `T23`, `T30`, `T31`, `T32`, `T33`, `T40`, `T41`, `A1`
 - `CROSS_COMPILE` -- toolchain prefix (e.g., `mipsel-linux-`)
 
 Optional variables:
@@ -381,6 +381,7 @@ clock. Reports min/avg/max/stddev/P50/P95/P99.
 | T30 | Old (IMP v1)  | Supported |
 | T31 | New (IMP v2)  | Primary target |
 | T32 | New (IMP v2)  | Supported |
+| T33 | New (IMP v2)  | Supported (T32-compatible) |
 | T40 | IMPVI         | Supported |
 | T41 | IMPVI         | Supported |
 | A1  | VDEC/VENC     | RFS only (no ISP HAL) |
