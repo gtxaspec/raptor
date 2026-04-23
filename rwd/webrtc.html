@@ -27,7 +27,7 @@ function stopStats(){clearInterval(statsIv);statsIv=null}
 async function start(){
   st.textContent='Connecting...';
   dbg('creating PeerConnection (local WHIP)');
-  pc=new RTCPeerConnection({iceServers:[]});
+  pc=new RTCPeerConnection({iceServers:[],bundlePolicy:'max-bundle'});
   pc.addTransceiver('video',{direction:'recvonly'});
   const at=pc.addTransceiver('audio',{direction:'sendrecv'});
   try{const caps=RTCRtpSender.getCapabilities('audio').codecs;const pcmu=caps.filter(c=>c.mimeType==='audio/PCMU');const opus=caps.filter(c=>c.mimeType==='audio/opus');if(pcmu.length){at.setCodecPreferences([...pcmu,...opus]);dbg('audio preference: PCMU first, then Opus')}}catch(e){}
@@ -36,6 +36,8 @@ async function start(){
   pc.oniceconnectionstatechange=()=>{dbg('ICE state:',pc.iceConnectionState);st.textContent=pc.iceConnectionState;
     if(pc.iceConnectionState==='connected'||pc.iceConnectionState==='completed')startStats();
     if(pc.iceConnectionState==='failed'||pc.iceConnectionState==='disconnected')stop()};
+  pc.onconnectionstatechange=()=>{dbg('conn state:',pc.connectionState);
+    if(pc.connectionState==='failed')stop()};
   pc.onsignalingstatechange=()=>{dbg('signaling:',pc.signalingState)};
   pc.onicegatheringstatechange=()=>{dbg('ICE gathering:',pc.iceGatheringState)};
   dbg('creating offer...');
@@ -47,7 +49,7 @@ async function start(){
   const stream=document.getElementById('stream').value;
   dbg('WHIP POST /whip?stream='+stream);
   const whipUrl=new URL('/whip?stream='+stream,location.href);whipUrl.username='';whipUrl.password='';
-  const resp=await fetch(whipUrl.href,{method:'POST',headers:{'Content-Type':'application/sdp'},body:pc.localDescription.sdp});
+  const resp=await fetch(whipUrl.href,{method:'POST',cache:'no-store',headers:{'Content-Type':'application/sdp'},body:pc.localDescription.sdp});
   if(!resp.ok){dbg('WHIP error:',resp.status,resp.statusText);st.textContent='Error: '+resp.status;return}
   resource=resp.headers.get('Location');
   dbg('WHIP resource:',resource);
@@ -85,4 +87,5 @@ function stopTalk(){
   if(micSender&&pc){try{micSender.replaceTrack(null)}catch(e){}micSender=null}
   document.getElementById('talk').textContent='Talk';document.getElementById('talk').classList.remove('active');
 }
+window.addEventListener('beforeunload',()=>{if(pc)stop()});
 </script></body></html>

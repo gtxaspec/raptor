@@ -128,8 +128,25 @@ rwd_client_t *rwd_client_from_offer(rwd_server_t *srv, const char *sdp, int stre
 
 	pthread_mutex_lock(&srv->clients_lock);
 	if (srv->client_count >= srv->max_clients) {
-		pthread_mutex_unlock(&srv->clients_lock);
-		return NULL;
+		int oldest_idx = -1;
+		int64_t oldest_ts = INT64_MAX;
+		for (int i = 0; i < RWD_MAX_CLIENTS; i++) {
+			if (srv->clients[i] && srv->clients[i]->created_at < oldest_ts) {
+				oldest_ts = srv->clients[i]->created_at;
+				oldest_idx = i;
+			}
+		}
+		if (oldest_idx < 0) {
+			pthread_mutex_unlock(&srv->clients_lock);
+			return NULL;
+		}
+		rwd_client_t *old = srv->clients[oldest_idx];
+		RSS_WARN("WHIP: evicting oldest session %s to make room", old->session_id);
+		rwd_media_teardown(old);
+		rwd_dtls_client_free(old);
+		free(old);
+		srv->clients[oldest_idx] = NULL;
+		srv->client_count--;
 	}
 
 	rwd_client_t *c = calloc(1, sizeof(*c));
@@ -215,9 +232,10 @@ static void handle_whip_post(rwd_server_t *srv, int fd, const char *body, size_t
 		return;
 	}
 
-	char location[128];
-	snprintf(location, sizeof(location), "Location: /whip/%s\r\n", c->session_id);
-	http_send(fd, "201 Created", "application/sdp", sdp_answer, strlen(sdp_answer), location);
+	char extra[256];
+	snprintf(extra, sizeof(extra), "Location: /whip/%s\r\nCache-Control: no-store\r\n",
+		 c->session_id);
+	http_send(fd, "201 Created", "application/sdp", sdp_answer, strlen(sdp_answer), extra);
 
 	RSS_INFO("WHIP: session %s created", c->session_id);
 }

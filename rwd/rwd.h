@@ -104,7 +104,7 @@ typedef struct {
 	bool has_audio;
 
 	/* ICE candidates from offer (for NAT hole punching) */
-#define RWD_MAX_CANDIDATES 8
+#define RWD_MAX_CANDIDATES 16
 	struct {
 		char ip[64];
 		uint16_t port;

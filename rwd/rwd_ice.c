@@ -408,12 +408,16 @@ int rwd_ice_process(rwd_server_t *srv, const uint8_t *buf, size_t len,
 		return -1;
 	}
 
-	/* Record client's transport address (first verified STUN binds the address) */
 	if (!client->ice_verified) {
 		memcpy(&client->addr, from, from_len);
 		client->addr_len = from_len;
 		client->ice_verified = true;
 		RSS_INFO("ICE: verified client %s", client->session_id);
+	} else if (from_len != client->addr_len || memcmp(&client->addr, from, from_len) != 0) {
+		/* Browser switched transports (BUNDLE renegotiation) */
+		memcpy(&client->addr, from, from_len);
+		client->addr_len = from_len;
+		RSS_INFO("ICE: client %s address updated", client->session_id);
 	}
 
 	/* Track consent freshness (RFC 7675) */
