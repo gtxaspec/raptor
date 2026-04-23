@@ -6,7 +6,7 @@
 #   make clean
 #
 # Required:
-#   PLATFORM       - Target SoC: T20, T21, T23, T30, T31, T32, T40, T41, A1
+#   PLATFORM       - Target SoC: T20, T21, T23, T30, T31, T32, T33, T40, T41, A1
 #   CROSS_COMPILE  - Cross-compiler prefix
 
 ifeq ($(filter clean distclean build,$(MAKECMDGOALS)),)

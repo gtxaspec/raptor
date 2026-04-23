@@ -147,7 +147,7 @@ usage() {
 
 for arg in "$@"; do
     case "$arg" in
-        t10|t20|t21|t23|t30|t31|t32|t40|t41|a1) PLATFORM="$arg" ;;
+        t10|t20|t21|t23|t30|t31|t32|t33|t40|t41|a1) PLATFORM="$arg" ;;
         --no-tls)    OPT_TLS= ;;
         --alt)       OPT_ALT=1 ;;
         --no-aac)    OPT_AAC= ;;
@@ -204,6 +204,7 @@ case "$PLATFORM" in
     t30)     SDK_VERSION=1.0.5;  GCC_VER=4.7.2 ;;
     t31)     SDK_VERSION=1.1.6;  GCC_VER=5.4.0 ;;
     t32)     SDK_VERSION=1.0.6;  GCC_VER=5.4.0 ;;
+    t33)     SDK_VERSION=2.0.2.1; GCC_VER=5.4.0 ;;
     t40)     SDK_VERSION=1.3.1;  GCC_VER=7.2.0 ;;
     t41)     SDK_VERSION=1.2.5;  GCC_VER=7.2.0 ;;
     a1)      SDK_VERSION=1.7.0;  GCC_VER=7.2.0 ;;
