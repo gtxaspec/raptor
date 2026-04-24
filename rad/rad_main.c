@@ -274,14 +274,14 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 					   0, 0);
 			if (ret == RSS_OK) {
 				ctx->aec_enabled = true;
-				rss_config_set_str(ctx->cfg, "audio", "aec_enabled", "true");
+				rss_config_set_bool(ctx->cfg, "audio", "aec_enabled", true);
 				RSS_INFO("AEC enabled");
 			}
 		} else if (!val && ctx->aec_enabled) {
 			ret = RSS_HAL_CALL(ctx->ops, audio_disable_aec, ctx->hal_ctx);
 			if (ret == RSS_OK) {
 				ctx->aec_enabled = false;
-				rss_config_set_str(ctx->cfg, "audio", "aec_enabled", "false");
+				rss_config_set_bool(ctx->cfg, "audio", "aec_enabled", false);
 				RSS_INFO("AEC disabled");
 			}
 		}
