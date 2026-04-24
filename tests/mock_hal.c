@@ -472,6 +472,7 @@ static const rss_hal_ops_t mock_ops = {
 	.audio_disable_agc = (void *)mock_ok,
 	.audio_read_frame = (void *)mock_audio_read_frame,
 	.audio_release_frame = (void *)mock_ok,
+	.audio_set_aec_profile_path = (void *)mock_ok,
 	.audio_enable_aec = (void *)mock_ok,
 	.audio_disable_aec = (void *)mock_ok,
 	.audio_get_volume = (void *)mock_ok,

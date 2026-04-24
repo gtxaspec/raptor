@@ -45,6 +45,7 @@ typedef struct {
 	int ao_gain;
 	_Atomic int *ao_flush;
 #ifdef RAPTOR_AUDIO_EFFECTS
+	bool aec_enabled;
 	bool ns_enabled;
 	bool hpf_enabled;
 	bool agc_enabled;
@@ -261,6 +262,33 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
 	}
 
+#ifdef RAPTOR_AUDIO_EFFECTS
+	if (strcmp(cmd, "set-aec") == 0) {
+		if (rss_json_get_int(cmd_json, "value", &val) != 0)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value (0/1)");
+		if (!ctx->ao_enabled)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "ao disabled");
+		int ret = RSS_OK;
+		if (val && !ctx->aec_enabled) {
+			ret = RSS_HAL_CALL(ctx->ops, audio_enable_aec, ctx->hal_ctx, ctx->ai_dev, 0,
+					   0, 0);
+			if (ret == RSS_OK) {
+				ctx->aec_enabled = true;
+				rss_config_set_bool(ctx->cfg, "audio", "aec_enabled", true);
+				RSS_INFO("AEC enabled");
+			}
+		} else if (!val && ctx->aec_enabled) {
+			ret = RSS_HAL_CALL(ctx->ops, audio_disable_aec, ctx->hal_ctx);
+			if (ret == RSS_OK) {
+				ctx->aec_enabled = false;
+				rss_config_set_bool(ctx->cfg, "audio", "aec_enabled", false);
+				RSS_INFO("AEC disabled");
+			}
+		}
+		return rad_fmt_result(resp_buf, resp_buf_size, ret);
+	}
+#endif
+
 	/* ── Audio pipeline restart (codec/sample-rate change) ── */
 
 	if (strcmp(cmd, "set-codec") == 0 || strcmp(cmd, "audio-restart") == 0) {
@@ -344,6 +372,9 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			};
 			RSS_HAL_CALL(ctx->ops, audio_enable_agc, ctx->hal_ctx, &agc_cfg);
 		}
+		if (ctx->aec_enabled && ctx->ao_enabled)
+			RSS_HAL_CALL(ctx->ops, audio_enable_aec, ctx->hal_ctx, ctx->ai_dev, 0, 0,
+				     0);
 #endif
 
 		/* 5. Init new codec — restore old on failure */
@@ -432,6 +463,9 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			cJSON_AddNumberToObject(r, "ao_volume", ctx->ao_volume);
 			cJSON_AddNumberToObject(r, "ao_gain", ctx->ao_gain);
 			cJSON_AddBoolToObject(r, "ao_muted", ctx->ao_muted);
+#ifdef RAPTOR_AUDIO_EFFECTS
+			cJSON_AddBoolToObject(r, "aec", ctx->aec_enabled);
+#endif
 		}
 #ifdef RAPTOR_AUDIO_EFFECTS
 		cJSON_AddBoolToObject(r, "ns", ctx->ns_enabled);
@@ -743,6 +777,22 @@ int main(int argc, char **argv)
 		}
 	}
 
+#ifdef RAPTOR_AUDIO_EFFECTS
+	bool aec_enabled = false;
+	if (ao_enabled && rss_config_get_bool(dctx.cfg, "audio", "aec_enabled", false)) {
+		const char *aec_path =
+			rss_config_get_str(dctx.cfg, "audio", "aec_profile_path", "/etc");
+		RSS_HAL_CALL(ops, audio_set_aec_profile_path, hal_ctx, aec_path);
+		ret = RSS_HAL_CALL(ops, audio_enable_aec, hal_ctx, ai_dev, 0, 0, 0);
+		if (ret == RSS_OK) {
+			aec_enabled = true;
+			RSS_INFO("AEC enabled (profile: %s/webrtc_profile.ini)", aec_path);
+		} else {
+			RSS_WARN("AEC enable failed: %d", ret);
+		}
+	}
+#endif
+
 	/* Ring buffer */
 	int ring_data_size = (codec_id == RAD_CODEC_L16) ? 256 * 1024 : 128 * 1024;
 	ring = rss_ring_create("audio", 32, ring_data_size);
@@ -790,6 +840,7 @@ int main(int argc, char **argv)
 		.ao_gain = rss_config_get_int(dctx.cfg, "audio", "ao_gain", 25),
 		.ao_flush = ao_enabled ? &ao_ctx.flush : NULL,
 #ifdef RAPTOR_AUDIO_EFFECTS
+		.aec_enabled = aec_enabled,
 		.ns_enabled = ns_enabled,
 		.hpf_enabled = hpf_enabled,
 		.agc_enabled = agc_enabled,

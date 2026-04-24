@@ -85,6 +85,7 @@ const struct help_entry help_entries[] = {
 	{"rad", "set-alc-gain <0-7>                  ALC gain (T21/T31 only)"},
 	{"rad", "mute                                Mute audio input"},
 	{"rad", "unmute                              Unmute audio input"},
+	{"rad", "set-aec <0|1>                        Acoustic echo cancellation"},
 	{"rad", "set-ns <0|1> [0-3]                  Noise suppression level"},
 	{"rad", "set-hpf <0|1>                       High-pass filter"},
 	{"rad", "set-agc <0|1> [target] [comp]       Automatic gain control"},

@@ -193,6 +193,7 @@ static const struct cmd_def cmd_table[] = {
 	{"set-rc-mode", NULL, 2, args_rc_mode},
 
 	/* Audio */
+	{"set-aec", NULL, 1, args_val},
 	{"set-volume", NULL, 1, args_val},
 	{"set-gain", NULL, 1, args_val},
 	{"ao-set-volume", NULL, 1, args_val},
