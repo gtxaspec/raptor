@@ -96,21 +96,32 @@ static void g711_init_tables(void)
 
 /* ── Transcoder state ── */
 
+#define RSP_AAC_OUTPUT_RATE 48000
+
 struct rsp_audio_enc {
 	uint32_t input_codec;
-	uint32_t sample_rate;
+	uint32_t input_rate;
+	uint32_t output_rate;
 
-	/* faac encoder */
+	/* faac encoder (always at output_rate) */
 	faacEncHandle faac;
-	int frame_samples; /* samples per AAC frame (1024) */
+	int frame_samples; /* samples per AAC frame (1024 at output_rate) */
 	unsigned long max_output;
 
-	/* PCM accumulation buffer */
+	/* PCM accumulation buffer (at output_rate) */
 	int16_t *pcm_buf;
 	int pcm_fill;
 
 	/* AAC output buffer */
 	uint8_t *aac_buf;
+
+	/* Resample state (non-integer ratio fallback) */
+	uint32_t resample_frac;
+
+	/* Output timestamp tracking (sample-accurate, avoids integer truncation) */
+	uint64_t out_samples; /* total output samples emitted */
+	uint32_t out_ts_base; /* base timestamp from first input frame (ms) */
+	bool out_ts_set;
 
 	/* Decode state */
 #ifdef RAPTOR_OPUS
@@ -128,13 +139,14 @@ rsp_audio_enc_t *rsp_audio_init(uint32_t input_codec, uint32_t sample_rate)
 		return NULL;
 
 	enc->input_codec = input_codec;
-	enc->sample_rate = sample_rate;
+	enc->input_rate = sample_rate;
+	enc->output_rate = RSP_AAC_OUTPUT_RATE;
 
 	g711_init_tables();
 
-	/* Init faac encoder */
+	/* Init faac encoder at output rate (48kHz for RTMP compatibility) */
 	unsigned long input_samples = 0;
-	enc->faac = faacEncOpen(sample_rate, 1, &input_samples, &enc->max_output);
+	enc->faac = faacEncOpen(enc->output_rate, 1, &input_samples, &enc->max_output);
 	if (!enc->faac) {
 		RSS_ERROR("rsp_audio: faac open failed");
 		free(enc);
@@ -146,7 +158,7 @@ rsp_audio_enc_t *rsp_audio_init(uint32_t input_codec, uint32_t sample_rate)
 	cfg->mpegVersion = MPEG4;
 	cfg->inputFormat = FAAC_INPUT_16BIT;
 	cfg->outputFormat = RAW_STREAM;
-	cfg->bandWidth = sample_rate;
+	cfg->bandWidth = enc->output_rate / 2;
 	cfg->bitRate = 128000;
 	cfg->allowMidside = 0;
 	cfg->useTns = 0;
@@ -183,10 +195,15 @@ rsp_audio_enc_t *rsp_audio_init(uint32_t input_codec, uint32_t sample_rate)
 #ifdef RAPTOR_AAC
 	if (input_codec == RSP_CODEC_AAC) {
 		enc->aac_dec = AACInitDecoder();
-		if (!enc->aac_dec)
+		if (!enc->aac_dec) {
 			RSS_WARN("rsp_audio: AAC decoder init failed");
-		else
-			RSS_DEBUG("rsp_audio: AAC decoder ready (re-encode path)");
+		} else {
+			AACFrameInfo fi = {0};
+			fi.nChans = 1;
+			fi.sampRateCore = (int)sample_rate;
+			AACSetRawBlockParams(enc->aac_dec, 0, &fi);
+			RSS_DEBUG("rsp_audio: AAC decoder ready (raw mode, %uHz)", sample_rate);
+		}
 	}
 #endif
 
@@ -196,8 +213,8 @@ rsp_audio_enc_t *rsp_audio_init(uint32_t input_codec, uint32_t sample_rate)
 				 : input_codec == RSP_CODEC_OPUS ? "Opus"
 				 : input_codec == RSP_CODEC_AAC	 ? "AAC"
 								 : "unknown";
-	RSS_INFO("rsp_audio: transcode %s @ %uHz -> AAC-LC (%d samples/frame)", codec_name,
-		 sample_rate, enc->frame_samples);
+	RSS_INFO("rsp_audio: %s @ %uHz -> AAC-LC @ %uHz (%d samples/frame)", codec_name,
+		 sample_rate, enc->output_rate, enc->frame_samples);
 
 	return enc;
 }
@@ -276,18 +293,80 @@ static int decode_to_pcm(rsp_audio_enc_t *enc, const uint8_t *data, uint32_t len
 	return samples;
 }
 
+/*
+ * Resample PCM from input_rate to output_rate using linear interpolation.
+ * Returns number of output samples written.
+ */
+/*
+ * Resample PCM from input_rate to output_rate.
+ * For integer ratios (e.g. 16kHz→48kHz = 3:1), uses sample repetition
+ * which is artifact-free — the AAC encoder's filterbank handles smoothing.
+ * For non-integer ratios, falls back to linear interpolation.
+ */
+static int resample(rsp_audio_enc_t *enc, const int16_t *in, int in_count, int16_t *out,
+		    int out_max)
+{
+	if (enc->input_rate == enc->output_rate) {
+		int n = in_count < out_max ? in_count : out_max;
+		memcpy(out, in, (size_t)n * sizeof(int16_t));
+		return n;
+	}
+
+	/* Integer ratio fast path (16→48 = 3x, 8→48 = 6x, etc.) */
+	if (enc->output_rate % enc->input_rate == 0) {
+		int ratio = (int)(enc->output_rate / enc->input_rate);
+		int out_count = in_count * ratio;
+		if (out_count > out_max)
+			out_count = (out_max / ratio) * ratio;
+		for (int i = 0; i < out_count / ratio; i++) {
+			for (int j = 0; j < ratio; j++)
+				out[i * ratio + j] = in[i];
+		}
+		return out_count;
+	}
+
+	/* Non-integer ratio: linear interpolation */
+	uint32_t step = ((uint32_t)enc->input_rate << 16) / enc->output_rate;
+	uint32_t pos = enc->resample_frac;
+	int out_count = 0;
+
+	while (out_count < out_max) {
+		uint32_t idx = pos >> 16;
+		if (idx >= (uint32_t)in_count)
+			break;
+		uint32_t frac = (pos >> 8) & 0xFF;
+		int32_t s0 = in[idx];
+		int32_t s1 = (idx + 1 < (uint32_t)in_count) ? in[idx + 1] : s0;
+		out[out_count++] = (int16_t)(s0 + ((s1 - s0) * (int32_t)frac >> 8));
+		pos += step;
+	}
+
+	enc->resample_frac = pos - ((uint32_t)in_count << 16);
+	return out_count;
+}
+
 int rsp_audio_transcode(rsp_audio_enc_t *enc, const uint8_t *data, uint32_t len,
 			uint32_t timestamp_ms, rsp_audio_cb cb, void *userdata)
 {
-	/* Decode to PCM */
+	/* Decode to PCM at input sample rate */
 	int16_t pcm[4096];
 	int samples = decode_to_pcm(enc, data, len, pcm, 4096);
-	if (samples <= 0)
+	if (samples <= 0) {
+		RSS_DEBUG("rsp_audio: decode failed (len=%u codec=%u)", len, enc->input_codec);
+		return 0;
+	}
+
+	/* Resample to output rate (48kHz) */
+	int16_t resampled[8192];
+	int rs_count = resample(enc, pcm, samples, resampled, 8192);
+	RSS_TRACE("rsp_audio: decode=%d resample=%d (in=%uHz out=%uHz)", samples, rs_count,
+		  enc->input_rate, enc->output_rate);
+	if (rs_count <= 0)
 		return 0;
 
-	/* Feed PCM into faac accumulator, emit AAC frames when full */
-	const int16_t *src = pcm;
-	int remaining = samples;
+	/* Feed resampled PCM into faac accumulator */
+	const int16_t *src = resampled;
+	int remaining = rs_count;
 
 	while (remaining > 0) {
 		int copy = remaining;
@@ -304,8 +383,18 @@ int rsp_audio_transcode(rsp_audio_enc_t *enc, const uint8_t *data, uint32_t len,
 						    (unsigned int)enc->max_output);
 			enc->pcm_fill = 0;
 			if (aac_len > 0) {
-				if (cb(enc->aac_buf, (uint32_t)aac_len, timestamp_ms, userdata) < 0)
+				if (!enc->out_ts_set) {
+					enc->out_ts_base = timestamp_ms;
+					enc->out_samples = 0;
+					enc->out_ts_set = true;
+				}
+				uint32_t ts =
+					enc->out_ts_base +
+					(uint32_t)(enc->out_samples * 1000 / enc->output_rate);
+				RSS_TRACE("rsp_audio: enc %d bytes ts=%u", aac_len, ts);
+				if (cb(enc->aac_buf, (uint32_t)aac_len, ts, userdata) < 0)
 					return -1;
+				enc->out_samples += (uint64_t)enc->frame_samples;
 			}
 		}
 	}

@@ -112,7 +112,7 @@ static int rsp_send_headers(rsp_state_t *st)
 		return -1;
 
 	if (st->audio_ring) {
-		uint32_t aac_rate = st->audio_sample_rate;
+		uint32_t aac_rate = st->audio_enc ? 48000 : st->audio_sample_rate;
 		if (rsp_rtmp_send_audio_header(&st->rtmp, aac_rate, 1) < 0)
 			return -1;
 	}
@@ -206,15 +206,18 @@ static void push_loop(rsp_state_t *st)
 					  st->audio_sample_rate);
 
 				/* Init transcoder if needed */
-				if (rsp_audio_needs_transcode(st->audio_codec) && !st->audio_enc) {
+				if (rsp_audio_needs_transcode(st->audio_codec,
+							      st->audio_sample_rate) &&
+				    !st->audio_enc) {
 					st->audio_enc = rsp_audio_init(st->audio_codec,
 								       st->audio_sample_rate);
 				}
 
 				/* Send audio header if already connected */
 				if (st->header_sent) {
-					rsp_rtmp_send_audio_header(&st->rtmp, st->audio_sample_rate,
-								   1);
+					uint32_t rate =
+						st->audio_enc ? 48000 : st->audio_sample_rate;
+					rsp_rtmp_send_audio_header(&st->rtmp, rate, 1);
 				}
 			}
 		}
@@ -358,6 +361,11 @@ static void push_loop(rsp_state_t *st)
 		}
 		st->frames_sent++;
 		st->bytes_sent += (uint32_t)avcc_len;
+		if ((st->frames_sent % 250) == 0)
+			RSS_DEBUG("stats: v=%" PRIu64 " a=%" PRIu64 " drop=%" PRIu64
+				  " bytes=%" PRIu64,
+				  st->frames_sent, st->audio_frames_sent, st->frames_dropped,
+				  st->bytes_sent);
 
 		/* Read and send audio frames */
 		if (st->audio_ring) {
@@ -502,7 +510,7 @@ int main(int argc, char **argv)
 			st.audio_codec = ahdr->codec;
 			st.audio_sample_rate = ahdr->fps_num;
 			RSS_INFO("audio: codec=%u rate=%u", st.audio_codec, st.audio_sample_rate);
-			if (rsp_audio_needs_transcode(st.audio_codec)) {
+			if (rsp_audio_needs_transcode(st.audio_codec, st.audio_sample_rate)) {
 				st.audio_enc = rsp_audio_init(st.audio_codec, st.audio_sample_rate);
 				if (!st.audio_enc)
 					RSS_WARN("audio transcode init failed, audio disabled");

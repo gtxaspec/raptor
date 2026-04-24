@@ -48,11 +48,15 @@ int rsp_audio_transcode(rsp_audio_enc_t *enc, const uint8_t *data, uint32_t len,
 void rsp_audio_free(rsp_audio_enc_t *enc);
 
 /*
- * Returns true if the codec needs transcoding (not already AAC).
+ * Returns true if audio needs transcoding.
+ * RTMP servers (YouTube/Twitch) require AAC at 44.1 or 48kHz.
+ * Transcode if codec is not AAC, or if sample rate is non-standard.
  */
-static inline bool rsp_audio_needs_transcode(uint32_t codec)
+static inline bool rsp_audio_needs_transcode(uint32_t codec, uint32_t sample_rate)
 {
-	return codec != RSP_CODEC_AAC;
+	if (codec != RSP_CODEC_AAC)
+		return true;
+	return (sample_rate != 44100 && sample_rate != 48000);
 }
 
 #endif /* RSP_AUDIO_H */
