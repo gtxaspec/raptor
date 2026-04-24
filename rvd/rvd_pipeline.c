@@ -234,7 +234,7 @@ static void load_sensor_from_section(rss_config_t *cfg, const char *section,
 		free(s);
 	}
 	if (sensor->mclk < 0)
-		sensor->mclk = 0;
+		sensor->mclk = 1;
 
 	sensor->vin_type = rss_config_get_int(cfg, section, "video_interface", -1);
 	if (sensor->vin_type < 0 && use_procfs) {
