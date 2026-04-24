@@ -19,145 +19,18 @@
 #include <sys/select.h>
 
 #include "rsp.h"
-
-/* Annex B start code scanner and AVCC converter — same as RMR */
-
-static const uint8_t *find_start_code(const uint8_t *p, const uint8_t *end, int *sc_len)
-{
-	while (p + 2 < end) {
-		if (p[0] == 0 && p[1] == 0) {
-			if (p[2] == 1) {
-				*sc_len = 3;
-				return p;
-			}
-			if (p + 3 < end && p[2] == 0 && p[3] == 1) {
-				*sc_len = 4;
-				return p;
-			}
-		}
-		p++;
-	}
-	return NULL;
-}
-
-static int annexb_to_avcc(const uint8_t *src, uint32_t src_len, uint8_t *dst, uint32_t dst_cap,
-			  int codec)
-{
-	uint32_t out = 0;
-	const uint8_t *end = src + src_len;
-	int sc_len = 0;
-	const uint8_t *sc = find_start_code(src, end, &sc_len);
-
-	while (sc) {
-		const uint8_t *nal_start = sc + sc_len;
-		if (nal_start >= end)
-			break;
-
-		int next_sc_len;
-		const uint8_t *next_sc = find_start_code(nal_start, end, &next_sc_len);
-		const uint8_t *nal_end = next_sc ? next_sc : end;
-
-		while (nal_end > nal_start && nal_end[-1] == 0)
-			nal_end--;
-
-		uint32_t nal_len = (uint32_t)(nal_end - nal_start);
-		if (nal_len == 0) {
-			sc = next_sc;
-			sc_len = next_sc_len;
-			continue;
-		}
-
-		/* Skip SPS/PPS/VPS — sent separately in sequence header */
-		bool is_param;
-		if (codec == 1) {
-			uint8_t nal_type = (nal_start[0] >> 1) & 0x3F;
-			is_param = (nal_type >= 32 && nal_type <= 34);
-		} else {
-			uint8_t nal_type = nal_start[0] & 0x1F;
-			is_param = (nal_type == 7 || nal_type == 8);
-		}
-
-		if (!is_param) {
-			if (out + 4 + nal_len > dst_cap)
-				return -1;
-			dst[out + 0] = (uint8_t)(nal_len >> 24);
-			dst[out + 1] = (uint8_t)(nal_len >> 16);
-			dst[out + 2] = (uint8_t)(nal_len >> 8);
-			dst[out + 3] = (uint8_t)nal_len;
-			memcpy(dst + out + 4, nal_start, nal_len);
-			out += 4 + nal_len;
-		}
-
-		sc = next_sc;
-		sc_len = next_sc_len;
-	}
-
-	return (int)out;
-}
-
-static void extract_params(const uint8_t *data, uint32_t len, int codec, rsp_codec_params_t *params)
-{
-	if (params->ready)
-		return;
-
-	const uint8_t *end = data + len;
-	int sc_len = 0;
-	const uint8_t *sc = find_start_code(data, end, &sc_len);
-
-	while (sc) {
-		const uint8_t *nal_start = sc + sc_len;
-		if (nal_start >= end)
-			break;
-
-		int next_sc_len;
-		const uint8_t *next_sc = find_start_code(nal_start, end, &next_sc_len);
-		const uint8_t *nal_end = next_sc ? next_sc : end;
-		while (nal_end > nal_start && nal_end[-1] == 0)
-			nal_end--;
-
-		uint32_t nal_len = (uint32_t)(nal_end - nal_start);
-		if (nal_len == 0) {
-			sc = next_sc;
-			sc_len = next_sc_len;
-			continue;
-		}
-
-		if (codec == 1) {
-			uint8_t nal_type = (nal_start[0] >> 1) & 0x3F;
-			if (nal_type == 32 && nal_len <= sizeof(params->vps)) {
-				memcpy(params->vps, nal_start, nal_len);
-				params->vps_len = nal_len;
-			} else if (nal_type == 33 && nal_len <= sizeof(params->sps)) {
-				memcpy(params->sps, nal_start, nal_len);
-				params->sps_len = nal_len;
-			} else if (nal_type == 34 && nal_len <= sizeof(params->pps)) {
-				memcpy(params->pps, nal_start, nal_len);
-				params->pps_len = nal_len;
-			}
-		} else {
-			uint8_t nal_type = nal_start[0] & 0x1F;
-			if (nal_type == 7 && nal_len <= sizeof(params->sps)) {
-				memcpy(params->sps, nal_start, nal_len);
-				params->sps_len = nal_len;
-			} else if (nal_type == 8 && nal_len <= sizeof(params->pps)) {
-				memcpy(params->pps, nal_start, nal_len);
-				params->pps_len = nal_len;
-			}
-		}
-
-		sc = next_sc;
-		sc_len = next_sc_len;
-	}
-
-	if (params->sps_len > 0 && params->pps_len > 0)
-		params->ready = true;
-}
+#include "rmr_nal.h"
 
 /* ── Control socket handler ── */
 
 static int rsp_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, void *userdata)
 {
 	rsp_state_t *st = userdata;
+
+	int common =
+		rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, st->cfg, st->config_path);
+	if (common >= 0)
+		return common;
 
 	char cmd[64];
 	if (rss_json_get_str(cmd_json, "cmd", cmd, sizeof(cmd)) != 0)
@@ -193,7 +66,7 @@ static int rsp_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 	}
 
-	return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+	return rss_ctrl_resp_error(resp_buf, resp_buf_size, "unknown command");
 }
 
 /* ── RTMP connection management ── */
@@ -436,7 +309,7 @@ static void push_loop(rsp_state_t *st)
 
 		/* Extract codec params from keyframe */
 		if (meta.is_key && !st->params.ready)
-			extract_params(frame_data, length, st->video_codec, &st->params);
+			rmr_extract_params(frame_data, length, st->video_codec, &st->params);
 		if (!st->params.ready) {
 			if (peeked)
 				rss_ring_peek_done(st->video_ring, &meta);
@@ -461,8 +334,8 @@ static void push_loop(rsp_state_t *st)
 		}
 
 		/* Convert Annex B to AVCC — then release the peek */
-		int avcc_len = annexb_to_avcc(frame_data, length, st->avcc_buf, st->avcc_buf_size,
-					      st->video_codec);
+		int avcc_len = rmr_annexb_to_avcc(frame_data, length, st->avcc_buf,
+						  st->avcc_buf_size, st->video_codec);
 		if (peeked)
 			rss_ring_peek_done(st->video_ring, &meta);
 		if (avcc_len <= 0)

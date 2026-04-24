@@ -732,9 +732,20 @@ TEST flv_constants(void)
  * Process Message State Machine Tests
  * ================================================================ */
 
+/* Helper: init a test context with stack-allocated buffers */
+static uint8_t test_recv_buf[4096];
+static void test_ctx_init(rsp_rtmp_t *ctx)
+{
+	memset(ctx, 0, sizeof(*ctx));
+	ctx->recv_buf = test_recv_buf;
+	ctx->recv_buf_size = sizeof(test_recv_buf);
+	ctx->fd = -1;
+}
+
 TEST process_set_chunk_size(void)
 {
-	rsp_rtmp_t ctx = {0};
+	rsp_rtmp_t ctx;
+	test_ctx_init(&ctx);
 	ctx.in_chunk_size = 128;
 	put_be32(ctx.recv_buf, 4096);
 	rtmp_process_message(&ctx, RTMP_MSG_SET_CHUNK_SIZE, 4);
@@ -744,7 +755,8 @@ TEST process_set_chunk_size(void)
 
 TEST process_set_chunk_size_clears_msb(void)
 {
-	rsp_rtmp_t ctx = {0};
+	rsp_rtmp_t ctx;
+	test_ctx_init(&ctx);
 	ctx.in_chunk_size = 128;
 	put_be32(ctx.recv_buf, 0x80001000); /* MSB should be masked */
 	rtmp_process_message(&ctx, RTMP_MSG_SET_CHUNK_SIZE, 4);
@@ -754,7 +766,8 @@ TEST process_set_chunk_size_clears_msb(void)
 
 TEST process_result_advances_connect(void)
 {
-	rsp_rtmp_t ctx = {0};
+	rsp_rtmp_t ctx;
+	test_ctx_init(&ctx);
 	ctx.state = RSP_STATE_HANDSHAKE;
 
 	/* Build _result AMF0 response */
@@ -769,7 +782,8 @@ TEST process_result_advances_connect(void)
 
 TEST process_result_advances_create_stream(void)
 {
-	rsp_rtmp_t ctx = {0};
+	rsp_rtmp_t ctx;
+	test_ctx_init(&ctx);
 	ctx.state = RSP_STATE_CONNECTING;
 
 	/* Build createStream _result: "_result", txn=2, null, stream_id=1.0 */
@@ -787,7 +801,8 @@ TEST process_result_advances_create_stream(void)
 
 TEST process_onstatus_advances_publishing(void)
 {
-	rsp_rtmp_t ctx = {0};
+	rsp_rtmp_t ctx;
+	test_ctx_init(&ctx);
 	ctx.state = RSP_STATE_CONNECTED;
 
 	int off = 0;
@@ -801,7 +816,8 @@ TEST process_onstatus_advances_publishing(void)
 
 TEST process_error_sets_error_state(void)
 {
-	rsp_rtmp_t ctx = {0};
+	rsp_rtmp_t ctx;
+	test_ctx_init(&ctx);
 	ctx.state = RSP_STATE_HANDSHAKE;
 
 	int off = 0;

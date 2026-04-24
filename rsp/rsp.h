@@ -14,17 +14,7 @@
 
 #include "rsp_rtmp.h"
 #include "rsp_audio.h"
-
-/* Codec params extracted from keyframes (same as RMR) */
-typedef struct {
-	uint8_t sps[256];
-	uint32_t sps_len;
-	uint8_t pps[128];
-	uint32_t pps_len;
-	uint8_t vps[256];
-	uint32_t vps_len;
-	bool ready;
-} rsp_codec_params_t;
+#include "rmr_nal.h"
 
 typedef struct {
 	/* Config */
@@ -51,7 +41,7 @@ typedef struct {
 	uint32_t audio_sample_rate;
 
 	/* Codec params */
-	rsp_codec_params_t params;
+	rmr_codec_params_t params;
 
 	/* Frame buffers (main thread only) */
 	uint8_t *frame_buf;

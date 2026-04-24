@@ -42,8 +42,6 @@
 
 /* Message type IDs */
 #define RTMP_MSG_SET_CHUNK_SIZE	 1
-#define RTMP_MSG_ABORT		 2
-#define RTMP_MSG_ACK		 3
 #define RTMP_MSG_WINDOW_ACK_SIZE 5
 #define RTMP_MSG_SET_PEER_BW	 6
 #define RTMP_MSG_AUDIO		 8
@@ -294,9 +292,15 @@ static int rtmp_handshake(rsp_rtmp_t *ctx)
 	put_be32(c0c1 + 1, ts);
 	memset(c0c1 + 5, 0, 4); /* zero */
 
-	srand((unsigned)ts);
-	for (int i = 9; i < 1 + RTMP_HANDSHAKE_SIZE; i++)
-		c0c1[i] = (uint8_t)(rand() & 0xFF);
+	{
+		int urand = open("/dev/urandom", O_RDONLY);
+		if (urand >= 0) {
+			read(urand, c0c1 + 9, RTMP_HANDSHAKE_SIZE - 8);
+			close(urand);
+		} else {
+			memset(c0c1 + 9, 0x42, RTMP_HANDSHAKE_SIZE - 8);
+		}
+	}
 
 	if (rtmp_send(ctx, c0c1, sizeof(c0c1)) < 0) {
 		RSS_ERROR("rtmp: handshake C0+C1 send failed");
@@ -332,7 +336,7 @@ static int rtmp_handshake(rsp_rtmp_t *ctx)
 
 static int rtmp_send_connect(rsp_rtmp_t *ctx)
 {
-	uint8_t buf[1024];
+	uint8_t buf[2048];
 	int off = 0;
 
 	off += amf0_write_string(buf + off, "connect");
@@ -570,7 +574,7 @@ static int rtmp_read_responses(rsp_rtmp_t *ctx, rsp_conn_state_t target_state, i
 		uint32_t chunk =
 			remaining_msg > ctx->in_chunk_size ? ctx->in_chunk_size : remaining_msg;
 
-		if (c->msg_got + chunk > sizeof(ctx->recv_buf)) {
+		if (c->msg_got + chunk > ctx->recv_buf_size) {
 			/* Message too large — skip this chunk */
 			uint8_t tmp[512];
 			uint32_t skip = chunk;
@@ -699,6 +703,27 @@ int rsp_rtmp_connect(rsp_rtmp_t *ctx, const char *host, int port, bool use_tls)
 	ctx->in_chunk_size = RTMP_DEFAULT_CHUNK_SZ;
 	ctx->stream_id = 0;
 
+	if (!ctx->recv_buf) {
+		ctx->recv_buf_size = 4096;
+		ctx->recv_buf = malloc(ctx->recv_buf_size);
+		if (!ctx->recv_buf) {
+			close(ctx->fd);
+			ctx->fd = -1;
+			return -1;
+		}
+	}
+	if (!ctx->send_buf) {
+		ctx->send_buf_size = 65536;
+		ctx->send_buf = malloc(ctx->send_buf_size);
+		if (!ctx->send_buf) {
+			free(ctx->recv_buf);
+			ctx->recv_buf = NULL;
+			close(ctx->fd);
+			ctx->fd = -1;
+			return -1;
+		}
+	}
+
 #ifdef RSS_HAS_TLS
 	if (use_tls) {
 		if (!ctx->tls_ctx) {
@@ -795,6 +820,10 @@ int rsp_rtmp_send_video_header(rsp_rtmp_t *ctx, int codec, const uint8_t *sps, u
 			       uint32_t vps_len)
 {
 	if (ctx->state != RSP_STATE_PUBLISHING)
+		return -1;
+
+	uint32_t needed = 64 + sps_len + pps_len + vps_len;
+	if (needed > ctx->send_buf_size)
 		return -1;
 
 	uint8_t *buf = ctx->send_buf;
@@ -1055,6 +1084,8 @@ int rsp_rtmp_send_audio(rsp_rtmp_t *ctx, const uint8_t *data, uint32_t len, uint
 	}
 
 	/* Slow path: multi-chunk (unlikely for audio) */
+	if (total > ctx->send_buf_size)
+		return -1;
 	uint8_t *tmp = ctx->send_buf;
 	memcpy(tmp, hdr, 2);
 	memcpy(tmp + 2, data, len);
@@ -1082,6 +1113,11 @@ void rsp_rtmp_disconnect(rsp_rtmp_t *ctx)
 		close(ctx->fd);
 		ctx->fd = -1;
 	}
+
+	free(ctx->recv_buf);
+	ctx->recv_buf = NULL;
+	free(ctx->send_buf);
+	ctx->send_buf = NULL;
 
 	ctx->state = RSP_STATE_DISCONNECTED;
 	ctx->video_ts_set = false;

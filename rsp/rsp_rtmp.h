@@ -57,10 +57,11 @@ typedef struct {
 	bool video_ts_set;
 	bool audio_ts_set;
 
-	/* I/O buffers */
-	uint8_t recv_buf[4096];
-	int recv_len;
-	uint8_t send_buf[65536];
+	/* I/O buffers (heap-allocated) */
+	uint8_t *recv_buf;
+	uint32_t recv_buf_size;
+	uint8_t *send_buf;
+	uint32_t send_buf_size;
 } rsp_rtmp_t;
 
 /*

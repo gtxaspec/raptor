@@ -291,7 +291,8 @@ endif
 
 rsp: $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_TLS_OBJ) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   rsp"
-	$(Q)$(MAKE) -C rsp CC="$(CC)" CFLAGS="$(CFLAGS) $(RSP_CFLAGS)" \
+	$(Q)$(MAKE) -C rsp CC="$(CC)" CFLAGS="$(CFLAGS) $(RSP_CFLAGS) -I$(CURDIR)/rmr" \
+		RMR_DIR="$(CURDIR)/rmr" \
 		LIBS="$(LIB_IPC) $(LIB_COMMON) $(RSS_TLS_OBJ) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS) $(LDFLAGS_TLS) $(RSP_LDFLAGS)" Q="$(Q)"
 

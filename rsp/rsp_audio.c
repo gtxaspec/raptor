@@ -46,6 +46,7 @@ void rsp_audio_free(rsp_audio_enc_t *enc)
 
 #include <rss_common.h>
 
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <arpa/inet.h>
@@ -64,11 +65,11 @@ void rsp_audio_free(rsp_audio_enc_t *enc)
 
 static int16_t ulaw_table[256];
 static int16_t alaw_table[256];
-static bool tables_init;
+static _Atomic bool tables_init;
 
 static void g711_init_tables(void)
 {
-	if (tables_init)
+	if (atomic_load(&tables_init))
 		return;
 	for (int i = 0; i < 256; i++) {
 		/* µ-law decode */
@@ -90,7 +91,7 @@ static void g711_init_tables(void)
 			mag = ((mantissa << 1) + 33) << (exp - 1);
 		alaw_table[i] = (int16_t)(sign * mag);
 	}
-	tables_init = true;
+	atomic_store(&tables_init, true);
 }
 
 /* ── Transcoder state ── */
@@ -171,11 +172,11 @@ rsp_audio_enc_t *rsp_audio_init(uint32_t input_codec, uint32_t sample_rate)
 #ifdef RAPTOR_OPUS
 	if (input_codec == RSP_CODEC_OPUS) {
 		int err;
-		enc->opus_dec = opus_decoder_create(48000, 1, &err);
+		enc->opus_dec = opus_decoder_create((opus_int32)sample_rate, 1, &err);
 		if (!enc->opus_dec)
 			RSS_WARN("rsp_audio: opus decoder init failed");
 		else
-			RSS_DEBUG("rsp_audio: opus decoder ready");
+			RSS_DEBUG("rsp_audio: opus decoder ready (%uHz)", sample_rate);
 	}
 #endif
 
