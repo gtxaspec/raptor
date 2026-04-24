@@ -773,7 +773,7 @@ if [ "$PLATFORM" = "a1" ]; then
 else
     TARGETS="rvd rsd rad rhd rod ric rmr rmd rfs raptorctl ringdump rac"
 fi
-[ "$OPT_TLS" = 1 ] && TARGETS="$TARGETS rwd"
+[ "$OPT_TLS" = 1 ] && TARGETS="$TARGETS rwd rsp"
 
 HAL_VIDEO="$SYSROOT_DIR/usr/lib/libraptor_hal_video.a"
 HAL_AUDIO="$SYSROOT_DIR/usr/lib/libraptor_hal_audio.a"
@@ -810,7 +810,7 @@ make -j"$JOBS" \
 
 # Collect binaries
 mkdir -p "$SCRIPT_DIR/build"
-for d in rvd rsd rad rhd rod ric rmr rmd rfs rwd raptorctl ringdump rac; do
+for d in rvd rsd rad rhd rod ric rmr rmd rfs rwd rsp raptorctl ringdump rac; do
     [ -f "$SCRIPT_DIR/$d/$d" ] && cp -f "$SCRIPT_DIR/$d/$d" "$SCRIPT_DIR/build/"
 done
 

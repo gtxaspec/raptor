@@ -21,7 +21,7 @@
 #include "raptorctl.h"
 
 const char *daemons[] = {"rvd", "rsd", "rad", "rod", "rhd", "ric",
-			 "rmr", "rmd", "rwd", "rwc", "rfs", NULL};
+			 "rmr", "rmd", "rwd", "rwc", "rfs", "rsp", NULL};
 
 int main(int argc, char **argv)
 {

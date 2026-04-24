@@ -179,7 +179,7 @@ LDFLAGS_HAL += $(EXTRA_LDFLAGS)
 LDFLAGS     += $(EXTRA_LDFLAGS)
 
 # Targets
-DAEMONS := rvd rsd rad rhd rod ric rmr rmd rwd rwc rfs
+DAEMONS := rvd rsd rad rhd rod ric rmr rmd rwd rwc rfs rsp
 TOOLS   := raptorctl ringdump rac rlatency
 
 .PHONY: all clean libs $(DAEMONS) $(TOOLS) install
@@ -277,6 +277,23 @@ rfs: $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_BUILD_OBJ)
 		LIBS="$(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS) $(LDFLAGS_AAC_ENC) $(LDFLAGS_OPUS) $(LDFLAGS_MP3) $(LDFLAGS_AAC_DEC)" \
 		RAD_DIR="$(CURDIR)/rad" LIBMOV_DIR="$(LIBMOV_DIR)" Q="$(Q)"
+
+RSP_CFLAGS := -DRSS_HAS_TLS
+RSP_LDFLAGS :=
+ifeq ($(AAC),1)
+RSP_CFLAGS += -DRAPTOR_AAC_ENC -DRAPTOR_AAC
+RSP_LDFLAGS += $(LDFLAGS_AAC_ENC) $(LDFLAGS_AAC_DEC)
+endif
+ifeq ($(OPUS),1)
+RSP_CFLAGS += -DRAPTOR_OPUS
+RSP_LDFLAGS += $(LDFLAGS_OPUS)
+endif
+
+rsp: $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_TLS_OBJ) $(RSS_BUILD_OBJ)
+	@echo "  BUILD   rsp"
+	$(Q)$(MAKE) -C rsp CC="$(CC)" CFLAGS="$(CFLAGS) $(RSP_CFLAGS)" \
+		LIBS="$(LIB_IPC) $(LIB_COMMON) $(RSS_TLS_OBJ) $(RSS_BUILD_LIBS)" \
+		LDFLAGS="$(LDFLAGS) $(LDFLAGS_TLS) $(RSP_LDFLAGS)" Q="$(Q)"
 
 # -- Tools --
 

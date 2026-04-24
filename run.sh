@@ -104,7 +104,7 @@ fi
 
 # Kill any running daemons and wait for them to exit
 log "stopping running daemons..."
-for d in rvd rad rod rsd rhd rmr rmd ric rwd; do
+for d in rvd rad rod rsd rhd rmr rmd ric rwd rsp; do
     pid=$(pidof $d 2>/dev/null)
     if [ -n "$pid" ]; then
         log "  killing $d (pid $pid)"
@@ -114,14 +114,14 @@ done
 # Wait for all to exit (HAL teardown can take several seconds)
 for i in 1 2 3 4 5 6 7 8 9 10; do
     alive=0
-    for d in rvd rad rod rsd rhd rmr rmd ric rwd; do
+    for d in rvd rad rod rsd rhd rmr rmd ric rwd rsp; do
         pidof $d >/dev/null 2>&1 && alive=1 && break
     done
     [ "$alive" = 0 ] && break
     sleep 1
 done
 # Force-kill anything still alive
-for d in rvd rad rod rsd rhd rmr rmd ric rwd; do
+for d in rvd rad rod rsd rhd rmr rmd ric rwd rsp; do
     pid=$(pidof $d 2>/dev/null)
     [ -n "$pid" ] && kill -9 $pid 2>/dev/null && log "  force-killed $d"
 done
@@ -189,8 +189,9 @@ launch rsd $DIR/rsd/rsd -c "$CONF" -f -d
 launch rhd $DIR/rhd/rhd -c "$CONF" -f -d
 launch rmr $DIR/rmr/rmr -c "$CONF" -f -d
 launch rwd $DIR/rwd/rwd -c "$CONF" -f -d
+launch rsp $DIR/rsp/rsp -c "$CONF" -f -d
 sleep 1
-for d in rod rsd rhd rmr rwd; do check $d; done
+for d in rod rsd rhd rmr rwd rsp; do check $d; done
 
 # Aux daemons
 launch ric $DIR/ric/ric -c "$CONF" -f -d
@@ -201,10 +202,10 @@ for d in ric rmd; do check $d; done
 # Final settle — catch delayed crashes
 sleep 2
 log "verifying all daemons survived..."
-for d in rvd rad rod rsd rhd rmr rwd ric rmd; do check $d; done
+for d in rvd rad rod rsd rhd rmr rwd rsp ric rmd; do check $d; done
 
 echo ""
-for d in rvd rad rod rsd rhd rmr rwd ric rmd; do
+for d in rvd rad rod rsd rhd rmr rwd rsp ric rmd; do
     pid=$(pidof $d 2>/dev/null)
     if [ -n "$pid" ]; then
         printf "  %-6s pid %-6s OK\n" "$d" "$pid"
@@ -221,4 +222,4 @@ if [ -n "$FAILED" ]; then
     log "check logs: /tmp/{daemon}.log"
     exit 1
 fi
-log "logs: /tmp/{rvd,rad,rod,rsd,rhd,rmr,rwd,ric,rmd}.log"
+log "logs: /tmp/{rvd,rad,rod,rsd,rhd,rmr,rwd,rsp,ric,rmd}.log"
