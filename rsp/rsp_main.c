@@ -77,6 +77,7 @@ static int rsp_connect(rsp_state_t *st)
 
 	rss_strlcpy(st->rtmp.app, st->app, sizeof(st->rtmp.app));
 	rss_strlcpy(st->rtmp.stream_key, st->stream_key, sizeof(st->rtmp.stream_key));
+	st->rtmp.tcp_sndbuf = st->tcp_sndbuf;
 	snprintf(st->rtmp.tc_url, sizeof(st->rtmp.tc_url), "%s://%s:%d/%s",
 		 st->use_tls ? "rtmps" : "rtmp", st->host, st->port, st->app);
 
@@ -459,6 +460,7 @@ int main(int argc, char **argv)
 		st.reconnect_delay = 1000;
 	if (st.reconnect_delay > 60000)
 		st.reconnect_delay = 60000;
+	st.tcp_sndbuf = rss_config_get_int(dctx.cfg, "push", "tcp_sndbuf", 256 * 1024);
 
 	/* Open video ring */
 	static const char *ring_names[] = {"main", "sub", "s1_main", "s1_sub", "s2_main", "s2_sub"};

@@ -24,6 +24,7 @@ typedef struct {
 	int stream_idx;
 	bool audio_enabled;
 	int reconnect_delay;
+	int tcp_sndbuf;
 
 	/* Rings */
 	rss_ring_t *video_ring;

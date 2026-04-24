@@ -41,6 +41,9 @@ typedef struct {
 	rss_tls_conn_t *tls_conn;
 #endif
 
+	/* TCP tuning */
+	int tcp_sndbuf;
+
 	/* RTMP chunk state */
 	uint32_t chunk_size;	/* outgoing chunk size (default 128) */
 	uint32_t in_chunk_size; /* incoming chunk size */

@@ -698,6 +698,13 @@ int rsp_rtmp_connect(rsp_rtmp_t *ctx, const char *host, int port, bool use_tls)
 	}
 
 	rss_set_tcp_nodelay(ctx->fd);
+	if (ctx->tcp_sndbuf > 0) {
+		int sndbuf = ctx->tcp_sndbuf;
+		setsockopt(ctx->fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+		socklen_t len = sizeof(sndbuf);
+		getsockopt(ctx->fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, &len);
+		RSS_DEBUG("rtmp: tcp_sndbuf=%d (requested %d)", sndbuf, ctx->tcp_sndbuf);
+	}
 	ctx->use_tls = use_tls;
 	ctx->chunk_size = RTMP_DEFAULT_CHUNK_SZ;
 	ctx->in_chunk_size = RTMP_DEFAULT_CHUNK_SZ;
