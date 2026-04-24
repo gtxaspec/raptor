@@ -54,6 +54,10 @@ typedef struct {
 	/* Audio transcoder (non-AAC → AAC) */
 	rsp_audio_enc_t *audio_enc;
 
+	/* Passthrough audio timestamp smoother */
+	uint32_t audio_next_ts;
+	bool audio_ts_running;
+
 	/* RTMP connection */
 	rsp_rtmp_t rtmp;
 	bool header_sent;

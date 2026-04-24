@@ -93,6 +93,7 @@ static int rsp_connect(rsp_state_t *st)
 	st->connect_time_us = rss_timestamp_us();
 	st->rtmp.video_ts_set = false;
 	st->rtmp.audio_ts_set = false;
+	st->audio_ts_running = false;
 	return 0;
 }
 
@@ -396,9 +397,26 @@ static void push_loop(rsp_state_t *st)
 						break;
 					}
 				} else {
-					/* Passthrough (already AAC) */
+					/* Passthrough — smooth timestamp to avoid
+					 * 40ms gaps from ms truncation of 21.33ms frames */
+					if (!st->audio_ts_running) {
+						st->audio_next_ts = a_ts;
+						st->audio_ts_running = true;
+					}
+					uint32_t smooth_ts = st->audio_next_ts;
+					uint32_t frame_dur = 1024 * 1000 / 48000;
+					st->audio_next_ts += frame_dur;
+					int32_t err = (int32_t)a_ts - (int32_t)st->audio_next_ts;
+					if (err > (int32_t)frame_dur * 4 ||
+					    err < -(int32_t)frame_dur * 4)
+						st->audio_next_ts = a_ts;
+					else if (err > 1)
+						st->audio_next_ts++;
+					else if (err < -1)
+						st->audio_next_ts--;
+
 					if (rsp_rtmp_send_audio(&st->rtmp, st->audio_buf, alen,
-								a_ts) < 0) {
+								smooth_ts) < 0) {
 						RSS_WARN("audio send failed, reconnecting");
 						rsp_disconnect(st);
 						reconnect_wait = st->reconnect_delay;

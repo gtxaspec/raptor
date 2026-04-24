@@ -184,11 +184,14 @@ rsp_audio_enc_t *rsp_audio_init(uint32_t input_codec, uint32_t sample_rate)
 #ifdef RAPTOR_OPUS
 	if (input_codec == RSP_CODEC_OPUS) {
 		int err;
-		enc->opus_dec = opus_decoder_create((opus_int32)sample_rate, 1, &err);
-		if (!enc->opus_dec)
+		enc->opus_dec = opus_decoder_create((opus_int32)enc->output_rate, 1, &err);
+		if (!enc->opus_dec) {
 			RSS_WARN("rsp_audio: opus decoder init failed");
-		else
-			RSS_DEBUG("rsp_audio: opus decoder ready (%uHz)", sample_rate);
+		} else {
+			enc->input_rate = enc->output_rate;
+			RSS_DEBUG("rsp_audio: opus decoder at %uHz (native, no resample)",
+				  enc->output_rate);
+		}
 	}
 #endif
 
