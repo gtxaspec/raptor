@@ -28,6 +28,7 @@ buffers at runtime, gracefully skipping any that don't exist.
    |     \            +--> [RMR] fragmented MP4 recording
    |      \           +--> [RWD] WebRTC/WHIP server (DTLS-SRTP)
    |       \          +--> [RWC] USB webcam (UVC + UAC1)
+   |       \          +--> [RSP] RTMP/RTMPS push (YouTube, Twitch)
    |        `--osd shm <-- [ROD] OSD text / logo renderer
    |        `--ivs ------> [RMD] motion detection → triggers RMR
    |
@@ -51,6 +52,7 @@ buffers at runtime, gracefully skipping any that don't exist.
 | RWD  | `rwd`  | WebRTC Daemon. Sends live H.264 + Opus to browsers and go2rtc via WHIP signaling with sub-second latency. ICE-lite, DTLS-SRTP (mbedTLS), SRTP (compy). Two-way audio backchannel (browser mic → camera speaker via Opus decode). HTTPS by default for signaling (enables `getUserMedia` Talk button). Embedded player at `/webrtc`. Optional WebTorrent sharing (`WEBTORRENT=1`) enables external viewing without port forwarding via public tracker signaling + STUN NAT traversal. Requires `TLS=1` and `MBEDTLS_SSL_DTLS_SRTP`. |
 | RWC  | `rwc`  | USB Webcam Daemon. Reads JPEG (or H.264) video from rings and raw PCM audio, feeds them to the Linux UVC+UAC gadget via V4L2 and `/dev/uac_mic`. Camera appears as a standard USB webcam with microphone on any connected host. MJPEG + H.264 at 1080p/720p/360p, 16kHz mono mic. Bulk video endpoint (works through USB hubs), isochronous audio. No ALSA dependency — custom minimal UAC1 kernel function. Requires `CONFIG_USB_G_WEBCAM=m` and the thingino kernel webcam patches. |
 | RFS  | `rfs`  | File Source Daemon. Reads video+audio from MP4/MOV containers or raw Annex B H.264/H.265 files, publishes to ring buffers at real-time rate. Replaces RVD+RAD on platforms without ISP/encoder hardware (A1, x86 testing). MP4 demuxing via libmov (zero-copy mmap, AVCC→Annex B on-the-fly). B-frame display reorder for raw files. Audio: direct passthrough for AAC/Opus/G.711, MP3 transcode via libhelix, raw PCM encoding via RAD codec plugins (L16/PCMU/PCMA/AAC/Opus). Control socket: status, pause/resume, seek. No HAL dependency. |
+| RSP  | `rsp`  | Stream Push Daemon. Reads H.264/H.265 video + audio from SHM rings and pushes to RTMP/RTMPS servers (YouTube Live, Twitch, Facebook Live, custom endpoints). Custom RTMP client with AMF0 encoding, chunk stream framing, and FLV tag construction. H.264 via standard FLV, H.265 via Enhanced RTMP FourCC. Audio transcode: any ring codec (G.711 µ/A-law, L16, Opus) is decoded to PCM and re-encoded to AAC-LC via faac; native AAC is passed through. Zero-copy ring peek in refmode. RTMPS via mbedTLS client-side TLS. Auto-reconnect with configurable backoff. Requires `TLS=1` for RTMPS, `AAC=1` for audio transcode. |
 
 ### Tools
 
@@ -150,7 +152,7 @@ All daemons share a single INI-style config file: `/etc/raptor.conf`.
 
 Sections: `[sensor]`, `[stream0]`, `[stream1]`, `[image]`, `[jpeg]`, `[ring]`,
 `[audio]`, `[rtsp]`, `[http]`, `[osd]`, `[ircut]`, `[recording]`, `[webrtc]`,
-`[webcam]`, `[webtorrent]`, `[motion]`, `[filesource]`, `[log]`.
+`[webcam]`, `[webtorrent]`, `[motion]`, `[filesource]`, `[push]`, `[log]`.
 
 See `config/raptor.conf` for the full reference with defaults and comments.
 
@@ -211,6 +213,9 @@ raptorctl rsd clients                 # list RTSP clients
 raptorctl rhd clients                 # list HTTP clients
 raptorctl rwd clients                 # list WebRTC clients
 raptorctl rwd share                   # show WebTorrent share URL
+raptorctl rsp status                  # show RTMP push status
+raptorctl rsp start                   # start push stream
+raptorctl rsp stop                    # stop push stream
 raptorctl config get audio             # show all [audio] config keys
 raptorctl config get rtsp port        # read single config value
 raptorctl config set audio codec pcmu # change config value
@@ -267,7 +272,7 @@ normally for lower-resolution snapshots. JPEG indices are preserved so
 
 ## Ring Reconnection
 
-All consumer daemons (RSD, RWD, RMR, RHD) automatically reconnect to both
+All consumer daemons (RSD, RWD, RMR, RHD, RSP) automatically reconnect to both
 video and audio ring buffers after RVD or RAD restarts. If a ring producer
 stops writing for ~2 seconds, consumers close the stale ring and retry until
 the new ring appears. No manual daemon restart required.
@@ -303,7 +308,7 @@ manages startup order:
 
 1. **RVD** starts first and creates the SHM ring buffers.
 2. The script waits (up to 5 seconds) for `/dev/shm/rss_ring_main` to appear.
-3. **RAD**, **ROD**, **RSD**, **RHD**, **RMR**, **RIC**, **RMD**, and **RWD** start.
+3. **RAD**, **ROD**, **RSD**, **RHD**, **RMR**, **RIC**, **RMD**, **RWD**, and **RSP** start.
    Each daemon checks its own `enabled` flag in the config and exits cleanly
    if disabled, so all can be started unconditionally.
 4. Shutdown reverses the order: consumers stop first, then RVD.
