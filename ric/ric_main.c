@@ -36,12 +36,14 @@ static void load_config(ric_state_t *st)
 	c->gpio_ircut2 = rss_config_get_int(cfg, "ircut", "gpio_ircut2", -1);
 	c->gpio_irled = rss_config_get_int(cfg, "ircut", "gpio_irled", -1);
 
-	/* Trigger mode: "luma" (default), "gain" (legacy), "adc" (photoresistor) */
+	/* Trigger mode: "luma" (default), "gain" (legacy), "adc", "photo" */
 	const char *trigger = rss_config_get_str(cfg, "ircut", "trigger", "luma");
 	if (strcmp(trigger, "gain") == 0)
 		c->trigger = RIC_TRIGGER_GAIN;
 	else if (strcmp(trigger, "adc") == 0)
 		c->trigger = RIC_TRIGGER_ADC;
+	else if (strcmp(trigger, "photo") == 0)
+		c->trigger = RIC_TRIGGER_PHOTO;
 	else
 		c->trigger = RIC_TRIGGER_LUMA;
 
@@ -54,6 +56,14 @@ static void load_config(ric_state_t *st)
 	c->adc_channel = rss_config_get_int(cfg, "ircut", "adc_channel", 0);
 	c->adc_night = rss_config_get_int(cfg, "ircut", "adc_night", 200);
 	c->adc_day = rss_config_get_int(cfg, "ircut", "adc_day", 600);
+
+	/* Photo trigger thresholds (defaults from gc2053/jxf37 profile) */
+	c->photo.ev_day = (uint32_t)rss_config_get_int(cfg, "ircut", "photo_ev_day", 188000);
+	c->photo.ev_1lux = (uint32_t)rss_config_get_int(cfg, "ircut", "photo_ev_1lux", 10000);
+	c->photo.ev_3lux = (uint32_t)rss_config_get_int(cfg, "ircut", "photo_ev_3lux", 3000);
+	c->photo.ev_6lux = (uint32_t)rss_config_get_int(cfg, "ircut", "photo_ev_6lux", 1200);
+	c->photo.rgain_rec = (uint16_t)rss_config_get_int(cfg, "ircut", "photo_rgain_rec", 250);
+	c->photo.bgain_rec = (uint16_t)rss_config_get_int(cfg, "ircut", "photo_bgain_rec", 187);
 
 	/* Gain thresholds (legacy, only used when trigger=gain) */
 	c->night_threshold = rss_config_get_int(cfg, "ircut", "night_threshold", 40000);
@@ -274,6 +284,10 @@ int main(int argc, char **argv)
 		}
 	}
 
+	/* Init photo mode state */
+	if (st.settings.trigger == RIC_TRIGGER_PHOTO)
+		ric_photo_reset(&st.photo, PHOTO_PHASE_NIGHT_DETECT);
+
 	/* Apply initial mode */
 	if (st.settings.opmode == RIC_FORCE_DAY)
 		ric_set_mode(&st, RIC_MODE_DAY);
@@ -296,17 +310,21 @@ int main(int argc, char **argv)
 		}
 	}
 
+	static const char *trigger_names[] = {"luma", "gain", "adc", "photo"};
 	RSS_INFO("ric running (mode=%s, trigger=%s, gpio_ircut=%d, gpio_ircut2=%d, gpio_irled=%d)",
 		 st.settings.opmode == RIC_AUTO
 			 ? "auto"
 			 : (st.settings.opmode == RIC_FORCE_DAY ? "day" : "night"),
-		 st.settings.trigger == RIC_TRIGGER_LUMA
-			 ? "luma"
-			 : (st.settings.trigger == RIC_TRIGGER_ADC ? "adc" : "gain"),
-		 st.settings.gpio_ircut, st.settings.gpio_ircut2, st.settings.gpio_irled);
+		 trigger_names[st.settings.trigger], st.settings.gpio_ircut,
+		 st.settings.gpio_ircut2, st.settings.gpio_irled);
 	if (st.settings.trigger == RIC_TRIGGER_ADC) {
 		RSS_DEBUG("  adc: channel=%d night=%d day=%d", st.settings.adc_channel,
 			  st.settings.adc_night, st.settings.adc_day);
+	} else if (st.settings.trigger == RIC_TRIGGER_PHOTO) {
+		RSS_DEBUG("  photo: ev_day=%u ev_1lux=%u ev_3lux=%u ev_6lux=%u rg=%u bg=%u",
+			  st.settings.photo.ev_day, st.settings.photo.ev_1lux,
+			  st.settings.photo.ev_3lux, st.settings.photo.ev_6lux,
+			  st.settings.photo.rgain_rec, st.settings.photo.bgain_rec);
 	} else if (st.settings.trigger == RIC_TRIGGER_LUMA) {
 		RSS_DEBUG("  luma: night_luma=%d night_gain=%d day_gain_pct=%d",
 			  st.settings.night_luma, st.settings.night_gain, st.settings.day_gain_pct);

@@ -204,19 +204,30 @@ void ric_poll_exposure(ric_state_t *st)
 		return;
 
 	/* Query RVD for ISP exposure data via control socket */
-	char resp[256];
+	char resp[512];
 	int ret = rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", "{\"cmd\":\"get-exposure\"}", resp,
 					sizeof(resp), 1000);
 	if (ret < 0)
 		return;
 
 	uint32_t total_gain = 0, ae_luma = 0;
+	uint32_t ev = 0;
+	uint16_t wb_rgain = 0, wb_bgain = 0;
 	cJSON *parsed = cJSON_Parse(resp);
 	if (!parsed)
 		return;
 	total_gain = json_get_uint(parsed, "total_gain");
 	ae_luma = json_get_uint(parsed, "ae_luma");
+	ev = json_get_uint(parsed, "ev");
+	wb_rgain = (uint16_t)json_get_uint(parsed, "wb_rgain");
+	wb_bgain = (uint16_t)json_get_uint(parsed, "wb_bgain");
 	cJSON_Delete(parsed);
+
+	/* Photo mode has its own state machine — bypass cooldown/hysteresis */
+	if (st->settings.trigger == RIC_TRIGGER_PHOTO) {
+		ric_photo_poll(st, ev, wb_rgain, wb_bgain);
+		return;
+	}
 
 	/* Cooldown after mode switch: wait for IR LEDs / ISP to stabilize.
 	 * After cooldown in night mode, sample total_gain as baseline for

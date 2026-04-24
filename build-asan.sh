@@ -43,7 +43,7 @@ DEPS="$OUT/deps"
 if [ "$1" = "clean" ]; then
     rm -f "$OUT"/*.o "$OUT"/*.a "$OUT"/rss_build_info.c
     rm -f "$OUT"/rvd "$OUT"/rsd "$OUT"/rad "$OUT"/rhd "$OUT"/rod "$OUT"/ric
-    rm -f "$OUT"/rmd "$OUT"/rmr "$OUT"/rwc "$OUT"/rwd
+    rm -f "$OUT"/rmd "$OUT"/rmr "$OUT"/rwc "$OUT"/rwd "$OUT"/rsp
     rm -f "$OUT"/raptorctl "$OUT"/ringdump "$OUT"/rac "$OUT"/create_rings
     rm -rf "$OUT"/mbedtls-build "$OUT"/mbedtls-install "$OUT"/compy-build
     echo "Cleaned asan-out/ (deps kept — use distclean to remove)"
@@ -226,7 +226,8 @@ echo "  -> rsd"
 echo "=== RIC ==="
 $CC $CFLAGS -c "$RAPTOR_DIR/ric/ric_main.c" -o "$OUT/ric_main.o"
 $CC $CFLAGS -c "$RAPTOR_DIR/ric/ric_daynight.c" -o "$OUT/ric_daynight.o"
-$CC -o "$OUT/ric" "$OUT/ric_main.o" "$OUT/ric_daynight.o" $LIBS $LDFLAGS
+$CC $CFLAGS -c "$RAPTOR_DIR/ric/ric_photo.c" -o "$OUT/ric_photo.o"
+$CC -o "$OUT/ric" "$OUT/ric_main.o" "$OUT/ric_daynight.o" "$OUT/ric_photo.o" $LIBS $LDFLAGS
 echo "  -> ric"
 
 echo "=== RMD ==="
@@ -269,6 +270,12 @@ $CC $CFLAGS -c "$RAPTOR_DIR/rmr/rmr_prebuf.c" -o "$OUT/rmr_prebuf.o"
 $CC $CFLAGS -c "$RAPTOR_DIR/rmr/rmr_storage.c" -o "$OUT/rmr_storage.o"
 $CC -o "$OUT/rmr" "$OUT"/rmr_main.o "$OUT"/rmr_mux.o "$OUT"/rmr_nal.o "$OUT"/rmr_prebuf.o "$OUT"/rmr_storage.o $LIBS $LDFLAGS
 echo "  -> rmr"
+
+echo "=== RSP ==="
+$CC $CFLAGS $TLS_CFLAGS -c "$RAPTOR_DIR/rsp/rsp_main.c" -o "$OUT/rsp_main.o"
+$CC $CFLAGS $TLS_CFLAGS -c "$RAPTOR_DIR/rsp/rsp_rtmp.c" -o "$OUT/rsp_rtmp.o"
+$CC -o "$OUT/rsp" "$OUT"/rsp_main.o "$OUT"/rsp_rtmp.o $LIBS $LIBS_TLS $LDFLAGS
+echo "  -> rsp"
 
 echo "=== raptorctl ==="
 for f in raptorctl raptorctl_dispatch raptorctl_config raptorctl_ipc raptorctl_help raptorctl_info; do

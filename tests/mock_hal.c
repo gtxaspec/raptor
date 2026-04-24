@@ -228,6 +228,9 @@ static int mock_get_exposure(void *ctx, rss_exposure_t *exp)
 	exp->total_gain = 1000;
 	exp->exposure_time = 33333;
 	exp->ae_luma = 128;
+	exp->ev = 50000;
+	exp->wb_rgain = 256;
+	exp->wb_bgain = 192;
 	return RSS_OK;
 }
 

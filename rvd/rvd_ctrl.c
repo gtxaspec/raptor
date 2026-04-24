@@ -1058,6 +1058,9 @@ static int handle_isp_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 		cJSON_AddNumberToObject(r, "total_gain", (double)exp.total_gain);
 		cJSON_AddNumberToObject(r, "exposure_us", (double)exp.exposure_time);
 		cJSON_AddNumberToObject(r, "ae_luma", (double)exp.ae_luma);
+		cJSON_AddNumberToObject(r, "ev", (double)exp.ev);
+		cJSON_AddNumberToObject(r, "wb_rgain", (double)exp.wb_rgain);
+		cJSON_AddNumberToObject(r, "wb_bgain", (double)exp.wb_bgain);
 		return rss_ctrl_resp_json(resp, resp_size, r);
 	}
 
