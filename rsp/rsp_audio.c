@@ -118,10 +118,10 @@ struct rsp_audio_enc {
 	/* Resample state (non-integer ratio fallback) */
 	uint32_t resample_frac;
 
-	/* Output timestamp tracking (sample-accurate, avoids integer truncation) */
-	uint64_t out_samples; /* total output samples emitted */
-	uint32_t out_ts_base; /* base timestamp from first input frame (ms) */
-	bool out_ts_set;
+	/* Smooth output timestamp (advances by frame_dur per output frame,
+	 * corrected toward ring timestamp to prevent long-term drift) */
+	uint32_t next_out_ts;
+	bool out_ts_running;
 
 	/* Decode state */
 #ifdef RAPTOR_OPUS
@@ -312,7 +312,7 @@ static int resample(rsp_audio_enc_t *enc, const int16_t *in, int in_count, int16
 		return n;
 	}
 
-	/* Integer ratio fast path (16→48 = 3x, 8→48 = 6x, etc.) */
+	/* Integer ratio: sample repetition (16→48 = 3x, 8→48 = 6x) */
 	if (enc->output_rate % enc->input_rate == 0) {
 		int ratio = (int)(enc->output_rate / enc->input_rate);
 		int out_count = in_count * ratio;
@@ -364,9 +364,18 @@ int rsp_audio_transcode(rsp_audio_enc_t *enc, const uint8_t *data, uint32_t len,
 	if (rs_count <= 0)
 		return 0;
 
-	/* Feed resampled PCM into faac accumulator */
+	/* Feed resampled PCM into faac accumulator.
+	 * Smooth output timestamp: advances by frame_dur per AAC frame,
+	 * with gentle correction toward ring timestamp to prevent drift
+	 * without introducing jitter from accumulator boundary misalignment. */
 	const int16_t *src = resampled;
 	int remaining = rs_count;
+	uint32_t frame_dur = (uint32_t)enc->frame_samples * 1000 / enc->output_rate;
+
+	if (!enc->out_ts_running) {
+		enc->next_out_ts = timestamp_ms;
+		enc->out_ts_running = true;
+	}
 
 	while (remaining > 0) {
 		int copy = remaining;
@@ -383,18 +392,22 @@ int rsp_audio_transcode(rsp_audio_enc_t *enc, const uint8_t *data, uint32_t len,
 						    (unsigned int)enc->max_output);
 			enc->pcm_fill = 0;
 			if (aac_len > 0) {
-				if (!enc->out_ts_set) {
-					enc->out_ts_base = timestamp_ms;
-					enc->out_samples = 0;
-					enc->out_ts_set = true;
-				}
-				uint32_t ts =
-					enc->out_ts_base +
-					(uint32_t)(enc->out_samples * 1000 / enc->output_rate);
-				RSS_TRACE("rsp_audio: enc %d bytes ts=%u", aac_len, ts);
-				if (cb(enc->aac_buf, (uint32_t)aac_len, ts, userdata) < 0)
+				RSS_TRACE("rsp_audio: enc %d bytes ts=%u", aac_len,
+					  enc->next_out_ts);
+				if (cb(enc->aac_buf, (uint32_t)aac_len, enc->next_out_ts,
+				       userdata) < 0)
 					return -1;
-				enc->out_samples += (uint64_t)enc->frame_samples;
+				enc->next_out_ts += frame_dur;
+				/* Correct toward ring timestamp to prevent drift.
+				 * Snap on large gaps (overflow/reconnect), nudge
+				 * on small drift (accumulator jitter). */
+				int32_t err = (int32_t)timestamp_ms - (int32_t)enc->next_out_ts;
+				if (err > (int32_t)frame_dur * 4 || err < -(int32_t)frame_dur * 4)
+					enc->next_out_ts = timestamp_ms;
+				else if (err > 1)
+					enc->next_out_ts++;
+				else if (err < -1)
+					enc->next_out_ts--;
 			}
 		}
 	}
