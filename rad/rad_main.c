@@ -35,6 +35,7 @@ typedef struct {
 	const rss_hal_ops_t *ops;
 	rss_hal_ctx_t *hal_ctx;
 	int ai_dev;
+	rss_audio_input_t input_type;
 	int volume;
 	int gain;
 	int sample_rate;
@@ -343,6 +344,7 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			.frame_depth = 20,
 			.ai_vol = ctx->volume,
 			.ai_gain = ctx->gain,
+			.input_type = ctx->input_type,
 		};
 		int ret = RSS_HAL_CALL(ctx->ops, audio_init, ctx->hal_ctx, &audio_cfg);
 		if (ret != RSS_OK) {
@@ -658,6 +660,10 @@ int main(int argc, char **argv)
 	int gain = rss_config_get_int(dctx.cfg, "audio", "gain", 25);
 	int ai_dev = rss_config_get_int(dctx.cfg, "audio", "device", 1);
 	const char *codec_str = rss_config_get_str(dctx.cfg, "audio", "codec", "l16");
+	const char *input_str = rss_config_get_str(dctx.cfg, "audio", "input", "amic");
+	rss_audio_input_t input_type = RSS_AUDIO_INPUT_AMIC;
+	if (strcmp(input_str, "dmic") == 0)
+		input_type = RSS_AUDIO_INPUT_DMIC;
 
 	/* Find codec plugin */
 	codec_ops = rad_codec_find(codec_str);
@@ -678,6 +684,9 @@ int main(int argc, char **argv)
 		.frame_depth = 20,
 		.ai_vol = volume,
 		.ai_gain = gain,
+		.input_type = input_type,
+		.dmic_count = rss_config_get_int(dctx.cfg, "audio", "dmic_count", 1),
+		.dmic_aec_id = rss_config_get_int(dctx.cfg, "audio", "dmic_aec_id", 0),
 	};
 
 	ret = RSS_HAL_CALL(ops, audio_init, hal_ctx, &audio_cfg);
@@ -689,7 +698,7 @@ int main(int argc, char **argv)
 	RSS_HAL_CALL(ops, audio_set_volume, hal_ctx, ai_dev, 0, volume);
 	RSS_HAL_CALL(ops, audio_set_gain, hal_ctx, ai_dev, 0, gain);
 
-	RSS_INFO("audio: dev=%d %d Hz %s vol=%d gain=%d", ai_dev, sample_rate, codec_str, volume,
+	RSS_INFO("audio: %s %d Hz %s vol=%d gain=%d", input_str, sample_rate, codec_str, volume,
 		 gain);
 	RSS_DEBUG("  samples/frame=%d (%dms) frame_depth=%d", audio_cfg.samples_per_frame,
 		  audio_cfg.samples_per_frame * 1000 / sample_rate, audio_cfg.frame_depth);
@@ -830,6 +839,7 @@ int main(int argc, char **argv)
 		.ops = ops,
 		.hal_ctx = hal_ctx,
 		.ai_dev = ai_dev,
+		.input_type = input_type,
 		.volume = volume,
 		.gain = gain,
 		.sample_rate = sample_rate,
