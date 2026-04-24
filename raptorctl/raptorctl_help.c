@@ -116,6 +116,8 @@ const struct help_entry help_entries[] = {
 	{"rmd", "sensitivity <0-4>                   Set motion sensitivity"},
 	{"rmd", "skip-frames <N>                      Set IVS skip frame count"},
 	{NULL, "test-motion [sec]                   Trigger clip recording (default 10s)"},
+	{NULL, "<daemon> set-affinity <cpu>          Pin daemon to CPU core"},
+	{NULL, "<daemon> get-affinity                Show CPU affinity and sched policy"},
 	{NULL, NULL}};
 
 static int same_section(const char *a, const char *b)

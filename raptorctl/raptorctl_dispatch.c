@@ -117,6 +117,8 @@ static const struct cmd_arg args_position[] = {
 
 static const struct cmd_arg args_pool_kb[] = {{"pool_kb", A_INT}, {NULL, A_END}};
 
+static const struct cmd_arg args_cpu[] = {{"cpu", A_INT}, {NULL, A_END}};
+
 static const struct cmd_arg args_enc_set[] = {
 	{"channel", A_INT}, {"param", A_STR}, {"value", A_INT}, {NULL, A_END}};
 
@@ -222,6 +224,10 @@ static const struct cmd_def cmd_table[] = {
 	/* Motion detection */
 	{"sensitivity", NULL, 1, args_val},
 	{"skip-frames", NULL, 1, args_val},
+
+	/* Scheduling (common to all daemons) */
+	{"set-affinity", NULL, 1, args_cpu},
+	{"get-affinity", NULL, 0, args_none},
 
 	/* White balance */
 	{"set-wb", NULL, 1, args_wb},
