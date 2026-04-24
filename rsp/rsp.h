@@ -43,6 +43,7 @@ typedef struct {
 	uint64_t audio_read_seq;
 
 	/* Ring metadata */
+	bool use_zerocopy;
 	uint32_t video_codec;
 	uint32_t width, height;
 	uint32_t fps_num;

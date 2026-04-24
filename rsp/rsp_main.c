@@ -352,23 +352,29 @@ static void push_loop(rsp_state_t *st)
 			if (st->video_ring) {
 				rss_ring_check_version(st->video_ring, "video");
 				const rss_ring_header_t *vhdr = rss_ring_get_header(st->video_ring);
+				st->use_zerocopy = (vhdr->flags & RSS_RING_FLAG_REFMODE) != 0;
 				uint32_t mfs = rss_ring_max_frame_size(st->video_ring);
-				if (mfs > st->frame_buf_size) {
-					uint8_t *new_frame = malloc(mfs);
+				if (mfs > st->avcc_buf_size) {
 					uint8_t *new_avcc = malloc(mfs);
-					if (!new_frame || !new_avcc) {
-						free(new_frame);
-						free(new_avcc);
+					if (!new_avcc) {
+						rss_ring_close(st->video_ring);
+						st->video_ring = NULL;
+						continue;
+					}
+					free(st->avcc_buf);
+					st->avcc_buf = new_avcc;
+					st->avcc_buf_size = mfs;
+				}
+				if (!st->use_zerocopy && mfs > st->frame_buf_size) {
+					uint8_t *new_frame = malloc(mfs);
+					if (!new_frame) {
 						rss_ring_close(st->video_ring);
 						st->video_ring = NULL;
 						continue;
 					}
 					free(st->frame_buf);
-					free(st->avcc_buf);
 					st->frame_buf = new_frame;
-					st->avcc_buf = new_avcc;
 					st->frame_buf_size = mfs;
-					st->avcc_buf_size = mfs;
 				}
 				st->video_codec = vhdr->codec;
 				st->video_read_seq = 0;
@@ -376,18 +382,30 @@ static void push_loop(rsp_state_t *st)
 				st->header_sent = false;
 				video_idle = 0;
 				last_video_ws = 0;
-				RSS_DEBUG("video ring reconnected (%s)", st->video_ring_name);
+				RSS_DEBUG("video ring reconnected (%s%s)", st->video_ring_name,
+					  st->use_zerocopy ? ", zero-copy" : "");
 			} else {
 				usleep(200000);
 			}
 			continue;
 		}
 
-		/* Read video frame */
+		/* Read video frame — peek (zero-copy) in refmode, copy otherwise */
 		uint32_t length;
 		rss_ring_slot_t meta;
-		int ret = rss_ring_read(st->video_ring, &st->video_read_seq, st->frame_buf,
-					st->frame_buf_size, &length, &meta);
+		const uint8_t *frame_data;
+		bool peeked = false;
+		int ret;
+
+		if (st->use_zerocopy) {
+			ret = rss_ring_peek(st->video_ring, &st->video_read_seq, &frame_data,
+					    &length, &meta);
+			peeked = (ret == 0);
+		} else {
+			ret = rss_ring_read(st->video_ring, &st->video_read_seq, st->frame_buf,
+					    st->frame_buf_size, &length, &meta);
+			frame_data = st->frame_buf;
+		}
 
 		if (ret == RSS_EOVERFLOW) {
 			rss_ring_request_idr(st->video_ring);
@@ -418,25 +436,35 @@ static void push_loop(rsp_state_t *st)
 
 		/* Extract codec params from keyframe */
 		if (meta.is_key && !st->params.ready)
-			extract_params(st->frame_buf, length, st->video_codec, &st->params);
-		if (!st->params.ready)
+			extract_params(frame_data, length, st->video_codec, &st->params);
+		if (!st->params.ready) {
+			if (peeked)
+				rss_ring_peek_done(st->video_ring, &meta);
 			continue;
+		}
 
 		/* Send sequence headers on first keyframe */
 		if (!st->header_sent && meta.is_key) {
 			if (rsp_send_headers(st) < 0) {
+				if (peeked)
+					rss_ring_peek_done(st->video_ring, &meta);
 				RSS_WARN("header send failed, reconnecting");
 				rsp_disconnect(st);
 				reconnect_wait = st->reconnect_delay;
 				continue;
 			}
 		}
-		if (!st->header_sent)
+		if (!st->header_sent) {
+			if (peeked)
+				rss_ring_peek_done(st->video_ring, &meta);
 			continue;
+		}
 
-		/* Convert Annex B to AVCC */
-		int avcc_len = annexb_to_avcc(st->frame_buf, length, st->avcc_buf,
-					      st->avcc_buf_size, st->video_codec);
+		/* Convert Annex B to AVCC — then release the peek */
+		int avcc_len = annexb_to_avcc(frame_data, length, st->avcc_buf, st->avcc_buf_size,
+					      st->video_codec);
+		if (peeked)
+			rss_ring_peek_done(st->video_ring, &meta);
 		if (avcc_len <= 0)
 			continue;
 
@@ -578,15 +606,16 @@ int main(int argc, char **argv)
 	st.width = vhdr->width;
 	st.height = vhdr->height;
 	st.fps_num = vhdr->fps_num;
-	RSS_INFO("video: %s %ux%u @ %u fps", st.video_codec == 1 ? "H.265" : "H.264", st.width,
-		 st.height, st.fps_num);
+	st.use_zerocopy = (vhdr->flags & RSS_RING_FLAG_REFMODE) != 0;
+	RSS_INFO("video: %s %ux%u @ %u fps%s", st.video_codec == 1 ? "H.265" : "H.264", st.width,
+		 st.height, st.fps_num, st.use_zerocopy ? " (zero-copy)" : "");
 
-	/* Allocate buffers */
+	/* Allocate buffers — frame_buf only needed in copy mode */
 	st.frame_buf_size = rss_ring_max_frame_size(st.video_ring);
-	st.frame_buf = malloc(st.frame_buf_size);
+	st.frame_buf = st.use_zerocopy ? NULL : malloc(st.frame_buf_size);
 	st.avcc_buf_size = st.frame_buf_size;
 	st.avcc_buf = malloc(st.avcc_buf_size);
-	if (!st.frame_buf || !st.avcc_buf) {
+	if ((!st.use_zerocopy && !st.frame_buf) || !st.avcc_buf) {
 		RSS_FATAL("buffer allocation failed (%u bytes)", st.frame_buf_size);
 		goto cleanup;
 	}
