@@ -377,6 +377,12 @@ static void push_loop(rsp_state_t *st)
 				ret = rss_ring_read(st->audio_ring, &st->audio_read_seq,
 						    st->audio_buf, sizeof(st->audio_buf), &alen,
 						    &ameta);
+				if (ret == RSS_EOVERFLOW) {
+					RSS_DEBUG("audio ring overflow, resetting decoder");
+					if (st->audio_enc)
+						rsp_audio_reset(st->audio_enc);
+					continue;
+				}
 				if (ret != 0)
 					break;
 

@@ -35,6 +35,11 @@ int rsp_audio_transcode(rsp_audio_enc_t *enc, const uint8_t *data, uint32_t len,
 	return -1;
 }
 
+void rsp_audio_reset(rsp_audio_enc_t *enc)
+{
+	(void)enc;
+}
+
 void rsp_audio_free(rsp_audio_enc_t *enc)
 {
 	(void)enc;
@@ -189,8 +194,7 @@ rsp_audio_enc_t *rsp_audio_init(uint32_t input_codec, uint32_t sample_rate)
 			RSS_WARN("rsp_audio: opus decoder init failed");
 		} else {
 			enc->input_rate = enc->output_rate;
-			RSS_DEBUG("rsp_audio: opus decoder at %uHz (native, no resample)",
-				  enc->output_rate);
+			RSS_DEBUG("rsp_audio: opus decode at %uHz (native)", enc->output_rate);
 		}
 	}
 #endif
@@ -321,7 +325,8 @@ static int resample(rsp_audio_enc_t *enc, const int16_t *in, int in_count, int16
 		int out_count = in_count * ratio;
 		if (out_count > out_max)
 			out_count = (out_max / ratio) * ratio;
-		for (int i = 0; i < out_count / ratio; i++) {
+		int n = out_count / ratio;
+		for (int i = 0; i < n; i++) {
 			for (int j = 0; j < ratio; j++)
 				out[i * ratio + j] = in[i];
 		}
@@ -416,6 +421,23 @@ int rsp_audio_transcode(rsp_audio_enc_t *enc, const uint8_t *data, uint32_t len,
 	}
 
 	return 0;
+}
+
+void rsp_audio_reset(rsp_audio_enc_t *enc)
+{
+	if (!enc)
+		return;
+#ifdef RAPTOR_OPUS
+	if (enc->opus_dec)
+		opus_decoder_ctl(enc->opus_dec, OPUS_RESET_STATE);
+#endif
+#ifdef RAPTOR_AAC
+	if (enc->aac_dec) {
+		AACFlushCodec(enc->aac_dec);
+	}
+#endif
+	enc->pcm_fill = 0;
+	enc->out_ts_running = false;
 }
 
 void rsp_audio_free(rsp_audio_enc_t *enc)

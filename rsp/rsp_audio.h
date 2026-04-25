@@ -43,6 +43,12 @@ int rsp_audio_transcode(rsp_audio_enc_t *enc, const uint8_t *data, uint32_t len,
 			uint32_t timestamp_ms, rsp_audio_cb cb, void *userdata);
 
 /*
+ * Reset decoder state after ring overflow (prevents clicks from
+ * stale Opus/AAC decoder prediction state after frame gaps).
+ */
+void rsp_audio_reset(rsp_audio_enc_t *enc);
+
+/*
  * Free the transcoder.
  */
 void rsp_audio_free(rsp_audio_enc_t *enc);
