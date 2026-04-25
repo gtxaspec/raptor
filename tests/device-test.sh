@@ -31,6 +31,16 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RAPTOR_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# Always clean up Docker + device on exit (including Ctrl+C, errors, etc.)
+cleanup_on_exit() {
+    docker rm -f raptor-nfs-test > /dev/null 2>&1 || true
+    ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o LogLevel=ERROR \
+        "root@${DEVICE_IP:-localhost}" \
+        'umount /tmp/raptor-test 2>/dev/null; killall rvd rad rsd rhd rod ric rmd rmr rwd rwc rsp rfs 2>/dev/null' \
+        2>/dev/null || true
+}
+trap cleanup_on_exit EXIT
+
 DEVICE_IP=""
 RESTART=true
 KEEP=false
