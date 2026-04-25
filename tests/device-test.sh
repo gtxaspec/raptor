@@ -489,8 +489,13 @@ RINGDUMP="$DEVICE_RAPTOR/build/ringdump"
 CONF_ON_DEVICE="$DEVICE_RAPTOR/tests/device-test.conf"
 
 SENSOR=$($SSH 'sensor name 2>/dev/null || cat /proc/jz/sensor/name 2>/dev/null' 2>/dev/null || echo "unknown")
-# Use actual runtime FPS, not max capability — sensor may run slower than max
-SENSOR_FPS=$($SSH 'cat /proc/jz/sensor/fps 2>/dev/null' 2>/dev/null || echo "")
+# Native sensor fps from driver module parameter (which register table was loaded).
+# /proc/jz/sensor/fps reflects what RVD configured, not the hardware rate.
+# sensor max_fps reports the driver define (capability), often higher than reality.
+SENSOR_FPS=$($SSH 'cat /sys/module/sensor_*/parameters/sensor_max_fps 2>/dev/null' 2>/dev/null || echo "")
+if [ -z "$SENSOR_FPS" ] || [ "$SENSOR_FPS" = "0" ]; then
+    SENSOR_FPS=$($SSH 'cat /proc/jz/sensor/fps 2>/dev/null' 2>/dev/null || echo "")
+fi
 if [ -z "$SENSOR_FPS" ] || [ "$SENSOR_FPS" = "0" ]; then
     SENSOR_FPS=$($SSH 'sensor max_fps 2>/dev/null || cat /proc/jz/sensor/max_fps 2>/dev/null' 2>/dev/null || echo "25")
 fi
