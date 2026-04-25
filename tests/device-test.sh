@@ -9,14 +9,19 @@
 # the full validation battery — SDK state, RTSP streams, bitrate,
 # ring buffer, and encoder parameter exercise.
 #
+# Serves binaries to the device via NFS. Auto-detects existing NFS
+# mounts, or spins up a temporary Docker NFS container. Override
+# with --nfs <host>:<path> for a custom NFS export.
+#
 # Prerequisites:
 #   - Device reachable via SSH (root@IP, key auth)
-#   - NFS mount at /mnt/nfs (auto-mounted if absent)
 #   - Raptor built via build-standalone.sh (binaries in build/)
 #   - ffprobe, ffmpeg, and curl on the build host
+#   - Docker (for auto NFS) or existing NFS server
 #
 # Usage:
 #   ./tests/device-test.sh <device-ip>
+#   ./tests/device-test.sh <device-ip> --nfs 10.0.0.5:/export/raptor
 #   ./tests/device-test.sh <device-ip> --no-restart
 #   ./tests/device-test.sh <device-ip> --keep
 #
@@ -29,27 +34,39 @@ RAPTOR_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEVICE_IP=""
 RESTART=true
 KEEP=false
+NFS_OVERRIDE=""
+NFS_PORT=12049
+NFS_MOUNTD_PORT=12048
+DOCKER_NFS_CONTAINER="raptor-nfs-test"
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --no-restart) RESTART=false; shift ;;
         --keep) KEEP=true; shift ;;
-        --help|-h) echo "Usage: $0 <device-ip> [--no-restart] [--keep]"; exit 0 ;;
+        --nfs) NFS_OVERRIDE="$2"; shift 2 ;;
+        --help|-h)
+            echo "Usage: $0 <device-ip> [--nfs host:path] [--no-restart] [--keep]"
+            exit 0 ;;
         -*) echo "Unknown option: $1"; exit 1 ;;
         *) DEVICE_IP="$1"; shift ;;
     esac
 done
 
-[ -z "$DEVICE_IP" ] && { echo "Usage: $0 <device-ip> [--no-restart] [--keep]"; exit 1; }
+[ -z "$DEVICE_IP" ] && { echo "Usage: $0 <device-ip> [--nfs host:path] [--no-restart] [--keep]"; exit 1; }
 
 # ── Config ──
 
 SSH="ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o LogLevel=ERROR root@$DEVICE_IP"
-NFS_RAPTOR="/mnt/nfs/projects/thingino/raptor"
-RAPTORCTL="$NFS_RAPTOR/build/raptorctl"
-RINGDUMP="$NFS_RAPTOR/build/ringdump"
-CONF_ON_DEVICE="$NFS_RAPTOR/tests/device-test.conf"
+BUILD_DIR="$RAPTOR_DIR/build"
 TEST_CONF="$RAPTOR_DIR/tests/device-test.conf"
+DEVICE_MNT="/tmp/raptor-test"
+DOCKER_STARTED=false
+
+# These get set during NFS setup
+DEVICE_RAPTOR=""
+RAPTORCTL=""
+RINGDUMP=""
+CONF_ON_DEVICE=""
 RTSP_PORT=554
 HTTP_PORT=8080
 PASS=0
@@ -101,22 +118,22 @@ check_eq() {
 start_raptor() {
     local mode="$1"
 
-    $SSH 'killall rvd rad rsd rhd 2>/dev/null' 2>/dev/null || true
+    $SSH "killall $RAPTOR_DAEMONS 2>/dev/null" 2>/dev/null || true
     sleep 2
-    $SSH 'killall -9 rvd rad rsd rhd 2>/dev/null' 2>/dev/null || true
+    $SSH "killall -9 $RAPTOR_DAEMONS 2>/dev/null" 2>/dev/null || true
     $SSH 'rm -f /dev/shm/rss_ring_* /dev/shm/rss_osd_* /var/run/rss/*.pid /var/run/rss/*.sock 2>/dev/null' 2>/dev/null || true
     sleep 1
 
     # Write config with this RC mode
     sed "s/^rc_mode = .*/rc_mode = $mode/" "$TEST_CONF" > "${TEST_CONF}.tmp" && mv "${TEST_CONF}.tmp" "$TEST_CONF"
 
-    $SSH "$NFS_RAPTOR/build/rvd -c $CONF_ON_DEVICE -d" 2>/dev/null
+    $SSH "$DEVICE_RAPTOR/build/rvd -c $CONF_ON_DEVICE -d" 2>/dev/null
     sleep 4
-    $SSH "LD_PRELOAD=/usr/lib/libimp-nodbg.so $NFS_RAPTOR/build/rad -c $CONF_ON_DEVICE -d" 2>/dev/null
+    $SSH "LD_PRELOAD=/usr/lib/libimp-nodbg.so $DEVICE_RAPTOR/build/rad -c $CONF_ON_DEVICE -d" 2>/dev/null
     sleep 1
-    $SSH "$NFS_RAPTOR/build/rsd -c $CONF_ON_DEVICE -d" 2>/dev/null
+    $SSH "$DEVICE_RAPTOR/build/rsd -c $CONF_ON_DEVICE -d" 2>/dev/null
     sleep 1
-    $SSH "$NFS_RAPTOR/build/rhd -c $CONF_ON_DEVICE -d" 2>/dev/null
+    $SSH "$DEVICE_RAPTOR/build/rhd -c $CONF_ON_DEVICE -d" 2>/dev/null
     sleep 2
 
     # Return success if RVD is running
@@ -328,19 +345,97 @@ if ! $SSH 'true' 2>/dev/null; then
 fi
 pass "SSH connectivity"
 
-if ! $SSH "test -d $NFS_RAPTOR/build" 2>/dev/null; then
-    $SSH 'mount -t nfs -o nolock 10.25.1.230:/home/turismo /mnt/nfs 2>/dev/null' 2>/dev/null || true
-    sleep 1
-    if ! $SSH "test -d $NFS_RAPTOR/build" 2>/dev/null; then
-        echo "ERROR: NFS mount not available"; exit 1
-    fi
-fi
-pass "NFS mount"
+# Kill any existing raptor daemons before we start
+RAPTOR_DAEMONS="rvd rad rsd rhd rod ric rmd rmr rwd rwc rsp rfs"
+$SSH "killall $RAPTOR_DAEMONS 2>/dev/null" 2>/dev/null || true
+sleep 2
+$SSH "killall -9 $RAPTOR_DAEMONS 2>/dev/null" 2>/dev/null || true
+$SSH 'rm -f /dev/shm/rss_ring_* /dev/shm/rss_osd_* /var/run/rss/*.pid /var/run/rss/*.sock 2>/dev/null' 2>/dev/null || true
+sleep 1
 
-if ! $SSH "test -x $NFS_RAPTOR/build/rvd" 2>/dev/null; then
-    echo "ERROR: build/rvd not found"; exit 1
+# Verify nothing is still running
+STALE=$($SSH "pidof $RAPTOR_DAEMONS 2>/dev/null" 2>/dev/null || echo "")
+if [ -n "$STALE" ]; then
+    echo "ERROR: raptor daemons still running after kill: $STALE"
+    exit 1
+fi
+pass "clean slate (all daemons stopped)"
+
+# Auto-detect host IP (as seen from device)
+HOST_IP=$($SSH 'echo $SSH_CONNECTION' 2>/dev/null | awk '{print $1}')
+[ -z "$HOST_IP" ] && HOST_IP=$(ip route get "$DEVICE_IP" 2>/dev/null | grep -o 'src [0-9.]*' | awk '{print $2}')
+echo "    host IP: $HOST_IP"
+
+if [ ! -f "$BUILD_DIR/rvd" ]; then
+    echo "ERROR: build/rvd not found — run build-standalone.sh first"; exit 1
 fi
 pass "binaries present"
+
+# ── NFS setup ──
+# Priority: --nfs override > Docker auto-setup
+
+setup_nfs_done=false
+
+if [ -n "$NFS_OVERRIDE" ]; then
+    # Manual NFS: --nfs host:/path (path should contain build/ and tests/)
+    echo "    using manual NFS: $NFS_OVERRIDE"
+    $SSH "mkdir -p $DEVICE_MNT && mount -t nfs -o nolock,nfsvers=3,tcp $NFS_OVERRIDE $DEVICE_MNT" 2>/dev/null
+    if $SSH "test -x $DEVICE_MNT/build/rvd" 2>/dev/null; then
+        setup_nfs_done=true
+        pass "NFS mount (manual)"
+    else
+        echo "ERROR: manual NFS mount failed or build/rvd not found"; exit 1
+    fi
+fi
+
+if [ "$setup_nfs_done" = false ]; then
+    # Try Docker NFS
+    if command -v docker > /dev/null 2>&1; then
+        echo "    starting Docker NFS server..."
+        docker rm -f "$DOCKER_NFS_CONTAINER" > /dev/null 2>&1 || true
+
+        docker run -d --rm --name "$DOCKER_NFS_CONTAINER" \
+            --privileged \
+            -v "$RAPTOR_DIR":/export/raptor:ro \
+            -e NFS_EXPORT_0='/export/raptor *(ro,no_subtree_check,insecure,no_root_squash)' \
+            -p ${NFS_PORT}:2049/tcp -p ${NFS_PORT}:2049/udp \
+            -p ${NFS_MOUNTD_PORT}:32767/tcp -p ${NFS_MOUNTD_PORT}:32767/udp \
+            erichough/nfs-server > /dev/null 2>&1
+
+        DOCKER_STARTED=true
+        sleep 3
+
+        if ! docker ps --format '{{.Names}}' | grep -q "$DOCKER_NFS_CONTAINER"; then
+            echo "ERROR: Docker NFS container failed to start"
+            docker logs "$DOCKER_NFS_CONTAINER" 2>&1 | tail -5
+            exit 1
+        fi
+
+        $SSH "mkdir -p $DEVICE_MNT" 2>/dev/null || true
+        $SSH "mount -t nfs -o nolock,port=$NFS_PORT,mountport=$NFS_MOUNTD_PORT,nfsvers=3,tcp $HOST_IP:/export/raptor $DEVICE_MNT" 2>/dev/null
+
+        if $SSH "test -x $DEVICE_MNT/build/rvd" 2>/dev/null; then
+            setup_nfs_done=true
+            pass "NFS mount (Docker)"
+        else
+            echo "ERROR: Docker NFS mount failed"
+            docker rm -f "$DOCKER_NFS_CONTAINER" > /dev/null 2>&1 || true
+            DOCKER_STARTED=false
+            exit 1
+        fi
+    else
+        echo "ERROR: No NFS setup available."
+        echo "  Install Docker, or provide --nfs host:/path"
+        echo "  Example: $0 $DEVICE_IP --nfs $HOST_IP:/path/to/raptor"
+        exit 1
+    fi
+fi
+
+# Set device-side paths
+DEVICE_RAPTOR="$DEVICE_MNT"
+RAPTORCTL="$DEVICE_RAPTOR/build/raptorctl"
+RINGDUMP="$DEVICE_RAPTOR/build/ringdump"
+CONF_ON_DEVICE="$DEVICE_RAPTOR/tests/device-test.conf"
 
 SENSOR=$($SSH 'cat /proc/jz/sensor/name 2>/dev/null' 2>/dev/null || echo "unknown")
 SENSOR_FPS=$($SSH 'cat /proc/jz/sensor/max_fps 2>/dev/null' 2>/dev/null || echo "25")
@@ -482,12 +577,22 @@ echo ""
 # ── Cleanup ──
 
 if [ "$KEEP" = false ] && [ "$RESTART" = true ]; then
-    echo "=== Stopping daemons ==="
+    echo "=== Cleanup ==="
     $SSH 'killall rvd rad rsd rhd 2>/dev/null' 2>/dev/null || true
     sleep 1
     # Restore config to CBR
     sed 's/^rc_mode = .*/rc_mode = cbr/' "$TEST_CONF" > "${TEST_CONF}.tmp" && mv "${TEST_CONF}.tmp" "$TEST_CONF"
-    echo "    stopped"
+    echo "    daemons stopped"
+
+    # Unmount NFS on device
+    $SSH "umount $DEVICE_MNT 2>/dev/null; rmdir $DEVICE_MNT 2>/dev/null" 2>/dev/null || true
+    echo "    device unmounted"
+
+    # Kill Docker NFS container
+    if [ "$DOCKER_STARTED" = true ]; then
+        docker rm -f "$DOCKER_NFS_CONTAINER" > /dev/null 2>&1 || true
+        echo "    Docker NFS stopped"
+    fi
     echo ""
 fi
 
