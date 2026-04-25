@@ -156,7 +156,7 @@ static void load_stream_config(rss_config_t *cfg, const char *section, rvd_strea
 		.fps_num = fps,
 		.fps_den = 1,
 		.gop_length = rss_config_get_int(cfg, section, "gop", fps),
-		.init_qp = -1,
+		.init_qp = rss_config_get_int(cfg, section, "init_qp", -1),
 		.min_qp = rss_config_get_int(cfg, section, "min_qp", -1),
 		.max_qp = rss_config_get_int(cfg, section, "max_qp", -1),
 		.ip_delta = rss_config_get_int(cfg, section, "ip_delta", -1),
