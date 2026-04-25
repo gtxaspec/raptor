@@ -41,20 +41,22 @@ trap cleanup_on_exit EXIT
 DEVICE_IP=""
 DURATION=60
 CODEC_FILTER=""
+RTSP_TRANSPORT="tcp"
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --duration) DURATION="$2"; shift 2 ;;
         --codec) CODEC_FILTER="$2"; shift 2 ;;
+        --udp) RTSP_TRANSPORT="udp"; shift ;;
         --help|-h)
-            echo "Usage: $0 <device-ip> [--duration <sec>] [--codec <codec>]"
+            echo "Usage: $0 <device-ip> [--duration <sec>] [--codec <codec>] [--udp]"
             exit 0 ;;
         -*) echo "Unknown option: $1"; exit 1 ;;
         *) DEVICE_IP="$1"; shift ;;
     esac
 done
 
-[ -z "$DEVICE_IP" ] && { echo "Usage: $0 <device-ip> [--duration <sec>] [--codec <codec>]"; exit 1; }
+[ -z "$DEVICE_IP" ] && { echo "Usage: $0 <device-ip> [--duration <sec>] [--codec <codec>] [--udp]"; exit 1; }
 
 DOCKER_NFS_CONTAINER="raptor-nfs-$(echo "$DEVICE_IP" | tr '.' '-')"
 docker rm -f "$DOCKER_NFS_CONTAINER" > /dev/null 2>&1 || true
@@ -86,6 +88,7 @@ skip() { SKIP=$((SKIP + 1)); printf "    SKIP  %s: %s\n" "$1" "$2"; }
 echo "========================================"
 echo " Stream health test: $DEVICE_IP"
 echo " Duration: ${DURATION}s per codec"
+echo " Transport: $RTSP_TRANSPORT"
 echo "========================================"
 echo ""
 
@@ -400,7 +403,7 @@ analyze_stream() {
 
     # Capture
     echo "    capturing ${DURATION}s RTSP (TCP)..."
-    timeout $((DURATION + 10)) $FFMPEG -y -v quiet -rtsp_transport tcp \
+    timeout $((DURATION + 10)) $FFMPEG -y -v quiet -rtsp_transport $RTSP_TRANSPORT \
         -i "rtsp://$DEVICE_IP:$RTSP_PORT/stream0" \
         -t "$DURATION" -c copy -f matroska "$capture" 2>/dev/null
     ret=$?
@@ -589,11 +592,11 @@ mkdir -p "$MS_DIR"
 
 # Capture stream0 + stream1 + MJPEG simultaneously
 echo "    capturing stream0 + stream1 + MJPEG in parallel..."
-timeout $((DURATION + 10)) "$FFMPEG" -y -v quiet -rtsp_transport tcp \
+timeout $((DURATION + 10)) "$FFMPEG" -y -v quiet -rtsp_transport $RTSP_TRANSPORT \
     -i "rtsp://$DEVICE_IP:$RTSP_PORT/stream0" \
     -t "$DURATION" -c copy -f matroska "$MS_DIR/stream0.mkv" > /dev/null 2>&1 &
 PID_S0=$!
-timeout $((DURATION + 10)) "$FFMPEG" -y -v quiet -rtsp_transport tcp \
+timeout $((DURATION + 10)) "$FFMPEG" -y -v quiet -rtsp_transport $RTSP_TRANSPORT \
     -i "rtsp://$DEVICE_IP:$RTSP_PORT/stream1" \
     -t "$DURATION" -c copy -f matroska "$MS_DIR/stream1.mkv" > /dev/null 2>&1 &
 PID_S1=$!
@@ -617,15 +620,20 @@ rm -f "$MS_DIR"/*.mkv
 set -eo pipefail
 echo ""
 
-# UDP transport probe
-echo "=== UDP transport ==="
-set +eo pipefail
-udp_ok=$(timeout 8 $FFPROBE -v quiet -print_format json -show_streams \
-    -rtsp_transport udp -i "rtsp://$DEVICE_IP:$RTSP_PORT/stream0" 2>/dev/null || echo "{}")
-if echo "$udp_ok" | grep -q '"codec_name"'; then
-    pass "UDP RTSP connects"
+# Alternate transport probe (test whichever we're NOT using)
+if [ "$RTSP_TRANSPORT" = "tcp" ]; then
+    ALT_TRANSPORT="udp"
 else
-    fail "UDP RTSP" "no stream via UDP"
+    ALT_TRANSPORT="tcp"
+fi
+echo "=== Alternate transport ($ALT_TRANSPORT) ==="
+set +eo pipefail
+alt_ok=$(timeout 8 "$FFPROBE" -v quiet -print_format json -show_streams \
+    -rtsp_transport "$ALT_TRANSPORT" -i "rtsp://$DEVICE_IP:$RTSP_PORT/stream0" 2>/dev/null || echo "{}")
+if echo "$alt_ok" | grep -q '"codec_name"'; then
+    pass "$ALT_TRANSPORT RTSP connects"
+else
+    fail "$ALT_TRANSPORT RTSP" "no stream via $ALT_TRANSPORT"
 fi
 set -eo pipefail
 
@@ -637,6 +645,7 @@ echo "========================================"
 echo " Results: $PASS passed, $FAIL failed, $SKIP skipped"
 echo " Device:  $DEVICE_IP ($SENSOR)"
 echo " Duration: ${DURATION}s per codec"
+echo " Transport: $RTSP_TRANSPORT"
 echo " Logs:    $LOG_DIR/"
 echo "========================================"
 
