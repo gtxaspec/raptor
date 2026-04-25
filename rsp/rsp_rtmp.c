@@ -295,8 +295,10 @@ static int rtmp_handshake(rsp_rtmp_t *ctx)
 	{
 		int urand = open("/dev/urandom", O_RDONLY);
 		if (urand >= 0) {
-			read(urand, c0c1 + 9, RTMP_HANDSHAKE_SIZE - 8);
+			ssize_t n = read(urand, c0c1 + 9, RTMP_HANDSHAKE_SIZE - 8);
 			close(urand);
+			if (n < (ssize_t)(RTMP_HANDSHAKE_SIZE - 8))
+				memset(c0c1 + 9 + (n > 0 ? n : 0), 0x42, RTMP_HANDSHAKE_SIZE - 8 - (n > 0 ? n : 0));
 		} else {
 			memset(c0c1 + 9, 0x42, RTMP_HANDSHAKE_SIZE - 8);
 		}
