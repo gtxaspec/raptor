@@ -150,7 +150,7 @@ static void push_loop(rsp_state_t *st)
 	bool was_pushing = false;
 	int reconnect_wait = 0;
 
-	while (*st->running) {
+	while (rss_running(st->running)) {
 		/* Handle control socket */
 		if (ctrl_fd >= 0) {
 			fd_set fds;

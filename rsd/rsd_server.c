@@ -568,7 +568,7 @@ void rsd_server_run(rsd_server_t *srv)
 	int ctrl_fd = srv->ctrl ? rss_ctrl_get_fd(srv->ctrl) : -1;
 	int audio_retry_count = 0;
 
-	while (*srv->running) {
+	while (rss_running(srv->running)) {
 		int n = epoll_wait(srv->epoll_fd, events, 16, 500);
 		for (int i = 0; i < n; i++) {
 			int fd = events[i].data.fd;

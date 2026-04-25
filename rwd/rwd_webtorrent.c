@@ -824,13 +824,13 @@ static void *webtorrent_thread(void *arg)
 		return NULL;
 	}
 
-	while (wt->running && *srv->running) {
+	while (wt->running && rss_running(srv->running)) {
 		RSS_DEBUG("webtorrent: connecting to %s:%s%s", host, port, path);
 
 		wt_tls_t tls;
 		if (wt_tls_connect(&tls, host, port, wt->tls_verify) != 0) {
 			RSS_WARN("webtorrent: connection failed, retry in %ds", backoff);
-			for (int i = 0; i < backoff && wt->running && *srv->running; i++)
+			for (int i = 0; i < backoff && wt->running && rss_running(srv->running); i++)
 				sleep(1);
 			if (backoff < 30)
 				backoff *= 2;
@@ -840,7 +840,7 @@ static void *webtorrent_thread(void *arg)
 		if (ws_upgrade(&tls, host, path) != 0) {
 			RSS_WARN("webtorrent: WebSocket upgrade failed");
 			wt_tls_close(&tls);
-			for (int i = 0; i < backoff && wt->running && *srv->running; i++)
+			for (int i = 0; i < backoff && wt->running && rss_running(srv->running); i++)
 				sleep(1);
 			if (backoff < 30)
 				backoff *= 2;
@@ -862,7 +862,7 @@ static void *webtorrent_thread(void *arg)
 		 * Total thread stack usage: ~10KB (buf + TLS context + locals).
 		 * Default pthread stack (128KB on uclibc) is more than sufficient. */
 		char buf[8192];
-		while (wt->running && *srv->running) {
+		while (wt->running && rss_running(srv->running)) {
 			int n = ws_recv_frame(&tls, buf, sizeof(buf));
 			if (n < 0)
 				break; /* error or close */
@@ -874,7 +874,7 @@ static void *webtorrent_thread(void *arg)
 		}
 
 		wt_tls_close(&tls);
-		if (wt->running && *srv->running)
+		if (wt->running && rss_running(srv->running))
 			sleep(1);
 	}
 

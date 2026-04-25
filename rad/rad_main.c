@@ -557,11 +557,11 @@ static void *ao_playback_thread(void *arg)
 
 	RSS_DEBUG("ao playback thread started");
 
-	while (*ctx->running) {
+	while (rss_running(ctx->running)) {
 		ao_apply_rate_change(ctx);
 
 		/* ── Phase 1: wait for speaker ring ── */
-		while (*ctx->running && !ring) {
+		while (rss_running(ctx->running) && !ring) {
 			ao_apply_rate_change(ctx);
 			if (atomic_exchange(&ctx->flush, 0)) {
 				RSS_HAL_CALL(ctx->ops, ao_clear_buf, ctx->hal_ctx);
@@ -598,7 +598,7 @@ static void *ao_playback_thread(void *arg)
 		RSS_DEBUG("speaker ring connected");
 
 		/* ── Phase 2: read and play frames ── */
-		while (*ctx->running) {
+		while (rss_running(ctx->running)) {
 			if (atomic_exchange(&ctx->flush, 0)) {
 				RSS_HAL_CALL(ctx->ops, ao_clear_buf, ctx->hal_ctx);
 				RSS_DEBUG("ao: flush requested, dropping ring");

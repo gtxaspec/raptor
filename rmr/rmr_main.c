@@ -409,7 +409,7 @@ static void record_loop(rmr_state_t *st)
 	uint64_t last_audio_ws = 0;
 	int audio_idle = 0;
 
-	while (*st->running) {
+	while (rss_running(st->running)) {
 		/* Handle control socket */
 		if (ctrl_fd >= 0) {
 			fd_set fds;

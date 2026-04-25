@@ -356,7 +356,7 @@ void *rsd_video_reader_thread(void *arg)
 	int64_t last_count_log = rss_timestamp_us();
 
 	RSS_DEBUG("video reader[%d] started", stream_idx);
-	while (*srv->running) {
+	while (rss_running(srv->running)) {
 		if (!rctx->ring) {
 			/* Ring lost — wait for RVD to recreate it */
 			rctx->ring = rss_ring_open(rctx->ring_name);
@@ -627,7 +627,7 @@ void *rsd_audio_reader_thread(void *arg)
 			  rtp_clock);
 	}
 
-	while (*srv->running) {
+	while (rss_running(srv->running)) {
 		if (!srv->ring_audio) {
 			/* Ring lost — wait for RAD to recreate it */
 			srv->ring_audio = rss_ring_open("audio");

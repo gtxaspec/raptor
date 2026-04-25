@@ -479,7 +479,7 @@ static void server_run(rhd_server_t *srv)
 							    "s1_jpeg1", "s2_jpeg0", "s2_jpeg1"};
 
 	/* Try to open JPEG rings */
-	for (int attempt = 0; attempt < 30 && *srv->running; attempt++) {
+	for (int attempt = 0; attempt < 30 && rss_running(srv->running); attempt++) {
 		for (int j = 0; j < RHD_MAX_JPEG; j++) {
 			if (srv->jpeg_rings[j])
 				continue;
@@ -535,7 +535,7 @@ static void server_run(rhd_server_t *srv)
 
 	bool was_streaming = false;
 
-	while (*srv->running) {
+	while (rss_running(srv->running)) {
 		/* Check for new JPEG frames from ring 0 for MJPEG streaming */
 		bool has_mjpeg_clients = false;
 		for (int i = 0; i < srv->client_count; i++)

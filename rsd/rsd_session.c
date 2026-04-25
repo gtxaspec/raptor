@@ -738,32 +738,12 @@ static void rsd_client_t_play(VSelf, Compy_Context *ctx, const Compy_Request *re
 	compy_header(ctx, COMPY_HEADER_SESSION, "%" PRIu64, self->session_id);
 	compy_respond_ok(ctx);
 
-	/* NOW enable playback — response is already on the wire.
-	 * Hold clients_lock so the reader thread sees all flag writes
-	 * atomically (waiting_keyframe, ts_base_set, playing). */
-	pthread_mutex_lock(&self->srv->clients_lock);
-	if (self->video.nal) {
-		self->waiting_keyframe = true;
-		self->video_ts_base_set = false;
-		self->audio_ts_base_set = false;
-		self->video.playing = true;
-		self->video.last_rtcp = rss_timestamp_us();
-		self->video_read_seq = 0;
-	}
-	if (self->audio.rtp) {
-		self->audio.playing = true;
-		self->audio.last_rtcp = rss_timestamp_us();
-	}
-	pthread_mutex_unlock(&self->srv->clients_lock);
+	/* Defer flag-setting until after compy_dispatch returns and
+	 * write_lock is released — avoids lock-order inversion with
+	 * clients_lock (reader threads hold clients_lock → write_lock). */
+	self->play_pending = true;
 
-	/* Request IDR from RVD so the client gets a keyframe ASAP */
-	if (self->video.nal) {
-		char resp[128];
-		rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", "{\"cmd\":\"request-idr\"}", resp,
-				      sizeof(resp), 1000);
-	}
-
-	RSS_DEBUG("client PLAY%s", self->video.nal ? " (IDR requested)" : " (audio only)");
+	RSS_DEBUG("client PLAY%s (pending)", self->video.nal ? "" : " (audio only)");
 }
 
 static void rsd_client_t_pause_method(VSelf, Compy_Context *ctx, const Compy_Request *req)
@@ -905,6 +885,35 @@ void rsd_handle_rtsp_data(rsd_client_t *client, const char *data, size_t len)
 		pthread_mutex_lock(&client->write_lock);
 		compy_dispatch(writer, ctrl, &req);
 		pthread_mutex_unlock(&client->write_lock);
+
+		/* Apply deferred PLAY — now that write_lock is released,
+		 * we can safely take clients_lock (matching the lock order
+		 * used by reader threads: clients_lock → write_lock). */
+		if (client->play_pending) {
+			client->play_pending = false;
+			pthread_mutex_lock(&client->srv->clients_lock);
+			if (client->video.nal) {
+				client->waiting_keyframe = true;
+				client->video_ts_base_set = false;
+				client->audio_ts_base_set = false;
+				atomic_store(&client->video.playing, true);
+				client->video.last_rtcp = rss_timestamp_us();
+				client->video_read_seq = 0;
+			}
+			if (client->audio.rtp) {
+				atomic_store(&client->audio.playing, true);
+				client->audio.last_rtcp = rss_timestamp_us();
+			}
+			pthread_mutex_unlock(&client->srv->clients_lock);
+
+			if (client->video.nal) {
+				char resp[128];
+				rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock",
+						     "{\"cmd\":\"request-idr\"}", resp,
+						     sizeof(resp), 1000);
+				RSS_DEBUG("client PLAY (IDR requested)");
+			}
+		}
 
 		/* Extract consumed byte count */
 		size_t consumed = len;

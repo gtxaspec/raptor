@@ -520,7 +520,7 @@ void *rwd_video_reader_thread(void *arg)
 	int64_t video_ts_epoch[RWD_STREAM_COUNT] = {0};
 
 	/* Wait for at least the main ring */
-	while (*srv->running && !srv->video_rings[0]) {
+	while (rss_running(srv->running) && !srv->video_rings[0]) {
 		for (int s = 0; s < RWD_STREAM_COUNT; s++) {
 			if (!srv->video_rings[s])
 				srv->video_rings[s] = rss_ring_open(ring_names[s]);
@@ -557,7 +557,7 @@ void *rwd_video_reader_thread(void *arg)
 	uint64_t last_ws[RWD_STREAM_COUNT] = {0};
 	int idle[RWD_STREAM_COUNT] = {0};
 
-	while (*srv->running) {
+	while (rss_running(srv->running)) {
 		/* Poll all rings (short timeout so we alternate quickly) */
 		bool any_polled = false;
 		for (int s = 0; s < RWD_STREAM_COUNT; s++) {
@@ -889,7 +889,7 @@ void *rwd_audio_reader_thread(void *arg)
 	HAACDecoder aac_dec = NULL;
 #endif
 
-	while (*srv->running) {
+	while (rss_running(srv->running)) {
 		if (!srv->audio_ring) {
 			srv->audio_ring = rss_ring_open("audio");
 			if (!srv->audio_ring) {

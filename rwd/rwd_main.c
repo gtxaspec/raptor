@@ -550,7 +550,7 @@ static void rwd_run(rwd_server_t *srv)
 	struct epoll_event events[16];
 	int64_t last_cleanup = rss_timestamp_us();
 
-	while (*srv->running) {
+	while (rss_running(srv->running)) {
 		int nfds = epoll_wait(srv->epoll_fd, events, 16, 1000);
 		if (nfds < 0) {
 			if (errno == EINTR)

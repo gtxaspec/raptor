@@ -48,7 +48,7 @@ void *rvd_encoder_thread(void *arg)
 	int64_t last_stats = rss_timestamp_us();
 	int64_t last_reap = last_stats;
 
-	while (*st->running && atomic_load(&st->stream_active[idx])) {
+	while (rss_running(st->running) && atomic_load(&st->stream_active[idx])) {
 		/* JPEG on-demand: start/stop encoder based on ring consumers */
 		if (s->is_jpeg && s->jpeg_idle && s->ring) {
 			/* Periodically check for crashed consumers (~10s) */
@@ -235,7 +235,7 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running)
 		}
 	}
 
-	while (*running) {
+	while (rss_running(running)) {
 		/* Check control socket */
 		if (epoll_fd >= 0) {
 			struct epoll_event events[4];

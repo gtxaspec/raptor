@@ -600,7 +600,7 @@ static void audio_init(rwc_state_t *st, const char *ring_name)
 	}
 
 	/* Open audio ring with retry */
-	for (int attempt = 0; attempt < 10 && *st->running; attempt++) {
+	for (int attempt = 0; attempt < 10 && rss_running(st->running); attempt++) {
 		st->audio_ring = try_open_ring(ring_name);
 		if (st->audio_ring)
 			break;

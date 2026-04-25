@@ -119,6 +119,11 @@ typedef struct rsd_client {
 	int udp_rtcp_fd;
 	bool rtcp_in_epoll; /* true once udp_rtcp_fd is added to epoll */
 
+	/* Deferred PLAY — set inside compy callback, applied after
+	 * write_lock is released to avoid lock-order inversion with
+	 * clients_lock (reader threads take clients_lock → write_lock). */
+	bool play_pending;
+
 	/* RTSP parse buffer */
 	char recv_buf[RSD_BUF_SIZE];
 	size_t recv_len;
