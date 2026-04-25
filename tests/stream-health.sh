@@ -639,6 +639,83 @@ set -eo pipefail
 
 echo ""
 
+# ── Backchannel probe ──
+
+echo "=== ONVIF backchannel probe ==="
+set +eo pipefail
+
+BC_RESPONSE=$(python3 -c "
+import hashlib, re, socket, sys
+from urllib.parse import urlparse
+
+url = 'rtsp://$DEVICE_IP:$RTSP_PORT/stream0'
+parsed = urlparse(url)
+host = parsed.hostname
+port = parsed.port or 554
+path = parsed.path or '/'
+full_url = f'rtsp://{host}:{port}{path}'
+
+sock = socket.create_connection((host, port), timeout=10)
+request = (
+    f'DESCRIBE {full_url} RTSP/1.0\r\n'
+    'CSeq: 1\r\n'
+    'Accept: application/sdp\r\n'
+    'Require: www.onvif.org/ver20/backchannel\r\n'
+    'User-Agent: stream-health-test/1.0\r\n'
+    '\r\n'
+)
+sock.sendall(request.encode())
+
+data = b''
+while b'\r\n\r\n' not in data:
+    chunk = sock.recv(4096)
+    if not chunk: break
+    data += chunk
+header, _, rest = data.partition(b'\r\n\r\n')
+m = re.search(br'Content-Length:\s*(\d+)', header, re.I)
+if m:
+    need = int(m.group(1)) - len(rest)
+    while need > 0:
+        chunk = sock.recv(4096)
+        if not chunk: break
+        rest += chunk
+        need -= len(chunk)
+sock.close()
+print((header + b'\r\n\r\n' + rest).decode('utf-8', 'replace'))
+" 2>/dev/null || echo "FAILED")
+
+if echo "$BC_RESPONSE" | grep -q 'RTSP/1.0 200'; then
+    pass "backchannel DESCRIBE accepted (200 OK)"
+else
+    fail "backchannel DESCRIBE" "not 200 OK"
+fi
+
+if echo "$BC_RESPONSE" | grep -q 'a=recvonly'; then
+    pass "backchannel has recvonly track"
+else
+    fail "backchannel recvonly" "no a=recvonly in SDP"
+fi
+
+# Count audio media sections — should be 2+ (playback + backchannel)
+AUDIO_SECTIONS=$(echo "$BC_RESPONSE" | grep -c '^m=audio' || true)
+AUDIO_SECTIONS=$((AUDIO_SECTIONS + 0))
+if [ "$AUDIO_SECTIONS" -ge 2 ]; then
+    pass "backchannel extra audio track ($AUDIO_SECTIONS audio sections)"
+else
+    fail "backchannel audio tracks" "only $AUDIO_SECTIONS audio section(s), expected >=2"
+fi
+
+# Check backchannel codec (should be PCMU or Opus)
+BC_CODEC=$(echo "$BC_RESPONSE" | sed -n '/a=recvonly/,/^m=/p' | grep 'a=rtpmap' | head -1 || echo "")
+if [ -n "$BC_CODEC" ]; then
+    pass "backchannel codec: $(echo "$BC_CODEC" | sed 's/a=rtpmap://')"
+else
+    skip "backchannel codec" "no rtpmap after recvonly"
+fi
+
+set -eo pipefail
+echo ""
+
 # ── Summary ──
 
 echo "========================================"
