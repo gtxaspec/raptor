@@ -558,6 +558,9 @@ enabled = false
 [recording]
 enabled = false
 
+[encoder]
+refmode = true
+
 [log]
 level = info
 EOF

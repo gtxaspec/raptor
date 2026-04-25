@@ -226,6 +226,9 @@ enabled = false
 [recording]
 enabled = false
 
+[encoder]
+refmode = true
+
 [log]
 level = warn
 EOF
