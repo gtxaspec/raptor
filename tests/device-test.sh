@@ -138,10 +138,14 @@ if ! $SSH 'true' 2>/dev/null; then
 fi
 pass "SSH connectivity"
 
-# NFS mount
+# NFS mount (auto-mount if not present)
 if ! $SSH "test -d $NFS_RAPTOR/build" 2>/dev/null; then
-    echo "ERROR: NFS mount not available at $NFS_RAPTOR/build"
-    exit 1
+    $SSH 'mount -t nfs -o nolock 10.25.1.230:/home/turismo /mnt/nfs 2>/dev/null' 2>/dev/null || true
+    sleep 1
+    if ! $SSH "test -d $NFS_RAPTOR/build" 2>/dev/null; then
+        echo "ERROR: NFS mount not available at $NFS_RAPTOR/build"
+        exit 1
+    fi
 fi
 pass "NFS mount"
 
@@ -228,9 +232,13 @@ EOF
 if [ "$RESTART" = true ]; then
     echo "=== Starting daemons ==="
 
-    # Kill existing raptor processes
-    $SSH 'killall -q rvd rad rsd rhd rod ric rmd rmr rwd 2>/dev/null; sleep 1' 2>/dev/null || true
+    # Kill existing raptor processes (SIGTERM for clean SDK teardown)
+    $SSH 'killall rvd rad rsd rhd rod ric rmd rmr rwd 2>/dev/null' 2>/dev/null || true
+    sleep 2
+    # SIGKILL stragglers
+    $SSH 'killall -9 rvd rad rsd rhd rod ric rmd rmr rwd 2>/dev/null' 2>/dev/null || true
     $SSH 'rm -f /dev/shm/rss_ring_* /dev/shm/rss_osd_* /var/run/rss/*.pid /var/run/rss/*.sock 2>/dev/null' 2>/dev/null || true
+    sleep 1
 
     CONF_ON_DEVICE="$NFS_RAPTOR/tests/device-test.conf"
 
@@ -273,7 +281,7 @@ echo "=== Phase 2: Control socket ==="
 RAPTORCTL="$NFS_RAPTOR/build/raptorctl"
 
 # Status
-STATUS=$($SSH "$RAPTORCTL rvd status" 2>/dev/null || echo "")
+STATUS=$($SSH "timeout 3 $RAPTORCTL rvd status" 2>/dev/null || echo "")
 if echo "$STATUS" | grep -q '"status"'; then
     pass "rvd status"
 else
@@ -283,7 +291,7 @@ fi
 # QP bounds — the QP 0/0 bug catch
 # SDK returns -1 for "use default" which is fine. 0/0 is the bad case.
 for ch in 0 1; do
-    QP=$($SSH "$RAPTORCTL rvd get-qp-bounds $ch" 2>/dev/null || echo "")
+    QP=$($SSH "timeout 3 $RAPTORCTL rvd get-qp-bounds $ch" 2>/dev/null || echo "")
     min_qp=$(echo "$QP" | grep -o '"min_qp":[-0-9]*' | grep -o '[-0-9]*$' || echo "")
     max_qp=$(echo "$QP" | grep -o '"max_qp":[-0-9]*' | grep -o '[-0-9]*$' || echo "")
     if [ -z "$min_qp" ] || [ -z "$max_qp" ]; then
@@ -300,7 +308,7 @@ for ch in 0 1; do
 done
 
 # Bitrate
-BR=$($SSH "$RAPTORCTL rvd get-bitrate 0" 2>/dev/null || echo "")
+BR=$($SSH "timeout 3 $RAPTORCTL rvd get-bitrate 0" 2>/dev/null || echo "")
 cfg_br=$(echo "$BR" | grep -o '"bitrate":[0-9]*' | grep -o '[0-9]*$' || echo "")
 if [ -n "$cfg_br" ]; then
     check_eq "ch0 configured bitrate" "$cfg_br" "$MAIN_BITRATE"
@@ -309,7 +317,7 @@ else
 fi
 
 # GOP
-GOP=$($SSH "$RAPTORCTL rvd get-gop 0" 2>/dev/null || echo "")
+GOP=$($SSH "timeout 3 $RAPTORCTL rvd get-gop 0" 2>/dev/null || echo "")
 gop_val=$(echo "$GOP" | grep -o '"gop":[0-9]*' | grep -o '[0-9]*$' || echo "")
 if [ -n "$gop_val" ]; then
     check_eq "ch0 GOP" "$gop_val" "$MAIN_GOP"
@@ -318,7 +326,7 @@ else
 fi
 
 # FPS
-FPS=$($SSH "$RAPTORCTL rvd get-fps 0" 2>/dev/null || echo "")
+FPS=$($SSH "timeout 3 $RAPTORCTL rvd get-fps 0" 2>/dev/null || echo "")
 fps_val=$(echo "$FPS" | grep -o '"fps_num":[0-9]*' | grep -o '[0-9]*$' || echo "")
 if [ -n "$fps_val" ]; then
     check_eq "ch0 FPS" "$fps_val" "$MAIN_FPS"
@@ -327,7 +335,7 @@ else
 fi
 
 # RC mode
-RC=$($SSH "$RAPTORCTL rvd get-rc-mode 0" 2>/dev/null || echo "")
+RC=$($SSH "timeout 3 $RAPTORCTL rvd get-rc-mode 0" 2>/dev/null || echo "")
 rc_val=$(echo "$RC" | grep -o '"rc_mode":"[^"]*"' | grep -o '"[^"]*"$' | tr -d '"' || echo "")
 if [ -n "$rc_val" ]; then
     check_eq "ch0 rc_mode" "$rc_val" "$MAIN_RC"
@@ -464,7 +472,152 @@ done
 
 echo ""
 
-# ── Phase 6: HTTP endpoints ──
+# ── Phase 6: RC mode cycling (full restart per mode) ──
+
+echo "=== Phase 6: RC mode cycling ==="
+
+# Each RC mode gets a fresh RVD start — some modes (SmartP, capped)
+# can't be switched at runtime without wedging the SDK.
+CAPS=$($SSH "timeout 3 $RAPTORCTL rvd get-enc-caps" 2>/dev/null || echo "")
+CONF_ON_DEVICE="$NFS_RAPTOR/tests/device-test.conf"
+
+rc_modes="cbr vbr fixqp"
+if echo "$CAPS" | grep -q '"smartp_gop":true'; then
+    rc_modes="$rc_modes smart capped_vbr capped_quality"
+fi
+
+for mode in $rc_modes; do
+    # Stop RVD, rewrite config with this mode, restart fresh
+    $SSH 'killall rvd 2>/dev/null' 2>/dev/null || true
+    sleep 2
+    # Rewrite config from host side (avoid busybox sed issues on NFS)
+    sed "s/^rc_mode = .*/rc_mode = $mode/" "$TEST_CONF" > "${TEST_CONF}.tmp" && mv "${TEST_CONF}.tmp" "$TEST_CONF"
+    $SSH 'rm -f /dev/shm/rss_ring_main /dev/shm/rss_ring_sub /var/run/rss/rvd.pid /var/run/rss/rvd.sock 2>/dev/null' 2>/dev/null || true
+    $SSH "$NFS_RAPTOR/build/rvd -c $CONF_ON_DEVICE -d" 2>/dev/null
+    sleep 3
+
+    rvd_pid=$($SSH 'pidof rvd 2>/dev/null' 2>/dev/null || echo "")
+    if [ -z "$rvd_pid" ]; then
+        skip "rc_mode $mode" "rvd failed to start"
+        continue
+    fi
+
+    GET_OUT=$($SSH "timeout 3 $RAPTORCTL rvd get-rc-mode 0" 2>/dev/null || echo "")
+    got_mode=$(echo "$GET_OUT" | grep -o '"rc_mode":"[^"]*"' | grep -o '"[^"]*"$' | tr -d '"' || echo "")
+    if [ "$got_mode" != "$mode" ]; then
+        fail "rc_mode $mode readback" "got '$got_mode'"
+        continue
+    fi
+
+    probe_ok=$(timeout 5 ffprobe -v quiet -print_format json -show_streams \
+        -rtsp_transport tcp -i "rtsp://$DEVICE_IP:$RTSP_PORT/stream0" 2>/dev/null || echo "{}")
+    if echo "$probe_ok" | grep -q '"codec_name"'; then
+        pass "rc_mode $mode (restart + readback + stream ok)"
+    else
+        fail "rc_mode $mode" "rvd started but stream dead"
+    fi
+done
+
+# Restore original config + restart
+sed "s/^rc_mode = .*/rc_mode = $MAIN_RC/" "$TEST_CONF" > "${TEST_CONF}.tmp" && mv "${TEST_CONF}.tmp" "$TEST_CONF"
+$SSH 'killall rvd 2>/dev/null' 2>/dev/null || true
+sleep 2
+$SSH 'rm -f /dev/shm/rss_ring_main /dev/shm/rss_ring_sub /var/run/rss/rvd.pid /var/run/rss/rvd.sock 2>/dev/null' 2>/dev/null || true
+$SSH "$NFS_RAPTOR/build/rvd -c $CONF_ON_DEVICE -d" 2>/dev/null
+sleep 3
+
+echo ""
+
+# ── Phase 7: Encoder parameter exercise ──
+
+echo "=== Phase 7: Encoder parameter exercise ==="
+
+# Bitrate change: set → verify → restore
+$SSH "timeout 3 $RAPTORCTL rvd set-bitrate 0 3000000" 2>/dev/null > /dev/null || true
+sleep 1
+BR_CHK=$($SSH "timeout 3 $RAPTORCTL rvd get-bitrate 0" 2>/dev/null || echo "")
+br_cfg=$(echo "$BR_CHK" | grep -o '"bitrate":[0-9]*' | grep -o '[0-9]*$' || echo "")
+if [ "$br_cfg" = "3000000" ]; then
+    pass "bitrate change (2M → 3M)"
+else
+    fail "bitrate change" "expected 3000000, got $br_cfg"
+fi
+$SSH "timeout 3 $RAPTORCTL rvd set-bitrate 0 $MAIN_BITRATE" 2>/dev/null > /dev/null || true
+
+# GOP change
+$SSH "timeout 3 $RAPTORCTL rvd set-gop 0 30" 2>/dev/null > /dev/null || true
+GOP_CHK=$($SSH "timeout 3 $RAPTORCTL rvd get-gop 0" 2>/dev/null || echo "")
+gop_chk=$(echo "$GOP_CHK" | grep -o '"gop":[0-9]*' | grep -o '[0-9]*$' || echo "")
+if [ "$gop_chk" = "30" ]; then
+    pass "GOP change (50 → 30)"
+else
+    fail "GOP change" "expected 30, got $gop_chk"
+fi
+$SSH "timeout 3 $RAPTORCTL rvd set-gop 0 $MAIN_GOP" 2>/dev/null > /dev/null || true
+
+# FPS change (halve it, then restore)
+half_fps=$((SENSOR_FPS / 2))
+$SSH "timeout 3 $RAPTORCTL rvd set-fps 0 $half_fps" 2>/dev/null > /dev/null || true
+sleep 1
+FPS_CHK=$($SSH "timeout 3 $RAPTORCTL rvd get-fps 0" 2>/dev/null || echo "")
+fps_chk=$(echo "$FPS_CHK" | grep -o '"fps_num":[0-9]*' | grep -o '[0-9]*$' || echo "")
+if [ "$fps_chk" = "$half_fps" ]; then
+    pass "FPS change ($SENSOR_FPS → $half_fps)"
+else
+    fail "FPS change" "expected $half_fps, got $fps_chk"
+fi
+$SSH "timeout 3 $RAPTORCTL rvd set-fps 0 $SENSOR_FPS" 2>/dev/null > /dev/null || true
+
+# QP bounds change
+$SSH "timeout 3 $RAPTORCTL rvd set-qp-bounds 0 10 50" 2>/dev/null > /dev/null || true
+QP_CHK=$($SSH "timeout 3 $RAPTORCTL rvd get-qp-bounds 0" 2>/dev/null || echo "")
+qp_min=$(echo "$QP_CHK" | grep -o '"min_qp":[-0-9]*' | grep -o '[-0-9]*$' || echo "")
+qp_max=$(echo "$QP_CHK" | grep -o '"max_qp":[-0-9]*' | grep -o '[-0-9]*$' || echo "")
+if [ "$qp_min" = "10" ] && [ "$qp_max" = "50" ]; then
+    pass "QP bounds change (15/45 → 10/50)"
+else
+    fail "QP bounds change" "got $qp_min/$qp_max"
+fi
+$SSH "timeout 3 $RAPTORCTL rvd set-qp-bounds 0 $MAIN_MIN_QP $MAIN_MAX_QP" 2>/dev/null > /dev/null || true
+
+# Table-driven enc-set/enc-get roundtrip (test a few)
+for param in gop_mode color2grey mbrc; do
+    ENC_SET=$($SSH "timeout 3 $RAPTORCTL rvd enc-set 0 $param 1" 2>/dev/null || echo "")
+    if echo "$ENC_SET" | grep -q '"ok"'; then
+        ENC_GET=$($SSH "timeout 3 $RAPTORCTL rvd enc-get 0 $param" 2>/dev/null || echo "")
+        if echo "$ENC_GET" | grep -q '"value"'; then
+            pass "enc-set/get $param"
+        else
+            fail "enc-get $param" "no value in response"
+        fi
+    else
+        if echo "$ENC_SET" | grep -q 'not supported'; then
+            skip "enc-set $param" "not supported on this SoC"
+        else
+            fail "enc-set $param" "failed"
+        fi
+    fi
+done
+# Restore defaults
+$SSH "timeout 3 $RAPTORCTL rvd enc-set 0 gop_mode 0" 2>/dev/null > /dev/null || true
+$SSH "timeout 3 $RAPTORCTL rvd enc-set 0 color2grey 0" 2>/dev/null > /dev/null || true
+$SSH "timeout 3 $RAPTORCTL rvd enc-set 0 mbrc 0" 2>/dev/null > /dev/null || true
+
+# ISP controls (set + readback via get-isp)
+$SSH "timeout 3 $RAPTORCTL rvd set-brightness 200" 2>/dev/null > /dev/null || true
+ISP_CHK=$($SSH "timeout 3 $RAPTORCTL rvd get-isp" 2>/dev/null || echo "")
+bri=$(echo "$ISP_CHK" | grep -o '"brightness":[0-9]*' | grep -o '[0-9]*$' || echo "")
+if [ "$bri" = "200" ]; then
+    pass "ISP brightness set/get"
+else
+    fail "ISP brightness" "expected 200, got $bri"
+fi
+$SSH "timeout 3 $RAPTORCTL rvd set-brightness 128" 2>/dev/null > /dev/null || true
+
+echo ""
+
+# ── Phase 8: HTTP endpoints ──
+
 
 echo "=== Phase 6: HTTP endpoints ==="
 
@@ -515,9 +668,9 @@ fi
 
 echo ""
 
-# ── Phase 7: Log scan ──
+# ── Phase 9: Log scan ──
 
-echo "=== Phase 7: Log scan ==="
+echo "=== Phase 9: Log scan ==="
 
 # Only check entries from current daemon PIDs (ignore stale log entries)
 LOG_OUT=$($SSH 'logread 2>/dev/null | tail -100' 2>/dev/null || echo "")
@@ -531,9 +684,9 @@ fi
 
 echo ""
 
-# ── Phase 8: Resource baseline ──
+# ── Phase 10: Resource baseline ──
 
-echo "=== Phase 8: Resource baseline ==="
+echo "=== Phase 10: Resource baseline ==="
 
 # Memory (busybox free uses KB, no -m flag)
 free_kb=$($SSH 'free | awk "/Mem:/{print \$4}"' 2>/dev/null || echo "0")
