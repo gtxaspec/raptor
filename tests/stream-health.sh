@@ -118,6 +118,8 @@ if ! $SSH 'true' 2>/dev/null; then
 fi
 pass "SSH connectivity"
 
+# Clean stale NFS mounts first (prevents D state on killall)
+$SSH 'umount -f -l /tmp/raptor-test 2>/dev/null' 2>/dev/null || true
 $SSH "killall $RAPTOR_DAEMONS 2>/dev/null" 2>/dev/null || true
 sleep 1
 $SSH "killall -9 $RAPTOR_DAEMONS 2>/dev/null" 2>/dev/null || true
