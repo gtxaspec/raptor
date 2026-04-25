@@ -216,15 +216,17 @@ validate_mode() {
     if [ "$HAS_IMP_DBG" = "yes" ]; then
         ENC_INFO=$($SSH 'libimp-debug --enc_info 2>/dev/null' 2>/dev/null || echo "")
         if [ -n "$ENC_INFO" ]; then
-            parse_sdk() { echo "$ENC_INFO" | grep -A30 "ch->index = 0" | grep "$1" | head -1 | sed 's/.*= \(-\?[0-9]*\)(.*/\1/'; }
+            # Parse value from libimp-debug output (handles both old and new SDK formats)
+            parse_sdk() { echo "$ENC_INFO" | grep -A50 "ch->index = 0" | grep "$1" | head -1 | sed 's/.*= \(-\?[0-9]*\)(.*/\1/'; }
             ch0_rc=$(parse_sdk 'rcMode')
-            ch0_gop=$(parse_sdk 'uGopLength')
+            ch0_gop=$(parse_sdk 'uGopLength\|maxGop')
             ch0_fps=$(parse_sdk 'frmRateNum')
 
-            # RC mode enum: 0=FIXQP, 1=CBR, 2=VBR, 4=CAPPED_VBR, 8=CAPPED_QUALITY
+            # RC mode enum: old SDK: 0=FIXQP,1=CBR,2=VBR,3=SMART
+            #               new SDK: 0=FIXQP,1=CBR,2=VBR,4=CAPPED_VBR,8=CAPPED_QUALITY
             case "$ch0_rc" in
                 0) sdk_rc="fixqp" ;; 1) sdk_rc="cbr" ;; 2) sdk_rc="vbr" ;;
-                4) sdk_rc="capped_vbr" ;; 8) sdk_rc="capped_quality" ;;
+                3) sdk_rc="smart" ;; 4) sdk_rc="capped_vbr" ;; 8) sdk_rc="capped_quality" ;;
                 *) sdk_rc="unknown($ch0_rc)" ;;
             esac
             check_eq "$prefix SDK rc_mode" "$sdk_rc" "$mode"
