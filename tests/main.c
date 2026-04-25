@@ -13,6 +13,7 @@ extern SUITE(rsp_flv_suite);
 extern SUITE(rsp_audio_suite);
 extern SUITE(rsp_annexb_suite);
 extern SUITE(rsp_state_suite);
+extern SUITE(ctrl_suite);
 
 GREATEST_MAIN_DEFS();
 
@@ -32,5 +33,6 @@ int main(int argc, char **argv)
 	RUN_SUITE(rsp_audio_suite);
 	RUN_SUITE(rsp_annexb_suite);
 	RUN_SUITE(rsp_state_suite);
+	RUN_SUITE(ctrl_suite);
 	GREATEST_MAIN_END();
 }
