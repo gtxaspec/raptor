@@ -22,6 +22,7 @@ rmd/rmd
 rwd/rwd
 rwc/rwc
 rfs/rfs
+rsp/rsp
 rlatency/rlatency
 rss_build_info.*
 tests/tests
