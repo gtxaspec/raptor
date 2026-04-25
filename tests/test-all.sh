@@ -68,7 +68,10 @@ echo ""
 
 echo "=== Stage 1: Build ($SAN_MODE) ==="
 
-if [ "$SAN_MODE" = "tsan" ]; then
+if [ -f "$RAPTOR_DIR/asan-out/rsd" ] && [ -f "$RAPTOR_DIR/asan-out/create_rings" ]; then
+    echo "  binaries exist, skipping build (delete asan-out/ to force)"
+    stage_pass "build ($SAN_MODE) [cached]"
+elif [ "$SAN_MODE" = "tsan" ]; then
     if (cd "$RAPTOR_DIR" && ./build-asan.sh tsan); then
         stage_pass "build (tsan)"
     else

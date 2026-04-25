@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-asan:
+  asan:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -14,26 +14,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake git curl \
             autoconf automake libtool meson ninja-build python3 \
-            libopus-dev
+            libopus-dev ffmpeg
 
-      - name: Build all daemons with ASan+UBSan
-        run: ./build-asan.sh
-
-      - name: Symlink sibling repos for tests/Makefile
+      - name: Symlink sibling repos for unit test Makefile
         run: |
-          # tests/Makefile references ../../raptor-common and
-          # ../../raptor-ipc. build-asan.sh already cloned them under
-          # asan-out/deps/; symlink into the expected sibling path.
+          # test-all.sh builds via build-asan.sh which clones sibling
+          # repos into asan-out/deps/. Unit tests/Makefile references
+          # ../../raptor-common etc. — build first, then symlink.
+          ./build-asan.sh
           ln -sfn "$PWD/asan-out/deps/raptor-common" ../raptor-common
           ln -sfn "$PWD/asan-out/deps/raptor-ipc"    ../raptor-ipc
+          ln -sfn "$PWD/asan-out/deps/raptor-hal"    ../raptor-hal
 
-      - name: Unit tests (under ASan)
-        run: |
-          cd tests
-          make SAN=address clean
-          make SAN=address test
+      - name: Full test suite (ASAN)
+        run: ./tests/test-all.sh --soak 300
 
-  build-tsan:
+  tsan:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -43,18 +39,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake git curl \
             autoconf automake libtool meson ninja-build python3 \
-            libopus-dev
+            libopus-dev ffmpeg
 
-      - name: Build all daemons with TSan
-        run: ./build-asan.sh tsan
-
-      - name: Symlink sibling repos for tests/Makefile
+      - name: Symlink sibling repos for unit test Makefile
         run: |
+          ./build-asan.sh tsan
           ln -sfn "$PWD/asan-out/deps/raptor-common" ../raptor-common
           ln -sfn "$PWD/asan-out/deps/raptor-ipc"    ../raptor-ipc
+          ln -sfn "$PWD/asan-out/deps/raptor-hal"    ../raptor-hal
 
-      - name: Unit tests (under TSan)
-        run: |
-          cd tests
-          make SAN=thread clean
-          make SAN=thread test
+      - name: Full test suite (TSAN)
+        run: ./tests/test-all.sh --tsan --soak 300
