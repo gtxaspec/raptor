@@ -185,6 +185,7 @@ $CC $CFLAGS -c "$COMMON_DIR/src/cJSON.c" -o "$OUT/cJSON.o"
 cat > "$OUT/rss_build_info.c" << 'BUILDEOF'
 const char *rss_build_hash = "asan";
 const char *rss_build_time = "asan-build";
+const char *rss_build_platform = "x86_64";
 BUILDEOF
 $CC $CFLAGS -c "$OUT/rss_build_info.c" -o "$OUT/rss_build_info.o"
 ar rcs "$OUT/librss_common.a" "$OUT"/rss_log.o "$OUT"/rss_config.o "$OUT"/rss_daemon.o "$OUT"/rss_util.o "$OUT"/rss_ctrl_common.o "$OUT"/rss_http.o "$OUT"/cJSON.o
