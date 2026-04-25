@@ -85,6 +85,25 @@ echo ""
 
 echo "=== Preflight ==="
 
+# Use bundled ffmpeg/ffprobe if available, otherwise download
+TOOLS_DIR="$SCRIPT_DIR/tools"
+if [ -x "$TOOLS_DIR/ffmpeg" ] && [ -x "$TOOLS_DIR/ffprobe" ]; then
+    FFMPEG="$TOOLS_DIR/ffmpeg"
+    FFPROBE="$TOOLS_DIR/ffprobe"
+else
+    echo "    downloading ffmpeg static build..."
+    mkdir -p "$TOOLS_DIR"
+    curl -sL "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz" \
+        -o /tmp/ffmpeg-latest.tar.xz
+    tar -xf /tmp/ffmpeg-latest.tar.xz -C /tmp/
+    cp /tmp/ffmpeg-master-latest-linux64-gpl/bin/ffmpeg "$TOOLS_DIR/"
+    cp /tmp/ffmpeg-master-latest-linux64-gpl/bin/ffprobe "$TOOLS_DIR/"
+    rm -rf /tmp/ffmpeg-master-latest-linux64-gpl /tmp/ffmpeg-latest.tar.xz
+    FFMPEG="$TOOLS_DIR/ffmpeg"
+    FFPROBE="$TOOLS_DIR/ffprobe"
+fi
+echo "    ffmpeg: $($FFMPEG -version 2>/dev/null | head -1 | awk '{print $3}')"
+
 if ! $SSH 'true' 2>/dev/null; then
     echo "ERROR: cannot SSH to root@$DEVICE_IP"; exit 1
 fi
@@ -136,9 +155,9 @@ SENSOR_FPS=$($SSH 'cat /sys/module/sensor_*/parameters/sensor_max_fps 2>/dev/nul
 [ -z "$SENSOR_FPS" ] || [ "$SENSOR_FPS" = "0" ] && SENSOR_FPS=$($SSH 'sensor max_fps 2>/dev/null' 2>/dev/null || echo "25")
 echo "    sensor: $SENSOR (${SENSOR_FPS}fps)"
 
-for cmd in ffmpeg ffprobe; do
-    command -v "$cmd" > /dev/null 2>&1 || { echo "ERROR: $cmd not found"; exit 1; }
-done
+if [ ! -x "$FFMPEG" ] || [ ! -x "$FFPROBE" ]; then
+    echo "ERROR: ffmpeg/ffprobe not available"; exit 1
+fi
 
 echo ""
 
@@ -243,20 +262,20 @@ analyze_stream() {
 
     # Capture
     echo "    capturing ${DURATION}s RTSP (TCP)..."
-    timeout $((DURATION + 10)) ffmpeg -y -v quiet -rtsp_transport tcp \
+    timeout $((DURATION + 10)) $FFMPEG -y -v quiet -rtsp_transport tcp \
         -i "rtsp://$DEVICE_IP:$RTSP_PORT/stream0" \
         -t "$DURATION" -c copy -f matroska "$capture" 2>/dev/null
     ret=$?
 
     if [ ! -f "$capture" ] || [ "$(stat -c%s "$capture" 2>/dev/null || echo 0)" -lt 10000 ]; then
-        fail "$prefix capture" "no data (ffmpeg exit $ret)"
+        fail "$prefix capture" "no data ($FFMPEG exit $ret)"
         set -eo pipefail
         return
     fi
     pass "$prefix capture ($(du -h "$capture" | cut -f1))"
 
     # Extract frame data
-    ffprobe -v quiet -print_format csv \
+    $FFPROBE -v quiet -print_format csv \
         -show_frames \
         -show_entries frame=media_type,key_frame,pts_time,pkt_dts_time,duration_time,pkt_size \
         "$capture" > "$frames" 2>/dev/null
@@ -269,7 +288,7 @@ analyze_stream() {
 
     # Verify audio codec via show_streams
     local stream_info
-    stream_info=$(ffprobe -v quiet -print_format json -show_streams "$capture" 2>/dev/null || echo "{}")
+    stream_info=$($FFPROBE -v quiet -print_format json -show_streams "$capture" 2>/dev/null || echo "{}")
     # Extract audio stream info — find the audio block in JSON
     local audio_block
     audio_block=$(echo "$stream_info" | python3 -c "
@@ -485,7 +504,7 @@ done
 # UDP transport probe
 echo "=== UDP transport ==="
 set +eo pipefail
-udp_ok=$(timeout 8 ffprobe -v quiet -print_format json -show_streams \
+udp_ok=$(timeout 8 $FFPROBE -v quiet -print_format json -show_streams \
     -rtsp_transport udp -i "rtsp://$DEVICE_IP:$RTSP_PORT/stream0" 2>/dev/null || echo "{}")
 if echo "$udp_ok" | grep -q '"codec_name"'; then
     pass "UDP RTSP connects"
