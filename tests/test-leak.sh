@@ -117,14 +117,14 @@ trap cleanup EXIT
 
 # ── Preflight ──
 
-if [ "$SAN_MODE" = "tsan" ]; then
-    echo "=== Building with ThreadSanitizer ==="
-    (cd "$RAPTOR_DIR" && ./build-asan.sh tsan) || { echo "ERROR: tsan build failed"; exit 1; }
-fi
-
 if [ ! -f "$OUT/create_rings" ] || [ ! -f "$OUT/rsd" ]; then
-    echo "ERROR: Run ./build-asan.sh first"
-    exit 1
+    if [ "$SAN_MODE" = "tsan" ]; then
+        echo "=== Building with ThreadSanitizer ==="
+        (cd "$RAPTOR_DIR" && ./build-asan.sh tsan) || { echo "ERROR: tsan build failed"; exit 1; }
+    else
+        echo "ERROR: Run ./build-asan.sh first"
+        exit 1
+    fi
 fi
 
 for cmd in curl ffprobe; do
