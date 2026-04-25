@@ -215,7 +215,30 @@ username =
 password =
 
 [osd]
-enabled = false
+enabled = true
+font_size = 24
+
+[osd.timestamp]
+type = text
+template = %time%
+position = top_left
+
+[osd.uptime]
+type = text
+template = %uptime%
+position = top_right
+
+[osd.camera]
+type = text
+template = Camera
+position = top_center
+
+[osd.logo]
+type = image
+path = /usr/share/images/thingino_100x30.bgra
+width = 100
+height = 30
+position = bottom_right
 
 [ircut]
 enabled = false
@@ -257,6 +280,8 @@ start_all() {
     $SSH "$DEVICE_RAPTOR/build/rsd -c $CONF_ON_DEVICE -d" 2>/dev/null
     sleep 1
     $SSH "$DEVICE_RAPTOR/build/rhd -c $CONF_ON_DEVICE -d" 2>/dev/null
+    sleep 1
+    $SSH "$DEVICE_RAPTOR/build/rod -c $CONF_ON_DEVICE -d" 2>/dev/null
     sleep 2
 
     $SSH 'pidof rvd > /dev/null && pidof rad > /dev/null && pidof rsd > /dev/null' 2>/dev/null
@@ -639,6 +664,102 @@ print(f'avg_size={sum(sizes)//max(len(sizes),1)}')
     rm -f "$MJPEG_RAW"
 fi
 
+set -eo pipefail
+echo ""
+
+# ── Multi-stream concurrent test ──
+
+echo "=== Multi-stream concurrent (${DURATION}s) ==="
+set +eo pipefail
+
+MS_DIR="$LOG_DIR/multi"
+mkdir -p "$MS_DIR"
+
+# Capture stream0 + stream1 + MJPEG simultaneously
+echo "    capturing stream0 + stream1 + MJPEG in parallel..."
+timeout $((DURATION + 10)) $FFMPEG -y -v quiet -rtsp_transport tcp \
+    -i "rtsp://$DEVICE_IP:$RTSP_PORT/stream0" \
+    -t "$DURATION" -c copy -f matroska "$MS_DIR/stream0.mkv" 2>/dev/null &
+PID_S0=$!
+timeout $((DURATION + 10)) $FFMPEG -y -v quiet -rtsp_transport tcp \
+    -i "rtsp://$DEVICE_IP:$RTSP_PORT/stream1" \
+    -t "$DURATION" -c copy -f matroska "$MS_DIR/stream1.mkv" 2>/dev/null &
+PID_S1=$!
+timeout $((DURATION + 5)) curl -s -o "$MS_DIR/mjpeg.bin" --max-time "$DURATION" \
+    "http://$DEVICE_IP:8080/mjpeg" 2>/dev/null &
+PID_MJ=$!
+
+wait $PID_S0 2>/dev/null
+wait $PID_S1 2>/dev/null
+wait $PID_MJ 2>/dev/null
+
+# Analyze stream0
+S0_SIZE=$(stat -c%s "$MS_DIR/stream0.mkv" 2>/dev/null || echo "0")
+S1_SIZE=$(stat -c%s "$MS_DIR/stream1.mkv" 2>/dev/null || echo "0")
+MJ_SIZE=$(stat -c%s "$MS_DIR/mjpeg.bin" 2>/dev/null || echo "0")
+
+if [ "$S0_SIZE" -gt 10000 ]; then
+    S0_FRAMES=$($FFPROBE -v quiet -print_format csv -show_frames \
+        -show_entries frame=media_type "$MS_DIR/stream0.mkv" 2>/dev/null | grep -c 'video' || true)
+    S0_FRAMES=$((S0_FRAMES + 0))
+    S0_EXPECTED=$((DURATION * SENSOR_FPS * 9 / 10))
+    if [ "$S0_FRAMES" -ge "$S0_EXPECTED" ]; then
+        pass "multi stream0 ($S0_FRAMES video frames)"
+    else
+        fail "multi stream0" "only $S0_FRAMES frames (expected >=$S0_EXPECTED)"
+    fi
+else
+    fail "multi stream0" "no data"
+fi
+
+if [ "$S1_SIZE" -gt 5000 ]; then
+    S1_FRAMES=$($FFPROBE -v quiet -print_format csv -show_frames \
+        -show_entries frame=media_type "$MS_DIR/stream1.mkv" 2>/dev/null | grep -c 'video' || true)
+    S1_FRAMES=$((S1_FRAMES + 0))
+    S1_EXPECTED=$((DURATION * SENSOR_FPS * 9 / 10))
+    if [ "$S1_FRAMES" -ge "$S1_EXPECTED" ]; then
+        pass "multi stream1 ($S1_FRAMES video frames)"
+    else
+        fail "multi stream1" "only $S1_FRAMES frames (expected >=$S1_EXPECTED)"
+    fi
+else
+    fail "multi stream1" "no data"
+fi
+
+if [ "$MJ_SIZE" -gt 10000 ]; then
+    MJ_FRAMES=$(python3 -c "
+data = open('$MS_DIR/mjpeg.bin','rb').read()
+print(data.count(b'\xff\xd8'))
+" 2>/dev/null || echo "0")
+    if [ "$MJ_FRAMES" -gt 3 ]; then
+        pass "multi MJPEG ($MJ_FRAMES frames concurrent)"
+    else
+        fail "multi MJPEG" "only $MJ_FRAMES frames"
+    fi
+else
+    fail "multi MJPEG" "no data"
+fi
+
+# Check PTS monotonicity on stream0 under concurrent load
+$FFPROBE -v quiet -print_format csv -show_frames \
+    -show_entries frame=media_type,pts_time "$MS_DIR/stream0.mkv" 2>/dev/null > "$MS_DIR/s0_frames.csv"
+MULTI_PTS_BAD=$(awk -F',' '
+BEGIN { last=""; count=0; bad=0 }
+$1=="frame" && $2=="video" && $3!="N/A" && $3!="" {
+    count++
+    if (last != "" && count > 2 && $3+0 <= last+0) bad++
+    last = $3
+}
+END { print bad }
+' "$MS_DIR/s0_frames.csv" 2>/dev/null || echo "0")
+
+if [ "$MULTI_PTS_BAD" -eq 0 ]; then
+    pass "multi stream0 PTS monotonic under load"
+else
+    fail "multi stream0 PTS" "$MULTI_PTS_BAD inversions under concurrent load"
+fi
+
+rm -f "$MS_DIR"/*.mkv "$MS_DIR"/*.bin "$MS_DIR"/*.csv
 set -eo pipefail
 echo ""
 
