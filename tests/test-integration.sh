@@ -214,6 +214,7 @@ start_daemon() {
         echo "  started $name (pid $pid)"
     else
         echo "  FAILED  $name (check $LOG_DIR/$name.log)"
+        cat "$LOG_DIR/$name.log" 2>/dev/null | head -20
     fi
 }
 

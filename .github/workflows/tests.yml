@@ -18,9 +18,6 @@ jobs:
 
       - name: Symlink sibling repos for unit test Makefile
         run: |
-          # test-all.sh builds via build-asan.sh which clones sibling
-          # repos into asan-out/deps/. Unit tests/Makefile references
-          # ../../raptor-common etc. — build first, then symlink.
           ./build-asan.sh
           ln -sfn "$PWD/asan-out/deps/raptor-common" ../raptor-common
           ln -sfn "$PWD/asan-out/deps/raptor-ipc"    ../raptor-ipc
@@ -28,6 +25,15 @@ jobs:
 
       - name: Full test suite (ASAN)
         run: ./tests/test-all.sh --soak 300
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: asan-logs
+          path: |
+            asan-out/test-logs/
+            asan-out/leak-logs/
 
   tsan:
     runs-on: ubuntu-latest
@@ -50,3 +56,12 @@ jobs:
 
       - name: Full test suite (TSAN)
         run: ./tests/test-all.sh --tsan --soak 300
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tsan-logs
+          path: |
+            asan-out/test-logs/
+            asan-out/leak-logs/

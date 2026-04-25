@@ -233,6 +233,7 @@ start_daemon() {
     sleep 0.3
     if ! kill -0 "$pid" 2>/dev/null; then
         echo "ERROR: $name failed to start (check $LOG_DIR/$name.log)"
+        cat "$LOG_DIR/$name.log" 2>/dev/null | head -20
         FAIL=$((FAIL + 1))
         return 1
     fi
