@@ -45,6 +45,8 @@ typedef struct {
 	int ao_volume;
 	int ao_gain;
 	_Atomic int *ao_flush;
+	_Atomic int *ao_rate_pending;
+	_Atomic int *ao_sample_rate;
 #ifdef RAPTOR_AUDIO_EFFECTS
 	bool aec_enabled;
 	bool ns_enabled;
@@ -263,6 +265,17 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
 	}
 
+	if (strcmp(cmd, "ao-set-sample-rate") == 0) {
+		if (!ctx->ao_enabled)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "ao disabled");
+		if (rss_json_get_int(cmd_json, "value", &val) != 0 || val <= 0)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value");
+		rss_config_set_int(ctx->cfg, "audio", "ao_sample_rate", val);
+		atomic_store(ctx->ao_rate_pending, val);
+		atomic_store(ctx->ao_flush, 1);
+		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+	}
+
 #ifdef RAPTOR_AUDIO_EFFECTS
 	if (strcmp(cmd, "set-aec") == 0) {
 		if (rss_json_get_int(cmd_json, "value", &val) != 0)
@@ -290,9 +303,21 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 #endif
 
+	/* ── Input sample rate change (validates, then falls through to restart) ── */
+
+	if (strcmp(cmd, "set-sample-rate") == 0) {
+		if (rss_json_get_int(cmd_json, "value", &val) != 0 || val <= 0)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value");
+		if (ctx->codec_id == RAD_CODEC_PCMU || ctx->codec_id == RAD_CODEC_PCMA)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+						   "G.711 is fixed at 8000 Hz");
+		rss_config_set_int(ctx->cfg, "audio", "sample_rate", val);
+	}
+
 	/* ── Audio pipeline restart (codec/sample-rate change) ── */
 
-	if (strcmp(cmd, "set-codec") == 0 || strcmp(cmd, "audio-restart") == 0) {
+	if (strcmp(cmd, "set-codec") == 0 || strcmp(cmd, "audio-restart") == 0 ||
+	    strcmp(cmd, "set-sample-rate") == 0) {
 		char new_codec_str[16] = "";
 		rss_json_get_str(cmd_json, "value", new_codec_str, sizeof(new_codec_str));
 
@@ -448,6 +473,9 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		cJSON_AddNumberToObject(config, "volume", ctx->volume);
 		cJSON_AddNumberToObject(config, "gain", ctx->gain);
 		cJSON_AddNumberToObject(config, "device", ctx->ai_dev);
+		if (ctx->ao_enabled && ctx->ao_sample_rate)
+			cJSON_AddNumberToObject(config, "ao_sample_rate",
+						atomic_load(ctx->ao_sample_rate));
 		cJSON_AddStringToObject(config, "config_path", ctx->config_path);
 		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 	}
@@ -464,6 +492,9 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		if (ctx->ao_enabled) {
 			cJSON_AddNumberToObject(r, "ao_volume", ctx->ao_volume);
 			cJSON_AddNumberToObject(r, "ao_gain", ctx->ao_gain);
+			if (ctx->ao_sample_rate)
+				cJSON_AddNumberToObject(r, "ao_sample_rate",
+							atomic_load(ctx->ao_sample_rate));
 			cJSON_AddBoolToObject(r, "ao_muted", ctx->ao_muted);
 #ifdef RAPTOR_AUDIO_EFFECTS
 			cJSON_AddBoolToObject(r, "aec", ctx->aec_enabled);
@@ -487,7 +518,36 @@ typedef struct {
 	rss_hal_ctx_t *hal_ctx;
 	volatile sig_atomic_t *running;
 	_Atomic int flush;
+	_Atomic int rate_pending;
+	_Atomic int sample_rate;
 } ao_thread_ctx_t;
+
+static void ao_apply_rate_change(ao_thread_ctx_t *ctx)
+{
+	int pending_rate = atomic_exchange(&ctx->rate_pending, 0);
+	if (pending_rate <= 0)
+		return;
+
+	RSS_HAL_CALL(ctx->ops, ao_deinit, ctx->hal_ctx);
+	rss_audio_config_t ao_cfg = {
+		.sample_rate = pending_rate,
+		.samples_per_frame = pending_rate / 50,
+		.chn_count = 1,
+		.frame_depth = 20,
+	};
+	int ret = RSS_HAL_CALL(ctx->ops, ao_init, ctx->hal_ctx, &ao_cfg);
+	if (ret == RSS_OK) {
+		atomic_store(&ctx->sample_rate, pending_rate);
+		RSS_INFO("ao: sample rate changed to %d Hz", pending_rate);
+	} else {
+		int old_rate = atomic_load(&ctx->sample_rate);
+		RSS_ERROR("ao: rate change to %d failed (%d), restoring %d", pending_rate, ret,
+			  old_rate);
+		ao_cfg.sample_rate = old_rate;
+		ao_cfg.samples_per_frame = old_rate / 50;
+		RSS_HAL_CALL(ctx->ops, ao_init, ctx->hal_ctx, &ao_cfg);
+	}
+}
 
 static void *ao_playback_thread(void *arg)
 {
@@ -498,8 +558,11 @@ static void *ao_playback_thread(void *arg)
 	RSS_DEBUG("ao playback thread started");
 
 	while (*ctx->running) {
+		ao_apply_rate_change(ctx);
+
 		/* ── Phase 1: wait for speaker ring ── */
 		while (*ctx->running && !ring) {
+			ao_apply_rate_change(ctx);
 			if (atomic_exchange(&ctx->flush, 0)) {
 				RSS_HAL_CALL(ctx->ops, ao_clear_buf, ctx->hal_ctx);
 				RSS_DEBUG("ao: flushed hardware buffer");
@@ -754,9 +817,11 @@ int main(int argc, char **argv)
 	ao_enabled = rss_config_get_bool(dctx.cfg, "audio", "ao_enabled", false);
 
 	if (ao_enabled) {
+		int ao_sample_rate =
+			rss_config_get_int(dctx.cfg, "audio", "ao_sample_rate", sample_rate);
 		rss_audio_config_t ao_cfg = {
-			.sample_rate = sample_rate,
-			.samples_per_frame = sample_rate / 50,
+			.sample_rate = ao_sample_rate,
+			.samples_per_frame = ao_sample_rate / 50,
 			.chn_count = 1,
 			.frame_depth = 20,
 		};
@@ -774,11 +839,12 @@ int main(int argc, char **argv)
 				.ops = ops,
 				.hal_ctx = hal_ctx,
 				.running = dctx.running,
+				.sample_rate = ao_sample_rate,
 			};
 			if (pthread_create(&ao_tid, NULL, ao_playback_thread, &ao_ctx) == 0) {
 				ao_thread_started = true;
-				RSS_DEBUG("audio output: %d Hz vol=%d gain=%d", sample_rate, ao_vol,
-					  ao_gain_val);
+				RSS_DEBUG("audio output: %d Hz vol=%d gain=%d", ao_sample_rate,
+					  ao_vol, ao_gain_val);
 			} else {
 				RSS_WARN("ao thread create failed");
 				ao_enabled = false;
@@ -849,6 +915,8 @@ int main(int argc, char **argv)
 		.ao_volume = rss_config_get_int(dctx.cfg, "audio", "ao_volume", 80),
 		.ao_gain = rss_config_get_int(dctx.cfg, "audio", "ao_gain", 25),
 		.ao_flush = ao_enabled ? &ao_ctx.flush : NULL,
+		.ao_rate_pending = ao_enabled ? &ao_ctx.rate_pending : NULL,
+		.ao_sample_rate = ao_enabled ? &ao_ctx.sample_rate : NULL,
 #ifdef RAPTOR_AUDIO_EFFECTS
 		.aec_enabled = aec_enabled,
 		.ns_enabled = ns_enabled,
