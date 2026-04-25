@@ -315,6 +315,24 @@ if [ "$DURATION" -gt 0 ]; then
     echo ""
     echo "=== Phase 5: soak test (${DURATION}s) ==="
 
+    # Long-running background clients — stay connected for the entire
+    # soak to catch per-frame leaks (RTP packetizer, ring reader, frame
+    # copy). Short-lived cycling clients run alongside these.
+    SOAK_PIDS=""
+
+    echo "  starting long-running RTSP client (TCP, full duration)..."
+    timeout $((DURATION + 10)) ffmpeg -v quiet -rtsp_transport tcp \
+        -i "rtsp://127.0.0.1:$RTSP_PORT/stream0" \
+        -t "$DURATION" -f null - > /dev/null 2>&1 &
+    SOAK_PIDS="$SOAK_PIDS $!"
+
+    echo "  starting long-running MJPEG client (full duration)..."
+    timeout $((DURATION + 10)) curl -s -o /dev/null \
+        "http://127.0.0.1:$HTTP_PORT/mjpeg" 2>/dev/null &
+    SOAK_PIDS="$SOAK_PIDS $!"
+
+    sleep 1
+
     START_TIME=$(date +%s)
     END_TIME=$((START_TIME + DURATION))
     CYCLE=0
@@ -374,8 +392,18 @@ if [ "$DURATION" -gt 0 ]; then
         fi
     done
 
-    echo "  soak done: $CYCLE cycles in ${DURATION}s"
+    # Kill long-running clients before daemon shutdown so the daemons
+    # process the disconnect (exercises client teardown path)
+    echo "  stopping long-running clients..."
+    for pid in $SOAK_PIDS; do
+        kill "$pid" 2>/dev/null || true
+    done
+    for pid in $SOAK_PIDS; do
+        wait "$pid" 2>/dev/null || true
+    done
     sleep 1
+
+    echo "  soak done: $CYCLE cycles in ${DURATION}s"
 fi
 
 # ── Shutdown (handled by cleanup trap) ──
