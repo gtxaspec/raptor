@@ -39,7 +39,7 @@ cleanup_on_exit() {
 trap cleanup_on_exit EXIT
 
 DEVICE_IP=""
-DURATION=30
+DURATION=60
 CODEC_FILTER=""
 
 while [ $# -gt 0 ]; do
