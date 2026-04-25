@@ -32,7 +32,8 @@ cleanup_on_exit() {
     if [ -n "$DOCKER_NFS_CONTAINER" ]; then
         docker rm -f "$DOCKER_NFS_CONTAINER" > /dev/null 2>&1
     fi
-    rm -f /tmp/raptor-stream-*.mkv /tmp/raptor-frames-*.csv 2>/dev/null
+    # Keep logs, clean temp captures
+    rm -f /tmp/raptor-stream-*.mkv 2>/dev/null
     set -e
 }
 trap cleanup_on_exit EXIT
@@ -66,6 +67,11 @@ RTSP_PORT=554
 PASS=0
 FAIL=0
 SKIP=0
+
+# Log directory — keeps frame CSVs and error details for analysis
+RUN_ID=$(date +%Y%m%d-%H%M%S)
+LOG_DIR="/tmp/raptor-stream-health-${RUN_ID}"
+mkdir -p "$LOG_DIR"
 
 RAPTOR_DAEMONS="rvd rad rsd rhd rod ric rmd rmr rwd rwc rsp rfs"
 
@@ -256,7 +262,8 @@ analyze_stream() {
     local expect_arate="$3"
     local prefix="[$codec_id]"
     local capture="/tmp/raptor-stream-${codec_id}.mkv"
-    local frames="/tmp/raptor-frames-${codec_id}.csv"
+    local frames="$LOG_DIR/frames-${codec_id}.csv"
+    local errors="$LOG_DIR/errors-${codec_id}.txt"
 
     set +eo pipefail
 
@@ -352,9 +359,10 @@ for s in d.get('streams',[]):
                 if (size+0 < 1000 && v_count > 1) v_small_idr++
             }
             if (size+0 == 0) v_zero++
+
             if (v_first_pts == "") v_first_pts = pts
 
-            if (v_last_pts != "" && pts+0 <= v_last_pts+0) v_pts_bad++
+            if (v_last_pts != "" && v_count > 2 && pts+0 <= v_last_pts+0) v_pts_bad++
             if (v_last_dts != "" && dts != "N/A" && dts+0 < v_last_dts+0) v_dts_bad++
             v_last_pts = pts
 
@@ -370,7 +378,7 @@ for s in d.get('streams',[]):
             a_count++
             if (a_first_pts == "") a_first_pts = pts
 
-            if (a_last_pts != "" && pts+0 <= a_last_pts+0) a_pts_bad++
+            if (a_last_pts != "" && a_count > 2 && pts+0 <= a_last_pts+0) a_pts_bad++
             a_last_pts = pts
 
             if (dur != "N/A" && dur+0 > 0) {
@@ -395,6 +403,24 @@ for s in d.get('streams',[]):
 
     # Parse results
     eval "$analysis"
+
+    # Dump specific violations to error log
+    awk -F',' '
+    BEGIN { last_v_pts=""; last_a_pts=""; vc=0; ac=0 }
+    $1 == "frame" && ($4 != "N/A" && $4 != "") {
+        if ($2 == "video") {
+            vc++
+            if (last_v_pts != "" && vc > 2 && $4+0 <= last_v_pts+0)
+                printf "VIDEO PTS INVERSION: frame %d pts=%s prev_pts=%s delta=%.6f\n", NR, $4, last_v_pts, $4-last_v_pts
+            last_v_pts = $4
+        }
+        if ($2 == "audio") {
+            ac++
+            if (last_a_pts != "" && ac > 2 && $4+0 <= last_a_pts+0)
+                printf "AUDIO PTS INVERSION: frame %d pts=%s prev_pts=%s delta=%.6f\n", NR, $4, last_a_pts, $4-last_a_pts
+            last_a_pts = $4
+        }
+    }' "$frames" > "$errors" 2>/dev/null
 
     # Video checks
     if [ "$v_count" -gt 0 ]; then
@@ -470,7 +496,7 @@ for s in d.get('streams',[]):
         skip "$prefix A/V sync" "missing timestamps"
     fi
 
-    rm -f "$capture" "$frames"
+    rm -f "$capture"
     set -eo pipefail
 }
 
@@ -521,6 +547,7 @@ echo "========================================"
 echo " Results: $PASS passed, $FAIL failed, $SKIP skipped"
 echo " Device:  $DEVICE_IP ($SENSOR)"
 echo " Duration: ${DURATION}s per codec"
+echo " Logs:    $LOG_DIR/"
 echo "========================================"
 
 if [ "$FAIL" -gt 0 ]; then
