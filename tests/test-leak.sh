@@ -6,7 +6,11 @@
 # ring reconnect, shutdown) and fails on any memory leak.
 #
 # Requires: ./build-asan.sh run first
-# Usage:    ./tests/test-leak.sh [--verbose]
+# Usage:    ./tests/test-leak.sh [--verbose] [--duration <seconds>]
+#
+# Without --duration, runs a quick pass (~30s).
+# With --duration, loops connect/disconnect cycles for that long,
+# plus a ring reconnect every 60s.
 #
 
 set -euo pipefail
@@ -15,7 +19,16 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RAPTOR_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUT="$RAPTOR_DIR/asan-out"
 LOG_DIR="$OUT/leak-logs"
-VERBOSE="${1:-}"
+VERBOSE=""
+DURATION=0
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --verbose) VERBOSE="--verbose"; shift ;;
+        --duration) DURATION="$2"; shift 2 ;;
+        *) echo "Usage: $0 [--verbose] [--duration <seconds>]"; exit 1 ;;
+    esac
+done
 
 RTSP_PORT=15654
 HTTP_PORT=18180
@@ -296,7 +309,73 @@ curl -s -o /dev/null --max-time 3 "http://127.0.0.1:$HTTP_PORT/snap" || true
 echo "  ring reconnect done"
 sleep 1
 
-# ── Phase 5: Shutdown (handled by cleanup trap) ──
+# ── Phase 5: Sustained soak (if --duration given) ──
 
-echo ""
-echo "=== Phase 5: clean shutdown (SIGTERM) ==="
+if [ "$DURATION" -gt 0 ]; then
+    echo ""
+    echo "=== Phase 5: soak test (${DURATION}s) ==="
+
+    START_TIME=$(date +%s)
+    END_TIME=$((START_TIME + DURATION))
+    CYCLE=0
+    LAST_RECONNECT=$START_TIME
+
+    while [ "$(date +%s)" -lt "$END_TIME" ]; do
+        CYCLE=$((CYCLE + 1))
+        REMAINING=$((END_TIME - $(date +%s)))
+
+        # RTSP stream (5s read via TCP, exercises full session lifecycle)
+        timeout 5 ffmpeg -v quiet -rtsp_transport tcp \
+            -i "rtsp://127.0.0.1:$RTSP_PORT/stream0" \
+            -t 3 -f null - > /dev/null 2>&1 || true
+
+        # HTTP snapshot
+        curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$HTTP_PORT/snap" || true
+
+        # MJPEG stream (2s)
+        timeout 2 curl -s -o /dev/null "http://127.0.0.1:$HTTP_PORT/mjpeg" 2>/dev/null || true
+
+        # Audio stream (1s)
+        timeout 1 curl -s -o /dev/null "http://127.0.0.1:$HTTP_PORT/audio" 2>/dev/null || true
+
+        # Concurrent burst every 5 cycles
+        if [ $((CYCLE % 5)) -eq 0 ]; then
+            CPIDS=""
+            for i in $(seq 1 3); do
+                timeout 3 curl -s -o /dev/null "http://127.0.0.1:$HTTP_PORT/mjpeg" 2>/dev/null &
+                CPIDS="$CPIDS $!"
+            done
+            timeout 5 ffmpeg -v quiet -rtsp_transport tcp \
+                -i "rtsp://127.0.0.1:$RTSP_PORT/stream0" \
+                -t 3 -f null - > /dev/null 2>&1 &
+            CPIDS="$CPIDS $!"
+            timeout 5 ffmpeg -v quiet -rtsp_transport udp \
+                -i "rtsp://127.0.0.1:$RTSP_PORT/stream0" \
+                -t 3 -f null - > /dev/null 2>&1 &
+            CPIDS="$CPIDS $!"
+            for pid in $CPIDS; do
+                wait "$pid" 2>/dev/null || true
+            done
+        fi
+
+        # Ring reconnect every 60s
+        NOW=$(date +%s)
+        if [ $((NOW - LAST_RECONNECT)) -ge 60 ]; then
+            echo "  cycle $CYCLE (${REMAINING}s left) — ring reconnect"
+            kill "$RINGS_PID" 2>/dev/null || true
+            wait "$RINGS_PID" 2>/dev/null || true
+            sleep 1
+            "$OUT/create_rings" > "$LOG_DIR/rings-soak.log" 2>&1 &
+            RINGS_PID=$!
+            sleep 2
+            LAST_RECONNECT=$NOW
+        elif [ $((CYCLE % 20)) -eq 0 ]; then
+            echo "  cycle $CYCLE (${REMAINING}s left)"
+        fi
+    done
+
+    echo "  soak done: $CYCLE cycles in ${DURATION}s"
+    sleep 1
+fi
+
+# ── Shutdown (handled by cleanup trap) ──
