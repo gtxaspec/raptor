@@ -98,7 +98,7 @@ if [ "$SAN_MODE" = "tsan" ]; then
     UNIT_SAN="thread"
 fi
 
-if (cd "$RAPTOR_DIR/tests" && make clean > /dev/null 2>&1 && make tests SAN="$UNIT_SAN" > /dev/null 2>&1 && ./tests); then
+if (cd "$RAPTOR_DIR/tests" && make clean > /dev/null 2>&1 && make tests SAN="$UNIT_SAN" > /dev/null 2>&1 && ./tests 2>/dev/null); then
     stage_pass "unit tests ($UNIT_SAN)"
 else
     stage_fail "unit tests ($UNIT_SAN)"
