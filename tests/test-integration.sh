@@ -256,10 +256,10 @@ check_contains "set-rc-mode" "ok" "$OUT/raptorctl" rvd set-rc-mode 0 cbr
 check_contains "request-idr" "ok" "$OUT/raptorctl" rvd request-idr
 
 # Advanced encoder
-check_contains "set-gop-mode" "ok" "$OUT/raptorctl" rvd set-gop-mode 0 0
-check_contains "get-gop-mode" "gop_mode" "$OUT/raptorctl" rvd get-gop-mode 0
-check_contains "set-color2grey" "ok" "$OUT/raptorctl" rvd set-color2grey 0 1
-check_contains "get-color2grey" "color2grey" "$OUT/raptorctl" rvd get-color2grey 0
+check_contains "enc-set gop_mode" "ok" "$OUT/raptorctl" rvd enc-set 0 gop_mode 0
+check_contains "enc-get gop_mode" "gop_mode" "$OUT/raptorctl" rvd enc-get 0 gop_mode
+check_contains "enc-set color2grey" "ok" "$OUT/raptorctl" rvd enc-set 0 color2grey 1
+check_contains "enc-get color2grey" "color2grey" "$OUT/raptorctl" rvd enc-get 0 color2grey
 
 # ISP
 check_contains "get-isp" "brightness" "$OUT/raptorctl" rvd get-isp
