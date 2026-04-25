@@ -77,10 +77,16 @@ static rss_rc_mode_t parse_rc_mode(const char *s)
 		return RSS_RC_VBR;
 	if (strcasecmp(s, "cbr") == 0)
 		return RSS_RC_CBR;
+	if (strcasecmp(s, "vbr") == 0)
+		return RSS_RC_VBR;
 	if (strcasecmp(s, "fixqp") == 0)
 		return RSS_RC_FIXQP;
+	if (strcasecmp(s, "smart") == 0)
+		return RSS_RC_SMART;
 	if (strcasecmp(s, "capped_vbr") == 0)
 		return RSS_RC_CAPPED_VBR;
+	if (strcasecmp(s, "capped_quality") == 0)
+		return RSS_RC_CAPPED_QUALITY;
 	return RSS_RC_VBR;
 }
 
