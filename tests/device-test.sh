@@ -31,13 +31,26 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RAPTOR_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# Unique container name per device IP (avoids collisions if running parallel tests)
+DOCKER_NFS_CONTAINER=""
+NFS_PORT=12049
+NFS_MOUNTD_PORT=12048
+
 # Always clean up Docker + device on exit (including Ctrl+C, errors, etc.)
 cleanup_on_exit() {
-    docker rm -f raptor-nfs-test > /dev/null 2>&1 || true
-    ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o LogLevel=ERROR \
-        "root@${DEVICE_IP:-localhost}" \
-        'umount /tmp/raptor-test 2>/dev/null; killall rvd rad rsd rhd rod ric rmd rmr rwd rwc rsp rfs 2>/dev/null' \
-        2>/dev/null || true
+    set +e
+    # Unmount on device FIRST (before killing Docker NFS) to avoid hung mount
+    if [ -n "${DEVICE_IP:-}" ]; then
+        ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o LogLevel=ERROR \
+            "root@$DEVICE_IP" \
+            'umount -f -l /tmp/raptor-test 2>/dev/null; killall rvd rad rsd rhd rod ric rmd rmr rwd rwc rsp rfs 2>/dev/null' \
+            2>/dev/null
+    fi
+    # Then kill Docker NFS
+    if [ -n "$DOCKER_NFS_CONTAINER" ]; then
+        docker rm -f "$DOCKER_NFS_CONTAINER" > /dev/null 2>&1
+    fi
+    set -e
 }
 trap cleanup_on_exit EXIT
 
@@ -45,9 +58,6 @@ DEVICE_IP=""
 RESTART=true
 KEEP=false
 NFS_OVERRIDE=""
-NFS_PORT=12049
-NFS_MOUNTD_PORT=12048
-DOCKER_NFS_CONTAINER="raptor-nfs-test"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -63,6 +73,12 @@ while [ $# -gt 0 ]; do
 done
 
 [ -z "$DEVICE_IP" ] && { echo "Usage: $0 <device-ip> [--nfs host:path] [--no-restart] [--keep]"; exit 1; }
+
+# Container name includes device IP so parallel tests don't collide
+DOCKER_NFS_CONTAINER="raptor-nfs-$(echo "$DEVICE_IP" | tr '.' '-')"
+
+# Kill any leftover container from a previous crashed run
+docker rm -f "$DOCKER_NFS_CONTAINER" > /dev/null 2>&1 || true
 
 # ── Config ──
 
@@ -155,6 +171,7 @@ start_raptor() {
 validate_mode() {
     local mode="$1"
     local prefix="[$mode]"
+    set +eo pipefail
 
     # ── Daemon health ──
     for daemon in rvd rad rsd rhd; do
@@ -194,7 +211,9 @@ validate_mode() {
     check_eq "$prefix FPS" "$fps_val" "$SENSOR_FPS"
 
     # ── SDK encoder verification (libimp-debug) ──
-    if $SSH 'which libimp-debug > /dev/null 2>&1' 2>/dev/null; then
+    HAS_IMP_DBG=$($SSH 'test -e /dev/shm/imp_deubg_shm && echo yes || echo no' 2>/dev/null)
+    [ -z "$HAS_IMP_DBG" ] && HAS_IMP_DBG="no"
+    if [ "$HAS_IMP_DBG" = "yes" ]; then
         ENC_INFO=$($SSH 'libimp-debug --enc_info 2>/dev/null' 2>/dev/null || echo "")
         if [ -n "$ENC_INFO" ]; then
             parse_sdk() { echo "$ENC_INFO" | grep -A30 "ch->index = 0" | grep "$1" | head -1 | sed 's/.*= \(-\?[0-9]*\)(.*/\1/'; }
@@ -343,6 +362,7 @@ validate_mode() {
     else
         fail "$prefix audio" "HTTP $AUDIO_CODE"
     fi
+    set -eo pipefail
 }
 
 # ══════════════════════════════════════════════════════════════════
@@ -531,9 +551,11 @@ fi
 
 CAPS=$($SSH "timeout 3 $RAPTORCTL rvd get-enc-caps" 2>/dev/null || echo "")
 
-# T31+: CBR, VBR, CAPPED_VBR, CAPPED_QUALITY, FIXQP
-# T20-T30/T32/T33: also Smart RC
-rc_modes="cbr vbr capped_vbr capped_quality fixqp"
+# Build mode list from platform capabilities
+rc_modes="cbr vbr fixqp"
+if echo "$CAPS" | grep -q '"capped_rc":true'; then
+    rc_modes="$rc_modes capped_vbr capped_quality"
+fi
 if echo "$CAPS" | grep -q '"smart_rc":true'; then
     rc_modes="$rc_modes smart"
 fi

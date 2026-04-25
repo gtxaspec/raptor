@@ -900,6 +900,8 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		cJSON *r = cJSON_CreateObject();
 		cJSON_AddStringToObject(r, "status", "ok");
 		cJSON_AddBoolToObject(r, "smartp_gop", caps->has_smartp_gop);
+		cJSON_AddBoolToObject(r, "smart_rc", caps->has_smart_rc);
+		cJSON_AddBoolToObject(r, "capped_rc", caps->has_capped_rc);
 		cJSON_AddBoolToObject(r, "rc_options", caps->has_rc_options);
 		cJSON_AddBoolToObject(r, "pskip", caps->has_pskip);
 		cJSON_AddBoolToObject(r, "srd", caps->has_srd);
