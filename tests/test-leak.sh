@@ -200,7 +200,7 @@ CONFIG="$LOG_DIR/leak-test.conf"
 
 # ── Clean state ──
 
-mkdir -p /var/run/rss 2>/dev/null || sudo mkdir -p /var/run/rss
+mkdir -p /var/run/rss 2>/dev/null || { sudo mkdir -p /var/run/rss && sudo chmod 1777 /var/run/rss; }
 rm -f /var/run/rss/*.pid /var/run/rss/*.sock 2>/dev/null || true
 rm -f /dev/shm/rss_ring_* /dev/shm/rss_osd_* 2>/dev/null || true
 
