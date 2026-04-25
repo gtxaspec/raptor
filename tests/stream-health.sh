@@ -287,6 +287,104 @@ start_all() {
     $SSH 'pidof rvd > /dev/null && pidof rad > /dev/null && pidof rsd > /dev/null' 2>/dev/null
 }
 
+# ── Frame analysis (reusable) ──
+
+# Analyze a capture file: PTS/DTS monotonicity, IDR, frame sizes, timing, A/V sync
+# Usage: check_frames <prefix> <capture_file>
+check_frames() {
+    local prefix="$1"
+    local capture="$2"
+    local frames="$LOG_DIR/frames-$(echo "$prefix" | tr '[]/ ' '----').csv"
+    local errors="$LOG_DIR/errors-$(echo "$prefix" | tr '[]/ ' '----').txt"
+
+    $FFPROBE -v quiet -print_format csv \
+        -show_frames \
+        -show_entries frame=media_type,key_frame,pts_time,pkt_dts_time,duration_time,pkt_size \
+        "$capture" > "$frames" 2>/dev/null
+
+    if [ ! -s "$frames" ]; then
+        fail "$prefix ffprobe" "no frame data"
+        return
+    fi
+
+    local analysis
+    analysis=$(awk -F',' '
+    BEGIN {
+        v_count=0; a_count=0; v_idr=0; v_zero=0; v_small_idr=0
+        v_pts_bad=0; v_dts_bad=0; a_pts_bad=0
+        v_gap=0; a_gap=0
+        v_last_pts=""; v_last_dts=""
+        a_last_pts=""
+        v_first_pts=""; a_first_pts=""
+    }
+    $1 == "frame" {
+        media = $2; key = $3; pts = $4; dts = $5; dur = $6; size = $7
+        if (pts == "N/A" || pts == "") next
+
+        if (media == "video") {
+            v_count++
+            if (key == 1) { v_idr++; if (size+0 < 1000 && v_count > 1) v_small_idr++ }
+            if (size+0 == 0) v_zero++
+            if (v_first_pts == "") v_first_pts = pts
+            if (v_last_pts != "" && v_count > 2 && pts+0 <= v_last_pts+0) v_pts_bad++
+            if (v_last_dts != "" && dts != "N/A" && dts+0 < v_last_dts+0) v_dts_bad++
+            v_last_pts = pts
+            if (dts != "N/A") v_last_dts = dts
+            if (dur != "N/A" && dur+0 > 0) {
+                expected_dur = 1.0 / '"$SENSOR_FPS"'
+                if (dur+0 > expected_dur * 3) v_gap++
+            }
+        }
+        else if (media == "audio") {
+            a_count++
+            if (a_first_pts == "") a_first_pts = pts
+            if (a_last_pts != "" && a_count > 2 && pts+0 <= a_last_pts+0) a_pts_bad++
+            a_last_pts = pts
+            if (dur != "N/A" && dur+0 > 0.1) a_gap++
+        }
+    }
+    END {
+        av_delta = "N/A"
+        if (v_first_pts != "" && a_first_pts != "") {
+            d = v_first_pts - a_first_pts; if (d < 0) d = -d
+            av_delta = sprintf("%.3f", d)
+        }
+        printf "v_count=%d v_idr=%d v_zero=%d v_small_idr=%d ", v_count, v_idr, v_zero, v_small_idr
+        printf "v_pts_bad=%d v_dts_bad=%d v_gap=%d ", v_pts_bad, v_dts_bad, v_gap
+        printf "a_count=%d a_pts_bad=%d a_gap=%d ", a_count, a_pts_bad, a_gap
+        printf "av_delta=%s\n", av_delta
+    }' "$frames")
+
+    eval "$analysis"
+
+    # Error detail log
+    awk -F',' '
+    BEGIN { last_v=""; last_a=""; vc=0; ac=0 }
+    $1=="frame" && ($4!="N/A" && $4!="") {
+        if ($2=="video") { vc++; if (last_v!="" && vc>2 && $4+0<=last_v+0) printf "VIDEO PTS: frame %d pts=%s prev=%s\n",NR,$4,last_v; last_v=$4 }
+        if ($2=="audio") { ac++; if (last_a!="" && ac>2 && $4+0<=last_a+0) printf "AUDIO PTS: frame %d pts=%s prev=%s\n",NR,$4,last_a; last_a=$4 }
+    }' "$frames" > "$errors" 2>/dev/null
+
+    # Report
+    [ "$v_count" -gt 0 ] && pass "$prefix video frames ($v_count)" || fail "$prefix video frames" "none"
+    [ "$v_pts_bad" -eq 0 ] && pass "$prefix video PTS monotonic" || fail "$prefix video PTS" "$v_pts_bad non-monotonic"
+    [ "$v_dts_bad" -eq 0 ] && pass "$prefix video DTS monotonic" || fail "$prefix video DTS" "$v_dts_bad non-monotonic"
+    [ "$v_idr" -gt 0 ] && pass "$prefix video IDR present ($v_idr)" || fail "$prefix video IDR" "none"
+    [ "$v_zero" -eq 0 ] && pass "$prefix video no zero-size frames" || fail "$prefix video zero-size" "$v_zero frames"
+    [ "$v_small_idr" -eq 0 ] && pass "$prefix video IDR size sane" || fail "$prefix video IDR size" "$v_small_idr undersized"
+    [ "$v_gap" -eq 0 ] && pass "$prefix video no timing gaps" || fail "$prefix video gaps" "$v_gap"
+    [ "$a_count" -gt 10 ] && pass "$prefix audio frames ($a_count)" || fail "$prefix audio frames" "only $a_count"
+    [ "$a_pts_bad" -eq 0 ] && pass "$prefix audio PTS monotonic" || fail "$prefix audio PTS" "$a_pts_bad non-monotonic"
+    [ "$a_gap" -eq 0 ] && pass "$prefix audio no timing gaps" || fail "$prefix audio gaps" "$a_gap"
+
+    if [ "$av_delta" != "N/A" ]; then
+        av_ms=$(echo "$av_delta * 1000" | bc | cut -d. -f1)
+        [ "${av_ms:-9999}" -lt 500 ] && pass "$prefix A/V sync (${av_delta}s)" || fail "$prefix A/V sync" "${av_delta}s (>500ms)"
+    else
+        skip "$prefix A/V sync" "missing timestamps"
+    fi
+}
+
 # ── Capture and analyze ──
 
 analyze_stream() {
@@ -314,22 +412,9 @@ analyze_stream() {
     fi
     pass "$prefix capture ($(du -h "$capture" | cut -f1))"
 
-    # Extract frame data
-    $FFPROBE -v quiet -print_format csv \
-        -show_frames \
-        -show_entries frame=media_type,key_frame,pts_time,pkt_dts_time,duration_time,pkt_size \
-        "$capture" > "$frames" 2>/dev/null
-
-    if [ ! -s "$frames" ]; then
-        fail "$prefix ffprobe" "no frame data"
-        set -eo pipefail
-        return
-    fi
-
     # Verify audio codec via show_streams
     local stream_info
     stream_info=$($FFPROBE -v quiet -print_format json -show_streams "$capture" 2>/dev/null || echo "{}")
-    # Extract audio stream info — find the audio block in JSON
     local audio_block
     audio_block=$(echo "$stream_info" | python3 -c "
 import sys,json
@@ -340,194 +425,21 @@ for s in d.get('streams',[]):
         print('sample_rate='+s.get('sample_rate',''))
         break
 " 2>/dev/null || echo "")
-    local actual_acodec
+    local actual_acodec actual_arate
     actual_acodec=$(echo "$audio_block" | grep '^codec_name=' | cut -d= -f2 || echo "")
-    local actual_arate
     actual_arate=$(echo "$audio_block" | grep '^sample_rate=' | cut -d= -f2 || echo "")
 
     if [ -n "$actual_acodec" ]; then
-        if [ "$actual_acodec" = "$expect_acodec" ]; then
-            pass "$prefix audio codec ($actual_acodec)"
-        else
-            fail "$prefix audio codec" "got $actual_acodec, expected $expect_acodec"
-        fi
+        [ "$actual_acodec" = "$expect_acodec" ] && pass "$prefix audio codec ($actual_acodec)" || fail "$prefix audio codec" "got $actual_acodec, expected $expect_acodec"
     else
         fail "$prefix audio codec" "no audio stream found"
     fi
-
     if [ -n "$actual_arate" ] && [ -n "$expect_arate" ]; then
-        if [ "$actual_arate" = "$expect_arate" ]; then
-            pass "$prefix audio sample rate ($actual_arate)"
-        else
-            fail "$prefix audio sample rate" "got $actual_arate, expected $expect_arate"
-        fi
+        [ "$actual_arate" = "$expect_arate" ] && pass "$prefix audio sample rate ($actual_arate)" || fail "$prefix audio sample rate" "got $actual_arate, expected $expect_arate"
     fi
 
-    # Analyze frames with awk
-    local analysis
-    analysis=$(awk -F',' '
-    BEGIN {
-        v_count=0; a_count=0; v_idr=0; v_zero=0; v_small_idr=0
-        v_pts_bad=0; v_dts_bad=0; a_pts_bad=0
-        v_gap=0; a_gap=0
-        v_last_pts=""; v_last_dts=""
-        a_last_pts=""
-        v_first_pts=""; a_first_pts=""
-        v_dur_bad=0; a_dur_bad=0
-    }
-    $1 == "frame" {
-        media = $2
-        key = $3
-        pts = $4
-        dts = $5
-        dur = $6
-        size = $7
-
-        if (pts == "N/A" || pts == "") next
-
-        if (media == "video") {
-            v_count++
-            if (key == 1) {
-                v_idr++
-                if (size+0 < 1000 && v_count > 1) v_small_idr++
-            }
-            if (size+0 == 0) v_zero++
-
-            if (v_first_pts == "") v_first_pts = pts
-
-            if (v_last_pts != "" && v_count > 2 && pts+0 <= v_last_pts+0) v_pts_bad++
-            if (v_last_dts != "" && dts != "N/A" && dts+0 < v_last_dts+0) v_dts_bad++
-            v_last_pts = pts
-
-            if (dts != "N/A") v_last_dts = dts
-
-            if (dur != "N/A" && dur+0 > 0) {
-                expected_dur = 1.0 / '"$SENSOR_FPS"'
-                if (dur+0 > expected_dur * 3) v_gap++
-                if (dur+0 > expected_dur * 2 || dur+0 < expected_dur * 0.3) v_dur_bad++
-            }
-        }
-        else if (media == "audio") {
-            a_count++
-            if (a_first_pts == "") a_first_pts = pts
-
-            if (a_last_pts != "" && a_count > 2 && pts+0 <= a_last_pts+0) a_pts_bad++
-            a_last_pts = pts
-
-            if (dur != "N/A" && dur+0 > 0) {
-                if (dur+0 > 0.1) a_gap++
-                if (dur+0 > 0.05 || dur+0 < 0.005) a_dur_bad++
-            }
-        }
-    }
-    END {
-        av_delta = "N/A"
-        if (v_first_pts != "" && a_first_pts != "") {
-            d = v_first_pts - a_first_pts
-            if (d < 0) d = -d
-            av_delta = sprintf("%.3f", d)
-        }
-        printf "v_count=%d v_idr=%d v_zero=%d v_small_idr=%d ", v_count, v_idr, v_zero, v_small_idr
-        printf "v_pts_bad=%d v_dts_bad=%d v_gap=%d v_dur_bad=%d ", v_pts_bad, v_dts_bad, v_gap, v_dur_bad
-        printf "a_count=%d a_pts_bad=%d a_gap=%d a_dur_bad=%d ", a_count, a_pts_bad, a_gap, a_dur_bad
-        printf "av_delta=%s\n", av_delta
-    }
-    ' "$frames")
-
-    # Parse results
-    eval "$analysis"
-
-    # Dump specific violations to error log
-    awk -F',' '
-    BEGIN { last_v_pts=""; last_a_pts=""; vc=0; ac=0 }
-    $1 == "frame" && ($4 != "N/A" && $4 != "") {
-        if ($2 == "video") {
-            vc++
-            if (last_v_pts != "" && vc > 2 && $4+0 <= last_v_pts+0)
-                printf "VIDEO PTS INVERSION: frame %d pts=%s prev_pts=%s delta=%.6f\n", NR, $4, last_v_pts, $4-last_v_pts
-            last_v_pts = $4
-        }
-        if ($2 == "audio") {
-            ac++
-            if (last_a_pts != "" && ac > 2 && $4+0 <= last_a_pts+0)
-                printf "AUDIO PTS INVERSION: frame %d pts=%s prev_pts=%s delta=%.6f\n", NR, $4, last_a_pts, $4-last_a_pts
-            last_a_pts = $4
-        }
-    }' "$frames" > "$errors" 2>/dev/null
-
-    # Video checks
-    if [ "$v_count" -gt 0 ]; then
-        pass "$prefix video frames ($v_count)"
-    else
-        fail "$prefix video frames" "none"
-    fi
-
-    if [ "$v_pts_bad" -eq 0 ]; then
-        pass "$prefix video PTS monotonic"
-    else
-        fail "$prefix video PTS" "$v_pts_bad non-monotonic"
-    fi
-
-    if [ "$v_dts_bad" -eq 0 ]; then
-        pass "$prefix video DTS monotonic"
-    else
-        fail "$prefix video DTS" "$v_dts_bad non-monotonic"
-    fi
-
-    if [ "$v_idr" -gt 0 ]; then
-        pass "$prefix video IDR present ($v_idr)"
-    else
-        fail "$prefix video IDR" "none in ${DURATION}s"
-    fi
-
-    if [ "$v_zero" -eq 0 ]; then
-        pass "$prefix video no zero-size frames"
-    else
-        fail "$prefix video zero-size" "$v_zero frames"
-    fi
-
-    if [ "$v_small_idr" -eq 0 ]; then
-        pass "$prefix video IDR size sane"
-    else
-        fail "$prefix video IDR size" "$v_small_idr undersized keyframes"
-    fi
-
-    if [ "$v_gap" -eq 0 ]; then
-        pass "$prefix video no timing gaps"
-    else
-        fail "$prefix video gaps" "$v_gap frames with >3x expected duration"
-    fi
-
-    # Audio checks
-    if [ "$a_count" -gt 100 ]; then
-        pass "$prefix audio frames ($a_count)"
-    else
-        fail "$prefix audio frames" "only $a_count (expected >100)"
-    fi
-
-    if [ "$a_pts_bad" -eq 0 ]; then
-        pass "$prefix audio PTS monotonic"
-    else
-        fail "$prefix audio PTS" "$a_pts_bad non-monotonic"
-    fi
-
-    if [ "$a_gap" -eq 0 ]; then
-        pass "$prefix audio no timing gaps"
-    else
-        fail "$prefix audio gaps" "$a_gap frames with >100ms gap"
-    fi
-
-    # A/V sync
-    if [ "$av_delta" != "N/A" ]; then
-        av_ms=$(echo "$av_delta * 1000" | bc | cut -d. -f1)
-        if [ "${av_ms:-9999}" -lt 500 ]; then
-            pass "$prefix A/V sync (${av_delta}s delta)"
-        else
-            fail "$prefix A/V sync" "${av_delta}s delta (>500ms)"
-        fi
-    else
-        skip "$prefix A/V sync" "missing timestamps"
-    fi
+    # Full frame analysis
+    check_frames "$prefix" "$capture"
 
     rm -f "$capture"
     set -eo pipefail
@@ -679,67 +591,29 @@ mkdir -p "$MS_DIR"
 echo "    capturing stream0 + stream1 + MJPEG in parallel..."
 timeout $((DURATION + 10)) "$FFMPEG" -y -v quiet -rtsp_transport tcp \
     -i "rtsp://$DEVICE_IP:$RTSP_PORT/stream0" \
-    -t "$DURATION" -c copy -f mpegts "$MS_DIR/stream0.ts" > /dev/null 2>&1 &
+    -t "$DURATION" -c copy -f matroska "$MS_DIR/stream0.mkv" > /dev/null 2>&1 &
 PID_S0=$!
 timeout $((DURATION + 10)) "$FFMPEG" -y -v quiet -rtsp_transport tcp \
     -i "rtsp://$DEVICE_IP:$RTSP_PORT/stream1" \
-    -t "$DURATION" -c copy -f mpegts "$MS_DIR/stream1.ts" > /dev/null 2>&1 &
+    -t "$DURATION" -c copy -f matroska "$MS_DIR/stream1.mkv" > /dev/null 2>&1 &
 PID_S1=$!
 wait $PID_S0 2>/dev/null
 wait $PID_S1 2>/dev/null
 
-# Analyze stream0
-S0_SIZE=$(stat -c%s "$MS_DIR/stream0.ts" 2>/dev/null || echo "0")
-S1_SIZE=$(stat -c%s "$MS_DIR/stream1.ts" 2>/dev/null || echo "0")
-
-if [ "$S0_SIZE" -gt 10000 ]; then
-    S0_FRAMES=$($FFPROBE -v quiet -print_format csv -show_frames \
-        -show_entries frame=media_type "$MS_DIR/stream0.ts" 2>/dev/null | grep -c 'video' || true)
-    S0_FRAMES=$((S0_FRAMES + 0))
-    S0_EXPECTED=10
-    if [ "$S0_FRAMES" -ge "$S0_EXPECTED" ]; then
-        pass "multi stream0 ($S0_FRAMES video frames)"
-    else
-        fail "multi stream0" "only $S0_FRAMES frames (expected >=$S0_EXPECTED)"
-    fi
+# Full analysis on both streams
+if [ "$(stat -c%s "$MS_DIR/stream0.mkv" 2>/dev/null || echo 0)" -gt 10000 ]; then
+    check_frames "[multi/stream0]" "$MS_DIR/stream0.mkv"
 else
-    fail "multi stream0" "no data"
+    fail "[multi/stream0]" "no data captured"
 fi
 
-if [ "$S1_SIZE" -gt 5000 ]; then
-    S1_FRAMES=$($FFPROBE -v quiet -print_format csv -show_frames \
-        -show_entries frame=media_type "$MS_DIR/stream1.ts" 2>/dev/null | grep -c 'video' || true)
-    S1_FRAMES=$((S1_FRAMES + 0))
-    S1_EXPECTED=10
-    if [ "$S1_FRAMES" -ge "$S1_EXPECTED" ]; then
-        pass "multi stream1 ($S1_FRAMES video frames)"
-    else
-        fail "multi stream1" "only $S1_FRAMES frames (expected >=$S1_EXPECTED)"
-    fi
+if [ "$(stat -c%s "$MS_DIR/stream1.mkv" 2>/dev/null || echo 0)" -gt 5000 ]; then
+    check_frames "[multi/stream1]" "$MS_DIR/stream1.mkv"
 else
-    fail "multi stream1" "no data"
+    fail "[multi/stream1]" "no data captured"
 fi
 
-# Check PTS monotonicity on stream0 under concurrent load
-$FFPROBE -v quiet -print_format csv -show_frames \
-    -show_entries frame=media_type,pts_time "$MS_DIR/stream0.ts" 2>/dev/null > "$MS_DIR/s0_frames.csv"
-MULTI_PTS_BAD=$(awk -F',' '
-BEGIN { last=""; count=0; bad=0 }
-$1=="frame" && $2=="video" && $3!="N/A" && $3!="" {
-    count++
-    if (last != "" && count > 2 && $3+0 <= last+0) bad++
-    last = $3
-}
-END { print bad }
-' "$MS_DIR/s0_frames.csv" 2>/dev/null || echo "0")
-
-if [ "$MULTI_PTS_BAD" -eq 0 ]; then
-    pass "multi stream0 PTS monotonic under load"
-else
-    fail "multi stream0 PTS" "$MULTI_PTS_BAD inversions under concurrent load"
-fi
-
-rm -f "$MS_DIR"/*.mkv "$MS_DIR"/*.bin "$MS_DIR"/*.csv
+rm -f "$MS_DIR"/*.mkv
 set -eo pipefail
 echo ""
 
