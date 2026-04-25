@@ -1,16 +1,17 @@
 #!/bin/bash
 #
-# test-leak.sh -- Leak detection via LeakSanitizer
+# test-leak.sh -- Memory leak and data race detection
 #
 # Exercises the daemon lifecycle (startup, client connect/disconnect,
-# ring reconnect, shutdown) and fails on any memory leak.
+# ring reconnect, shutdown) under sanitizers.
 #
-# Requires: ./build-asan.sh run first
-# Usage:    ./tests/test-leak.sh [--verbose] [--duration <seconds>]
+# Requires: ./build-asan.sh run first (or --tsan to auto-rebuild)
+# Usage:    ./tests/test-leak.sh [--verbose] [--duration <seconds>] [--tsan]
 #
-# Without --duration, runs a quick pass (~30s).
-# With --duration, loops connect/disconnect cycles for that long,
-# plus a ring reconnect every 60s.
+# --tsan      Rebuild with ThreadSanitizer and check for data races
+#             instead of memory leaks. Mutually exclusive with ASAN.
+# --duration  Sustained soak with long-running + cycling clients.
+#             Without it, runs a quick pass (~30s).
 #
 
 set -euo pipefail
@@ -21,12 +22,14 @@ OUT="$RAPTOR_DIR/asan-out"
 LOG_DIR="$OUT/leak-logs"
 VERBOSE=""
 DURATION=0
+SAN_MODE="asan"
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --verbose) VERBOSE="--verbose"; shift ;;
         --duration) DURATION="$2"; shift 2 ;;
-        *) echo "Usage: $0 [--verbose] [--duration <seconds>]"; exit 1 ;;
+        --tsan) SAN_MODE="tsan"; shift ;;
+        *) echo "Usage: $0 [--verbose] [--duration <seconds>] [--tsan]"; exit 1 ;;
     esac
 done
 
@@ -54,41 +57,58 @@ cleanup() {
     kill "$RINGS_PID" 2>/dev/null || true
     wait "$RINGS_PID" 2>/dev/null || true
 
-    # ── Scan logs for leaks ──
+    # ── Scan logs for sanitizer errors ──
     echo ""
-    echo "=== Leak check ==="
+    echo "=== Sanitizer check ($SAN_MODE) ==="
 
-    local leaked=0
-    for log in "$LOG_DIR"/*.log; do
+    local found=0
+    for log in "$LOG_DIR"/*.log "$LOG_DIR"/tsan.* "$LOG_DIR"/asan.*; do
         [ -f "$log" ] || continue
         local name
         name=$(basename "$log" .log)
 
-        if grep -q "ERROR: LeakSanitizer" "$log"; then
-            local summary
-            summary=$(grep "SUMMARY: .*LeakSanitizer" "$log" | tail -1)
-            echo "  LEAK  $name: $summary"
-            if [ "$VERBOSE" = "--verbose" ]; then
-                grep -A5 "Direct leak\|Indirect leak" "$log" | head -30
+        if [ "$SAN_MODE" = "tsan" ]; then
+            if grep -q "WARNING: ThreadSanitizer" "$log"; then
+                local count
+                count=$(grep -c "WARNING: ThreadSanitizer" "$log")
+                echo "  RACE  $name: $count data race(s)"
+                if [ "$VERBOSE" = "--verbose" ]; then
+                    grep -A10 "WARNING: ThreadSanitizer" "$log" | head -40
+                fi
+                found=1
+            else
+                echo "  CLEAN $name"
             fi
-            leaked=1
-        elif grep -q "ERROR: AddressSanitizer" "$log"; then
-            echo "  ASAN  $name: memory error detected"
-            leaked=1
         else
-            echo "  CLEAN $name"
+            if grep -q "ERROR: LeakSanitizer" "$log"; then
+                local summary
+                summary=$(grep "SUMMARY: .*LeakSanitizer" "$log" | tail -1)
+                echo "  LEAK  $name: $summary"
+                if [ "$VERBOSE" = "--verbose" ]; then
+                    grep -A5 "Direct leak\|Indirect leak" "$log" | head -30
+                fi
+                found=1
+            elif grep -q "ERROR: AddressSanitizer" "$log"; then
+                echo "  ASAN  $name: memory error detected"
+                if [ "$VERBOSE" = "--verbose" ]; then
+                    grep -A10 "ERROR: AddressSanitizer" "$log" | head -30
+                fi
+                found=1
+            else
+                echo "  CLEAN $name"
+            fi
         fi
     done
 
     echo ""
-    if [ "$leaked" -eq 1 ]; then
-        echo "FAILED — leaks detected (logs in $LOG_DIR/)"
+    if [ "$found" -eq 1 ]; then
+        echo "FAILED — $SAN_MODE errors detected (logs in $LOG_DIR/)"
         exit 1
     elif [ "$FAIL" -ne 0 ]; then
         echo "FAILED — $FAIL test phase(s) failed"
         exit 1
     else
-        echo "PASSED — no leaks"
+        echo "PASSED — $SAN_MODE clean"
         exit 0
     fi
 }
@@ -96,6 +116,11 @@ cleanup() {
 trap cleanup EXIT
 
 # ── Preflight ──
+
+if [ "$SAN_MODE" = "tsan" ]; then
+    echo "=== Building with ThreadSanitizer ==="
+    (cd "$RAPTOR_DIR" && ./build-asan.sh tsan) || { echo "ERROR: tsan build failed"; exit 1; }
+fi
 
 if [ ! -f "$OUT/create_rings" ] || [ ! -f "$OUT/rsd" ]; then
     echo "ERROR: Run ./build-asan.sh first"
@@ -110,10 +135,13 @@ for cmd in curl ffprobe; do
 done
 
 mkdir -p "$LOG_DIR"
-rm -f "$LOG_DIR"/*.log
+rm -f "$LOG_DIR"/*.log "$LOG_DIR"/tsan.* "$LOG_DIR"/asan.*
 
-# Force LeakSanitizer on, abort on leak so exit code is nonzero
-export ASAN_OPTIONS="detect_leaks=1:exitcode=23:log_path=$LOG_DIR/asan"
+if [ "$SAN_MODE" = "tsan" ]; then
+    export TSAN_OPTIONS="exitcode=66:log_path=$LOG_DIR/tsan:history_size=4"
+else
+    export ASAN_OPTIONS="detect_leaks=1:exitcode=23:log_path=$LOG_DIR/asan"
+fi
 
 # ── Config ──
 
