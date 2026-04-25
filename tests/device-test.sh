@@ -156,7 +156,12 @@ validate_mode() {
     # ── Control socket readback ──
     RC=$($SSH "timeout 3 $RAPTORCTL rvd get-rc-mode 0" 2>/dev/null || echo "")
     rc_val=$(echo "$RC" | grep -o '"rc_mode":"[^"]*"' | grep -o '"[^"]*"$' | tr -d '"' || echo "")
-    check_eq "$prefix rc_mode readback" "$rc_val" "$mode"
+    if [ "$rc_val" != "$mode" ]; then
+        fail "$prefix rc_mode readback" "got '$rc_val', expected '$mode'"
+        skip "$prefix remaining" "rc_mode mismatch — SDK rejected or fell back"
+        return
+    fi
+    pass "$prefix rc_mode readback"
 
     # QP bounds (0/0 = encoder misconfigured)
     QP=$($SSH "timeout 3 $RAPTORCTL rvd get-qp-bounds 0" 2>/dev/null || echo "")
