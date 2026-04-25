@@ -1,11 +1,12 @@
 /*
  * Fuzz target for STUN message parsing.
  *
- * Exercises the header validation and attribute walker from rwd_ice.c
- * without needing a full server context. Extracts the same parsing
- * logic that rwd_ice_process uses before the client lookup.
+ * Calls the production rwd_ice_process with a minimal server context,
+ * exercising the real attribute walker, MESSAGE-INTEGRITY verification
+ * (hmac_buf sizing, mi_offset math), CRC32 fingerprint, and response
+ * builder — not a reimplementation.
  *
- * Build:  make -C fuzz
+ * Build:  make -C fuzz fuzz_stun
  * Run:    ./fuzz/fuzz_stun corpus/stun/
  */
 
@@ -13,74 +14,62 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdbool.h>
+#include <pthread.h>
+#include <netinet/in.h>
 
-/* STUN constants (from rwd.h) */
-#define STUN_HEADER_SIZE    20
-#define STUN_MAGIC_COOKIE   0x2112A442
-#define STUN_BINDING_REQUEST 0x0001
-#define STUN_ATTR_USERNAME  0x0006
-#define STUN_ATTR_MSG_INTEGRITY 0x0008
+#include "fuzz_stun_shim.h"
 
-static inline uint16_t rd16(const uint8_t *p)
+/* Stub HMAC — fills output with zeros. We don't need correct crypto
+ * for memory safety fuzzing, just need the code paths to execute. */
+void rwd_hmac_sha1(const uint8_t *key, size_t key_len,
+		   const uint8_t *data, size_t data_len, uint8_t *out)
 {
-	return (uint16_t)((p[0] << 8) | p[1]);
+	(void)key;
+	(void)key_len;
+	(void)data;
+	(void)data_len;
+	memset(out, 0, 20);
 }
 
-static inline uint32_t rd32(const uint8_t *p)
+static rwd_server_t srv;
+static rwd_client_t client;
+static bool initialized;
+
+static void init_once(void)
 {
-	return (uint32_t)((p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3]);
-}
+	if (initialized)
+		return;
+	initialized = true;
 
-/* Attribute walker — same logic as stun_get_username in rwd_ice.c */
-static int stun_walk_attrs(const uint8_t *msg, size_t msg_len,
-			   char *username, size_t username_size)
-{
-	const uint8_t *p = msg + STUN_HEADER_SIZE;
-	const uint8_t *end = msg + msg_len;
+	rwd_crc32_init();
+	pthread_mutex_init(&srv.clients_lock, NULL);
+	srv.udp_fd = -1; /* sendto harmlessly returns EBADF */
 
-	while (p + 4 <= end) {
-		uint16_t attr_type = rd16(p);
-		uint16_t attr_len = rd16(p + 2);
-		size_t padded = (attr_len + 3) & ~3u;
+	memset(&client, 0, sizeof(client));
+	snprintf(client.local_ufrag, sizeof(client.local_ufrag), "fuzz");
+	snprintf(client.local_pwd, sizeof(client.local_pwd), "fuzzpassword1234");
+	client.active = true;
+	snprintf(client.session_id, sizeof(client.session_id), "fuzz-session");
 
-		if (p + 4 + attr_len > end)
-			break;
-
-		if (attr_type == STUN_ATTR_USERNAME) {
-			if (attr_len >= username_size)
-				return -1;
-			memcpy(username, p + 4, attr_len);
-			username[attr_len] = '\0';
-			return 0;
-		}
-		if (p + 4 + padded > end)
-			break;
-		p += 4 + padded;
-	}
-	return -1;
+	srv.clients[0] = &client;
+	srv.client_count = 1;
 }
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
-	if (size < STUN_HEADER_SIZE)
-		return 0;
+	init_once();
 
-	/* Header validation — same as rwd_ice_process */
-	uint16_t msg_type = rd16(data);
-	uint16_t msg_len = rd16(data + 2);
-	uint32_t cookie = rd32(data + 4);
+	struct sockaddr_in from = {
+		.sin_family = AF_INET,
+		.sin_port = htons(12345),
+		.sin_addr.s_addr = htonl(0x0A190101),
+	};
 
-	if (cookie != STUN_MAGIC_COOKIE)
-		return 0;
-	if (msg_type != STUN_BINDING_REQUEST)
-		return 0;
-	if ((size_t)(STUN_HEADER_SIZE + msg_len) > size)
-		return 0;
+	/* Reset client state between runs so ice_verified path varies */
+	client.ice_verified = false;
 
-	/* Walk attributes */
-	char username[128];
-	(void)stun_walk_attrs(data, STUN_HEADER_SIZE + msg_len,
-			      username, sizeof(username));
+	rwd_ice_process(&srv, data, size,
+			(const struct sockaddr_storage *)&from, sizeof(from));
 
 	return 0;
 }

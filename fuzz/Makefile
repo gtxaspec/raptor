@@ -24,9 +24,9 @@ fuzz_sdp: fuzz_sdp_parse.c $(COMMON_SRCS)
 	sed '/^int rwd_sdp_generate_answer/,$$d' ../rwd/rwd_sdp.c > /tmp/fuzz_sdp_src.c
 	$(CC) $(CFLAGS) -DRWD_H -include fuzz_rwd_shim.h -o $@ $< /tmp/fuzz_sdp_src.c $(COMMON_SRCS) $(LDFLAGS)
 
-# STUN parser: self-contained (parsing logic duplicated in harness)
-fuzz_stun: fuzz_stun_parse.c
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+# STUN: compile rwd_ice.c against minimal shim (no compy/mbedTLS)
+fuzz_stun: fuzz_stun_parse.c ../rwd/rwd_ice.c $(COMMON_SRCS)
+	$(CC) $(CFLAGS) -DRWD_H -include fuzz_stun_shim.h -o $@ $^ $(LDFLAGS)
 
 # HTTP auth: needs raptor-common (base64, auth check)
 fuzz_http_auth: fuzz_http_auth.c $(COMMON_SRCS)
