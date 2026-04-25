@@ -558,7 +558,7 @@ enabled = false
 [recording]
 enabled = false
 
-[encoder]
+[ring]
 refmode = true
 
 [log]

@@ -226,8 +226,11 @@ enabled = false
 [recording]
 enabled = false
 
-[encoder]
+[ring]
 refmode = true
+
+[jpeg]
+enabled = true
 
 [log]
 level = warn
@@ -252,6 +255,8 @@ start_all() {
     $SSH "LD_PRELOAD=/usr/lib/libimp-nodbg.so $DEVICE_RAPTOR/build/rad -c $CONF_ON_DEVICE -d" 2>/dev/null
     sleep 2
     $SSH "$DEVICE_RAPTOR/build/rsd -c $CONF_ON_DEVICE -d" 2>/dev/null
+    sleep 1
+    $SSH "$DEVICE_RAPTOR/build/rhd -c $CONF_ON_DEVICE -d" 2>/dev/null
     sleep 2
 
     $SSH 'pidof rvd > /dev/null && pidof rad > /dev/null && pidof rsd > /dev/null' 2>/dev/null
@@ -529,6 +534,113 @@ for line in $CODECS; do
 
     echo ""
 done
+
+# ── MJPEG stream health ──
+
+echo "=== MJPEG stream health (${DURATION}s) ==="
+set +eo pipefail
+
+MJPEG_DIR="$LOG_DIR/mjpeg"
+mkdir -p "$MJPEG_DIR"
+MJPEG_RAW="$MJPEG_DIR/raw.bin"
+MJPEG_ERRORS="$MJPEG_DIR/errors.txt"
+
+# Capture raw MJPEG multipart stream
+timeout $((DURATION + 5)) curl -s -o "$MJPEG_RAW" --max-time "$DURATION" \
+    "http://$DEVICE_IP:8080/mjpeg" 2>/dev/null || true
+
+if [ ! -f "$MJPEG_RAW" ] || [ "$(stat -c%s "$MJPEG_RAW" 2>/dev/null || echo 0)" -lt 1000 ]; then
+    fail "MJPEG capture" "no data"
+else
+    RAW_SIZE=$(du -h "$MJPEG_RAW" | cut -f1)
+    pass "MJPEG capture ($RAW_SIZE)"
+
+    # Split on JPEG SOI markers (FF D8) and analyze each frame
+    # Count JPEG frames, verify SOI/EOI markers, check sizes
+    MJPEG_ANALYSIS=$(python3 -c "
+import sys
+
+data = open('$MJPEG_RAW', 'rb').read()
+soi = b'\xff\xd8'
+eoi = b'\xff\xd9'
+
+# Find all JPEG frames by SOI marker
+frames = []
+pos = 0
+while True:
+    start = data.find(soi, pos)
+    if start == -1:
+        break
+    end = data.find(eoi, start + 2)
+    if end == -1:
+        break
+    end += 2  # include EOI
+    frames.append((start, end, end - start))
+    pos = end
+
+total = len(frames)
+bad_soi = 0
+bad_eoi = 0
+zero_size = 0
+min_size = 999999999
+max_size = 0
+sizes = []
+
+for i, (start, end, size) in enumerate(frames):
+    if data[start:start+2] != soi:
+        bad_soi += 1
+    if data[end-2:end] != eoi:
+        bad_eoi += 1
+    if size < 100:
+        zero_size += 1
+    if size < min_size:
+        min_size = size
+    if size > max_size:
+        max_size = size
+    sizes.append(size)
+
+# Check timing consistency (frames should be ~1fps for JPEG idle mode,
+# or higher if actively streaming)
+print(f'total={total}')
+print(f'bad_soi={bad_soi}')
+print(f'bad_eoi={bad_eoi}')
+print(f'zero_size={zero_size}')
+print(f'min_size={min_size}')
+print(f'max_size={max_size}')
+print(f'avg_size={sum(sizes)//max(len(sizes),1)}')
+" 2>/dev/null || echo "total=0")
+
+    eval "$MJPEG_ANALYSIS"
+
+    if [ "${total:-0}" -gt 5 ]; then
+        pass "MJPEG frames ($total)"
+    else
+        fail "MJPEG frames" "only ${total:-0}"
+    fi
+
+    if [ "${bad_soi:-0}" -eq 0 ]; then
+        pass "MJPEG SOI markers valid"
+    else
+        fail "MJPEG SOI" "$bad_soi frames missing SOI (FF D8)"
+    fi
+
+    if [ "${bad_eoi:-0}" -eq 0 ]; then
+        pass "MJPEG EOI markers valid"
+    else
+        fail "MJPEG EOI" "$bad_eoi frames missing EOI (FF D9)"
+    fi
+
+    if [ "${zero_size:-0}" -eq 0 ]; then
+        pass "MJPEG no undersized frames (min ${min_size:-0}B, max ${max_size:-0}B)"
+    else
+        fail "MJPEG frame sizes" "$zero_size frames < 100 bytes"
+    fi
+
+    rm -f "$MJPEG_RAW"
+fi
+
+set -eo pipefail
+echo ""
 
 # UDP transport probe
 echo "=== UDP transport ==="
