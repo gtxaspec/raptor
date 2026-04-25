@@ -246,8 +246,8 @@ if [ "$RESTART" = true ]; then
     $SSH "$NFS_RAPTOR/build/rvd -c $CONF_ON_DEVICE -d" 2>/dev/null
     sleep 4
 
-    # Start consumers
-    $SSH "$NFS_RAPTOR/build/rad -c $CONF_ON_DEVICE -d" 2>/dev/null
+    # Start consumers (RAD needs LD_PRELOAD to avoid vendor SHM wipe bug)
+    $SSH "LD_PRELOAD=/usr/lib/libimp-nodbg.so $NFS_RAPTOR/build/rad -c $CONF_ON_DEVICE -d" 2>/dev/null
     sleep 1
     $SSH "$NFS_RAPTOR/build/rsd -c $CONF_ON_DEVICE -d" 2>/dev/null
     sleep 1
@@ -345,9 +345,58 @@ fi
 
 echo ""
 
-# ── Phase 3: Ring buffer sanity ──
+# ── Phase 3: SDK encoder verification (libimp-debug) ──
 
-echo "=== Phase 3: Ring buffer ==="
+echo "=== Phase 3: SDK encoder verification ==="
+
+if $SSH 'which libimp-debug > /dev/null 2>&1' 2>/dev/null; then
+    ENC_INFO=$($SSH 'libimp-debug --enc_info 2>/dev/null' 2>/dev/null || echo "")
+
+    if [ -n "$ENC_INFO" ]; then
+        # CH0 (main video): verify SDK sees what raptor configured
+        ch0_line=$(echo "$ENC_INFO" | grep "CHANNEL 0" | head -1)
+        # Parse SDK values: format is "field = VALUE(0xHEX) offset:size = N:N"
+        parse_sdk() { echo "$ENC_INFO" | grep -A30 "ch->index = 0" | grep "$1" | head -1 | sed 's/.*= \(-\?[0-9]*\)(.*/\1/'; }
+        ch0_rc=$(parse_sdk 'rcMode')
+        ch0_br=$(parse_sdk 'uTargetBitRate')
+        ch0_minqp=$(parse_sdk 'iMinQP')
+        ch0_maxqp=$(parse_sdk 'iMaxQP')
+        ch0_gop=$(parse_sdk 'uGopLength')
+        ch0_fps=$(parse_sdk 'frmRateNum')
+
+        # RC mode: 0=FIXQP, 1=CBR, 2=VBR, 3=SMART, 4=CAPPED_VBR, 5=CAPPED_QUALITY
+        RC_NAMES="fixqp cbr vbr smart capped_vbr capped_quality"
+        sdk_rc=$(echo "$RC_NAMES" | awk -v n="$ch0_rc" '{print $(n+1)}')
+        check_eq "SDK ch0 rc_mode" "$sdk_rc" "$MAIN_RC"
+        check_eq "SDK ch0 bitrate" "${ch0_br}000" "$MAIN_BITRATE"
+        check_eq "SDK ch0 min_qp" "$ch0_minqp" "$MAIN_MIN_QP"
+        check_eq "SDK ch0 max_qp" "$ch0_maxqp" "$MAIN_MAX_QP"
+        check_eq "SDK ch0 gop" "$ch0_gop" "$MAIN_GOP"
+        check_eq "SDK ch0 fps" "$ch0_fps" "$MAIN_FPS"
+
+        # Check actual FPS and bitrate from encoder stats line
+        ch0_actual_fps=$(echo "$ch0_line" | grep -o 'Fps:[0-9.]*' | grep -o '[0-9.]*' || echo "")
+        ch0_actual_br=$(echo "$ch0_line" | grep -o 'Bitrate:[0-9.]*' | grep -o '[0-9.]*' || echo "")
+        if [ -n "$ch0_actual_fps" ]; then
+            actual_fps_int=$(echo "$ch0_actual_fps" | cut -d. -f1)
+            check_range "SDK ch0 actual FPS" "$actual_fps_int" "$MAIN_FPS" 15
+        fi
+        if [ -n "$ch0_actual_br" ]; then
+            actual_br_int=$(echo "$ch0_actual_br" | cut -d. -f1)
+            check_range "SDK ch0 actual bitrate (kbps)" "$actual_br_int" "$((MAIN_BITRATE / 1000))" 40
+        fi
+    else
+        skip "SDK encoder verification" "libimp-debug returned no data"
+    fi
+else
+    skip "SDK encoder verification" "libimp-debug not available"
+fi
+
+echo ""
+
+# ── Phase 4: Ring buffer sanity ──
+
+echo "=== Phase 4: Ring buffer ==="
 
 RINGDUMP="$NFS_RAPTOR/build/ringdump"
 
@@ -379,9 +428,9 @@ fi
 
 echo ""
 
-# ── Phase 4: RTSP stream validation ──
+# ── Phase 5: RTSP stream validation ──
 
-echo "=== Phase 4: RTSP streams ==="
+echo "=== Phase 5: RTSP streams ==="
 
 validate_rtsp_stream() {
     local name="$1" url="$2" exp_w="$3" exp_h="$4" exp_codec="$5" exp_fps="$6"
@@ -443,9 +492,9 @@ fi
 
 echo ""
 
-# ── Phase 5: RTSP bitrate validation ──
+# ── Phase 6: RTSP bitrate validation ──
 
-echo "=== Phase 5: Bitrate validation ==="
+echo "=== Phase 6: Bitrate validation ==="
 
 # Stream for 5 seconds via ffmpeg, measure actual bitrate
 for stream_name in stream0 stream1; do
@@ -472,9 +521,9 @@ done
 
 echo ""
 
-# ── Phase 6: RC mode cycling (full restart per mode) ──
+# ── Phase 7: RC mode cycling (full restart per mode) ──
 
-echo "=== Phase 6: RC mode cycling ==="
+echo "=== Phase 7: RC mode cycling ==="
 
 # Each RC mode gets a fresh RVD start — some modes (SmartP, capped)
 # can't be switched at runtime without wedging the SDK.
@@ -528,9 +577,9 @@ sleep 3
 
 echo ""
 
-# ── Phase 7: Encoder parameter exercise ──
+# ── Phase 8: Encoder parameter exercise ──
 
-echo "=== Phase 7: Encoder parameter exercise ==="
+echo "=== Phase 8: Encoder parameter exercise ==="
 
 # Bitrate change: set → verify → restore
 $SSH "timeout 3 $RAPTORCTL rvd set-bitrate 0 3000000" 2>/dev/null > /dev/null || true
@@ -616,10 +665,10 @@ $SSH "timeout 3 $RAPTORCTL rvd set-brightness 128" 2>/dev/null > /dev/null || tr
 
 echo ""
 
-# ── Phase 8: HTTP endpoints ──
+# ── Phase 9: HTTP endpoints ──
 
 
-echo "=== Phase 6: HTTP endpoints ==="
+echo "=== Phase 9: HTTP endpoints ==="
 
 # Snapshot
 SNAP_FILE=$(mktemp /tmp/raptor-snap-XXXXXX.jpg)
@@ -668,9 +717,9 @@ fi
 
 echo ""
 
-# ── Phase 9: Log scan ──
+# ── Phase 10: Log scan ──
 
-echo "=== Phase 9: Log scan ==="
+echo "=== Phase 10: Log scan ==="
 
 # Only check entries from current daemon PIDs (ignore stale log entries)
 LOG_OUT=$($SSH 'logread 2>/dev/null | tail -100' 2>/dev/null || echo "")
@@ -684,9 +733,9 @@ fi
 
 echo ""
 
-# ── Phase 10: Resource baseline ──
+# ── Phase 11: Resource baseline ──
 
-echo "=== Phase 10: Resource baseline ==="
+echo "=== Phase 11: Resource baseline ==="
 
 # Memory (busybox free uses KB, no -m flag)
 free_kb=$($SSH 'free | awk "/Mem:/{print \$4}"' 2>/dev/null || echo "0")
