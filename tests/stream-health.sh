@@ -500,10 +500,12 @@ print((header + b'\r\n\r\n' + rest).decode('utf-8', 'replace'))
         fail "backchannel DESCRIBE" "not 200 OK"
     fi
 
-    if echo "$BC_RESPONSE" | grep -q 'a=recvonly'; then
-        pass "backchannel has recvonly track"
+    # ONVIF backchannel uses a=sendonly (server perspective: "I will only send
+    # on this track" = client should send audio TO me)
+    if echo "$BC_RESPONSE" | grep -q 'a=sendonly'; then
+        pass "backchannel has sendonly track (ONVIF)"
     else
-        fail "backchannel recvonly" "no a=recvonly in SDP"
+        fail "backchannel sendonly" "no a=sendonly in SDP"
     fi
 
     AUDIO_SECTIONS=$(echo "$BC_RESPONSE" | grep -c '^m=audio' || true)
@@ -514,7 +516,7 @@ print((header + b'\r\n\r\n' + rest).decode('utf-8', 'replace'))
         fail "backchannel audio tracks" "only $AUDIO_SECTIONS audio section(s), expected >=2"
     fi
 
-    BC_CODEC=$(echo "$BC_RESPONSE" | sed -n '/a=recvonly/,/^m=/p' | grep 'a=rtpmap' | head -1 || echo "")
+    BC_CODEC=$(echo "$BC_RESPONSE" | sed -n '/a=sendonly/,/^m=/p' | grep 'a=rtpmap' | head -1 || echo "")
     if [ -n "$BC_CODEC" ]; then
         pass "backchannel codec: $(echo "$BC_CODEC" | sed 's/a=rtpmap://')"
     else
@@ -563,14 +565,21 @@ if '200' not in resp.split('\r\n')[0]:
     raise SystemExit(1)
 
 # Find backchannel control track
+# Find the backchannel control track — look for the media section with a=sendonly
 bc_track = None
-in_recvonly = False
-for line in resp.split('\r\n'):
-    if 'a=recvonly' in line:
-        in_recvonly = True
-    if in_recvonly and line.startswith('a=control:'):
-        bc_track = line.split(':',1)[1].strip()
+lines = resp.split('\r\n')
+for i, line in enumerate(lines):
+    if 'a=control:backchannel' in line:
+        bc_track = 'backchannel'
         break
+    if 'a=sendonly' in line:
+        # Walk backwards to find the a=control in this section
+        for j in range(i-1, max(i-10, 0), -1):
+            if lines[j].startswith('a=control:'):
+                bc_track = lines[j].split(':',1)[1].strip()
+                break
+        if bc_track:
+            break
 
 if not bc_track:
     print('NO_BC_TRACK')
