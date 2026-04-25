@@ -489,7 +489,11 @@ RINGDUMP="$DEVICE_RAPTOR/build/ringdump"
 CONF_ON_DEVICE="$DEVICE_RAPTOR/tests/device-test.conf"
 
 SENSOR=$($SSH 'sensor name 2>/dev/null || cat /proc/jz/sensor/name 2>/dev/null' 2>/dev/null || echo "unknown")
-SENSOR_FPS=$($SSH 'sensor max_fps 2>/dev/null || cat /proc/jz/sensor/max_fps 2>/dev/null' 2>/dev/null || echo "25")
+# Use actual runtime FPS, not max capability — sensor may run slower than max
+SENSOR_FPS=$($SSH 'cat /proc/jz/sensor/fps 2>/dev/null' 2>/dev/null || echo "")
+if [ -z "$SENSOR_FPS" ] || [ "$SENSOR_FPS" = "0" ]; then
+    SENSOR_FPS=$($SSH 'sensor max_fps 2>/dev/null || cat /proc/jz/sensor/max_fps 2>/dev/null' 2>/dev/null || echo "25")
+fi
 echo "    sensor: $SENSOR (${SENSOR_FPS}fps)"
 
 if ! command -v ffprobe > /dev/null 2>&1; then
