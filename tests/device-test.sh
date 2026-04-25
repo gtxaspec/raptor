@@ -277,6 +277,37 @@ validate_mode() {
     if [ "$qp_min" = "10" ] && [ "$qp_max" = "50" ]; then pass "$prefix QP change"
     else fail "$prefix QP change" "got $qp_min/$qp_max"; fi
     $SSH "timeout 3 $RAPTORCTL rvd set-qp-bounds 0 $MAIN_MIN_QP $MAIN_MAX_QP" 2>/dev/null > /dev/null || true
+
+    # ── HTTP endpoints ──
+    SNAP_FILE=$(mktemp /tmp/raptor-snap-XXXXXX.jpg)
+    HTTP_CODE=$(curl -s -o "$SNAP_FILE" -w "%{http_code}" --max-time 5 \
+        "http://$DEVICE_IP:$HTTP_PORT/snap" 2>/dev/null || echo "000")
+    if [ "$HTTP_CODE" = "200" ]; then
+        if od -A n -t x1 -N 2 "$SNAP_FILE" | tr -d ' ' | grep -q 'ffd8'; then
+            pass "$prefix snapshot (JPEG OK)"
+        else
+            fail "$prefix snapshot" "not a JPEG"
+        fi
+    else
+        fail "$prefix snapshot" "HTTP $HTTP_CODE"
+    fi
+    rm -f "$SNAP_FILE"
+
+    MJPEG_CODE=$(timeout 3 curl -s -o /dev/null -w "%{http_code}" \
+        "http://$DEVICE_IP:$HTTP_PORT/mjpeg" 2>/dev/null || echo "000")
+    if [ "$MJPEG_CODE" = "200" ] || [ "$MJPEG_CODE" = "000" ]; then
+        pass "$prefix MJPEG stream"
+    else
+        fail "$prefix MJPEG" "HTTP $MJPEG_CODE"
+    fi
+
+    AUDIO_CODE=$(timeout 3 curl -s -o /dev/null -w "%{http_code}" \
+        "http://$DEVICE_IP:$HTTP_PORT/audio" 2>/dev/null || echo "000")
+    if [ "$AUDIO_CODE" = "200" ] || [ "$AUDIO_CODE" = "000" ]; then
+        pass "$prefix audio stream"
+    else
+        fail "$prefix audio" "HTTP $AUDIO_CODE"
+    fi
 }
 
 # ══════════════════════════════════════════════════════════════════
@@ -409,43 +440,6 @@ for mode in $rc_modes; do
 
     echo ""
 done
-
-# ── HTTP endpoints (once, using last running config) ──
-
-echo "=== HTTP endpoints ==="
-
-SNAP_FILE=$(mktemp /tmp/raptor-snap-XXXXXX.jpg)
-HTTP_CODE=$(curl -s -o "$SNAP_FILE" -w "%{http_code}" --max-time 5 \
-    "http://$DEVICE_IP:$HTTP_PORT/snap" 2>/dev/null || echo "000")
-if [ "$HTTP_CODE" = "200" ]; then
-    pass "HTTP snapshot (200)"
-    if od -A n -t x1 -N 2 "$SNAP_FILE" | tr -d ' ' | grep -q 'ffd8'; then
-        pass "snapshot is valid JPEG"
-    else
-        fail "snapshot JPEG" "not a JPEG"
-    fi
-else
-    fail "HTTP snapshot" "HTTP $HTTP_CODE"
-fi
-rm -f "$SNAP_FILE"
-
-MJPEG_CODE=$(timeout 3 curl -s -o /dev/null -w "%{http_code}" \
-    "http://$DEVICE_IP:$HTTP_PORT/mjpeg" 2>/dev/null || echo "000")
-if [ "$MJPEG_CODE" = "200" ] || [ "$MJPEG_CODE" = "000" ]; then
-    pass "MJPEG stream"
-else
-    fail "MJPEG stream" "HTTP $MJPEG_CODE"
-fi
-
-AUDIO_CODE=$(timeout 3 curl -s -o /dev/null -w "%{http_code}" \
-    "http://$DEVICE_IP:$HTTP_PORT/audio" 2>/dev/null || echo "000")
-if [ "$AUDIO_CODE" = "200" ] || [ "$AUDIO_CODE" = "000" ]; then
-    pass "audio stream"
-else
-    fail "audio stream" "HTTP $AUDIO_CODE"
-fi
-
-echo ""
 
 # ── Log scan ──
 
