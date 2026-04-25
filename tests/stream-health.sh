@@ -208,6 +208,7 @@ rc_mode = cbr
 enabled = true
 sample_rate = $audio_rate
 codec = $audio_codec
+ao_enabled = true
 
 [rtsp]
 port = $RTSP_PORT
@@ -518,6 +519,147 @@ print((header + b'\r\n\r\n' + rest).decode('utf-8', 'replace'))
         pass "backchannel codec: $(echo "$BC_CODEC" | sed 's/a=rtpmap://')"
     else
         skip "backchannel codec" "no rtpmap after recvonly"
+    fi
+
+    # Send actual audio via backchannel
+    # Generate 1s of PCMU test tone (1kHz sine wave, mu-law encoded)
+    BC_SEND_RESULT=$(python3 -c "
+import re, socket, struct, math, time
+
+host = '$DEVICE_IP'
+port = $RTSP_PORT
+url = f'rtsp://{host}:{port}/stream0'
+cseq = [0]
+
+def next_cseq():
+    cseq[0] += 1
+    return cseq[0]
+
+def send_recv(sock, req):
+    sock.sendall(req.encode())
+    data = b''
+    while b'\r\n\r\n' not in data:
+        chunk = sock.recv(4096)
+        if not chunk: break
+        data += chunk
+    header, _, rest = data.partition(b'\r\n\r\n')
+    m = re.search(br'Content-Length:\s*(\d+)', header, re.I)
+    if m:
+        need = int(m.group(1)) - len(rest)
+        while need > 0:
+            chunk = sock.recv(4096)
+            if not chunk: break
+            rest += chunk
+            need -= len(chunk)
+    return (header + b'\r\n\r\n' + rest).decode('utf-8', 'replace')
+
+sock = socket.create_connection((host, port), timeout=10)
+
+# DESCRIBE with backchannel
+resp = send_recv(sock, f'DESCRIBE {url} RTSP/1.0\r\nCSeq: {next_cseq()}\r\nAccept: application/sdp\r\nRequire: www.onvif.org/ver20/backchannel\r\n\r\n')
+if '200' not in resp.split('\r\n')[0]:
+    print('DESCRIBE_FAILED')
+    sock.close()
+    raise SystemExit(1)
+
+# Find backchannel control track
+bc_track = None
+in_recvonly = False
+for line in resp.split('\r\n'):
+    if 'a=recvonly' in line:
+        in_recvonly = True
+    if in_recvonly and line.startswith('a=control:'):
+        bc_track = line.split(':',1)[1].strip()
+        break
+
+if not bc_track:
+    print('NO_BC_TRACK')
+    sock.close()
+    raise SystemExit(1)
+
+# Find session from video SETUP first (needed for interleaved)
+session = None
+
+# SETUP video (interleaved ch 0-1)
+resp = send_recv(sock, f'SETUP {url}/video RTSP/1.0\r\nCSeq: {next_cseq()}\r\nTransport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n\r\n')
+m = re.search(r'Session:\s*(\S+)', resp)
+if m:
+    session = m.group(1).split(';')[0]
+
+if not session:
+    print('NO_SESSION')
+    sock.close()
+    raise SystemExit(1)
+
+# SETUP audio playback (interleaved ch 2-3)
+resp = send_recv(sock, f'SETUP {url}/audio RTSP/1.0\r\nCSeq: {next_cseq()}\r\nSession: {session}\r\nTransport: RTP/AVP/TCP;unicast;interleaved=2-3\r\nRequire: www.onvif.org/ver20/backchannel\r\n\r\n')
+
+# SETUP backchannel (interleaved ch 4-5)
+resp = send_recv(sock, f'SETUP {url}/{bc_track} RTSP/1.0\r\nCSeq: {next_cseq()}\r\nSession: {session}\r\nTransport: RTP/AVP/TCP;unicast;interleaved=4-5\r\nRequire: www.onvif.org/ver20/backchannel\r\n\r\n')
+if '200' not in resp.split('\r\n')[0]:
+    print('SETUP_BC_FAILED')
+    sock.close()
+    raise SystemExit(1)
+
+# PLAY
+resp = send_recv(sock, f'PLAY {url} RTSP/1.0\r\nCSeq: {next_cseq()}\r\nSession: {session}\r\nRange: npt=0.000-\r\n\r\n')
+if '200' not in resp.split('\r\n')[0]:
+    print('PLAY_FAILED')
+    sock.close()
+    raise SystemExit(1)
+
+# Load PCMU test audio (or generate silence)
+test_audio = '$SCRIPT_DIR/backchannel-test.raw'
+try:
+    with open(test_audio, 'rb') as f:
+        samples = list(f.read())
+except:
+    samples = [0xFF] * 4000  # 0.5s silence
+
+# Send as RTP over interleaved channel 4
+# 20ms frames = 160 samples each
+seq = 0
+ts = 0
+ssrc = 0x12345678
+sent = 0
+for frame_start in range(0, len(samples), 160):
+    frame = bytes(samples[frame_start:frame_start+160])
+    if len(frame) < 160:
+        break
+    # RTP header: V=2, P=0, X=0, CC=0, M=0, PT=0 (PCMU)
+    rtp = struct.pack('!BBHII', 0x80, 0, seq & 0xFFFF, ts, ssrc) + frame
+    # RTSP interleaved: $ + channel + length
+    interleaved = b'\x24' + struct.pack('!BH', 4, len(rtp)) + rtp
+    try:
+        sock.sendall(interleaved)
+        sent += 1
+    except:
+        break
+    seq += 1
+    ts += 160
+    time.sleep(0.018)
+
+# TEARDOWN
+try:
+    sock.sendall(f'TEARDOWN {url} RTSP/1.0\r\nCSeq: {next_cseq()}\r\nSession: {session}\r\n\r\n'.encode())
+except:
+    pass
+sock.close()
+
+if sent > 10:
+    print(f'SENT_OK:{sent}')
+else:
+    print(f'SENT_FEW:{sent}')
+" 2>/dev/null || echo "SCRIPT_ERROR")
+
+    if echo "$BC_SEND_RESULT" | grep -q 'SENT_OK'; then
+        BC_FRAMES=$(echo "$BC_SEND_RESULT" | grep -o '[0-9]*$')
+        pass "backchannel audio sent ($BC_FRAMES RTP frames)"
+    elif echo "$BC_SEND_RESULT" | grep -q 'SENT_FEW'; then
+        BC_FRAMES=$(echo "$BC_SEND_RESULT" | grep -o '[0-9]*$')
+        fail "backchannel send" "only $BC_FRAMES frames sent"
+    else
+        fail "backchannel send" "$BC_SEND_RESULT"
     fi
 
     set -eo pipefail
