@@ -192,9 +192,12 @@ validate_mode() {
             ch0_gop=$(parse_sdk 'uGopLength')
             ch0_fps=$(parse_sdk 'frmRateNum')
 
-            # RC mode enum: 0=FIXQP, 1=CBR, 2=VBR, 4=CAPPED_VBR, 5=CAPPED_QUALITY
-            RC_NAMES="fixqp cbr vbr smart capped_vbr capped_quality"
-            sdk_rc=$(echo "$RC_NAMES" | awk -v n="$ch0_rc" '{print $(n+1)}')
+            # RC mode enum: 0=FIXQP, 1=CBR, 2=VBR, 4=CAPPED_VBR, 8=CAPPED_QUALITY
+            case "$ch0_rc" in
+                0) sdk_rc="fixqp" ;; 1) sdk_rc="cbr" ;; 2) sdk_rc="vbr" ;;
+                4) sdk_rc="capped_vbr" ;; 8) sdk_rc="capped_quality" ;;
+                *) sdk_rc="unknown($ch0_rc)" ;;
+            esac
             check_eq "$prefix SDK rc_mode" "$sdk_rc" "$mode"
             check_eq "$prefix SDK gop" "$ch0_gop" "$MAIN_GOP"
             check_eq "$prefix SDK fps" "$ch0_fps" "$SENSOR_FPS"
@@ -442,8 +445,8 @@ RAPTORCTL="$DEVICE_RAPTOR/build/raptorctl"
 RINGDUMP="$DEVICE_RAPTOR/build/ringdump"
 CONF_ON_DEVICE="$DEVICE_RAPTOR/tests/device-test.conf"
 
-SENSOR=$($SSH 'cat /proc/jz/sensor/name 2>/dev/null' 2>/dev/null || echo "unknown")
-SENSOR_FPS=$($SSH 'cat /proc/jz/sensor/max_fps 2>/dev/null' 2>/dev/null || echo "25")
+SENSOR=$($SSH 'sensor name 2>/dev/null || cat /proc/jz/sensor/name 2>/dev/null' 2>/dev/null || echo "unknown")
+SENSOR_FPS=$($SSH 'sensor max_fps 2>/dev/null || cat /proc/jz/sensor/max_fps 2>/dev/null' 2>/dev/null || echo "25")
 echo "    sensor: $SENSOR (${SENSOR_FPS}fps)"
 
 if ! command -v ffprobe > /dev/null 2>&1; then
