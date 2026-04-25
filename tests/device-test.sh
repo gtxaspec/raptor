@@ -204,7 +204,14 @@ validate_mode() {
 
     GOP=$($SSH "timeout 3 $RAPTORCTL rvd get-gop 0" 2>/dev/null || echo "")
     gop_val=$(echo "$GOP" | grep -o '"gop":[0-9]*' | grep -o '[0-9]*$' || echo "")
-    check_eq "$prefix GOP" "$gop_val" "$MAIN_GOP"
+    # Old SDK clamps maxGop up to next multiple of fps
+    if [ -n "$gop_val" ] && [ "$gop_val" -ge "$MAIN_GOP" ]; then
+        pass "$prefix GOP ($gop_val, configured $MAIN_GOP)"
+    elif [ -n "$gop_val" ]; then
+        fail "$prefix GOP" "got $gop_val, expected >= $MAIN_GOP"
+    else
+        fail "$prefix GOP" "no response"
+    fi
 
     FPS=$($SSH "timeout 3 $RAPTORCTL rvd get-fps 0" 2>/dev/null || echo "")
     fps_val=$(echo "$FPS" | grep -o '"fps_num":[0-9]*' | grep -o '[0-9]*$' || echo "")
@@ -230,7 +237,11 @@ validate_mode() {
                 *) sdk_rc="unknown($ch0_rc)" ;;
             esac
             check_eq "$prefix SDK rc_mode" "$sdk_rc" "$mode"
-            check_eq "$prefix SDK gop" "$ch0_gop" "$MAIN_GOP"
+            if [ -n "$ch0_gop" ] && [ "$ch0_gop" -ge "$MAIN_GOP" ]; then
+                pass "$prefix SDK gop ($ch0_gop, configured $MAIN_GOP)"
+            else
+                fail "$prefix SDK gop" "got '$ch0_gop', expected >= $MAIN_GOP"
+            fi
             check_eq "$prefix SDK fps" "$ch0_fps" "$SENSOR_FPS"
 
             # Live encoder stats
