@@ -462,8 +462,8 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			}
 			free(*ctx->encode_buf);
 			*ctx->encode_buf = new_buf;
+			*ctx->encode_buf_size = new_buf_size;
 		}
-		*ctx->encode_buf_size = new_buf_size;
 
 		/* 8. Update state — persist config only after successful switch */
 		*ctx->codec_ops = new_ops;
