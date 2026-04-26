@@ -947,9 +947,6 @@ void *rvd_osd_thread(void *arg)
 	rvd_state_t *st = arg;
 	RSS_INFO("osd update thread started");
 
-	while (!st->pipeline_ready && *st->running)
-		usleep(100000);
-
 	/* Show initial regions */
 	pthread_mutex_lock(&st->osd_lock);
 	for (int s = 0; s < st->stream_count; s++) {
