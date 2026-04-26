@@ -1326,6 +1326,10 @@ void rvd_stream_deinit(rvd_state_t *st, int idx)
 {
 	rvd_stream_t *s = &st->streams[idx];
 
+	/* Skip if never successfully initialized (or already rolled back) */
+	if (!s->ring)
+		return;
+
 	/* Unbind chain in reverse */
 	if (!s->is_jpeg) {
 		int len = st->bind_chain_len[idx];
