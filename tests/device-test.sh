@@ -77,12 +77,13 @@ done
 # Container name includes device IP so parallel tests don't collide
 DOCKER_NFS_CONTAINER="raptor-nfs-$(echo "$DEVICE_IP" | tr '.' '-')"
 
-# Kill any leftover container from a previous crashed run
-docker rm -f "$DOCKER_NFS_CONTAINER" > /dev/null 2>&1 || true
-
 # ── Config ──
 
 SSH="ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o LogLevel=ERROR root@$DEVICE_IP"
+
+# Unmount on device BEFORE killing Docker (prevents D-state hang)
+$SSH 'umount -f -l /tmp/raptor-test 2>/dev/null' 2>/dev/null || true
+docker rm -f "$DOCKER_NFS_CONTAINER" > /dev/null 2>&1 || true
 BUILD_DIR="$RAPTOR_DIR/build"
 TEST_CONF="$RAPTOR_DIR/tests/device-test.conf"
 DEVICE_MNT="/tmp/raptor-test"

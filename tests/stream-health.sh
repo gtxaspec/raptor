@@ -59,9 +59,11 @@ done
 [ -z "$DEVICE_IP" ] && { echo "Usage: $0 <device-ip> [--duration <sec>] [--codec <codec>] [--udp]"; exit 1; }
 
 DOCKER_NFS_CONTAINER="raptor-nfs-$(echo "$DEVICE_IP" | tr '.' '-')"
-docker rm -f "$DOCKER_NFS_CONTAINER" > /dev/null 2>&1 || true
-
 SSH="ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o LogLevel=ERROR root@$DEVICE_IP"
+
+# Unmount on device BEFORE killing Docker (prevents D-state hang)
+$SSH 'umount -f -l /tmp/raptor-test 2>/dev/null' 2>/dev/null || true
+docker rm -f "$DOCKER_NFS_CONTAINER" > /dev/null 2>&1 || true
 DEVICE_MNT="/tmp/raptor-test"
 BUILD_DIR="$RAPTOR_DIR/build"
 TEST_CONF="$RAPTOR_DIR/tests/stream-health.conf"
@@ -455,12 +457,29 @@ for s in d.get('streams',[]):
 #  Main
 # ══════════════════════════════════════════════════════════════════
 
-# ── ONVIF backchannel probe (before codec cycling) ──
+# ── Per-codec streaming analysis ──
 
-echo "=== ONVIF backchannel probe ==="
+BC_TESTED=false
 
-# Start daemons with default codec for the probe
-if start_all "l16" "16000"; then
+for line in $CODECS; do
+    IFS=: read -r codec_id config_name config_rate expect_codec expect_rate <<< "$line"
+
+    if [ -n "$CODEC_FILTER" ] && [ "$CODEC_FILTER" != "$codec_id" ]; then
+        continue
+    fi
+
+    echo "=== Audio codec: $codec_id (${config_rate}Hz) ==="
+
+    if start_all "$config_name" "$config_rate"; then
+        pass "[$codec_id] daemons started"
+        sleep 1
+        analyze_stream "$codec_id" "$expect_codec" "$expect_rate"
+
+        # Run backchannel on first codec only (reuses same session)
+        if [ "$BC_TESTED" = false ]; then
+            BC_TESTED=true
+            echo ""
+            echo "  --- ONVIF backchannel (on $codec_id session) ---"
     set +eo pipefail
 
     BC_RESPONSE=$(python3 -c "
@@ -674,28 +693,7 @@ else:
     fi
 
     set -eo pipefail
-else
-    skip "backchannel" "daemons failed to start"
-fi
-
-echo ""
-
-# ── Per-codec streaming analysis ──
-
-for line in $CODECS; do
-    IFS=: read -r codec_id config_name config_rate expect_codec expect_rate <<< "$line"
-
-    # Skip if --codec filter set
-    if [ -n "$CODEC_FILTER" ] && [ "$CODEC_FILTER" != "$codec_id" ]; then
-        continue
-    fi
-
-    echo "=== Audio codec: $codec_id (${config_rate}Hz) ==="
-
-    if start_all "$config_name" "$config_rate"; then
-        pass "[$codec_id] daemons started"
-        sleep 1
-        analyze_stream "$codec_id" "$expect_codec" "$expect_rate"
+        fi
     else
         skip "[$codec_id] all" "daemons failed to start"
     fi
