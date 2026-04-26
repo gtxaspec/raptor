@@ -412,9 +412,13 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				  old_codec_str);
 			memset(ctx->codec_ctx, 0, sizeof(*ctx->codec_ctx));
 			ctx->codec_ctx->codec_id = old_codec_id;
-			if (old_ops->init(ctx->codec_ctx, ctx->cfg, old_sample_rate) != 0)
+			if (old_ops->init(ctx->codec_ctx, ctx->cfg, old_sample_rate) != 0) {
 				RSS_FATAL("audio-restart: old codec %s restore also failed",
 					  old_codec_str);
+				*ctx->codec_ops = NULL;
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+							   "codec init failed, audio disabled");
+			}
 			new_ops = old_ops;
 			new_codec_id = old_codec_id;
 			new_sample_rate = old_sample_rate;
@@ -975,10 +979,11 @@ int main(int argc, char **argv)
 		synth_audio_ts += (int64_t)samples * 1000000 / ctrl_ctx.sample_rate;
 
 		const int16_t *pcm = frame.data;
-		int out_len;
+		int out_len = 0;
 
-		out_len = codec_ops->encode(&codec_ctx, pcm, samples, encode_buf, encode_buf_size,
-					    ts);
+		if (codec_ops)
+			out_len = codec_ops->encode(&codec_ctx, pcm, samples, encode_buf,
+						    encode_buf_size, ts);
 
 		if (out_len > 0 && ring)
 			rss_ring_publish(ring, encode_buf, out_len, ts, ctrl_ctx.codec_id, 0);
