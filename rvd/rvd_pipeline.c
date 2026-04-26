@@ -1266,6 +1266,7 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 
 		if (!s->ring) {
 			RSS_ERROR("failed to create ring %s", ring_name);
+			ret = RSS_ERR;
 			goto fail_ring;
 		}
 		RSS_DEBUG("stream%d ring: %s", idx, ring_name);
