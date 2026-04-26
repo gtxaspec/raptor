@@ -242,6 +242,8 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running)
 
 	/* Main thread: handle control socket */
 	int epoll_fd = epoll_create1(EPOLL_CLOEXEC);
+	if (epoll_fd < 0)
+		RSS_ERROR("epoll_create1 failed: %s (ctrl socket disabled)", strerror(errno));
 	int ctrl_fd = -1;
 
 	if (st->ctrl && epoll_fd >= 0) {
