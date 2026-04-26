@@ -168,8 +168,11 @@ embedded_publish:
 			/* Embedded mode: copy NALs into ring via scatter-gather */
 			rss_iov_t iov[16];
 			uint32_t cnt = frame.nal_count;
-			if (cnt > 16)
+			if (cnt > 16) {
+				RSS_WARN("stream%d: frame has %u NALs, truncating to 16",
+					 idx, cnt);
 				cnt = 16;
+			}
 			for (uint32_t n = 0; n < cnt; n++) {
 				iov[n].data = frame.nals[n].data;
 				iov[n].length = frame.nals[n].length;
