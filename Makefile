@@ -28,7 +28,7 @@ STRIP  := $(CROSS_COMPILE)strip
 
 # Common flags for all daemons
 EXTRA_CFLAGS ?=
-CFLAGS := -Wall -Wextra -Werror=implicit-function-declaration
+CFLAGS := -Wall -Wextra -Werror
 CFLAGS += -std=gnu11 -D_GNU_SOURCE
 CFLAGS += -ffunction-sections -fdata-sections -flto
 CFLAGS += -fno-asynchronous-unwind-tables -fmerge-all-constants -fno-ident
