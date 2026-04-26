@@ -44,6 +44,9 @@ typedef struct {
 	uint32_t priv[0];
 } IMPFrameInfo;
 
+_Static_assert(offsetof(IMPFrameInfo, virAddr) == 28,
+	       "IMPFrameInfo layout mismatch — SDK struct changed");
+
 extern int IMP_FrameSource_SetFrameDepth(int chnNum, int depth);
 extern int IMP_FrameSource_GetFrame(int chnNum, IMPFrameInfo **frame);
 extern int IMP_FrameSource_ReleaseFrame(int chnNum, IMPFrameInfo *frame);
