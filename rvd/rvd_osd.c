@@ -755,20 +755,8 @@ void rvd_osd_check(rvd_state_t *st)
 			if (!reg->active || !reg->shm)
 				continue;
 
-			bool stale = false;
-			if (shm_is_stale(reg->shm, s, reg->name))
-				stale = true;
-			else if (!any_alive)
-				stale = true;
-
-			if (stale) {
+			if (shm_is_stale(reg->shm, s, reg->name)) {
 				RSS_INFO("osd %d/%s: producer gone, clearing", s, reg->name);
-				if (!any_alive) {
-					char path[128];
-					snprintf(path, sizeof(path), RSS_SHM_DIR "/rss_osd_osd_%d_%s",
-						 s, reg->name);
-					unlink(path);
-				}
 				rss_osd_close(reg->shm);
 				reg->shm = NULL;
 				reg->no_update_ticks = 0;
