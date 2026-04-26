@@ -25,7 +25,7 @@ cleanup_on_exit() {
     set +e
     if [ -n "${DEVICE_IP:-}" ]; then
         local cleanup_ssh="${SSH:-ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o LogLevel=ERROR root@$DEVICE_IP}"
-        $cleanup_ssh 'umount -f -l /tmp/raptor-test 2>/dev/null; killall rvd rad rsd rhd 2>/dev/null' 2>/dev/null
+        $cleanup_ssh 'umount -f -l /tmp/raptor-test 2>/dev/null; killall rvd rad rsd rhd rod ric rmd rmr rwd rwc rsp rfs 2>/dev/null' 2>/dev/null
     fi
     if [ -n "$DOCKER_NFS_CONTAINER" ]; then
         docker rm -f "$DOCKER_NFS_CONTAINER" > /dev/null 2>&1
