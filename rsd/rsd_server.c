@@ -218,6 +218,14 @@ static void accept_client(rsd_server_t *srv)
 		return;
 	}
 
+	/* Early capacity check — main thread is the sole writer of
+	 * client_count so a lockless read is safe as an optimistic gate.
+	 * The definitive check still happens under clients_lock below. */
+	if (srv->client_count >= srv->max_clients) {
+		RSS_WARN("max clients reached (%d), rejecting", srv->max_clients);
+		goto reject_client;
+	}
+
 	/* Initialize send queue and thread before taking the lock —
 	 * readers block on clients_lock so keep the critical section short. */
 	pthread_mutex_init(&client->write_lock, NULL);
