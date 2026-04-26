@@ -164,11 +164,9 @@ void *rvd_encoder_thread(void *arg);
 void rvd_osd_calc_position(int stream_w, int stream_h, int region_w, int region_h,
 			   const char *pos_str, int *out_x, int *out_y);
 rvd_osd_region_t *rvd_osd_find_region(rvd_state_t *st, int stream, const char *name);
-void rvd_osd_init(rvd_state_t *st);
 void rvd_osd_init_stream(rvd_state_t *st, int idx);
 void rvd_osd_deinit_stream(rvd_state_t *st, int idx);
 void rvd_osd_check(rvd_state_t *st);
-void rvd_osd_deinit(rvd_state_t *st);
 void *rvd_osd_thread(void *arg);
 void rvd_osd_set_privacy(rvd_state_t *st, bool enable, int stream);
 

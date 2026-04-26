@@ -408,23 +408,6 @@ void rvd_osd_init_stream(rvd_state_t *st, int s)
 	}
 }
 
-void rvd_osd_init(rvd_state_t *st)
-{
-	if (!st->osd_enabled)
-		return;
-
-	for (int s = 0; s < st->stream_count; s++) {
-		st->privacy_handles[s] = -1;
-		st->osd_region_count[s] = 0;
-	}
-
-	for (int s = 0; s < st->stream_count; s++)
-		rvd_osd_init_stream(st, s);
-
-	for (int s = 0; s < st->stream_count; s++)
-		st->privacy[s] = false;
-	st->osd_retry_counter = 0;
-}
 
 /* ── SHM staleness and discovery ── */
 
@@ -1076,11 +1059,3 @@ void rvd_osd_deinit_stream(rvd_state_t *st, int s)
 	}
 }
 
-void rvd_osd_deinit(rvd_state_t *st)
-{
-	if (!st->osd_enabled)
-		return;
-
-	for (int s = 0; s < st->stream_count; s++)
-		rvd_osd_deinit_stream(st, s);
-}
