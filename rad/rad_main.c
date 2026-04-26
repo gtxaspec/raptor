@@ -435,6 +435,13 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			codec_switched = false;
 		}
 
+		/* Update ops immediately so early-return paths don't leave
+		 * codec_ctx->priv typed for the new codec with old ops. */
+		*ctx->codec_ops = new_ops;
+		ctx->codec_id = new_codec_id;
+		ctx->codec_str = new_ops->name;
+		ctx->sample_rate = new_sample_rate;
+
 		/* 6. Create new ring */
 		int ring_data_size = (new_codec_id == RAD_CODEC_L16) ? 256 * 1024 : 128 * 1024;
 		*ctx->ring = rss_ring_create("audio", 32, ring_data_size);
@@ -465,11 +472,7 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			*ctx->encode_buf_size = new_buf_size;
 		}
 
-		/* 8. Update state — persist config only after successful switch */
-		*ctx->codec_ops = new_ops;
-		ctx->codec_id = new_codec_id;
-		ctx->codec_str = new_ops->name;
-		ctx->sample_rate = new_sample_rate;
+		/* 8. Persist config only after successful switch */
 		if (codec_switched)
 			rss_config_set_str(ctx->cfg, "audio", "codec", target_codec);
 		if (requested_sample_rate > 0)
