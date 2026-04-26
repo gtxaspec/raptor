@@ -1463,10 +1463,13 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 			/* Restore FS scaler and attempt re-init with old config */
 			RSS_HAL_CALL(st->ops, fs_set_channel_attr, st->hal_ctx,
 				     st->streams[chn].fs_chn, &st->streams[chn].fs_cfg);
-			if (rvd_stream_init(st, chn) == RSS_OK)
+			if (rvd_stream_init(st, chn) == RSS_OK) {
 				rvd_stream_start(st, chn);
-			if (has_ivs)
+				if (has_ivs)
+					ivs_thread_start(st);
+			} else if (has_ivs) {
 				atomic_store(&st->ivs_active, false);
+			}
 			return rss_ctrl_resp_error(resp, resp_size, "init failed");
 		}
 		if (jpeg >= 0) {
