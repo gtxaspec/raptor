@@ -103,6 +103,8 @@ int main(int argc, char **argv)
 			RSS_INFO("RTSP Digest auth enabled (realm=Raptor)");
 		else
 			RSS_WARN("failed to create auth context");
+	} else if (rtsp_user[0] || rtsp_pass[0]) {
+		RSS_WARN("RTSP auth requires both username and password — auth disabled");
 	}
 
 #ifdef COMPY_HAS_TLS
