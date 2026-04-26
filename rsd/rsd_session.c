@@ -320,10 +320,11 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 	}
 	self->stream_idx = idx;
 
-	/* Snapshot ring pointer — the reader thread can set it to NULL
-	 * during idle timeout. Local copy avoids TOCTOU NULL deref. */
-	rss_ring_t *vring = self->srv->video[self->stream_idx].ring;
-	bool has_video = vring != NULL;
+	/* Use cached stream info from rsd_ring_ctx_t — never dereference the
+	 * ring pointer here. The reader thread may close the ring (idle timeout)
+	 * between our check and any header read, causing a UAF. */
+	rsd_ring_ctx_t *rctx = &self->srv->video[self->stream_idx];
+	bool has_video = rctx->last_width > 0;
 	if (!has_video && !self->srv->has_audio) {
 		compy_respond(ctx, COMPY_STATUS_NOT_FOUND, "Stream not available");
 		return;
@@ -345,39 +346,32 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 		COMPY_SDP_DESCRIBE(ret, sdp_w, (COMPY_SDP_INFO, "%s", self->srv->session_info));
 
 	if (has_video) {
-		const rss_ring_header_t *hdr = rss_ring_get_header(vring);
+		self->video_codec = rctx->last_codec;
 
-		/* Store codec for NAL framing in ring reader */
-		self->video_codec = hdr->codec;
-
-		if (hdr->codec == 1) {
+		if (rctx->last_codec == 1) {
 			/* H.265 / HEVC (RFC 7798) */
 			COMPY_SDP_DESCRIBE(
 				ret, sdp_w, (COMPY_SDP_MEDIA, "video 0 RTP/AVP %d", RSD_VIDEO_PT),
 				(COMPY_SDP_ATTR, "control:video"), (COMPY_SDP_ATTR, "recvonly"),
 				(COMPY_SDP_ATTR, "rtpmap:%d H265/%d", RSD_VIDEO_PT,
 				 RSD_VIDEO_CLOCK),
-				(COMPY_SDP_ATTR, "framerate:%u", hdr->fps_num));
+				(COMPY_SDP_ATTR, "framerate:%u", rctx->last_fps_num));
 		} else {
 			/* H.264 / AVC (RFC 6184) */
-			rsd_ring_ctx_t *rctx = &self->srv->video[self->stream_idx];
 			uint16_t sps_l = atomic_load_explicit(&rctx->sps_len, memory_order_acquire);
 			uint16_t pps_l = atomic_load_explicit(&rctx->pps_len, memory_order_acquire);
 
-			/* profile-level-id: read from cached SPS bytes 1-3 when
-			 * available (byte 0 is the NAL header). */
 			uint8_t profile_idc, constraint_flags, level_idc;
 			if (sps_l >= 4) {
 				profile_idc = rctx->sps[1];
 				constraint_flags = rctx->sps[2];
 				level_idc = rctx->sps[3];
 			} else {
-				profile_idc = hdr->profile ? hdr->profile : 100;
+				profile_idc = rctx->last_profile ? rctx->last_profile : 100;
 				constraint_flags = 0;
-				level_idc = hdr->level ? hdr->level : 40;
+				level_idc = rctx->last_level ? rctx->last_level : 40;
 			}
 
-			/* Build fmtp with optional sprop-parameter-sets */
 			char fmtp[1024];
 			int foff = snprintf(
 				fmtp, sizeof(fmtp),
@@ -399,7 +393,7 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 				(COMPY_SDP_ATTR, "rtpmap:%d H264/%d", RSD_VIDEO_PT,
 				 RSD_VIDEO_CLOCK),
 				(COMPY_SDP_ATTR, "%s", fmtp),
-				(COMPY_SDP_ATTR, "framerate:%u", hdr->fps_num));
+				(COMPY_SDP_ATTR, "framerate:%u", rctx->last_fps_num));
 		}
 	}
 
@@ -658,8 +652,8 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 		self->audio.rtp = Compy_RtpTransport_new(rtp_t, apt, aclk);
 		self->audio.rtcp = Compy_Rtcp_new(self->audio.rtp, rtcp_t, "raptor@camera");
 	} else {
-		/* Video SETUP — reject if this stream has no video ring */
-		if (!self->srv->video[self->stream_idx].ring) {
+		/* Video SETUP — reject if this stream has no video */
+		if (!self->srv->video[self->stream_idx].last_width) {
 			compy_respond(ctx, COMPY_STATUS_NOT_FOUND, "Video not available");
 			return;
 		}

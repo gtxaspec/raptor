@@ -385,6 +385,10 @@ int rsd_server_init(rsd_server_t *srv)
 		srv->video[s].last_codec = hdr->codec;
 		srv->video[s].last_width = hdr->width;
 		srv->video[s].last_height = hdr->height;
+		srv->video[s].last_fps_num = hdr->fps_num;
+		srv->video[s].last_fps_den = hdr->fps_den;
+		srv->video[s].last_profile = hdr->profile;
+		srv->video[s].last_level = hdr->level;
 
 		srv->video[s].frame_buf_size = rss_ring_max_frame_size(srv->video[s].ring);
 		if (srv->video[s].frame_buf_size < 256 * 1024)

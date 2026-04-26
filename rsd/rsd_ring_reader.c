@@ -379,12 +379,17 @@ void *rsd_video_reader_thread(void *arg)
 			atomic_store_explicit(&rctx->sps_len, 0, memory_order_relaxed);
 			atomic_store_explicit(&rctx->pps_len, 0, memory_order_relaxed);
 
-			/* Check if codec/resolution changed (hot restart) */
+			/* Cache all SDP-relevant fields so the session thread
+			 * never needs to dereference the ring pointer. */
 			const rss_ring_header_t *new_hdr = rss_ring_get_header(rctx->ring);
 			bool codec_changed = (new_hdr->codec != rctx->last_codec);
 			rctx->last_codec = new_hdr->codec;
 			rctx->last_width = new_hdr->width;
 			rctx->last_height = new_hdr->height;
+			rctx->last_fps_num = new_hdr->fps_num;
+			rctx->last_fps_den = new_hdr->fps_den;
+			rctx->last_profile = new_hdr->profile;
+			rctx->last_level = new_hdr->level;
 
 			/* Ring reconnected — reset all clients on this stream
 			 * so they re-sync from the next keyframe. If codec changed,

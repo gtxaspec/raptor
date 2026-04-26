@@ -158,10 +158,17 @@ typedef struct {
 	int idx;
 	const char *ring_name; /* for reconnection after RVD restart */
 
-	/* Cached codec/resolution — detect changes on ring reconnect */
+	/* Cached stream info — written by reader thread on ring open,
+	 * read by session thread during DESCRIBE. Avoids dereferencing
+	 * the ring pointer from the session thread (UAF if reader closes
+	 * the ring between snapshot and header read). */
 	uint32_t last_codec;
 	uint32_t last_width;
 	uint32_t last_height;
+	uint32_t last_fps_num;
+	uint32_t last_fps_den;
+	uint8_t last_profile;
+	uint8_t last_level;
 
 	/* Cached SPS/PPS for SDP sprop-parameter-sets.
 	 * Written by the reader thread (release), read by session thread
