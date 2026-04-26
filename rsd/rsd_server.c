@@ -218,58 +218,56 @@ static void accept_client(rsd_server_t *srv)
 		return;
 	}
 
-	/* Atomic check+insert under a single lock hold to prevent TOCTOU */
-	pthread_mutex_lock(&srv->clients_lock);
-	if (srv->client_count >= srv->max_clients) {
-		pthread_mutex_unlock(&srv->clients_lock);
-		RSS_WARN("max clients reached (%d), rejecting", srv->max_clients);
-		epoll_ctl(srv->epoll_fd, EPOLL_CTL_DEL, fd, NULL);
-#ifdef COMPY_HAS_TLS
-		if (client->tls)
-			Compy_TlsConn_free(client->tls);
-#endif
-		close(fd);
-		free(client);
-		return;
-	}
-
-	/* Initialize send queue and thread AFTER all fallible checks above,
-	 * so error paths don't need to tear down a running thread. */
+	/* Initialize send queue and thread before taking the lock —
+	 * readers block on clients_lock so keep the critical section short. */
 	pthread_mutex_init(&client->write_lock, NULL);
 	if (rsd_sendq_init(&client->sendq) != 0) {
 		pthread_mutex_destroy(&client->write_lock);
-		pthread_mutex_unlock(&srv->clients_lock);
-		epoll_ctl(srv->epoll_fd, EPOLL_CTL_DEL, fd, NULL);
-#ifdef COMPY_HAS_TLS
-		if (client->tls)
-			Compy_TlsConn_free(client->tls);
-#endif
-		close(fd);
-		free(client);
-		return;
+		goto reject_client;
 	}
 	{
 		pthread_attr_t sa;
 		pthread_attr_init(&sa);
 		pthread_attr_setstacksize(&sa, 128 * 1024);
-		if (pthread_create(&client->send_tid, &sa, rsd_client_send_thread, client) != 0) {
-			pthread_attr_destroy(&sa);
-			rsd_sendq_destroy(&client->sendq);
-			pthread_mutex_unlock(&srv->clients_lock);
-			epoll_ctl(srv->epoll_fd, EPOLL_CTL_DEL, fd, NULL);
-#ifdef COMPY_HAS_TLS
-			if (client->tls)
-				Compy_TlsConn_free(client->tls);
-#endif
-			close(fd);
-			free(client);
-			return;
-		}
+		int cret = pthread_create(&client->send_tid, &sa, rsd_client_send_thread, client);
 		pthread_attr_destroy(&sa);
+		if (cret != 0) {
+			rsd_sendq_destroy(&client->sendq);
+			pthread_mutex_destroy(&client->write_lock);
+			goto reject_client;
+		}
 		client->send_thread_running = true;
+	}
+
+	/* Lock only for capacity check + insert */
+	pthread_mutex_lock(&srv->clients_lock);
+	if (srv->client_count >= srv->max_clients) {
+		pthread_mutex_unlock(&srv->clients_lock);
+		RSS_WARN("max clients reached (%d), rejecting", srv->max_clients);
+		pthread_mutex_lock(&client->sendq.lock);
+		client->sendq.shutdown = true;
+		pthread_cond_signal(&client->sendq.cond);
+		pthread_mutex_unlock(&client->sendq.lock);
+		pthread_join(client->send_tid, NULL);
+		rsd_sendq_destroy(&client->sendq);
+		pthread_mutex_destroy(&client->write_lock);
+		goto reject_client;
 	}
 	srv->clients[srv->client_count++] = client;
 	pthread_mutex_unlock(&srv->clients_lock);
+	goto accept_done;
+
+reject_client:
+	epoll_ctl(srv->epoll_fd, EPOLL_CTL_DEL, fd, NULL);
+#ifdef COMPY_HAS_TLS
+	if (client->tls)
+		Compy_TlsConn_free(client->tls);
+#endif
+	close(fd);
+	free(client);
+	return;
+
+accept_done:;
 
 	char addrstr[INET6_ADDRSTRLEN];
 	RSS_INFO("client %s:%u connected%s (%d/%d)",
