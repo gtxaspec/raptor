@@ -1244,7 +1244,7 @@ static int do_stream_restart(rvd_state_t *st, int chn, char *resp, int resp_size
 	if (jpeg >= 0 && st->streams[jpeg].ring)
 		rvd_stream_start(st, jpeg);
 
-	/* IVS resume + thread relaunch */
+	/* IVS resume after FS streaming (vendor SDK step 7: StartRecvPic) */
 	if (has_ivs) {
 		rvd_ivs_resume(st);
 		pthread_attr_t ivs_attr;
