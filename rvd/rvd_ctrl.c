@@ -1420,24 +1420,10 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		int old_sc_w = st->streams[chn].fs_cfg.scaler.out_width;
 		int old_sc_h = st->streams[chn].fs_cfg.scaler.out_height;
 
-		/* Update encoder + framesource config */
-		st->streams[chn].enc_cfg.width = w;
-		st->streams[chn].enc_cfg.height = h;
-		st->streams[chn].fs_cfg.width = w;
-		st->streams[chn].fs_cfg.height = h;
-		if (st->streams[chn].fs_cfg.scaler.enable) {
-			st->streams[chn].fs_cfg.scaler.out_width = w;
-			st->streams[chn].fs_cfg.scaler.out_height = h;
-		}
-		RSS_INFO("set-resolution: channel %d → %dx%d", chn, w, h);
-
-		/* Reconfigure FS scaler while channel is disabled.
-		 * do_stream_restart stops+deinits first, but we need FS
-		 * reconfigured before reinit. Do it manually. */
 		int jpeg = find_jpeg_for_video_ctrl(st, chn);
 		bool has_ivs = (st->streams[chn].fs_chn == st->ivs_fs_chn && st->ivs_active);
 
-		/* Stop */
+		/* Stop first, then mutate config */
 		if (has_ivs) {
 			rvd_ivs_pause(st);
 			atomic_store(&st->ivs_active, false);
@@ -1449,6 +1435,17 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		if (jpeg >= 0)
 			rvd_stream_stop(st, jpeg);
 		rvd_stream_stop(st, chn);
+
+		/* Update encoder + framesource config (threads stopped) */
+		st->streams[chn].enc_cfg.width = w;
+		st->streams[chn].enc_cfg.height = h;
+		st->streams[chn].fs_cfg.width = w;
+		st->streams[chn].fs_cfg.height = h;
+		if (st->streams[chn].fs_cfg.scaler.enable) {
+			st->streams[chn].fs_cfg.scaler.out_width = w;
+			st->streams[chn].fs_cfg.scaler.out_height = h;
+		}
+		RSS_INFO("set-resolution: channel %d → %dx%d", chn, w, h);
 
 		/* Deinit (IVS channel stays alive — SDK limitation) */
 		if (jpeg >= 0)
