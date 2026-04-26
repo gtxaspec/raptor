@@ -517,7 +517,7 @@ int main(int argc, char **argv)
 
 	int ctrl_fd = st.ctrl ? rss_ctrl_get_fd(st.ctrl) : -1;
 	if (ctrl_fd >= 0) {
-		epoll_fd = epoll_create1(0);
+		epoll_fd = epoll_create1(EPOLL_CLOEXEC);
 		if (epoll_fd >= 0) {
 			struct epoll_event ev = {.events = EPOLLIN, .data.fd = ctrl_fd};
 			if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, ctrl_fd, &ev) < 0)

@@ -436,7 +436,7 @@ static int server_init(rhd_server_t *srv)
 		return -1;
 	}
 
-	srv->epoll_fd = epoll_create1(0);
+	srv->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
 	struct epoll_event ev = {.events = EPOLLIN, .data.fd = srv->listen_fd};
 	if (epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, srv->listen_fd, &ev) < 0)
 		RSS_ERROR("epoll_ctl add listen_fd: %s", strerror(errno));

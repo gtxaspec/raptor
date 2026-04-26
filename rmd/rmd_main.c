@@ -262,7 +262,7 @@ int main(int argc, char **argv)
 	rss_mkdir_p(RSS_RUN_DIR);
 	ctx.ctrl = rss_ctrl_listen(RSS_RUN_DIR "/rmd.sock");
 
-	epoll_fd = epoll_create1(0);
+	epoll_fd = epoll_create1(EPOLL_CLOEXEC);
 	int ctrl_fd = -1;
 	if (ctx.ctrl && epoll_fd >= 0) {
 		ctrl_fd = rss_ctrl_get_fd(ctx.ctrl);

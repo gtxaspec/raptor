@@ -507,7 +507,7 @@ static int rwd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 
 static void rwd_run(rwd_server_t *srv)
 {
-	srv->epoll_fd = epoll_create1(0);
+	srv->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
 	if (srv->epoll_fd < 0) {
 		RSS_FATAL("epoll_create1 failed: %s", strerror(errno));
 		return;

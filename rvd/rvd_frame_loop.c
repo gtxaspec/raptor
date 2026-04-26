@@ -233,7 +233,7 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running)
 	}
 
 	/* Main thread: handle control socket */
-	int epoll_fd = epoll_create1(0);
+	int epoll_fd = epoll_create1(EPOLL_CLOEXEC);
 	int ctrl_fd = -1;
 
 	if (st->ctrl && epoll_fd >= 0) {

@@ -301,7 +301,7 @@ int main(int argc, char **argv)
 	rss_mkdir_p(RSS_RUN_DIR);
 	st.ctrl = rss_ctrl_listen(RSS_RUN_DIR "/rod.sock");
 
-	int epoll_fd = epoll_create1(0);
+	int epoll_fd = epoll_create1(EPOLL_CLOEXEC);
 	int ctrl_fd = st.ctrl ? rss_ctrl_get_fd(st.ctrl) : -1;
 	if (epoll_fd >= 0 && ctrl_fd >= 0) {
 		struct epoll_event ev = {.events = EPOLLIN, .data.fd = ctrl_fd};

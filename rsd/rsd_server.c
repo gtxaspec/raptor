@@ -433,7 +433,7 @@ int rsd_server_init(rsd_server_t *srv)
 	}
 
 	/* Epoll */
-	srv->epoll_fd = epoll_create1(0);
+	srv->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
 	if (srv->epoll_fd < 0) {
 		RSS_FATAL("epoll_create1 failed");
 		close(srv->listen_fd);
