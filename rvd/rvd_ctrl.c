@@ -1137,7 +1137,7 @@ static int handle_ivs_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 
 	if (strcmp(cmd, "ivs-set-sensitivity") == 0) {
 		int sens = -1;
-		if (rss_json_get_int(cmd_json, "value", &sens) == 0 && st->ivs_active &&
+		if (rss_json_get_int(cmd_json, "value", &sens) == 0 && atomic_load(&st->ivs_active) &&
 		    sens >= 0) {
 			rss_ivs_move_param_t mp;
 			memset(&mp, 0, sizeof(mp));
@@ -1157,7 +1157,7 @@ static int handle_ivs_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 
 	if (strcmp(cmd, "ivs-set-skip-frames") == 0) {
 		int val = -1;
-		if (rss_json_get_int(cmd_json, "value", &val) == 0 && st->ivs_active && val >= 0) {
+		if (rss_json_get_int(cmd_json, "value", &val) == 0 && atomic_load(&st->ivs_active) && val >= 0) {
 			rss_ivs_move_param_t mp;
 			memset(&mp, 0, sizeof(mp));
 			if (RSS_HAL_CALL(st->ops, ivs_get_param, st->hal_ctx, st->ivs_chn, &mp) ==
@@ -1224,7 +1224,7 @@ static int find_jpeg_for_video_ctrl(rvd_state_t *st, int video_idx)
 static int do_stream_restart(rvd_state_t *st, int chn, char *resp, int resp_size)
 {
 	int jpeg = find_jpeg_for_video_ctrl(st, chn);
-	bool has_ivs = (st->streams[chn].fs_chn == st->ivs_fs_chn && st->ivs_active);
+	bool has_ivs = (st->streams[chn].fs_chn == st->ivs_fs_chn && atomic_load(&st->ivs_active));
 
 	RSS_INFO("stream-restart: channel %d (jpeg=%d ivs=%d)", chn, jpeg, has_ivs);
 
@@ -1305,7 +1305,7 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 			return rss_ctrl_resp_ok(resp, resp_size);
 
 		int jpeg = find_jpeg_for_video_ctrl(st, chn);
-		bool has_ivs = (st->streams[chn].fs_chn == st->ivs_fs_chn && st->ivs_active);
+		bool has_ivs = (st->streams[chn].fs_chn == st->ivs_fs_chn && atomic_load(&st->ivs_active));
 
 		RSS_INFO("stream-stop: channel %d (jpeg=%d ivs=%d)", chn, jpeg, has_ivs);
 
@@ -1329,7 +1329,7 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 			return rss_ctrl_resp_error(resp, resp_size, "stream not initialized");
 
 		int jpeg = find_jpeg_for_video_ctrl(st, chn);
-		bool has_ivs = (st->streams[chn].fs_chn == st->ivs_fs_chn && st->ivs_enabled && !st->ivs_active);
+		bool has_ivs = (st->streams[chn].fs_chn == st->ivs_fs_chn && st->ivs_enabled && !atomic_load(&st->ivs_active));
 
 		RSS_INFO("stream-start: channel %d (jpeg=%d ivs=%d)", chn, jpeg, has_ivs);
 
@@ -1417,7 +1417,7 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		int old_sc_h = st->streams[chn].fs_cfg.scaler.out_height;
 
 		int jpeg = find_jpeg_for_video_ctrl(st, chn);
-		bool has_ivs = (st->streams[chn].fs_chn == st->ivs_fs_chn && st->ivs_active);
+		bool has_ivs = (st->streams[chn].fs_chn == st->ivs_fs_chn && atomic_load(&st->ivs_active));
 
 		/* Stop first, then mutate config */
 		if (has_ivs)
@@ -1608,7 +1608,7 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		/* IVS: stop before streams (IVS is bound to sub-stream) */
 		bool has_ivs = false;
 		for (int j = 0; j < video_count; j++) {
-			if (st->streams[video_indices[j]].fs_chn == st->ivs_fs_chn && st->ivs_active) {
+			if (st->streams[video_indices[j]].fs_chn == st->ivs_fs_chn && atomic_load(&st->ivs_active)) {
 				has_ivs = true;
 				break;
 			}
