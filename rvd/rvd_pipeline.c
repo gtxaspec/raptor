@@ -1198,7 +1198,8 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 
 			s->ring = rss_ring_create(ring_name, slots, data);
 			if (s->ring)
-				rss_ring_set_stream_info(s->ring, 0x20 + jpeg_idx, RSS_CODEC_JPEG,
+				rss_ring_set_stream_info(s->ring, RVD_JPEG_STREAM_ID_BASE + jpeg_idx,
+							 RSS_CODEC_JPEG,
 							 w, h, fps, s->enc_cfg.fps_den, 0, 0);
 		} else {
 			const char *type = is_main ? "main" : "sub";
