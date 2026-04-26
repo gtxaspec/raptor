@@ -361,6 +361,26 @@ void *rsd_client_send_thread(void *arg)
 			rsd_send_audio_frame(c, entry.codec, entry.data, entry.len, entry.rtp_ts);
 		pthread_mutex_unlock(&c->write_lock);
 
+		/* Post-send zerocopy validation: detect if the encoder recycled
+		 * the buffer during packetization (TOCTOU between pre-send gen
+		 * check and compy's RTP packet construction). The window is
+		 * narrow (microseconds of packetization vs 33ms+ buffer cycle)
+		 * but a slow send path could widen it. */
+		if (entry.zerocopy && c->srv) {
+			rss_ring_t *ring = c->srv->video[c->stream_idx].ring;
+			if (ring) {
+				const rss_ring_header_t *hdr = rss_ring_get_header(ring);
+				if (hdr && entry.buf_idx < RSS_RING_MAX_REF_BUFS) {
+					uint32_t cur = atomic_load_explicit(
+						&hdr->ref_buf_gen[entry.buf_idx],
+						memory_order_acquire);
+					if (cur != entry.buf_gen)
+						RSS_WARN("zerocopy buf %u recycled during send",
+							 entry.buf_idx);
+				}
+			}
+		}
+
 		sendq_release_entry(&entry);
 	}
 
