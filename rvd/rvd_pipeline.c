@@ -960,10 +960,6 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 	rvd_stream_t *s = &st->streams[idx];
 	rss_config_t *cfg = st->cfg;
 	int ret;
-	/* Track which group the channel was registered with (for rollback clarity).
-	 * JPEG registers with parent video's group; non-JPEG with its own. */
-	int reg_grp = s->chn;
-
 	/* ── Encoder group + channel ── */
 	if (s->is_jpeg) {
 		int video_grp = find_video_group(st, s->fs_chn);
@@ -972,8 +968,6 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 				  idx, s->fs_chn);
 			return RSS_ERR;
 		}
-		reg_grp = video_grp;
-
 		if (rss_config_get_bool(cfg, "jpeg", "bufshare", true)) {
 			ret = RSS_HAL_CALL(st->ops, enc_set_bufshare, st->hal_ctx, s->chn,
 					   video_grp);
@@ -1277,7 +1271,6 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 	/* Rollback on failure */
 fail_ring:
 fail_bind:
-	(void)reg_grp;
 	if (st->osd_enabled && !s->is_jpeg) {
 		pthread_mutex_lock(&st->osd_lock);
 		rvd_osd_deinit_stream(st, idx);
