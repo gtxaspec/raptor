@@ -165,6 +165,16 @@ static void load_stream_config(rss_config_t *cfg, const char *section, rvd_strea
 	};
 }
 
+static int read_procfs_int(const char *path, int base, int def)
+{
+	char *s = rss_read_file(path, NULL);
+	if (!s)
+		return def;
+	int val = (int)strtol(s, NULL, base);
+	free(s);
+	return val;
+}
+
 /* Load sensor config from an INI section, with procfs fallback for sensor 0 */
 static void load_sensor_from_section(rss_config_t *cfg, const char *section,
 				     rss_sensor_config_t *sensor, bool use_procfs)
@@ -186,68 +196,43 @@ static void load_sensor_from_section(rss_config_t *cfg, const char *section,
 	}
 
 	sensor->i2c_addr = rss_config_get_int(cfg, section, "i2c_addr", 0);
-	if (sensor->i2c_addr == 0 && use_procfs) {
-		char *s = rss_read_file("/proc/jz/sensor/i2c_addr", NULL);
-		if (s) {
-			sensor->i2c_addr = (uint16_t)strtol(s, NULL, 0);
-			free(s);
-		}
-	}
+	if (sensor->i2c_addr == 0 && use_procfs)
+		sensor->i2c_addr = (uint16_t)read_procfs_int("/proc/jz/sensor/i2c_addr", 0, 0);
 
 	sensor->i2c_adapter = rss_config_get_int(cfg, section, "i2c_adapter", -1);
 	if (sensor->i2c_adapter < 0 && use_procfs) {
-		char *s = rss_read_file("/proc/jz/sensor/i2c_adapter", NULL);
-		if (!s)
-			s = rss_read_file("/proc/jz/sensor/i2c_bus", NULL);
-		sensor->i2c_adapter = s ? (int)strtol(s, NULL, 10) : 0;
-		free(s);
+		int val = read_procfs_int("/proc/jz/sensor/i2c_adapter", 10, -1);
+		if (val < 0)
+			val = read_procfs_int("/proc/jz/sensor/i2c_bus", 10, 0);
+		sensor->i2c_adapter = val;
 	}
 	if (sensor->i2c_adapter < 0)
 		sensor->i2c_adapter = 0;
 
 	sensor->sensor_id = rss_config_get_int(cfg, section, "sensor_id", 0);
 	sensor->pwdn_gpio = rss_config_get_int(cfg, section, "pwdn_gpio", -1);
-	if (sensor->pwdn_gpio == -1 && use_procfs) {
-		char *s = rss_read_file("/proc/jz/sensor/pwdn_gpio", NULL);
-		if (s) {
-			sensor->pwdn_gpio = (int)strtol(s, NULL, 10);
-			free(s);
-		}
-	}
+	if (sensor->pwdn_gpio == -1 && use_procfs)
+		sensor->pwdn_gpio = read_procfs_int("/proc/jz/sensor/pwdn_gpio", 10, -1);
 	sensor->power_gpio = rss_config_get_int(cfg, section, "power_gpio", -1);
 	sensor->rst_gpio = rss_config_get_int(cfg, section, "rst_gpio", -1);
-	if (sensor->rst_gpio == -1 && use_procfs) {
-		char *s = rss_read_file("/proc/jz/sensor/rst_gpio", NULL);
-		if (s) {
-			sensor->rst_gpio = (int)strtol(s, NULL, 10);
-			free(s);
-		}
-	}
+	if (sensor->rst_gpio == -1 && use_procfs)
+		sensor->rst_gpio = read_procfs_int("/proc/jz/sensor/rst_gpio", 10, -1);
 
 	sensor->default_boot = rss_config_get_int(cfg, section, "boot", -1);
-	if (sensor->default_boot < 0 && use_procfs) {
-		char *s = rss_read_file("/proc/jz/sensor/boot", NULL);
-		sensor->default_boot = s ? (int)strtol(s, NULL, 10) : 0;
-		free(s);
-	}
+	if (sensor->default_boot < 0 && use_procfs)
+		sensor->default_boot = read_procfs_int("/proc/jz/sensor/boot", 10, 0);
 	if (sensor->default_boot < 0)
 		sensor->default_boot = 0;
 
 	sensor->mclk = rss_config_get_int(cfg, section, "mclk", -1);
-	if (sensor->mclk < 0 && use_procfs) {
-		char *s = rss_read_file("/proc/jz/sensor/mclk", NULL);
-		sensor->mclk = s ? (int)strtol(s, NULL, 10) : 0;
-		free(s);
-	}
+	if (sensor->mclk < 0 && use_procfs)
+		sensor->mclk = read_procfs_int("/proc/jz/sensor/mclk", 10, 0);
 	if (sensor->mclk < 0)
 		sensor->mclk = 1;
 
 	sensor->vin_type = rss_config_get_int(cfg, section, "video_interface", -1);
-	if (sensor->vin_type < 0 && use_procfs) {
-		char *s = rss_read_file("/proc/jz/sensor/video_interface", NULL);
-		sensor->vin_type = s ? (int)strtol(s, NULL, 10) : 0;
-		free(s);
-	}
+	if (sensor->vin_type < 0 && use_procfs)
+		sensor->vin_type = read_procfs_int("/proc/jz/sensor/video_interface", 10, 0);
 	if (sensor->vin_type < 0)
 		sensor->vin_type = 0;
 }
