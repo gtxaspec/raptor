@@ -511,22 +511,23 @@ static void ivs_process_persondet_result(rvd_state_t *st, void *result)
 #ifdef IVS_DETECT
 /*
  * JZDL standalone inference thread — reads NV12 frames directly from
- * FrameSource channel 1 (sub-stream) and runs JZDL model inference.
+ * the IVS FrameSource channel and runs JZDL model inference.
  * Bypasses the IVS pipeline entirely.
  */
 static void *rvd_jzdl_thread(void *arg)
 {
 	rvd_state_t *st = arg;
+	int fs = st->ivs_fs_chn;
 
-	RSS_INFO("JZDL inference thread started");
+	RSS_INFO("JZDL inference thread started (fs_chn=%d)", fs);
 
 	/* Enable frame depth so GetFrame works alongside encoder binding.
 	 * Must be > 0 for GetFrame to return frames. */
-	IMP_FrameSource_SetFrameDepth(1, 1);
+	IMP_FrameSource_SetFrameDepth(fs, 1);
 
 	while (*st->running && atomic_load(&st->ivs_active)) {
 		IMPFrameInfo *frame = NULL;
-		int ret = IMP_FrameSource_GetFrame(1, &frame);
+		int ret = IMP_FrameSource_GetFrame(fs, &frame);
 		if (ret != 0 || !frame) {
 			usleep(100000);
 			continue;
@@ -534,7 +535,7 @@ static void *rvd_jzdl_thread(void *arg)
 
 		rss_ivs_detect_result_t result = {0};
 		ret = hal_jzdl_detect(st->jzdl_handle, (const uint8_t *)frame->virAddr, &result);
-		IMP_FrameSource_ReleaseFrame(1, frame);
+		IMP_FrameSource_ReleaseFrame(fs, frame);
 
 		if (ret != 0)
 			continue;
@@ -567,7 +568,7 @@ static void *rvd_jzdl_thread(void *arg)
 		}
 	}
 
-	IMP_FrameSource_SetFrameDepth(1, 0);
+	IMP_FrameSource_SetFrameDepth(fs, 0);
 	RSS_INFO("JZDL inference thread exiting");
 	return NULL;
 }
