@@ -112,9 +112,9 @@ void *rvd_encoder_thread(void *arg)
 		const rss_ring_header_t *rhdr = rss_ring_get_header(s->ring);
 		if (rhdr && (rhdr->flags & RSS_RING_FLAG_REFMODE) && frame.nal_count > 0) {
 			uintptr_t vaddr = (uintptr_t)frame.nals[0].data;
-			uint32_t total_len = 0;
+			uint64_t total_len64 = 0;
 			for (uint32_t n = 0; n < frame.nal_count; n++)
-				total_len += frame.nals[n].length;
+				total_len64 += frame.nals[n].length;
 
 			/* Compute base for offset calculation */
 			uintptr_t ref_base;
@@ -127,8 +127,8 @@ void *rvd_encoder_thread(void *arg)
 				ref_size = st->rmem_size;
 			}
 
-			if (!ref_base || vaddr < ref_base ||
-			    total_len > ref_size || vaddr - ref_base > ref_size - total_len) {
+			if (!ref_base || total_len64 > ref_size || vaddr < ref_base ||
+			    vaddr - ref_base > ref_size - total_len64) {
 				if (frame_count == 0)
 					RSS_WARN("stream%d: vaddr 0x%lx outside ref region "
 						 "[0x%lx..0x%lx], embedded fallback",
@@ -160,7 +160,7 @@ void *rvd_encoder_thread(void *arg)
 			}
 found_buf:
 
-			rss_ring_publish_ref(s->ring, rmem_off, total_len, frame.timestamp,
+			rss_ring_publish_ref(s->ring, rmem_off, (uint32_t)total_len64, frame.timestamp,
 					     primary_nal_type(&frame), frame.is_key ? 1 : 0,
 					     buf_idx);
 		} else {
