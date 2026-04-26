@@ -26,10 +26,10 @@ static const struct {
 	{"daylight", RSS_WB_DAYLIGHT},
 	{"cloudy", RSS_WB_CLOUDY},
 	{"incandescent", RSS_WB_INCANDESCENT},
-	{"flourescent", RSS_WB_FLOURESCENT},
+	{"fluorescent", RSS_WB_FLUORESCENT},
 	{"twilight", RSS_WB_TWILIGHT},
 	{"shade", RSS_WB_SHADE},
-	{"warm_flourescent", RSS_WB_WARM_FLOURESCENT},
+	{"warm_fluorescent", RSS_WB_WARM_FLUORESCENT},
 	{"custom", RSS_WB_CUSTOM},
 };
 #define WB_MODE_COUNT (sizeof(wb_mode_table) / sizeof(wb_mode_table[0]))
