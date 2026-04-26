@@ -22,6 +22,7 @@ typedef struct {
 	int pcm_fill;		  /* samples accumulated */
 	int frame_samples;	  /* samples needed per AAC frame */
 	unsigned long max_output; /* max encoded bytes per frame */
+	int64_t frame_ts;	  /* timestamp of first chunk in current frame */
 } aac_state_t;
 
 static int aac_init(rad_codec_ctx_t *ctx, rss_config_t *cfg, int sample_rate)
@@ -80,6 +81,8 @@ static int aac_encode(rad_codec_ctx_t *ctx, const int16_t *pcm, int samples, uin
 	int remaining = samples;
 
 	while (remaining > 0) {
+		if (st->pcm_fill == 0)
+			st->frame_ts = timestamp;
 		int copy = remaining;
 		if (st->pcm_fill + copy > st->frame_samples)
 			copy = st->frame_samples - st->pcm_fill;
@@ -93,7 +96,8 @@ static int aac_encode(rad_codec_ctx_t *ctx, const int16_t *pcm, int samples, uin
 						st->frame_samples, out, out_size);
 			st->pcm_fill = 0;
 			if (len > 0 && ctx->ring)
-				rss_ring_publish(ctx->ring, out, len, timestamp, ctx->codec_id, 0);
+				rss_ring_publish(ctx->ring, out, len, st->frame_ts, ctx->codec_id,
+						 0);
 		}
 	}
 
