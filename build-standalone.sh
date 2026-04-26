@@ -771,7 +771,7 @@ if [ "$PLATFORM" = "a1" ]; then
     # A1 has no ISP/encoder — skip HAL daemons (rvd, rad), use RFS as producer
     TARGETS="rfs rsd rhd rmr rmd raptorctl ringdump"
 else
-    TARGETS="rvd rsd rad rhd rod ric rmr rmd rfs raptorctl ringdump rac"
+    TARGETS="rvd rsd rad rhd rod ric rmr rmd rfs rwc raptorctl ringdump rac"
 fi
 [ "$OPT_TLS" = 1 ] && TARGETS="$TARGETS rwd rsp"
 
@@ -810,7 +810,7 @@ make -j"$JOBS" \
 
 # Collect binaries
 mkdir -p "$SCRIPT_DIR/build"
-for d in rvd rsd rad rhd rod ric rmr rmd rfs rwd rsp raptorctl ringdump rac; do
+for d in rvd rsd rad rhd rod ric rmr rmd rfs rwc rwd rsp raptorctl ringdump rac; do
     [ -f "$SCRIPT_DIR/$d/$d" ] && cp -f "$SCRIPT_DIR/$d/$d" "$SCRIPT_DIR/build/"
 done
 

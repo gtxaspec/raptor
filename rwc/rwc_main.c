@@ -42,6 +42,7 @@ typedef struct {
 	struct rwc_buffer buffers[RWC_MAX_BUFFERS];
 	int buf_count;
 	bool streaming;
+	int eagain_count;
 
 	/* Negotiated format */
 	uint8_t cur_format;
@@ -78,13 +79,6 @@ typedef struct {
 	rss_ctrl_t *ctrl;
 } rwc_state_t;
 
-/* --------------------------------------------------------------------------
- * Streaming control fill
- *
- * Populate a UVC streaming control struct with clamped values.
- * Used for PROBE/COMMIT GET_CUR/GET_MIN/GET_MAX/GET_DEF responses.
- */
-
 static void fill_streaming_control(struct uvc_streaming_control *ctrl, uint8_t format_idx,
 				   uint8_t frame_idx, uint32_t interval)
 {
@@ -108,7 +102,7 @@ static void fill_streaming_control(struct uvc_streaming_control *ctrl, uint8_t f
 	ctrl->dwFrameInterval = interval;
 
 	ctrl->dwMaxVideoFrameSize = rwc_frames[frame_idx].max_size;
-	ctrl->dwMaxPayloadTransferSize = 3072;
+	ctrl->dwMaxPayloadTransferSize = ctrl->dwMaxVideoFrameSize;
 	ctrl->bmFramingInfo = 3;
 	ctrl->bPreferedVersion = 1;
 	ctrl->bMinVersion = 1;
@@ -117,6 +111,7 @@ static void fill_streaming_control(struct uvc_streaming_control *ctrl, uint8_t f
 
 static int start_streaming(rwc_state_t *st);
 static void stop_streaming(rwc_state_t *st);
+static int uvc_open(rwc_state_t *st);
 
 /* --------------------------------------------------------------------------
  * UVC event handlers
@@ -201,8 +196,10 @@ static void handle_data_event(rwc_state_t *st, const struct uvc_request_data *da
 		  st->last_cs == UVC_VS_COMMIT_CONTROL ? "COMMIT" : "PROBE", target->bFormatIndex,
 		  target->bFrameIndex, target->dwFrameInterval);
 
-	/* Bulk mode: start streaming after COMMIT (no STREAMON event) */
-	if (st->last_cs == UVC_VS_COMMIT_CONTROL && !st->streaming) {
+	/* Bulk mode: start/restart streaming after COMMIT (no STREAMON event) */
+	if (st->last_cs == UVC_VS_COMMIT_CONTROL) {
+		if (st->streaming)
+			stop_streaming(st);
 		RSS_INFO("COMMIT received, starting streaming");
 		if (start_streaming(st) < 0)
 			RSS_ERROR("failed to start streaming");
@@ -219,19 +216,29 @@ static int start_streaming(rwc_state_t *st)
 	struct v4l2_format fmt;
 	int i;
 
-	/* Apply committed format before allocating buffers */
-	st->cur_format = st->probe.bFormatIndex;
-	st->cur_frame = st->probe.bFrameIndex;
-	st->cur_interval = st->probe.dwFrameInterval;
+	st->cur_format = st->commit.bFormatIndex;
+	st->cur_frame = st->commit.bFrameIndex;
+	st->cur_interval = st->commit.dwFrameInterval;
 
-	/* Set format + imagesize so the kernel allocates properly sized buffers.
-	 * For MJPEG, bpp=0 so the kernel uses sizeimage directly.
-	 * Use the ring's data_size as a safe upper bound for compressed frames.
-	 */
+	/* (Re)allocate frame buffer for negotiated resolution (~1 byte/pixel,
+	 * well above worst-case JPEG/H.264 compressed size). */
+	uint32_t need = rwc_frames[st->cur_frame].width * rwc_frames[st->cur_frame].height;
+	if (need < 512 * 1024)
+		need = 512 * 1024;
+	if (need > st->frame_buf_size) {
+		free(st->frame_buf);
+		st->frame_buf = malloc(need);
+		if (!st->frame_buf) {
+			st->frame_buf_size = 0;
+			RSS_ERROR("frame buffer alloc failed (%u bytes)", need);
+			return -1;
+		}
+		st->frame_buf_size = need;
+	}
+
 	memset(&fmt, 0, sizeof(fmt));
 	fmt.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
-	fmt.fmt.pix.pixelformat =
-		(st->cur_format == RWC_FMT_H264) ? V4L2_PIX_FMT_H264 : V4L2_PIX_FMT_MJPEG;
+	fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_MJPEG;
 	fmt.fmt.pix.width = rwc_frames[st->cur_frame].width;
 	fmt.fmt.pix.height = rwc_frames[st->cur_frame].height;
 	fmt.fmt.pix.sizeimage = st->frame_buf_size;
@@ -292,7 +299,11 @@ static int start_streaming(rwc_state_t *st)
 	}
 
 	st->read_seq = 0;
+	st->eagain_count = 0;
 	st->streaming = true;
+
+	if (st->cur_format == RWC_FMT_H264 && st->video_ring)
+		rss_ring_request_idr(st->video_ring);
 
 	RSS_INFO("streaming: %s %ux%u @ %u fps", st->cur_format == RWC_FMT_H264 ? "H.264" : "MJPEG",
 		 rwc_frames[st->cur_frame].width, rwc_frames[st->cur_frame].height,
@@ -403,35 +414,72 @@ static void deliver_frame(rwc_state_t *st)
 	if (!ring)
 		return;
 
-	ret = rss_ring_read(ring, &st->read_seq, st->frame_buf, st->frame_buf_size, &length, &meta);
-	if (ret == RSS_EOVERFLOW && st->read_seq > 0) {
-		st->read_seq--;
-		ret = rss_ring_read(ring, &st->read_seq, st->frame_buf, st->frame_buf_size, &length,
-				    &meta);
-	}
-	if (ret != 0 || length == 0)
+	const rss_ring_header_t *rhdr = rss_ring_get_header(ring);
+	uint64_t wseq =
+		atomic_load_explicit((_Atomic uint64_t *)&rhdr->write_seq, memory_order_acquire);
+	if (st->read_seq >= wseq)
 		return;
-
-	/* Validate JPEG SOI marker */
-	if (st->cur_format == RWC_FMT_MJPEG &&
-	    (length < 2 || st->frame_buf[0] != 0xFF || st->frame_buf[1] != 0xD8)) {
-		RSS_DEBUG("bad JPEG (len=%u hdr=%02x%02x)", length,
-			  length > 0 ? st->frame_buf[0] : 0, length > 1 ? st->frame_buf[1] : 0);
-		return;
-	}
 
 	memset(&buf, 0, sizeof(buf));
 	buf.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
 	buf.memory = V4L2_MEMORY_MMAP;
 
 	if (ioctl(st->uvc_fd, VIDIOC_DQBUF, &buf) < 0) {
-		if (errno != EAGAIN)
+		if (errno == EAGAIN) {
+			if (++st->eagain_count >= 100) {
+				RSS_INFO("no host consumer, stopping streaming");
+				stop_streaming(st);
+			}
+		} else {
 			RSS_DEBUG("VIDIOC_DQBUF: %s", strerror(errno));
+		}
 		return;
 	}
+	st->eagain_count = 0;
 
 	if (buf.index >= (unsigned)st->buf_count) {
 		RSS_ERROR("DQBUF index %u out of range", buf.index);
+		ioctl(st->uvc_fd, VIDIOC_QBUF, &buf);
+		return;
+	}
+
+	/* Peek (zero-copy) for refmode rings, copy for embedded rings */
+	const uint8_t *frame_data;
+	bool use_peek = (rhdr->flags & RSS_RING_FLAG_REFMODE);
+	bool peeked = false;
+
+	if (use_peek) {
+		ret = rss_ring_peek(ring, &st->read_seq, &frame_data, &length, &meta);
+		peeked = (ret == 0);
+	} else {
+		ret = rss_ring_read(ring, &st->read_seq, st->frame_buf, st->frame_buf_size, &length,
+				    &meta);
+		frame_data = st->frame_buf;
+	}
+	if (ret == RSS_EOVERFLOW && st->read_seq > 0) {
+		st->read_seq--;
+		if (use_peek) {
+			ret = rss_ring_peek(ring, &st->read_seq, &frame_data, &length, &meta);
+			peeked = (ret == 0);
+		} else {
+			ret = rss_ring_read(ring, &st->read_seq, st->frame_buf, st->frame_buf_size,
+					    &length, &meta);
+		}
+	}
+	if (ret != 0 || length == 0) {
+		buf.bytesused = 1;
+		ioctl(st->uvc_fd, VIDIOC_QBUF, &buf);
+		return;
+	}
+
+	if (st->cur_format == RWC_FMT_MJPEG &&
+	    (length < 2 || frame_data[0] != 0xFF || frame_data[1] != 0xD8)) {
+		RSS_DEBUG("bad JPEG (len=%u hdr=%02x%02x)", length, length > 0 ? frame_data[0] : 0,
+			  length > 1 ? frame_data[1] : 0);
+		if (peeked)
+			rss_ring_peek_done(ring, &meta);
+		buf.bytesused = 1;
+		ioctl(st->uvc_fd, VIDIOC_QBUF, &buf);
 		return;
 	}
 
@@ -441,7 +489,9 @@ static void deliver_frame(rwc_state_t *st)
 		copy_len = st->buffers[buf.index].length;
 	}
 
-	memcpy(st->buffers[buf.index].start, st->frame_buf, copy_len);
+	memcpy(st->buffers[buf.index].start, frame_data, copy_len);
+	if (peeked)
+		rss_ring_peek_done(ring, &meta);
 	buf.bytesused = copy_len;
 
 	if (ioctl(st->uvc_fd, VIDIOC_QBUF, &buf) < 0)
@@ -506,7 +556,8 @@ static void check_ring_idle(rss_ring_t **ring, uint64_t *last_ws, int *idle_coun
 		return;
 
 	const rss_ring_header_t *hdr = rss_ring_get_header(*ring);
-	uint64_t ws = hdr->write_seq;
+	uint64_t ws =
+		atomic_load_explicit((_Atomic uint64_t *)&hdr->write_seq, memory_order_acquire);
 
 	if (ws == *last_ws)
 		(*idle_count)++;
@@ -576,6 +627,8 @@ static int ctrl_handler(const char *cmd_json, char *resp, int resp_size, void *u
 		 st->streaming ? rwc_frames[st->cur_frame].height : 0);
 
 	cJSON *r = cJSON_CreateObject();
+	if (!r)
+		return rss_ctrl_resp_error(resp, resp_size, "out of memory");
 	cJSON_AddStringToObject(r, "status", "ok");
 	cJSON_AddBoolToObject(r, "streaming", st->streaming);
 	cJSON_AddStringToObject(r, "format", st->cur_format == RWC_FMT_H264 ? "h264" : "mjpeg");
@@ -624,6 +677,10 @@ static void audio_init(rwc_state_t *st, const char *ring_name)
 	return;
 
 disable:
+	if (st->audio_ring) {
+		rss_ring_close(st->audio_ring);
+		st->audio_ring = NULL;
+	}
 	if (st->mic_fd >= 0) {
 		close(st->mic_fd);
 		st->mic_fd = -1;
@@ -668,7 +725,7 @@ int main(int argc, char **argv)
 		st.buf_count = RWC_MAX_BUFFERS;
 
 	const char *jpeg_name = rss_config_get_str(ctx.cfg, "webcam", "jpeg_stream", "jpeg0");
-	const char *h264_name = rss_config_get_str(ctx.cfg, "webcam", "h264_stream", "video0");
+	const char *h264_name = rss_config_get_str(ctx.cfg, "webcam", "h264_stream", "main");
 	st.audio_enabled = rss_config_get_bool(ctx.cfg, "webcam", "audio", true);
 	const char *audio_name = rss_config_get_str(ctx.cfg, "webcam", "audio_stream", "audio");
 
@@ -700,27 +757,8 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	/* Allocate video frame buffer */
-	st.frame_buf_size = 512 * 1024;
-	if (st.jpeg_ring) {
-		uint32_t mfs = rss_ring_max_frame_size(st.jpeg_ring);
-		if (mfs > st.frame_buf_size)
-			st.frame_buf_size = mfs;
-	}
-	if (st.video_ring) {
-		uint32_t mfs = rss_ring_max_frame_size(st.video_ring);
-		if (mfs > st.frame_buf_size)
-			st.frame_buf_size = mfs;
-	}
-
-	st.frame_buf = malloc(st.frame_buf_size);
-	if (!st.frame_buf) {
-		RSS_FATAL("frame buffer alloc failed (%u bytes)", st.frame_buf_size);
-		close(st.uvc_fd);
-		rss_config_free(ctx.cfg);
-		rss_daemon_cleanup("rwc");
-		return 1;
-	}
+	/* Frame buffer is allocated/resized in start_streaming based on
+	 * the negotiated resolution. */
 
 	/* Audio setup */
 	if (st.audio_enabled)
@@ -770,11 +808,11 @@ int main(int argc, char **argv)
 		if (nfds > 1 && (fds[1].revents & POLLIN))
 			rss_ctrl_accept_and_handle(st.ctrl, ctrl_handler, &st);
 
-		if (st.streaming)
+		if (st.streaming) {
 			deliver_frame(&st);
-
-		if (st.audio_enabled)
-			feed_audio(&st);
+			if (st.audio_enabled)
+				feed_audio(&st);
+		}
 
 		/* Ring reconnection (~every 2s at 50ms/tick when streaming) */
 		if (++reconnect_tick >= 40) {
