@@ -421,14 +421,16 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			codec_switched = false;
 		}
 
-		/* 6. Create new ring — restore old codec on failure */
+		/* 6. Create new ring */
 		int ring_data_size = (new_codec_id == RAD_CODEC_L16) ? 256 * 1024 : 128 * 1024;
 		*ctx->ring = rss_ring_create("audio", 32, ring_data_size);
 		if (!*ctx->ring) {
-			RSS_ERROR("audio-restart: ring create failed, retrying");
+			RSS_ERROR("audio-restart: ring create failed, retrying with 128KB");
 			*ctx->ring = rss_ring_create("audio", 32, 128 * 1024);
-			if (!*ctx->ring)
-				RSS_FATAL("audio-restart: ring create failed on retry");
+		}
+		if (!*ctx->ring) {
+			RSS_FATAL("audio-restart: ring create failed");
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "ring create failed");
 		}
 		rss_ring_set_stream_info(*ctx->ring, 0x10, new_codec_id, 0, 0, new_sample_rate, 1,
 					 0, 0);
@@ -978,7 +980,7 @@ int main(int argc, char **argv)
 		out_len = codec_ops->encode(&codec_ctx, pcm, samples, encode_buf, encode_buf_size,
 					    ts);
 
-		if (out_len > 0)
+		if (out_len > 0 && ring)
 			rss_ring_publish(ring, encode_buf, out_len, ts, ctrl_ctx.codec_id, 0);
 
 		RSS_HAL_CALL(ops, audio_release_frame, hal_ctx, ai_dev, 0, &frame);
