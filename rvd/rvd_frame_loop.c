@@ -17,6 +17,9 @@
 
 #include "rvd.h"
 
+#define RVD_STATS_INTERVAL_US 30000000 /* 30s */
+#define RVD_REAP_INTERVAL_US  10000000 /* 10s */
+
 /*
  * Determine the primary NAL type for ring metadata.
  */
@@ -53,7 +56,7 @@ void *rvd_encoder_thread(void *arg)
 		if (s->is_jpeg && s->jpeg_idle && s->ring) {
 			/* Periodically check for crashed consumers (~10s) */
 			int64_t now_reap = rss_timestamp_us();
-			if (now_reap - last_reap >= 10000000) {
+			if (now_reap - last_reap >= RVD_REAP_INTERVAL_US) {
 				RSS_TRACE("jpeg chn %d: reap check (readers=%u pids=[%u,%u,%u,%u])",
 					  s->chn, rss_ring_reader_count(s->ring),
 					  rss_ring_get_header(s->ring)->reader_pids[0],
@@ -186,7 +189,7 @@ embedded_publish:
 		frame_count++;
 
 		int64_t now = rss_timestamp_us();
-		if (now - last_stats >= 30000000) {
+		if (now - last_stats >= RVD_STATS_INTERVAL_US) {
 			RSS_TRACE("stream%d: %llu frames", idx, (unsigned long long)frame_count);
 			last_stats = now;
 		}
