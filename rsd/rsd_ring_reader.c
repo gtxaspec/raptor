@@ -277,6 +277,41 @@ static int rsd_sendq_push_zerocopy(rsd_sendq_t *q, const uint8_t *data, uint32_t
 	return dropped ? RSD_SENDQ_DROPPED : RSD_SENDQ_OK;
 }
 
+static int rsd_sendq_push_audio(rsd_sendq_t *q, uint32_t codec, const uint8_t *data, uint32_t len,
+			       uint32_t rtp_ts)
+{
+	uint8_t *copy = malloc(len);
+	if (!copy)
+		return -1;
+	memcpy(copy, data, len);
+
+	pthread_mutex_lock(&q->lock);
+	if (q->shutdown) {
+		pthread_mutex_unlock(&q->lock);
+		free(copy);
+		return -1;
+	}
+
+	if (q->count >= RSD_SENDQ_SLOTS) {
+		sendq_flush_locked(q);
+	}
+
+	rsd_sendq_entry_t *slot = &q->entries[q->head];
+	slot->data = copy;
+	slot->len = len;
+	slot->rtp_ts = rtp_ts;
+	slot->type = RSD_FRAME_AUDIO;
+	slot->codec = codec;
+	slot->zerocopy = false;
+
+	q->head = (q->head + 1) % RSD_SENDQ_SLOTS;
+	q->count++;
+
+	pthread_cond_signal(&q->cond);
+	pthread_mutex_unlock(&q->lock);
+	return RSD_SENDQ_OK;
+}
+
 /* Per-client send thread — drains sendq through compy (blocking I/O) */
 void *rsd_client_send_thread(void *arg)
 {
@@ -742,9 +777,8 @@ void *rsd_audio_reader_thread(void *arg)
 					c->audio_ts_base_set = true;
 				}
 				uint32_t client_ts = rtp_ts - c->audio_ts_offset;
-				pthread_mutex_lock(&c->write_lock);
-				rsd_send_audio_frame(c, audio_codec, audio_buf, length, client_ts);
-				pthread_mutex_unlock(&c->write_lock);
+				rsd_sendq_push_audio(&c->sendq, audio_codec, audio_buf, length,
+						     client_ts);
 			}
 			pthread_mutex_unlock(&srv->clients_lock);
 		}
