@@ -156,7 +156,7 @@ static void accept_client(rsd_server_t *srv)
 {
 	struct sockaddr_storage addr;
 	socklen_t addrlen = sizeof(addr);
-	int fd = accept(srv->listen_fd, (struct sockaddr *)&addr, &addrlen);
+	int fd = accept4(srv->listen_fd, (struct sockaddr *)&addr, &addrlen, SOCK_CLOEXEC);
 	if (fd < 0)
 		return;
 
