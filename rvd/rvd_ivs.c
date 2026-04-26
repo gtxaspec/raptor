@@ -429,19 +429,30 @@ static void ivs_process_move_result(rvd_state_t *st, void *result)
 static void ivs_process_persondet_result(rvd_state_t *st, void *result)
 {
 	/*
-	 * The SDK returns persondet_param_output_t* but we access it
-	 * through the generic rss_ivs_detect_result_t layout.  The HAL
-	 * result is opaque — we cast based on the known SDK struct layout:
-	 *   { int count, int count_move, person_info[20], int64_t ts }
-	 * where person_info = { IVSRect box, IVSRect show_box, float confidence }
+	 * persondet_param_output_t layout (from SDK header):
+	 *   offset 0:  int count
+	 *   offset 4:  int count_move
+	 *   offset 8:  person_info[20]  — each 36 bytes:
+	 *              IVSRect box (16 bytes: 4 ints)
+	 *              IVSRect show_box (16 bytes: 4 ints)
+	 *              float confidence (4 bytes)
+	 *   offset 728: int64_t timeStamp
 	 *
-	 * We read count + person[] fields at known offsets rather than
-	 * including the vendor header (which isn't in the standard path).
+	 * All reads use memcpy to avoid strict-aliasing violations on the
+	 * opaque vendor buffer (LTO TBAA could reorder direct casts).
 	 */
-	const int *raw = (const int *)result;
-	int count = raw[0];
+#define PD_PERSON_OFF  8
+#define PD_PERSON_SIZE 36
+#define PD_SHOWBOX_OFF 16
+#define PD_CONF_OFF    32
+#define PD_MAX_PERSONS 20
+
+	int count;
+	memcpy(&count, result, sizeof(int));
 	if (count < 0)
 		count = 0;
+	if (count > PD_MAX_PERSONS)
+		count = PD_MAX_PERSONS;
 	if (count > RSS_IVS_MAX_DETECTIONS)
 		count = RSS_IVS_MAX_DETECTIONS;
 
@@ -449,7 +460,6 @@ static void ivs_process_persondet_result(rvd_state_t *st, void *result)
 	bool prev = atomic_load(&st->ivs_motion);
 
 	if (count > 0) {
-		/* Active detection — update results and timestamp */
 		atomic_store(&st->ivs_motion, true);
 		atomic_store(&st->ivs_person_count, count);
 		atomic_store(&st->ivs_motion_ts, now);
@@ -458,31 +468,28 @@ static void ivs_process_persondet_result(rvd_state_t *st, void *result)
 		st->ivs_detections.count = count;
 		st->ivs_detections.timestamp = now;
 
-		/*
-		 * persondet_param_output_t layout (from SDK header):
-		 *   offset 0:  int count
-		 *   offset 4:  int count_move
-		 *   offset 8:  person_info[20]  — each 36 bytes:
-		 *              IVSRect box (16 bytes: 4 ints)
-		 *              IVSRect show_box (16 bytes: 4 ints)
-		 *              float confidence (4 bytes)
-		 *   offset 728: int64_t timeStamp
-		 */
-		const char *base = (const char *)result + 8;
+		const char *base = (const char *)result + PD_PERSON_OFF;
 		for (int i = 0; i < count; i++) {
-			const char *pi = base + i * 36;
-			const int *sb = (const int *)(pi + 16);
+			const char *pi = base + i * PD_PERSON_SIZE;
+			int sb[4];
 			float conf;
-			memcpy(&conf, pi + 32, sizeof(float));
+			memcpy(sb, pi + PD_SHOWBOX_OFF, sizeof(sb));
+			memcpy(&conf, pi + PD_CONF_OFF, sizeof(conf));
 
 			st->ivs_detections.detections[i].box = (rss_rect_t){
-				sb[0], sb[1], /* ul.x, ul.y */
-				sb[2], sb[3], /* br.x, br.y */
+				sb[0], sb[1],
+				sb[2], sb[3],
 			};
 			st->ivs_detections.detections[i].confidence = conf;
 			st->ivs_detections.detections[i].class_id = 0;
 		}
 		pthread_mutex_unlock(&st->ivs_det_lock);
+
+#undef PD_PERSON_OFF
+#undef PD_PERSON_SIZE
+#undef PD_SHOWBOX_OFF
+#undef PD_CONF_OFF
+#undef PD_MAX_PERSONS
 
 		if (!prev)
 			RSS_DEBUG("IVS: %d person(s) detected", count);
