@@ -69,7 +69,10 @@ int main(int argc, char **argv)
 	RSS_INFO("rvd shutting down");
 
 cleanup:
-	rvd_pipeline_deinit(&st);
+	if (st.hal_ctx)
+		rvd_pipeline_deinit(&st);
+	else
+		pthread_mutex_destroy(&st.osd_lock);
 
 	if (st.ctrl)
 		rss_ctrl_destroy(st.ctrl);
