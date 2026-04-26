@@ -649,7 +649,7 @@ echo ""
 
 if [ "$KEEP" = false ] && [ "$RESTART" = true ]; then
     echo "=== Cleanup ==="
-    $SSH 'killall rvd rad rsd rhd 2>/dev/null' 2>/dev/null || true
+    $SSH "killall $RAPTOR_DAEMONS 2>/dev/null" 2>/dev/null || true
     sleep 1
     # Restore config to CBR
     sed 's/^rc_mode = .*/rc_mode = cbr/' "$TEST_CONF" > "${TEST_CONF}.tmp" && mv "${TEST_CONF}.tmp" "$TEST_CONF"
