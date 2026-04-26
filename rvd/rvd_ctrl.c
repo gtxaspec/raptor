@@ -1110,17 +1110,20 @@ static int handle_ivs_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 	}
 
 	if (strcmp(cmd, "ivs-detections") == 0) {
-		if (!st->ivs_active) {
+		if (!atomic_load(&st->ivs_active)) {
 			return rss_ctrl_resp_error(resp, resp_size, "ivs not active");
 		}
+		rss_ivs_detect_result_t snap;
+		pthread_mutex_lock(&st->ivs_det_lock);
+		snap = st->ivs_detections;
+		pthread_mutex_unlock(&st->ivs_det_lock);
+
 		cJSON *r = cJSON_CreateObject();
 		cJSON_AddStringToObject(r, "status", "ok");
-		pthread_mutex_lock(&st->ivs_det_lock);
-		int count = st->ivs_detections.count;
-		cJSON_AddNumberToObject(r, "count", (double)count);
+		cJSON_AddNumberToObject(r, "count", (double)snap.count);
 		cJSON *arr = cJSON_AddArrayToObject(r, "detections");
-		for (int i = 0; i < count; i++) {
-			rss_ivs_detection_t *d = &st->ivs_detections.detections[i];
+		for (int i = 0; i < snap.count; i++) {
+			rss_ivs_detection_t *d = &snap.detections[i];
 			cJSON *item = cJSON_CreateObject();
 			cJSON_AddNumberToObject(item, "x0", (double)d->box.p0_x);
 			cJSON_AddNumberToObject(item, "y0", (double)d->box.p0_y);
@@ -1130,7 +1133,6 @@ static int handle_ivs_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 			cJSON_AddNumberToObject(item, "class", (double)d->class_id);
 			cJSON_AddItemToArray(arr, item);
 		}
-		pthread_mutex_unlock(&st->ivs_det_lock);
 		return rss_ctrl_resp_json(resp, resp_size, r);
 	}
 
