@@ -323,6 +323,8 @@ int rvd_pipeline_init(rvd_state_t *st)
 	int ret;
 
 	pthread_mutex_init(&st->osd_lock, NULL);
+	for (int i = 0; i < RVD_MAX_STREAMS; i++)
+		st->enc_shm_fd[i] = -1;
 
 	/* ── 1. Create HAL ── */
 	st->hal_ctx = rss_hal_create();
