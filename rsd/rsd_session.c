@@ -826,7 +826,9 @@ impl(Compy_Controller, rsd_client_t);
 void rsd_handle_rtsp_data(rsd_client_t *client, const char *data, size_t len)
 {
 	/* Handle TCP interleaved frames ($ + channel + 2-byte length + payload).
-	 * These arrive on the same TCP connection as RTSP signaling. */
+	 * These arrive on the same TCP connection as RTSP signaling.
+	 * Advance data/len through all complete frames, then shift recv_buf once. */
+	const char *interleaved_start = data;
 	while (len >= 4 && data[0] == '$') {
 		uint8_t channel = (uint8_t)data[1];
 		uint16_t frame_len = ((uint8_t)data[2] << 8) | (uint8_t)data[3];
@@ -856,10 +858,14 @@ void rsd_handle_rtsp_data(rsd_client_t *client, const char *data, size_t len)
 		size_t consumed = 4 + frame_len;
 		data += consumed;
 		len -= consumed;
-		if (consumed <= client->recv_len) {
-			memmove(client->recv_buf, client->recv_buf + consumed,
-				client->recv_len - consumed);
-			client->recv_len -= consumed;
+	}
+	/* Shift recv_buf once for all consumed interleaved frames */
+	size_t total_consumed = (size_t)(data - interleaved_start);
+	if (total_consumed > 0) {
+		if (total_consumed <= client->recv_len) {
+			memmove(client->recv_buf, client->recv_buf + total_consumed,
+				client->recv_len - total_consumed);
+			client->recv_len -= total_consumed;
 		} else {
 			client->recv_len = 0;
 		}
