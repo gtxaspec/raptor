@@ -305,13 +305,14 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 
 	/* ── Input sample rate change (validates, then falls through to restart) ── */
 
+	int requested_sample_rate = 0;
 	if (strcmp(cmd, "set-sample-rate") == 0) {
 		if (rss_json_get_int(cmd_json, "value", &val) != 0 || val <= 0)
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value");
 		if (ctx->codec_id == RAD_CODEC_PCMU || ctx->codec_id == RAD_CODEC_PCMA)
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size,
 						   "G.711 is fixed at 8000 Hz");
-		rss_config_set_int(ctx->cfg, "audio", "sample_rate", val);
+		requested_sample_rate = val;
 	}
 
 	/* ── Audio pipeline restart (codec/sample-rate change) ── */
@@ -332,9 +333,11 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		int new_codec_id = new_ops->codec_id;
 		int new_sample_rate = ctx->sample_rate;
 
-		/* G.711 forces 8kHz; other codecs use configured rate */
+		/* G.711 forces 8kHz; other codecs use requested or configured rate */
 		if (new_codec_id == RAD_CODEC_PCMU || new_codec_id == RAD_CODEC_PCMA)
 			new_sample_rate = 8000;
+		else if (requested_sample_rate > 0)
+			new_sample_rate = requested_sample_rate;
 		else
 			new_sample_rate =
 				rss_config_get_int(ctx->cfg, "audio", "sample_rate", 16000);
@@ -462,6 +465,8 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		ctx->sample_rate = new_sample_rate;
 		if (codec_switched)
 			rss_config_set_str(ctx->cfg, "audio", "codec", target_codec);
+		if (requested_sample_rate > 0)
+			rss_config_set_int(ctx->cfg, "audio", "sample_rate", new_sample_rate);
 
 		RSS_INFO("audio-restart: %s %dHz ready", new_ops->name, new_sample_rate);
 		if (!codec_switched)
