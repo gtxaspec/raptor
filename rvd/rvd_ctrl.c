@@ -287,7 +287,6 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 				       char *resp, int resp_size)
 {
 	int chn, val, val2;
-	const rss_hal_caps_t *caps = st->ops->get_caps ? st->ops->get_caps(st->hal_ctx) : NULL;
 
 	/* ── Table-driven encoder params (enc-set / enc-get / enc-list) ── */
 
@@ -902,9 +901,10 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 
 	/* ── Encoder capabilities query ── */
 	if (strcmp(cmd, "get-enc-caps") == 0) {
-		if (!caps) {
+		const rss_hal_caps_t *caps =
+			st->ops->get_caps ? st->ops->get_caps(st->hal_ctx) : NULL;
+		if (!caps)
 			return rss_ctrl_resp_error(resp, resp_size, "caps not available");
-		}
 		cJSON *r = cJSON_CreateObject();
 		cJSON_AddStringToObject(r, "status", "ok");
 		cJSON_AddBoolToObject(r, "smartp_gop", caps->has_smartp_gop);
@@ -932,7 +932,6 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 		return rss_ctrl_resp_json(resp, resp_size, r);
 	}
 
-	(void)caps;
 	return 0;
 }
 
