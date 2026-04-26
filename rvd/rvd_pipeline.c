@@ -369,12 +369,12 @@ int rvd_pipeline_init(rvd_state_t *st)
 		load_sensor_from_section(cfg, "sensor", &multi_cfg.sensors[0], true);
 		multi_cfg.sensor_count = 1;
 	}
-	st->sensor_count = multi_cfg.sensor_count;
-	if (st->sensor_count > RVD_MAX_SENSORS) {
-		RSS_FATAL("sensor_count %d exceeds RVD_MAX_SENSORS %d", st->sensor_count,
+	if (multi_cfg.sensor_count > RVD_MAX_SENSORS) {
+		RSS_FATAL("sensor_count %d exceeds RVD_MAX_SENSORS %d", multi_cfg.sensor_count,
 			  RVD_MAX_SENSORS);
 		return RSS_ERR;
 	}
+	st->sensor_count = multi_cfg.sensor_count;
 
 	/* Validate primary sensor */
 	if (!multi_cfg.sensors[0].name[0]) {
