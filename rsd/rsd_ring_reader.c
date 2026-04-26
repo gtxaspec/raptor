@@ -334,9 +334,15 @@ void *rsd_client_send_thread(void *arg)
 		q->count--;
 		pthread_mutex_unlock(&q->lock);
 
-		/* Zero-copy: validate encoder buffer wasn't recycled */
+		/* Zero-copy: validate encoder buffer wasn't recycled.
+		 * Ring may have been closed by the reader thread (idle timeout)
+		 * while this entry sat in the sendq — treat as stale. */
 		if (entry.zerocopy && c->srv) {
 			rss_ring_t *ring = c->srv->video[c->stream_idx].ring;
+			if (!ring) {
+				sendq_release_entry(&entry);
+				continue;
+			}
 			const rss_ring_header_t *hdr = rss_ring_get_header(ring);
 			if (hdr && entry.buf_idx < RSS_RING_MAX_REF_BUFS) {
 				uint32_t cur = atomic_load_explicit(
