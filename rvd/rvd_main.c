@@ -5,6 +5,7 @@
  * and runs the frame acquisition loop until signaled to stop.
  */
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
