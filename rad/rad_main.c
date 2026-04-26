@@ -384,6 +384,7 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			if (ret != RSS_OK)
 				RSS_FATAL("audio-restart: HAL restore at %dHz also failed: %d",
 					  old_sample_rate, ret);
+			*ctx->codec_ops = NULL;
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "audio_init failed");
 		}
 
