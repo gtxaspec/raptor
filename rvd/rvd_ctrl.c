@@ -1188,7 +1188,7 @@ static int find_jpeg_for_video_ctrl(rvd_state_t *st, int video_idx)
 static int do_stream_restart(rvd_state_t *st, int chn, char *resp, int resp_size)
 {
 	int jpeg = find_jpeg_for_video_ctrl(st, chn);
-	bool has_ivs = (st->streams[chn].fs_chn == 1 && st->ivs_active);
+	bool has_ivs = (st->streams[chn].fs_chn == st->ivs_fs_chn && st->ivs_active);
 
 	RSS_INFO("stream-restart: channel %d (jpeg=%d ivs=%d)", chn, jpeg, has_ivs);
 
@@ -1282,7 +1282,7 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 			return rss_ctrl_resp_ok(resp, resp_size);
 
 		int jpeg = find_jpeg_for_video_ctrl(st, chn);
-		bool has_ivs = (st->streams[chn].fs_chn == 1 && st->ivs_active);
+		bool has_ivs = (st->streams[chn].fs_chn == st->ivs_fs_chn && st->ivs_active);
 
 		RSS_INFO("stream-stop: channel %d (jpeg=%d ivs=%d)", chn, jpeg, has_ivs);
 
@@ -1311,7 +1311,7 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 			return rss_ctrl_resp_error(resp, resp_size, "stream not initialized");
 
 		int jpeg = find_jpeg_for_video_ctrl(st, chn);
-		bool has_ivs = (st->streams[chn].fs_chn == 1 && st->ivs_enabled && !st->ivs_active);
+		bool has_ivs = (st->streams[chn].fs_chn == st->ivs_fs_chn && st->ivs_enabled && !st->ivs_active);
 
 		RSS_INFO("stream-start: channel %d (jpeg=%d ivs=%d)", chn, jpeg, has_ivs);
 
@@ -1420,7 +1420,7 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		 * do_stream_restart stops+deinits first, but we need FS
 		 * reconfigured before reinit. Do it manually. */
 		int jpeg = find_jpeg_for_video_ctrl(st, chn);
-		bool has_ivs = (st->streams[chn].fs_chn == 1 && st->ivs_active);
+		bool has_ivs = (st->streams[chn].fs_chn == st->ivs_fs_chn && st->ivs_active);
 
 		/* Stop */
 		if (has_ivs) {
@@ -1610,7 +1610,7 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		/* IVS: stop before streams (IVS is bound to sub-stream) */
 		bool has_ivs = false;
 		for (int j = 0; j < video_count; j++) {
-			if (st->streams[video_indices[j]].fs_chn == 1 && st->ivs_active) {
+			if (st->streams[video_indices[j]].fs_chn == st->ivs_fs_chn && st->ivs_active) {
 				has_ivs = true;
 				break;
 			}

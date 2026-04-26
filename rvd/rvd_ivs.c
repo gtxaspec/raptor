@@ -66,6 +66,7 @@ int rvd_ivs_init(rvd_state_t *st)
 
 	st->ivs_grp = IVS_GRP;
 	st->ivs_chn = IVS_CHN;
+	st->ivs_fs_chn = st->streams[1].fs_chn;
 	pthread_mutex_init(&st->ivs_det_lock, NULL);
 
 	int ret = RSS_HAL_CALL(st->ops, ivs_create_group, st->hal_ctx, IVS_GRP);
