@@ -536,7 +536,8 @@ static void *rvd_jzdl_thread(void *arg)
 
 	/* Enable frame depth so GetFrame works alongside encoder binding.
 	 * Must be > 0 for GetFrame to return frames. */
-	IMP_FrameSource_SetFrameDepth(fs, 1);
+	if (IMP_FrameSource_SetFrameDepth(fs, 1) != 0)
+		RSS_WARN("JZDL: SetFrameDepth failed, inference may not work");
 
 	while (rss_running(st->running) && atomic_load(&st->ivs_active)) {
 		IMPFrameInfo *frame = NULL;
