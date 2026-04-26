@@ -68,7 +68,9 @@ fi
 
 # Unmount on device BEFORE killing Docker (prevents D-state hang)
 $SSH 'umount -f -l /tmp/raptor-test 2>/dev/null' 2>/dev/null || true
-docker rm -f "$DOCKER_NFS_CONTAINER" > /dev/null 2>&1 || true
+# Kill any stale raptor-nfs containers (from prior runs on any device IP)
+docker ps -a --filter 'name=raptor-nfs-' --format '{{.Names}}' 2>/dev/null \
+    | xargs -r docker rm -f > /dev/null 2>&1 || true
 DEVICE_MNT="/tmp/raptor-test"
 BUILD_DIR="$RAPTOR_DIR/build"
 TEST_CONF="$RAPTOR_DIR/tests/stream-health.conf"
