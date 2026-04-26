@@ -160,6 +160,11 @@ void *rvd_encoder_thread(void *arg)
 			if (s->enc_buf_count < 8) {
 				buf_idx = s->enc_buf_count;
 				s->enc_buf_addrs[s->enc_buf_count++] = vpage;
+			} else {
+				RSS_WARN("stream%d: >8 unique encoder buffers, "
+					 "refmode buf_idx may alias",
+					 idx);
+				goto embedded_publish;
 			}
 found_buf:
 
