@@ -967,7 +967,7 @@ static int find_video_group(rvd_state_t *st, int fs_chn)
 		if (!st->streams[v].is_jpeg && st->streams[v].fs_chn == fs_chn)
 			return st->streams[v].chn;
 	}
-	return 0;
+	return -1;
 }
 
 int rvd_stream_init(rvd_state_t *st, int idx)
@@ -982,6 +982,11 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 	/* ── Encoder group + channel ── */
 	if (s->is_jpeg) {
 		int video_grp = find_video_group(st, s->fs_chn);
+		if (video_grp < 0) {
+			RSS_ERROR("stream%d: JPEG has no paired video stream (fs_chn=%d)",
+				  idx, s->fs_chn);
+			return RSS_ERR;
+		}
 		reg_grp = video_grp;
 
 		if (rss_config_get_bool(cfg, "jpeg", "bufshare", true)) {
