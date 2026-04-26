@@ -609,6 +609,10 @@ static void rsd_send_audio_frame(rsd_client_t *c, uint32_t codec, const uint8_t 
 		/* RFC 3640 AAC-hbr: AU header section
 		 * 2 bytes AU-headers-length (16 = one 16-bit AU header)
 		 * 2 bytes AU header: 13-bit AU-size | 3-bit AU-index (0) */
+		if (len > 8191) {
+			RSS_WARN("AAC frame %u bytes exceeds 13-bit AU-size, dropping", len);
+			return;
+		}
 		au_header[0] = 0x00;
 		au_header[1] = 0x10; /* 16 bits of AU header */
 		au_header[2] = (uint8_t)((len >> 5) & 0xFF);
