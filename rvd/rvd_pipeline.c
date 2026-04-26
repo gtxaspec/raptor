@@ -1145,7 +1145,7 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 
 		chain[chain_len++] = (rss_cell_t){RSS_DEV_FS, s->fs_chn, 0};
 		if (s->fs_chn == st->ivs_fs_chn && st->ivs_active)
-			chain[chain_len++] = (rss_cell_t){RSS_DEV_IVS, 0, 0};
+			chain[chain_len++] = (rss_cell_t){RSS_DEV_IVS, st->ivs_grp, 0};
 		if (st->osd_enabled && (!st->use_isp_osd || s->fs_chn % 3 != 0))
 			chain[chain_len++] = (rss_cell_t){RSS_DEV_OSD, s->chn, 0};
 		chain[chain_len++] = (rss_cell_t){RSS_DEV_ENC, s->chn, 0};
