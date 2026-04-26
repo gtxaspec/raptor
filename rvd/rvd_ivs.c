@@ -174,11 +174,13 @@ int rvd_ivs_start(rvd_state_t *st)
 			int gx = 4, gy = 4;
 			if (sscanf(grid_str, "%dx%d", &gx, &gy) < 2)
 				RSS_WARN("IVS: invalid grid '%s', using 4x4", grid_str);
-			if (gx < 1)
-				gx = 1;
-			if (gy < 1)
-				gy = 1;
+			if (gx < 1 || gx > RSS_IVS_MAX_ROI)
+				gx = 4;
+			if (gy < 1 || gy > RSS_IVS_MAX_ROI)
+				gy = 4;
 			if (gx * gy > RSS_IVS_MAX_ROI) {
+				RSS_WARN("IVS: grid %dx%d exceeds %d ROIs, using 4x4",
+					 gx, gy, RSS_IVS_MAX_ROI);
 				gx = 4;
 				gy = 4;
 			}
