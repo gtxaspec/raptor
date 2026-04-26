@@ -249,7 +249,7 @@ static int fs_base_channel(int sensor_idx)
 static void get_ring_name(int sensor_idx, const char *type, char *buf, size_t len)
 {
 	if (sensor_idx == 0)
-		snprintf(buf, len, "%s", type);
+		rss_strlcpy(buf, type, len);
 	else
 		snprintf(buf, len, "s%d_%s", sensor_idx, type);
 }
