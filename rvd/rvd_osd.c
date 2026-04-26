@@ -649,13 +649,14 @@ static void scan_new_shm(rvd_state_t *st, int s)
 		rvd_osd_region_t *reg = alloc_region_slot(st, s);
 		if (!reg)
 			break;
+		int slot_idx = (int)(reg - st->osd_regions[s]);
 
 		memset(reg, 0, sizeof(*reg));
 		rss_strlcpy(reg->name, name, sizeof(reg->name));
 		reg->hal_handle = -1;
 		reg->width = w;
 		reg->height = h;
-		reg->layer = st->osd_region_count[s];
+		reg->layer = slot_idx;
 
 		/* T20 time+uptime merge: avoid two OSD channels spanning
 		 * opposite edges of the same scanline (causes IPU stall). */
