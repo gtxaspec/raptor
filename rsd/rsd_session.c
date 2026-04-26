@@ -747,6 +747,7 @@ static void rsd_client_t_pause_method(VSelf, Compy_Context *ctx, const Compy_Req
 	(void)req;
 
 	self->video.playing = false;
+	self->audio.playing = false;
 	compy_respond_ok(ctx);
 }
 
@@ -756,9 +757,12 @@ static void rsd_client_t_teardown(VSelf, Compy_Context *ctx, const Compy_Request
 	(void)req;
 
 	self->video.playing = false;
+	self->audio.playing = false;
 
 	if (self->video.rtcp)
 		(void)!Compy_Rtcp_send_bye(self->video.rtcp);
+	if (self->audio.rtcp)
+		(void)!Compy_Rtcp_send_bye(self->audio.rtcp);
 
 	compy_respond_ok(ctx);
 	RSS_INFO("client TEARDOWN");
