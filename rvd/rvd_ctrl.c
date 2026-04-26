@@ -1101,7 +1101,7 @@ static int handle_ivs_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 		int persons = st->ivs_persondet ? atomic_load(&st->ivs_person_count) : -1;
 		cJSON *r = cJSON_CreateObject();
 		cJSON_AddStringToObject(r, "status", "ok");
-		cJSON_AddBoolToObject(r, "active", st->ivs_active);
+		cJSON_AddBoolToObject(r, "active", atomic_load(&st->ivs_active));
 		cJSON_AddBoolToObject(r, "motion", motion);
 		cJSON_AddBoolToObject(r, "persondet", st->ivs_persondet);
 		cJSON_AddNumberToObject(r, "persons", (double)persons);
