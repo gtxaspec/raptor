@@ -308,6 +308,11 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 	typedef int (*enc_get_u32_fn)(void *, int, uint32_t *);
 	typedef int (*enc_get_bool_fn)(void *, int, bool *);
 
+	/* Read a function pointer from ops at a given offset without
+	 * violating strict aliasing (memcpy is aliasing-safe). */
+	#define OPS_FN(ops, off, type) \
+		({ type __fn; memcpy(&__fn, (const char *)(ops) + (off), sizeof(__fn)); __fn; })
+
 #define EP_OFF(field) offsetof(rss_hal_ops_t, field)
 
 	static const enc_param_t enc_params[] = {
@@ -348,21 +353,23 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 				continue;
 			if (enc_params[i].set_off == 0)
 				return rss_ctrl_resp_error(resp, resp_size, "no setter");
-			void *fn = *(void **)((char *)st->ops + enc_params[i].set_off);
-			if (!fn)
+			if (!OPS_FN(st->ops, enc_params[i].set_off, void *))
 				return rss_ctrl_resp_error(resp, resp_size,
 							   "not supported on this SoC");
 			int ret;
 			int hw_chn = st->streams[chn].chn;
 			switch (enc_params[i].type) {
 			case EP_INT:
-				ret = ((enc_set_int_fn)fn)(st->hal_ctx, hw_chn, val);
+				ret = OPS_FN(st->ops, enc_params[i].set_off, enc_set_int_fn)(
+					st->hal_ctx, hw_chn, val);
 				break;
 			case EP_U32:
-				ret = ((enc_set_u32_fn)fn)(st->hal_ctx, hw_chn, (uint32_t)val);
+				ret = OPS_FN(st->ops, enc_params[i].set_off, enc_set_u32_fn)(
+					st->hal_ctx, hw_chn, (uint32_t)val);
 				break;
 			case EP_BOOL:
-				ret = ((enc_set_bool_fn)fn)(st->hal_ctx, hw_chn, (bool)val);
+				ret = OPS_FN(st->ops, enc_params[i].set_off, enc_set_bool_fn)(
+					st->hal_ctx, hw_chn, (bool)val);
 				break;
 			default:
 				ret = RSS_ERR;
@@ -384,8 +391,7 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 				continue;
 			if (enc_params[i].get_off == 0)
 				return rss_ctrl_resp_error(resp, resp_size, "no getter");
-			void *fn = *(void **)((char *)st->ops + enc_params[i].get_off);
-			if (!fn)
+			if (!OPS_FN(st->ops, enc_params[i].get_off, void *))
 				return rss_ctrl_resp_error(resp, resp_size,
 							   "not supported on this SoC");
 			int hw_chn = st->streams[chn].chn;
@@ -396,7 +402,8 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 			switch (enc_params[i].type) {
 			case EP_INT: {
 				int out = 0;
-				ret = ((enc_get_int_fn)fn)(st->hal_ctx, hw_chn, &out);
+				ret = OPS_FN(st->ops, enc_params[i].get_off, enc_get_int_fn)(
+					st->hal_ctx, hw_chn, &out);
 				if (ret == 0) {
 					cJSON_AddStringToObject(r, "status", "ok");
 					cJSON_AddStringToObject(r, "param", param);
@@ -407,7 +414,8 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 			}
 			case EP_U32: {
 				uint32_t out = 0;
-				ret = ((enc_get_u32_fn)fn)(st->hal_ctx, hw_chn, &out);
+				ret = OPS_FN(st->ops, enc_params[i].get_off, enc_get_u32_fn)(
+					st->hal_ctx, hw_chn, &out);
 				if (ret == 0) {
 					cJSON_AddStringToObject(r, "status", "ok");
 					cJSON_AddStringToObject(r, "param", param);
@@ -418,7 +426,8 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 			}
 			case EP_BOOL: {
 				bool out = false;
-				ret = ((enc_get_bool_fn)fn)(st->hal_ctx, hw_chn, &out);
+				ret = OPS_FN(st->ops, enc_params[i].get_off, enc_get_bool_fn)(
+					st->hal_ctx, hw_chn, &out);
 				if (ret == 0) {
 					cJSON_AddStringToObject(r, "status", "ok");
 					cJSON_AddStringToObject(r, "param", param);
@@ -457,33 +466,32 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 			cJSON_AddStringToObject(obj, "name", p->name);
 			cJSON_AddStringToObject(obj, "type", ep_type_str[p->type]);
 			bool has_set =
-				p->set_off && *(void **)((char *)st->ops + p->set_off) != NULL;
+				p->set_off && OPS_FN(st->ops, p->set_off, void *) != NULL;
 			bool has_get =
-				p->get_off && *(void **)((char *)st->ops + p->get_off) != NULL;
+				p->get_off && OPS_FN(st->ops, p->get_off, void *) != NULL;
 			cJSON_AddBoolToObject(obj, "set", has_set);
 			cJSON_AddBoolToObject(obj, "get", has_get);
 
 			if (hw_list_chn >= 0 && has_get) {
-				void *fn = *(void **)((char *)st->ops + p->get_off);
 				switch (p->type) {
 				case EP_INT: {
 					int out = 0;
-					if (((enc_get_int_fn)fn)(st->hal_ctx, hw_list_chn, &out) ==
-					    0)
+					if (OPS_FN(st->ops, p->get_off, enc_get_int_fn)(
+						    st->hal_ctx, hw_list_chn, &out) == 0)
 						cJSON_AddNumberToObject(obj, "value", (double)out);
 					break;
 				}
 				case EP_U32: {
 					uint32_t out = 0;
-					if (((enc_get_u32_fn)fn)(st->hal_ctx, hw_list_chn, &out) ==
-					    0)
+					if (OPS_FN(st->ops, p->get_off, enc_get_u32_fn)(
+						    st->hal_ctx, hw_list_chn, &out) == 0)
 						cJSON_AddNumberToObject(obj, "value", (double)out);
 					break;
 				}
 				case EP_BOOL: {
 					bool out = false;
-					if (((enc_get_bool_fn)fn)(st->hal_ctx, hw_list_chn, &out) ==
-					    0)
+					if (OPS_FN(st->ops, p->get_off, enc_get_bool_fn)(
+						    st->hal_ctx, hw_list_chn, &out) == 0)
 						cJSON_AddBoolToObject(obj, "value", out);
 					break;
 				}
