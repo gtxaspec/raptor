@@ -370,6 +370,9 @@ int rvd_pipeline_init(rvd_state_t *st)
 		/* Legacy single-sensor: load from [sensor] section */
 		load_sensor_from_section(cfg, "sensor", &multi_cfg.sensors[0], true);
 		multi_cfg.sensor_count = 1;
+		if (rss_config_get_str(cfg, "sensor2", "name", "")[0] != '\0')
+			RSS_WARN("[sensor2] defined but [sensor1] missing — "
+				 "using single-sensor mode");
 	}
 	if (multi_cfg.sensor_count > RVD_MAX_SENSORS) {
 		RSS_FATAL("sensor_count %d exceeds RVD_MAX_SENSORS %d", multi_cfg.sensor_count,
