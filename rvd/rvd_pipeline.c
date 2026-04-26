@@ -374,6 +374,8 @@ int rvd_pipeline_init(rvd_state_t *st)
 	if (multi_cfg.sensor_count > RVD_MAX_SENSORS) {
 		RSS_FATAL("sensor_count %d exceeds RVD_MAX_SENSORS %d", multi_cfg.sensor_count,
 			  RVD_MAX_SENSORS);
+		rss_hal_destroy(st->hal_ctx);
+		st->hal_ctx = NULL;
 		return RSS_ERR;
 	}
 	st->sensor_count = multi_cfg.sensor_count;
