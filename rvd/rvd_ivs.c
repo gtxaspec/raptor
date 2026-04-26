@@ -251,9 +251,7 @@ err_unreg:
 err_chn:
 	RSS_HAL_CALL(st->ops, ivs_destroy_channel, st->hal_ctx, IVS_CHN);
 err_iface:
-	if (st->ivs_jzdl)
-		RSS_HAL_CALL(st->ops, ivs_destroy_jzdl_interface, st->hal_ctx, algo_handle);
-	else if (st->ivs_persondet)
+	if (st->ivs_persondet)
 		RSS_HAL_CALL(st->ops, ivs_destroy_persondet_interface, st->hal_ctx, algo_handle);
 	else if (st->ivs_base_move)
 		RSS_HAL_CALL(st->ops, ivs_destroy_base_move_interface, st->hal_ctx, algo_handle);
