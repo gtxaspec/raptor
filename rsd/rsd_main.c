@@ -38,8 +38,18 @@ static Compy_Auth *rsd_auth_new(const char *username, const char *password)
 
 int main(int argc, char **argv)
 {
-	/* Seed PRNG for SSRC generation (compy requirement) */
-	srand(time(NULL));
+	/* Seed PRNG for SSRC generation (compy requirement).
+	 * Use /dev/urandom — time(NULL) is predictable (RFC 3550 §8.1). */
+	{
+		unsigned int seed;
+		FILE *f = fopen("/dev/urandom", "r");
+		if (f && fread(&seed, sizeof(seed), 1, f) == 1)
+			srand(seed);
+		else
+			srand((unsigned)time(NULL) ^ (unsigned)getpid());
+		if (f)
+			fclose(f);
+	}
 
 	rss_daemon_ctx_t dctx;
 	int ret = rss_daemon_init(&dctx, "rsd", argc, argv,
