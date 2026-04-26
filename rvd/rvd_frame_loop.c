@@ -112,6 +112,10 @@ void *rvd_encoder_thread(void *arg)
 			continue;
 		}
 
+		/* Refmode: publish a reference (offset+length) into the encoder's
+		 * DMA output buffer. Assumes all NALs are contiguous starting at
+		 * nals[0].data — guaranteed by the Ingenic encoder IP which packs
+		 * start codes + data sequentially into a single buffer region. */
 		const rss_ring_header_t *rhdr = rss_ring_get_header(s->ring);
 		if (rhdr && (rhdr->flags & RSS_RING_FLAG_REFMODE) && frame.nal_count > 0) {
 			uintptr_t vaddr = (uintptr_t)frame.nals[0].data;
