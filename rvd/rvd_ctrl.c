@@ -1193,7 +1193,8 @@ static int find_jpeg_for_video_ctrl(rvd_state_t *st, int video_idx)
 
 /*
  * Core restart sequence for a video stream + its paired JPEG.
- * Called after config has been updated. Returns 0 on success.
+ * Returns 0 on success, or positive response length on failure
+ * (error already written to resp).
  */
 static int do_stream_restart(rvd_state_t *st, int chn, char *resp, int resp_size)
 {
@@ -1228,9 +1229,7 @@ static int do_stream_restart(rvd_state_t *st, int chn, char *resp, int resp_size
 		RSS_ERROR("stream-restart: init stream %d failed: %d", chn, ret);
 		if (has_ivs)
 			atomic_store(&st->ivs_active, false);
-		if (resp)
-			rss_ctrl_resp_error(resp, resp_size, "init failed");
-		return -1;
+		return resp ? rss_ctrl_resp_error(resp, resp_size, "init failed") : -1;
 	}
 	if (jpeg >= 0) {
 		/* JPEG inherits parent video's resolution */
@@ -1261,33 +1260,35 @@ static int do_stream_restart(rvd_state_t *st, int chn, char *resp, int resp_size
 	return 0;
 }
 
+/* Returns 0 if valid, or positive response length (error already written) */
 static int validate_video_channel(rvd_state_t *st, const char *cmd_json, int *out_chn, char *resp,
 				  int resp_size)
 {
 	if (rss_json_get_int(cmd_json, "channel", out_chn) != 0 || *out_chn < 0 ||
-	    *out_chn >= st->stream_count || st->streams[*out_chn].is_jpeg) {
-		rss_ctrl_resp_error(resp, resp_size, "need valid video channel");
-		return -1;
-	}
+	    *out_chn >= st->stream_count || st->streams[*out_chn].is_jpeg)
+		return rss_ctrl_resp_error(resp, resp_size, "need valid video channel");
 	return 0;
 }
 
 static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st, char *resp,
 			       int resp_size)
 {
-	int chn;
+	int chn, vret;
 
 	if (strcmp(cmd, "stream-restart") == 0) {
-		if (validate_video_channel(st, cmd_json, &chn, resp, resp_size) < 0)
-			return (int)strlen(resp); /* validate already wrote error */
-		if (do_stream_restart(st, chn, resp, resp_size) < 0)
-			return (int)strlen(resp);
+		vret = validate_video_channel(st, cmd_json, &chn, resp, resp_size);
+		if (vret > 0)
+			return vret;
+		vret = do_stream_restart(st, chn, resp, resp_size);
+		if (vret > 0)
+			return vret;
 		return rss_ctrl_resp_ok(resp, resp_size);
 	}
 
 	if (strcmp(cmd, "stream-stop") == 0) {
-		if (validate_video_channel(st, cmd_json, &chn, resp, resp_size) < 0)
-			return (int)strlen(resp);
+		vret = validate_video_channel(st, cmd_json, &chn, resp, resp_size);
+		if (vret > 0)
+			return vret;
 		if (!atomic_load(&st->stream_active[chn]))
 			return rss_ctrl_resp_ok(resp, resp_size);
 
@@ -1313,8 +1314,9 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 	}
 
 	if (strcmp(cmd, "stream-start") == 0) {
-		if (validate_video_channel(st, cmd_json, &chn, resp, resp_size) < 0)
-			return (int)strlen(resp);
+		vret = validate_video_channel(st, cmd_json, &chn, resp, resp_size);
+		if (vret > 0)
+			return vret;
 		if (atomic_load(&st->stream_active[chn]))
 			return rss_ctrl_resp_ok(resp, resp_size);
 		if (!st->streams[chn].ring)
@@ -1348,8 +1350,9 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 
 	if (strcmp(cmd, "set-codec") == 0) {
 		char val[8];
-		if (validate_video_channel(st, cmd_json, &chn, resp, resp_size) < 0)
-			return (int)strlen(resp);
+		vret = validate_video_channel(st, cmd_json, &chn, resp, resp_size);
+		if (vret > 0)
+			return vret;
 		if (rss_json_get_str(cmd_json, "value", val, sizeof(val)) != 0) {
 			return rss_ctrl_resp_error(resp, resp_size, "need value (h264|h265)");
 		}
@@ -1379,9 +1382,10 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		st->streams[chn].enc_cfg.codec = codec;
 		RSS_INFO("set-codec: channel %d → %s", chn, val);
 
-		if (do_stream_restart(st, chn, resp, resp_size) < 0) {
+		vret = do_stream_restart(st, chn, resp, resp_size);
+		if (vret > 0) {
 			st->streams[chn].enc_cfg.codec = old_codec;
-			return (int)strlen(resp);
+			return vret;
 		}
 		rss_config_set_str(st->cfg, st->streams[chn].cfg_sect, "codec", val);
 		return rss_ctrl_resp_ok(resp, resp_size);
@@ -1389,8 +1393,9 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 
 	if (strcmp(cmd, "set-resolution") == 0) {
 		int w, h;
-		if (validate_video_channel(st, cmd_json, &chn, resp, resp_size) < 0)
-			return (int)strlen(resp);
+		vret = validate_video_channel(st, cmd_json, &chn, resp, resp_size);
+		if (vret > 0)
+			return vret;
 		if (rss_json_get_int(cmd_json, "width", &w) != 0 ||
 		    rss_json_get_int(cmd_json, "height", &h) != 0 || w < 32 || h < 32 || w > 4096 ||
 		    h > 4096) {
