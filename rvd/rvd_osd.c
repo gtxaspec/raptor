@@ -306,7 +306,8 @@ void rvd_osd_init_stream(rvd_state_t *st, int s)
 			continue;
 
 		const char *name = ent->d_name + prefix_len;
-		if (!name[0] || strlen(name) >= RVD_OSD_NAME_LEN)
+		size_t name_len = strnlen(name, RVD_OSD_NAME_LEN);
+		if (name_len == 0 || name_len >= RVD_OSD_NAME_LEN)
 			continue;
 
 		/* Already have this region? */
@@ -634,7 +635,8 @@ static void scan_new_shm(rvd_state_t *st, int s)
 			continue;
 
 		const char *name = ent->d_name + prefix_len;
-		if (!name[0] || strlen(name) >= RVD_OSD_NAME_LEN)
+		size_t name_len = strnlen(name, RVD_OSD_NAME_LEN);
+		if (name_len == 0 || name_len >= RVD_OSD_NAME_LEN)
 			continue;
 
 		if (rvd_osd_find_region(st, s, name))
