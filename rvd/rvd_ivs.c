@@ -163,8 +163,17 @@ int rvd_ivs_start(rvd_state_t *st)
 				snprintf(key, sizeof(key), "roi%d", i);
 				const char *val = rss_config_get_str(cfg, "motion", key, "");
 				int x0 = 0, y0 = 0, x1 = w - 1, y1 = h - 1;
-				if (sscanf(val, "%d,%d,%d,%d", &x0, &y0, &x1, &y1) < 4)
-					RSS_WARN("IVS: roi%d incomplete, using defaults", i);
+				if (sscanf(val, "%d,%d,%d,%d", &x0, &y0, &x1, &y1) < 4) {
+					RSS_WARN("IVS: roi%d incomplete, using full frame", i);
+					x0 = 0;
+					y0 = 0;
+					x1 = w - 1;
+					y1 = h - 1;
+				}
+				if (x0 < 0) x0 = 0;
+				if (y0 < 0) y0 = 0;
+				if (x1 >= w) x1 = w - 1;
+				if (y1 >= h) y1 = h - 1;
 				mp.roi[i] = (rss_rect_t){x0, y0, x1, y1};
 				mp.sense[i] = sensitivity > 4 ? 4 : sensitivity;
 			}
