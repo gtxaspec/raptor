@@ -120,8 +120,18 @@ void *rvd_encoder_thread(void *arg)
 		if (rhdr && (rhdr->flags & RSS_RING_FLAG_REFMODE) && frame.nal_count > 0) {
 			uintptr_t vaddr = (uintptr_t)frame.nals[0].data;
 			uint64_t total_len64 = 0;
-			for (uint32_t n = 0; n < frame.nal_count; n++)
+			bool contiguous = true;
+			for (uint32_t n = 0; n < frame.nal_count; n++) {
+				if (n > 0 && (uintptr_t)frame.nals[n].data !=
+						      (uintptr_t)frame.nals[n - 1].data +
+							      frame.nals[n - 1].length)
+					contiguous = false;
 				total_len64 += frame.nals[n].length;
+			}
+			if (!contiguous) {
+				RSS_WARN("stream%d: non-contiguous NALs, embedded fallback", idx);
+				goto embedded_publish;
+			}
 
 			/* Compute base for offset calculation */
 			uintptr_t ref_base;
@@ -134,6 +144,9 @@ void *rvd_encoder_thread(void *arg)
 				ref_size = st->rmem_size;
 			}
 
+			/* Order matters: each check guards the next against underflow.
+			 * total_len64 > ref_size prevents ref_size - total_len64 wrap;
+			 * vaddr < ref_base prevents vaddr - ref_base wrap. */
 			if (!ref_base || total_len64 > ref_size || vaddr < ref_base ||
 			    vaddr - ref_base > ref_size - total_len64) {
 				if (frame_count == 0)
