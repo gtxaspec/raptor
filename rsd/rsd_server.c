@@ -548,6 +548,7 @@ void rsd_server_run(rsd_server_t *srv)
 	rsd_set_server_for_readers(srv);
 	pthread_t video_tid[RSD_STREAM_COUNT], audio_tid;
 	bool video_started[RSD_STREAM_COUNT] = {false};
+	bool audio_started = false;
 
 	pthread_attr_t attr;
 	pthread_attr_init(&attr);
@@ -560,8 +561,12 @@ void rsd_server_run(rsd_server_t *srv)
 			video_started[s] = true;
 		}
 	}
-	if (srv->has_audio)
-		pthread_create(&audio_tid, &attr, rsd_audio_reader_thread, srv);
+	if (srv->has_audio) {
+		if (pthread_create(&audio_tid, &attr, rsd_audio_reader_thread, srv) == 0)
+			audio_started = true;
+		else
+			RSS_ERROR("audio reader thread create failed");
+	}
 	pthread_attr_destroy(&attr);
 
 	struct epoll_event events[16];
@@ -626,13 +631,20 @@ void rsd_server_run(rsd_server_t *srv)
 			audio_retry_count = 0;
 			srv->ring_audio = rss_ring_open("audio");
 			if (srv->ring_audio) {
-				srv->has_audio = true;
 				pthread_attr_t a_attr;
 				pthread_attr_init(&a_attr);
 				pthread_attr_setstacksize(&a_attr, 128 * 1024);
-				pthread_create(&audio_tid, &a_attr, rsd_audio_reader_thread, srv);
+				if (pthread_create(&audio_tid, &a_attr, rsd_audio_reader_thread,
+						   srv) == 0) {
+					srv->has_audio = true;
+					audio_started = true;
+					RSS_INFO("audio ring attached (late)");
+				} else {
+					RSS_ERROR("audio reader thread create failed");
+					rss_ring_close(srv->ring_audio);
+					srv->ring_audio = NULL;
+				}
 				pthread_attr_destroy(&a_attr);
-				RSS_INFO("audio ring attached (late)");
 			}
 		}
 	}
@@ -641,7 +653,7 @@ void rsd_server_run(rsd_server_t *srv)
 		if (video_started[s])
 			pthread_join(video_tid[s], NULL);
 	}
-	if (srv->has_audio)
+	if (audio_started)
 		pthread_join(audio_tid, NULL);
 }
 
