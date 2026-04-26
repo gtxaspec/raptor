@@ -34,30 +34,30 @@ static uint8_t rvd_profile_idc(int profile)
 }
 
 /* Derive H.264 level_idc from resolution (Table A-1 in H.264 spec) */
+static const struct {
+	uint32_t max_mbs;
+	uint8_t level;
+} h264_level_table[] = {
+	{99, 10},    /* 1.0: 176x144 (QCIF) */
+	{396, 13},   /* 1.3: 352x288 (CIF) */
+	{792, 21},   /* 2.1: 480x360 */
+	{1620, 30},  /* 3.0: 720x576 */
+	{3600, 31},  /* 3.1: 1280x720 */
+	{5120, 32},  /* 3.2: 1280x1024 */
+	{8192, 40},  /* 4.0: 1920x1080 */
+	{8704, 42},  /* 4.2: 2048x1088 */
+	{22080, 50}, /* 5.0: 2560x1920 */
+	{36864, 51}, /* 5.1: 4096x2160 */
+};
+
 static uint8_t rvd_level_idc(int width, int height)
 {
-	int macroblocks = ((width + 15) / 16) * ((height + 15) / 16);
-	if (macroblocks <= 99)
-		return 10; /* 1.0: up to 176x144 (QCIF) */
-	if (macroblocks <= 396)
-		return 13; /* 1.3: up to 352x288 (CIF) */
-	if (macroblocks <= 792)
-		return 21; /* 2.1: up to 480x360 */
-	if (macroblocks <= 1620)
-		return 30; /* 3.0: up to 720x576 */
-	if (macroblocks <= 3600)
-		return 31; /* 3.1: up to 1280x720 */
-	if (macroblocks <= 5120)
-		return 32; /* 3.2: up to 1280x1024 */
-	if (macroblocks <= 8192)
-		return 40; /* 4.0: up to 1920x1080 */
-	if (macroblocks <= 8704)
-		return 42; /* 4.2: up to 2048x1088 */
-	if (macroblocks <= 22080)
-		return 50; /* 5.0: up to 2560x1920 */
-	if (macroblocks <= 36864)
-		return 51; /* 5.1: up to 4096x2160 */
-	return 52;	   /* 5.2 */
+	uint32_t mbs = (uint32_t)(((width + 15) / 16) * ((height + 15) / 16));
+	for (unsigned i = 0; i < sizeof(h264_level_table) / sizeof(h264_level_table[0]); i++) {
+		if (mbs <= h264_level_table[i].max_mbs)
+			return h264_level_table[i].level;
+	}
+	return 52; /* 5.2 */
 }
 
 /* Parse codec string from config */
