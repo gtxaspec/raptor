@@ -75,7 +75,7 @@ int rvd_ivs_init(rvd_state_t *st)
 		return ret;
 	}
 
-	st->ivs_active = true;
+	atomic_store(&st->ivs_active, true);
 	RSS_INFO("IVS: group %d created (bind pending)", IVS_GRP);
 	return RSS_OK;
 }
@@ -86,7 +86,7 @@ int rvd_ivs_init(rvd_state_t *st)
  */
 int rvd_ivs_start(rvd_state_t *st)
 {
-	if (!st->ivs_active)
+	if (!atomic_load(&st->ivs_active))
 		return RSS_ERR;
 
 	rss_config_t *cfg = st->cfg;
@@ -256,7 +256,7 @@ err_iface:
 	else
 		RSS_HAL_CALL(st->ops, ivs_destroy_move_interface, st->hal_ctx, algo_handle);
 	st->ivs_algo_handle = NULL;
-	st->ivs_active = false;
+	atomic_store(&st->ivs_active, false);
 	return ret;
 }
 
@@ -266,7 +266,7 @@ err_iface:
  */
 void rvd_ivs_stop(rvd_state_t *st)
 {
-	if (!st->ivs_active)
+	if (!atomic_load(&st->ivs_active))
 		return;
 
 #ifdef IVS_DETECT
@@ -312,7 +312,7 @@ void rvd_ivs_stop(rvd_state_t *st)
  */
 void rvd_ivs_pause(rvd_state_t *st)
 {
-	if (!st->ivs_active)
+	if (!atomic_load(&st->ivs_active))
 		return;
 	RSS_HAL_CALL(st->ops, ivs_stop, st->hal_ctx, st->ivs_chn);
 	RSS_INFO("IVS: paused");
@@ -320,7 +320,7 @@ void rvd_ivs_pause(rvd_state_t *st)
 
 void rvd_ivs_resume(rvd_state_t *st)
 {
-	if (!st->ivs_active)
+	if (!atomic_load(&st->ivs_active))
 		return;
 	RSS_HAL_CALL(st->ops, ivs_start, st->hal_ctx, st->ivs_chn);
 	RSS_INFO("IVS: resumed");
@@ -332,13 +332,13 @@ void rvd_ivs_resume(rvd_state_t *st)
  */
 void rvd_ivs_deinit(rvd_state_t *st)
 {
-	if (!st->ivs_active)
+	if (!atomic_load(&st->ivs_active))
 		return;
 
 	RSS_HAL_CALL(st->ops, ivs_destroy_group, st->hal_ctx, st->ivs_grp);
 	pthread_mutex_destroy(&st->ivs_det_lock);
 
-	st->ivs_active = false;
+	atomic_store(&st->ivs_active, false);
 	RSS_INFO("IVS: deinitialized");
 }
 
