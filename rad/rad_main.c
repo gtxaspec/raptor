@@ -768,6 +768,8 @@ int main(int argc, char **argv)
 
 	/* Audio config */
 	int sample_rate = rss_config_get_int(dctx.cfg, "audio", "sample_rate", 16000);
+	if (sample_rate <= 0)
+		sample_rate = 16000;
 	int volume = rss_config_get_int(dctx.cfg, "audio", "volume", 80);
 	int gain = rss_config_get_int(dctx.cfg, "audio", "gain", 25);
 	int ai_dev = rss_config_get_int(dctx.cfg, "audio", "device", 1);
