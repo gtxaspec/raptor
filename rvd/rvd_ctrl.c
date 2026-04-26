@@ -1138,7 +1138,7 @@ static int handle_ivs_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 	if (strcmp(cmd, "ivs-set-sensitivity") == 0) {
 		int sens = -1;
 		if (rss_json_get_int(cmd_json, "value", &sens) == 0 && atomic_load(&st->ivs_active) &&
-		    sens >= 0) {
+		    sens >= 0 && sens <= 4) {
 			rss_ivs_move_param_t mp;
 			memset(&mp, 0, sizeof(mp));
 			if (RSS_HAL_CALL(st->ops, ivs_get_param, st->hal_ctx, st->ivs_chn, &mp) ==
