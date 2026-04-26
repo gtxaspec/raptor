@@ -431,7 +431,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 			osd_pool = st->osd_pool_override;
 		if (osd_pool < 448 * 1024)
 			osd_pool = 448 * 1024;
-		osd_pool = (osd_pool + 0xFFFF) & ~0xFFFF;
+		osd_pool = (osd_pool + 0xFFFFu) & ~0xFFFFu;
 		RSS_HAL_CALL(st->ops, osd_set_pool_size, st->hal_ctx, osd_pool);
 		RSS_DEBUG("osd pool: %u KB (font_size=%d)", osd_pool / 1024, font_size);
 	}
