@@ -535,7 +535,7 @@ static void *rvd_jzdl_thread(void *arg)
 	 * Must be > 0 for GetFrame to return frames. */
 	IMP_FrameSource_SetFrameDepth(fs, 1);
 
-	while (*st->running && atomic_load(&st->ivs_active)) {
+	while (rss_running(st->running) && atomic_load(&st->ivs_active)) {
 		IMPFrameInfo *frame = NULL;
 		int ret = IMP_FrameSource_GetFrame(fs, &frame);
 		if (ret != 0 || !frame) {
@@ -596,7 +596,7 @@ void *rvd_ivs_thread(void *arg)
 
 	RSS_INFO("IVS poll thread started (algo=%s)", st->ivs_persondet ? "persondet" : "move");
 
-	while (*st->running && atomic_load(&st->ivs_active)) {
+	while (rss_running(st->running) && atomic_load(&st->ivs_active)) {
 		int ret = RSS_HAL_CALL(st->ops, ivs_poll_result, st->hal_ctx, st->ivs_chn, 1000);
 		if (ret != 0)
 			continue;
