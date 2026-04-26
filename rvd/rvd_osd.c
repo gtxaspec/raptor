@@ -731,27 +731,6 @@ void rvd_osd_check(rvd_state_t *st)
 		if (st->streams[s].is_jpeg)
 			continue;
 
-		bool any_alive = true;
-		bool any_open = false;
-		for (int r = 0; r < st->osd_region_count[s]; r++) {
-			rvd_osd_region_t *reg = &st->osd_regions[s][r];
-			if (reg->active && reg->shm) {
-				any_open = true;
-				if (reg->no_update_ticks < 30)
-					break;
-			}
-		}
-		if (any_open) {
-			any_alive = false;
-			for (int r = 0; r < st->osd_region_count[s]; r++) {
-				rvd_osd_region_t *reg = &st->osd_regions[s][r];
-				if (reg->active && reg->shm && reg->no_update_ticks < 30) {
-					any_alive = true;
-					break;
-				}
-			}
-		}
-
 		for (int r = 0; r < st->osd_region_count[s]; r++) {
 			rvd_osd_region_t *reg = &st->osd_regions[s][r];
 			if (!reg->active || !reg->shm)
