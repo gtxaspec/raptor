@@ -376,7 +376,14 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		};
 		int ret = RSS_HAL_CALL(ctx->ops, audio_init, ctx->hal_ctx, &audio_cfg);
 		if (ret != RSS_OK) {
-			RSS_ERROR("audio-restart: audio_init failed: %d", ret);
+			RSS_ERROR("audio-restart: audio_init at %dHz failed: %d, restoring %dHz",
+				  new_sample_rate, ret, old_sample_rate);
+			audio_cfg.sample_rate = old_sample_rate;
+			audio_cfg.samples_per_frame = old_sample_rate / 50;
+			ret = RSS_HAL_CALL(ctx->ops, audio_init, ctx->hal_ctx, &audio_cfg);
+			if (ret != RSS_OK)
+				RSS_FATAL("audio-restart: HAL restore at %dHz also failed: %d",
+					  old_sample_rate, ret);
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "audio_init failed");
 		}
 
