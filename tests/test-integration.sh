@@ -281,8 +281,14 @@ echo "=== RHD HTTP tests ==="
 # Index page (will 404 since no html file, that's expected)
 check_http "GET /" "http://127.0.0.1:18080/" "404"
 
-# JPEG snapshot
-check_http "GET /snap" "http://127.0.0.1:18080/snap" "200"
+# JPEG snapshot (wait for JPEG ring producer to start publishing)
+snap_ok=false
+for i in 1 2 3 4 5; do
+    code=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:18080/snap" 2>/dev/null)
+    if [ "$code" = "200" ]; then snap_ok=true; break; fi
+    sleep 1
+done
+if $snap_ok; then pass "GET /snap"; else fail "GET /snap: expected HTTP 200, got $code"; fi
 
 # MJPEG stream (connect briefly — timeout exit 124 = success for streaming)
 if timeout 2 curl -s -o /dev/null "http://127.0.0.1:18080/mjpeg" 2>/dev/null; ret=$?; [ "$ret" = 124 ] || [ "$ret" = 0 ]; then

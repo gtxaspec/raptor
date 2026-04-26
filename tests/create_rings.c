@@ -163,14 +163,9 @@ int main(int argc, char **argv)
 	RSS_INFO("created rings: main sub jpeg0 jpeg1 audio(codec=%d rate=%d) speaker",
 		 audio_codec, sample_rate);
 
-	/* Publish initial JPEG frames so RHD has data immediately */
-	rss_iov_t iov = {.data = fake_jpeg, .length = sizeof(fake_jpeg)};
-	if (jpeg0)
-		for (int i = 0; i < 4; i++)
-			rss_ring_publish_iov(jpeg0, &iov, 1, i * 40000, 0x30, 1);
-	if (jpeg1)
-		for (int i = 0; i < 4; i++)
-			rss_ring_publish_iov(jpeg1, &iov, 1, i * 40000, 0x30, 1);
+	/* Keep publishing JPEG so a consumer connecting at any time finds
+	 * a fresh frame after EOVERFLOW resync (ring sentinel is UINT64_MAX,
+	 * first read overflows past stale pre-published frames). */
 
 	/* Build IDR frame: [SPS][PPS][IDR_slice] */
 	uint8_t idr_frame[4096];
