@@ -335,6 +335,8 @@ int rvd_pipeline_init(rvd_state_t *st)
 	rss_config_t *cfg = st->cfg;
 	int ret;
 
+	pthread_mutex_init(&st->osd_lock, NULL);
+
 	/* ── 1. Create HAL ── */
 	st->hal_ctx = rss_hal_create();
 	if (!st->hal_ctx) {
@@ -882,8 +884,6 @@ int rvd_pipeline_init(rvd_state_t *st)
 		st->privacy_handles[s] = -1;
 		st->privacy[s] = false;
 	}
-
-	pthread_mutex_init(&st->osd_lock, NULL);
 
 	/* ── 7-10. Create encoder, OSD, bind, rings per stream ── */
 	/* IVS init must happen before bind (SDK requires all groups created) */
