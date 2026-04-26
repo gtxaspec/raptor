@@ -16,6 +16,8 @@
 
 #include "rvd.h"
 
+#define RVD_PAGE_SIZE 4096u
+
 /* Map HAL profile enum (0=base,1=main,2=high) to H.264 profile_idc */
 static uint8_t rvd_profile_idc(int profile)
 {
@@ -1011,7 +1013,7 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 				uint32_t pbuf = s->enc_cfg.width * s->enc_cfg.height * 3 / 8;
 				if (pbuf < 256 * 1024)
 					pbuf = 256 * 1024;
-				pbuf = (pbuf + 4095) & ~4095u;
+				pbuf = (pbuf + RVD_PAGE_SIZE - 1) & ~(RVD_PAGE_SIZE - 1);
 				s->enc_cfg.buf_size = pbuf;
 			}
 			/* Allegro (T31/T40/T41): leave SDK defaults.
