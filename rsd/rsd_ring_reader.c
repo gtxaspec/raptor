@@ -326,18 +326,10 @@ void *rsd_client_send_thread(void *arg)
 	return NULL;
 }
 
-/* Global server pointer (set in rsd_server_run before threads start) */
-static rsd_server_t *g_srv_for_readers = NULL;
-
-void rsd_set_server_for_readers(rsd_server_t *srv)
-{
-	g_srv_for_readers = srv;
-}
-
 void *rsd_video_reader_thread(void *arg)
 {
 	rsd_ring_ctx_t *rctx = arg;
-	rsd_server_t *srv = g_srv_for_readers;
+	rsd_server_t *srv = rctx->srv;
 	int stream_idx = rctx->idx;
 
 	/* Wall-clock video timestamps: derive from IMP's CLOCK_MONOTONIC_RAW

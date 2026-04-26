@@ -150,6 +150,7 @@ typedef struct rsd_client {
  * the ~15 hot-path accesses in the reader thread.
  */
 typedef struct {
+	struct rsd_server *srv; /* back-pointer to server */
 	rss_ring_t *ring;
 	uint64_t read_seq;
 	uint8_t *frame_buf;
@@ -236,7 +237,6 @@ void rsd_handle_rtsp_data(rsd_client_t *client, const char *data, size_t len);
 void rsd_endpoints_load(rsd_server_t *srv, rss_config_t *cfg);
 
 /* rsd_ring_reader.c */
-void rsd_set_server_for_readers(rsd_server_t *srv);
 void *rsd_video_reader_thread(void *arg);
 void *rsd_audio_reader_thread(void *arg);
 int rsd_sendq_init(rsd_sendq_t *q);

@@ -542,8 +542,9 @@ static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 
 void rsd_server_run(rsd_server_t *srv)
 {
-	/* Start ring reader threads */
-	rsd_set_server_for_readers(srv);
+	/* Start ring reader threads — set back-pointers before spawn */
+	for (int s = 0; s < RSD_STREAM_COUNT; s++)
+		srv->video[s].srv = srv;
 	pthread_t video_tid[RSD_STREAM_COUNT], audio_tid;
 	bool video_started[RSD_STREAM_COUNT] = {false};
 	bool audio_started = false;
