@@ -421,6 +421,33 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		if (new_ops->init(ctx->codec_ctx, ctx->cfg, new_sample_rate) != 0) {
 			RSS_ERROR("audio-restart: codec %s init failed, restoring %s", target_codec,
 				  old_codec_str);
+
+			/* Restore HAL to old sample rate before restoring codec */
+			if (new_sample_rate != old_sample_rate) {
+				RSS_HAL_CALL(ctx->ops, audio_deinit, ctx->hal_ctx);
+				rss_audio_config_t restore_cfg = {
+					.sample_rate = old_sample_rate,
+					.samples_per_frame = old_sample_rate / 50,
+					.chn_count = 1,
+					.frame_depth = 20,
+					.ai_vol = ctx->volume,
+					.ai_gain = ctx->gain,
+					.input_type = ctx->input_type,
+				};
+				if (RSS_HAL_CALL(ctx->ops, audio_init, ctx->hal_ctx,
+						 &restore_cfg) != RSS_OK) {
+					RSS_FATAL("audio-restart: HAL restore to %dHz failed",
+						  old_sample_rate);
+					*ctx->codec_ops = NULL;
+					return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+								   "HAL restore failed, audio disabled");
+				}
+				RSS_HAL_CALL(ctx->ops, audio_set_volume, ctx->hal_ctx,
+					     ctx->ai_dev, 0, ctx->volume);
+				RSS_HAL_CALL(ctx->ops, audio_set_gain, ctx->hal_ctx,
+					     ctx->ai_dev, 0, ctx->gain);
+			}
+
 			memset(ctx->codec_ctx, 0, sizeof(*ctx->codec_ctx));
 			ctx->codec_ctx->codec_id = old_codec_id;
 			if (old_ops->init(ctx->codec_ctx, ctx->cfg, old_sample_rate) != 0) {
