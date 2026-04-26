@@ -18,6 +18,12 @@
 #define RVD_OSD_RETRY_INTERVAL 50 /* check ticks (~5s at 10Hz) */
 #define RVD_OSD_NAME_LEN       32
 
+/*
+ * Thread safety: enc_cfg/fs_cfg are written only by the ctrl handler
+ * (main thread). The encoder thread reads width/height once at startup
+ * before ctrl is active. Commands that modify width/height (set-resolution,
+ * set-codec) stop the encoder thread first via do_stream_restart.
+ */
 typedef struct {
 	rss_video_config_t enc_cfg;
 	rss_fs_config_t fs_cfg;
