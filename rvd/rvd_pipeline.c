@@ -640,9 +640,14 @@ int rvd_pipeline_init(rvd_state_t *st)
 	 *   encoder writes to POSIX SHM via DMMU, consumers mmap the SHM. */
 	st->refmode = rss_config_get_bool(cfg, "ring", "refmode", false);
 	if (st->refmode) {
-		st->refmode_shm = !caps->has_stream_buf_size;
-		RSS_INFO("ring reference mode enabled (%s)",
-			 st->refmode_shm ? "SHM injection" : "rmem zero-copy");
+		if (!caps) {
+			RSS_WARN("refmode enabled but HAL caps unavailable, disabling");
+			st->refmode = false;
+		} else {
+			st->refmode_shm = !caps->has_stream_buf_size;
+			RSS_INFO("ring reference mode enabled (%s)",
+				 st->refmode_shm ? "SHM injection" : "rmem zero-copy");
+		}
 	}
 
 	/* ── 4. Load stream configs (per sensor) ── */
