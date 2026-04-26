@@ -1146,7 +1146,7 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 		int chain_len = 0;
 
 		chain[chain_len++] = (rss_cell_t){RSS_DEV_FS, s->fs_chn, 0};
-		if (s->fs_chn == 1 && st->ivs_active)
+		if (s->fs_chn == st->ivs_fs_chn && st->ivs_active)
 			chain[chain_len++] = (rss_cell_t){RSS_DEV_IVS, 0, 0};
 		if (st->osd_enabled && (!st->use_isp_osd || s->fs_chn % 3 != 0))
 			chain[chain_len++] = (rss_cell_t){RSS_DEV_OSD, s->chn, 0};
@@ -1224,7 +1224,12 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 				uint32_t fps = s->enc_cfg.fps_num;
 				if (fps == 0)
 					fps = 25;
-				uint32_t max_frame = (uint32_t)((uint64_t)bps * 4 / 8 / fps);
+				/* I-frame headroom: 4x for normal GOP, 8x for
+				 * short GOP where every frame is an I-frame */
+				uint32_t gop = s->enc_cfg.gop_length;
+				uint32_t iframe_mult = (gop > 0 && gop <= fps) ? 8 : 4;
+				uint32_t max_frame =
+					(uint32_t)((uint64_t)bps * iframe_mult / 8 / fps);
 				if (max_frame < min_frame)
 					max_frame = min_frame;
 				data = max_frame * (uint32_t)slots_cfg;
