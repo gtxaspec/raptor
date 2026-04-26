@@ -212,7 +212,10 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running)
 		pthread_attr_t osd_attr;
 		pthread_attr_init(&osd_attr);
 		pthread_attr_setstacksize(&osd_attr, 128 * 1024);
-		pthread_create(&osd_tid, &osd_attr, rvd_osd_thread, st);
+		if (pthread_create(&osd_tid, &osd_attr, rvd_osd_thread, st) != 0) {
+			RSS_ERROR("OSD thread create failed");
+			osd_tid = 0;
+		}
 		pthread_attr_destroy(&osd_attr);
 	}
 
@@ -221,7 +224,11 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running)
 		pthread_attr_t ivs_attr;
 		pthread_attr_init(&ivs_attr);
 		pthread_attr_setstacksize(&ivs_attr, 64 * 1024);
-		pthread_create(&st->ivs_tid, &ivs_attr, rvd_ivs_thread, st);
+		if (pthread_create(&st->ivs_tid, &ivs_attr, rvd_ivs_thread, st) != 0) {
+			RSS_ERROR("IVS thread create failed");
+			st->ivs_tid = 0;
+			atomic_store(&st->ivs_active, false);
+		}
 		pthread_attr_destroy(&ivs_attr);
 	}
 
