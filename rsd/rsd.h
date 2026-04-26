@@ -141,7 +141,14 @@ typedef struct rsd_client {
 	bool send_thread_running;
 } rsd_client_t;
 
-/* Per-ring reader state */
+/*
+ * Per-ring reader state.
+ * ring pointer: written only by the reader thread (open/close), read
+ * by the session thread during DESCRIBE/SETUP via a local snapshot.
+ * Pointer-sized loads are naturally atomic on MIPS32; the snapshot
+ * pattern handles TOCTOU. Not _Atomic to avoid seq_cst overhead on
+ * the ~15 hot-path accesses in the reader thread.
+ */
 typedef struct {
 	rss_ring_t *ring;
 	uint64_t read_seq;
@@ -181,7 +188,7 @@ typedef struct rsd_server {
 	/* Video rings */
 	rsd_ring_ctx_t video[RSD_STREAM_COUNT];
 
-	/* Audio ring */
+	/* Audio ring — same cross-thread access pattern as video ring pointers */
 	rss_ring_t *ring_audio;
 	uint64_t audio_read_seq;
 	bool has_audio;

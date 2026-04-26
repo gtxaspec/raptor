@@ -313,11 +313,12 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 	VSELF(rsd_client_t);
 
 	/* Determine which stream from URI */
-	self->stream_idx = detect_stream_idx(self->srv, req->start_line.uri);
-	if (self->stream_idx < 0) {
+	int idx = detect_stream_idx(self->srv, req->start_line.uri);
+	if (idx < 0) {
 		compy_respond(ctx, COMPY_STATUS_NOT_FOUND, "Unknown stream endpoint");
 		return;
 	}
+	self->stream_idx = idx;
 
 	/* Snapshot ring pointer — the reader thread can set it to NULL
 	 * during idle timeout. Local copy avoids TOCTOU NULL deref. */
