@@ -41,10 +41,8 @@ cleanup_on_exit() {
     set +e
     # Unmount on device FIRST (before killing Docker NFS) to avoid hung mount
     if [ -n "${DEVICE_IP:-}" ]; then
-        ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o LogLevel=ERROR \
-            "root@$DEVICE_IP" \
-            'umount -f -l /tmp/raptor-test 2>/dev/null; killall rvd rad rsd rhd rod ric rmd rmr rwd rwc rsp rfs 2>/dev/null' \
-            2>/dev/null
+        local cleanup_ssh="${SSH:-ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o LogLevel=ERROR root@$DEVICE_IP}"
+        $cleanup_ssh 'umount -f -l /tmp/raptor-test 2>/dev/null; killall rvd rad rsd rhd rod ric rmd rmr rwd rwc rsp rfs 2>/dev/null' 2>/dev/null
     fi
     # Then kill Docker NFS
     if [ -n "$DOCKER_NFS_CONTAINER" ]; then
@@ -58,28 +56,35 @@ DEVICE_IP=""
 RESTART=true
 KEEP=false
 NFS_OVERRIDE=""
+SSH_PASS=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --no-restart) RESTART=false; shift ;;
         --keep) KEEP=true; shift ;;
         --nfs) NFS_OVERRIDE="$2"; shift 2 ;;
+        --password) SSH_PASS="$2"; shift 2 ;;
         --help|-h)
-            echo "Usage: $0 <device-ip> [--nfs host:path] [--no-restart] [--keep]"
+            echo "Usage: $0 <device-ip> [--nfs host:path] [--no-restart] [--keep] [--password <pw>]"
             exit 0 ;;
         -*) echo "Unknown option: $1"; exit 1 ;;
         *) DEVICE_IP="$1"; shift ;;
     esac
 done
 
-[ -z "$DEVICE_IP" ] && { echo "Usage: $0 <device-ip> [--nfs host:path] [--no-restart] [--keep]"; exit 1; }
+[ -z "$DEVICE_IP" ] && { echo "Usage: $0 <device-ip> [--nfs host:path] [--no-restart] [--keep] [--password <pw>]"; exit 1; }
 
 # Container name includes device IP so parallel tests don't collide
 DOCKER_NFS_CONTAINER="raptor-nfs-$(echo "$DEVICE_IP" | tr '.' '-')"
 
 # ── Config ──
 
-SSH="ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o LogLevel=ERROR root@$DEVICE_IP"
+SSH_BASE="ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o LogLevel=ERROR root@$DEVICE_IP"
+if [ -n "$SSH_PASS" ]; then
+    SSH="sshpass -p $SSH_PASS $SSH_BASE"
+else
+    SSH="$SSH_BASE"
+fi
 
 # Unmount on device BEFORE killing Docker (prevents D-state hang)
 $SSH 'umount -f -l /tmp/raptor-test 2>/dev/null' 2>/dev/null || true

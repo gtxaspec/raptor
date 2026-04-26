@@ -24,10 +24,8 @@ NFS_MOUNTD_PORT=12048
 cleanup_on_exit() {
     set +e
     if [ -n "${DEVICE_IP:-}" ]; then
-        ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o LogLevel=ERROR \
-            "root@$DEVICE_IP" \
-            'umount -f -l /tmp/raptor-test 2>/dev/null; killall rvd rad rsd rhd 2>/dev/null' \
-            2>/dev/null
+        local cleanup_ssh="${SSH:-ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o LogLevel=ERROR root@$DEVICE_IP}"
+        $cleanup_ssh 'umount -f -l /tmp/raptor-test 2>/dev/null; killall rvd rad rsd rhd 2>/dev/null' 2>/dev/null
     fi
     if [ -n "$DOCKER_NFS_CONTAINER" ]; then
         docker rm -f "$DOCKER_NFS_CONTAINER" > /dev/null 2>&1
@@ -42,24 +40,31 @@ DEVICE_IP=""
 DURATION=60
 CODEC_FILTER=""
 RTSP_TRANSPORT="tcp"
+SSH_PASS=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --duration) DURATION="$2"; shift 2 ;;
         --codec) CODEC_FILTER="$2"; shift 2 ;;
         --udp) RTSP_TRANSPORT="udp"; shift ;;
+        --password) SSH_PASS="$2"; shift 2 ;;
         --help|-h)
-            echo "Usage: $0 <device-ip> [--duration <sec>] [--codec <codec>] [--udp]"
+            echo "Usage: $0 <device-ip> [--duration <sec>] [--codec <codec>] [--udp] [--password <pw>]"
             exit 0 ;;
         -*) echo "Unknown option: $1"; exit 1 ;;
         *) DEVICE_IP="$1"; shift ;;
     esac
 done
 
-[ -z "$DEVICE_IP" ] && { echo "Usage: $0 <device-ip> [--duration <sec>] [--codec <codec>] [--udp]"; exit 1; }
+[ -z "$DEVICE_IP" ] && { echo "Usage: $0 <device-ip> [--duration <sec>] [--codec <codec>] [--udp] [--password <pw>]"; exit 1; }
 
 DOCKER_NFS_CONTAINER="raptor-nfs-$(echo "$DEVICE_IP" | tr '.' '-')"
-SSH="ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o LogLevel=ERROR root@$DEVICE_IP"
+SSH_BASE="ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o LogLevel=ERROR root@$DEVICE_IP"
+if [ -n "$SSH_PASS" ]; then
+    SSH="sshpass -p $SSH_PASS $SSH_BASE"
+else
+    SSH="$SSH_BASE"
+fi
 
 # Unmount on device BEFORE killing Docker (prevents D-state hang)
 $SSH 'umount -f -l /tmp/raptor-test 2>/dev/null' 2>/dev/null || true
