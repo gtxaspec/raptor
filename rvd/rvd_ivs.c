@@ -146,6 +146,8 @@ int rvd_ivs_start(rvd_state_t *st)
 		bp.height = h;
 		if (st->ops->ivs_create_base_move_interface)
 			algo_handle = st->ops->ivs_create_base_move_interface(st->hal_ctx, &bp);
+		if (algo_handle)
+			st->ivs_base_move = true;
 	} else {
 		rss_ivs_move_param_t mp = {0};
 		mp.skip_frame_count = skip;
@@ -251,7 +253,7 @@ err_iface:
 		RSS_HAL_CALL(st->ops, ivs_destroy_jzdl_interface, st->hal_ctx, algo_handle);
 	else if (st->ivs_persondet)
 		RSS_HAL_CALL(st->ops, ivs_destroy_persondet_interface, st->hal_ctx, algo_handle);
-	else if (strcmp(algo, "base_move") == 0)
+	else if (st->ivs_base_move)
 		RSS_HAL_CALL(st->ops, ivs_destroy_base_move_interface, st->hal_ctx, algo_handle);
 	else
 		RSS_HAL_CALL(st->ops, ivs_destroy_move_interface, st->hal_ctx, algo_handle);
@@ -288,11 +290,10 @@ void rvd_ivs_stop(rvd_state_t *st)
 	RSS_HAL_CALL(st->ops, ivs_destroy_channel, st->hal_ctx, st->ivs_chn);
 
 	if (st->ivs_algo_handle) {
-		const char *algo = rss_config_get_str(st->cfg, "motion", "algorithm", "move");
 		if (st->ivs_persondet)
 			RSS_HAL_CALL(st->ops, ivs_destroy_persondet_interface, st->hal_ctx,
 				     st->ivs_algo_handle);
-		else if (strcmp(algo, "base_move") == 0)
+		else if (st->ivs_base_move)
 			RSS_HAL_CALL(st->ops, ivs_destroy_base_move_interface, st->hal_ctx,
 				     st->ivs_algo_handle);
 		else

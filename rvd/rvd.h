@@ -135,7 +135,8 @@ struct rvd_state {
 	int ivs_grp;
 	int ivs_chn;
 	int ivs_fs_chn; /* framesource channel IVS is bound to */
-	bool ivs_persondet; /* true = persondet/jzdl algo, false = move/base_move */
+	bool ivs_persondet; /* true = persondet/jzdl algo */
+	bool ivs_base_move; /* true = base_move algo (vs move) */
 	bool ivs_jzdl;	    /* true = standalone JZDL inference */
 	void *jzdl_handle;  /* opaque JZDL context */
 	int ivs_grid_x;	    /* move detection grid columns */
