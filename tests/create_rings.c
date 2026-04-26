@@ -163,9 +163,13 @@ int main(int argc, char **argv)
 	RSS_INFO("created rings: main sub jpeg0 jpeg1 audio(codec=%d rate=%d) speaker",
 		 audio_codec, sample_rate);
 
-	/* Keep publishing JPEG so a consumer connecting at any time finds
-	 * a fresh frame after EOVERFLOW resync (ring sentinel is UINT64_MAX,
-	 * first read overflows past stale pre-published frames). */
+	/* Publish initial JPEG frames so RHD has data immediately */
+	if (jpeg0)
+		for (int i = 0; i < 4; i++)
+			rss_ring_publish(jpeg0, fake_jpeg, sizeof(fake_jpeg), i * 40000, 0x30, 1);
+	if (jpeg1)
+		for (int i = 0; i < 4; i++)
+			rss_ring_publish(jpeg1, fake_jpeg, sizeof(fake_jpeg), i * 40000, 0x30, 1);
 
 	/* Build IDR frame: [SPS][PPS][IDR_slice] */
 	uint8_t idr_frame[4096];
@@ -214,8 +218,10 @@ int main(int argc, char **argv)
 		if (sub_ring)
 			rss_ring_publish_iov(sub_ring, &viov, 1, vts, nal, is_key ? 1 : 0);
 
-		/* Publish JPEG snapshot at 1fps */
-		if (frame_num % 25 == 0) {
+		/* Publish JPEG snapshot at 5fps (every 5th video frame).
+		 * Higher rate than production so snap requests always find
+		 * a fresh frame after EOVERFLOW resync on ring open. */
+		if (frame_num % 5 == 0) {
 			rss_iov_t jiov = {.data = fake_jpeg, .length = sizeof(fake_jpeg)};
 			if (jpeg0)
 				rss_ring_publish_iov(jpeg0, &jiov, 1, vts, 0x30, 1);
