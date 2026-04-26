@@ -1400,6 +1400,12 @@ int rvd_stream_start(rvd_state_t *st, int idx)
 	if (ret != 0) {
 		RSS_ERROR("stream%d: pthread_create failed: %d", idx, ret);
 		atomic_store(&st->stream_active[idx], false);
+		if (s->enabled) {
+			RSS_HAL_CALL(st->ops, enc_stop, st->hal_ctx, s->chn);
+			s->enabled = false;
+		}
+		if (!s->is_jpeg)
+			RSS_HAL_CALL(st->ops, fs_disable_channel, st->hal_ctx, s->fs_chn);
 		return RSS_ERR;
 	}
 
