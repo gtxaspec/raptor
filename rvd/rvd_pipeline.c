@@ -978,11 +978,11 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 	if (s->is_jpeg) {
 		int video_grp = find_video_group(st, s->fs_chn);
 		if (video_grp < 0) {
-			RSS_ERROR("stream%d: JPEG has no paired video stream (fs_chn=%d)",
-				  idx, s->fs_chn);
+			RSS_ERROR("stream%d: JPEG has no paired video stream (fs_chn=%d)", idx,
+				  s->fs_chn);
 			return RSS_ERR;
 		}
-		if (rss_config_get_bool(cfg, "jpeg", "bufshare", true)) {
+		if (rss_config_get_bool(cfg, "jpeg", "bufshare", false)) {
 			ret = RSS_HAL_CALL(st->ops, enc_set_bufshare, st->hal_ctx, s->chn,
 					   video_grp);
 			if (ret == RSS_OK)
@@ -1048,7 +1048,8 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 				shm_unlink(full_shm);
 				sfd = shm_open(full_shm, O_CREAT | O_RDWR | O_EXCL, 0600);
 				if (sfd < 0) {
-					RSS_WARN("stream%d: SHM open failed, embedded fallback", idx);
+					RSS_WARN("stream%d: SHM open failed, embedded fallback",
+						 idx);
 					goto shm_fail;
 				}
 				if (ftruncate(sfd, shm_size) < 0) {
@@ -1056,8 +1057,8 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 						 idx);
 					goto shm_fail;
 				}
-				addr = mmap(NULL, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED,
-					    sfd, 0);
+				addr = mmap(NULL, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, sfd,
+					    0);
 				if (addr == MAP_FAILED) {
 					RSS_WARN("stream%d: SHM mmap failed, embedded fallback",
 						 idx);
@@ -1200,9 +1201,9 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 
 			s->ring = rss_ring_create(ring_name, slots, data);
 			if (s->ring)
-				rss_ring_set_stream_info(s->ring, RVD_JPEG_STREAM_ID_BASE + jpeg_idx,
-							 RSS_CODEC_JPEG,
-							 w, h, fps, s->enc_cfg.fps_den, 0, 0);
+				rss_ring_set_stream_info(
+					s->ring, RVD_JPEG_STREAM_ID_BASE + jpeg_idx, RSS_CODEC_JPEG,
+					w, h, fps, s->enc_cfg.fps_den, 0, 0);
 		} else {
 			const char *type = is_main ? "main" : "sub";
 			get_ring_name(s->sensor_idx, type, ring_name, sizeof(ring_name));
