@@ -178,8 +178,16 @@ EXTRA_LDFLAGS ?=
 LDFLAGS_HAL += $(EXTRA_LDFLAGS)
 LDFLAGS     += $(EXTRA_LDFLAGS)
 
+# live555 include paths (for rsd-555)
+LIVE555_SYSROOT ?= $(SYSROOT)
+LIVE555_INC := -I$(LIVE555_SYSROOT)/usr/include/liveMedia \
+               -I$(LIVE555_SYSROOT)/usr/include/groupsock \
+               -I$(LIVE555_SYSROOT)/usr/include/UsageEnvironment \
+               -I$(LIVE555_SYSROOT)/usr/include/BasicUsageEnvironment
+LIVE555_LIBS := -lliveMedia -lgroupsock -lBasicUsageEnvironment -lUsageEnvironment
+
 # Targets
-DAEMONS := rvd rsd rad rhd rod ric rmr rmd rwd rwc rfs rsp
+DAEMONS := rvd rsd rad rhd rod ric rmr rmd rwd rwc rfs rsp rsd-555
 TOOLS   := raptorctl ringdump rac rlatency
 
 .PHONY: all clean libs $(DAEMONS) $(TOOLS) install
@@ -219,6 +227,14 @@ rsd: $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(LIB_COMPY_FILE) $(RSS_BUILD_OBJ)
 	$(Q)$(MAKE) -C rsd CC="$(CC)" CFLAGS="$(CFLAGS) $(COMPY_CFLAGS)" \
 		LIBS="$(LIB_IPC) $(LIB_COMMON) $(LIB_COMPY) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS) $(LDFLAGS_TLS)" Q="$(Q)"
+
+rsd-555: $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_BUILD_OBJ)
+	@echo "  BUILD   rsd-555"
+	$(Q)$(MAKE) -C rsd-555 CC="$(CC)" CXX="$(CROSS_COMPILE)g++" CFLAGS="$(CFLAGS)" \
+		LIVE555_INC="$(LIVE555_INC)" \
+		LIVE555_LIBS="$(LIVE555_LIBS)" \
+		LIBS="$(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_LIBS)" \
+		LDFLAGS="$(LDFLAGS)" Q="$(Q)"
 
 rad: $(LIB_HAL_AUDIO_FILE) $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   rad"

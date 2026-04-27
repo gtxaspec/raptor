@@ -633,6 +633,59 @@ build_schrift() {
     cd "$SCRIPT_DIR"
 }
 
+build_live555() {
+    local src="$DEPS_DIR/live"
+    [ -f "$SYSROOT_DIR/usr/lib/libliveMedia.a" ] && return
+
+    echo "Building live555..."
+    cd "$src"
+
+    local cc="${CROSS_COMPILE}gcc"
+    local cxx="${CROSS_COMPILE}g++"
+    local ar="${CROSS_COMPILE}ar"
+
+    cat > config.raptor <<EOCFG
+COMPILE_OPTS =		\$(INCLUDES) -I. -DSOCKLEN_T=socklen_t -DNO_OPENSSL -DNO_STD_LIB -DLOCALE_NOT_USED -DALLOW_RTSP_SERVER_PORT_REUSE -Os -fPIC
+C =			c
+CPP =			cpp
+C_COMPILER =		${cc}
+C_FLAGS =		\$(COMPILE_OPTS) \$(CPPFLAGS)
+CPLUSPLUS_COMPILER =	${cxx}
+CPLUSPLUS_FLAGS =	\$(COMPILE_OPTS) -Wall -DBSD=1 -std=c++20 \$(CPPFLAGS)
+OBJ =			o
+LINK =			${cxx} -o
+LINK_OPTS =		-L. \$(LDFLAGS)
+CONSOLE_LINK_OPTS =	\$(LINK_OPTS)
+LIBRARY_LINK =		${ar} cr 
+LIBRARY_LINK_OPTS =
+LIB_SUFFIX =		a
+PREFIX =		/usr
+EOCFG
+
+    ./genMakefiles raptor
+
+    run live555-groupsock make -C groupsock -j"$JOBS"
+    run live555-liveMedia make -C liveMedia -j"$JOBS"
+    run live555-UsageEnvironment make -C UsageEnvironment -j"$JOBS"
+    run live555-BasicUsageEnvironment make -C BasicUsageEnvironment -j"$JOBS"
+
+    cp -f groupsock/libgroupsock.a "$SYSROOT_DIR/usr/lib/"
+    cp -f liveMedia/libliveMedia.a "$SYSROOT_DIR/usr/lib/"
+    cp -f UsageEnvironment/libUsageEnvironment.a "$SYSROOT_DIR/usr/lib/"
+    cp -f BasicUsageEnvironment/libBasicUsageEnvironment.a "$SYSROOT_DIR/usr/lib/"
+
+    mkdir -p "$SYSROOT_DIR/usr/include/liveMedia" \
+             "$SYSROOT_DIR/usr/include/groupsock" \
+             "$SYSROOT_DIR/usr/include/UsageEnvironment" \
+             "$SYSROOT_DIR/usr/include/BasicUsageEnvironment"
+    cp -f liveMedia/include/*.hh liveMedia/include/*.h "$SYSROOT_DIR/usr/include/liveMedia/" 2>/dev/null || true
+    cp -f groupsock/include/*.hh groupsock/include/*.h "$SYSROOT_DIR/usr/include/groupsock/" 2>/dev/null || true
+    cp -f UsageEnvironment/include/*.hh "$SYSROOT_DIR/usr/include/UsageEnvironment/"
+    cp -f BasicUsageEnvironment/include/*.hh "$SYSROOT_DIR/usr/include/BasicUsageEnvironment/"
+
+    cd "$SCRIPT_DIR"
+}
+
 build_raptor_common() {
     local src="$DEPS_DIR/raptor-common"
     echo "Building raptor-common..."
@@ -725,6 +778,12 @@ clone_repo compy        https://github.com/gtxaspec/compy            "$COMPY_VER
 clone_repo libschrift   https://github.com/tomolt/libschrift         "$SCHRIFT_VERSION"
 clone_repo media-server https://github.com/ireader/media-server      HEAD
 
+# live555 — download tarball (not a git repo)
+if [ ! -d "$DEPS_DIR/live" ]; then
+    echo "Downloading live555..."
+    curl -sL https://download.live555.com/live.2026.04.22.tar.gz | tar xz -C "$DEPS_DIR"
+fi
+
 [ "$OPT_TLS" = 1 ] && clone_repo mbedtls https://github.com/Mbed-TLS/mbedtls "$MBEDTLS_VERSION" submodules
 [ "$OPT_TLS" = 1 ] && [ "$OPT_ALT" = 1 ] && clone_repo jz-crypto https://github.com/gtxaspec/jz-crypto "$JZ_CRYPTO_VERSION"
 [ "$OPT_OPUS" = 1 ] && clone_repo opus https://github.com/xiph/opus "v$OPUS_VERSION"
@@ -742,6 +801,7 @@ build_libc_shim
 [ "$OPT_AAC" = 1 ]  && build_helix_aac
 [ "$OPT_MP3" = 1 ]  && build_helix_mp3
 build_schrift
+build_live555
 build_raptor_common
 build_raptor_ipc
 if [ "$PLATFORM" = "a1" ]; then
@@ -771,7 +831,7 @@ if [ "$PLATFORM" = "a1" ]; then
     # A1 has no ISP/encoder — skip HAL daemons (rvd, rad), use RFS as producer
     TARGETS="rfs rsd rhd rmr rmd raptorctl ringdump"
 else
-    TARGETS="rvd rsd rad rhd rod ric rmr rmd rfs rwc raptorctl ringdump rac"
+    TARGETS="rvd rsd rad rhd rod ric rmr rmd rfs rwc rsd-555 raptorctl ringdump rac"
 fi
 [ "$OPT_TLS" = 1 ] && TARGETS="$TARGETS rwd rsp"
 
@@ -799,6 +859,7 @@ make -j"$JOBS" \
     LIB_COMPY="$SYSROOT_DIR/usr/lib/libcompy.a" \
     LIB_COMPY_FILE="$SYSROOT_DIR/usr/lib/libcompy.a" \
     COMPY_CFLAGS="$COMPY_CFLAGS" \
+    LIVE555_SYSROOT="$SYSROOT_DIR" \
     EXTRA_CFLAGS="-I$SYSROOT_DIR/usr/include" \
     ${OPT_STATIC_VENDOR:+EXTRA_LDFLAGS="-no-pie"} \
     ${OPT_TLS:+TLS=1 WEBTORRENT=1} \
@@ -810,7 +871,7 @@ make -j"$JOBS" \
 
 # Collect binaries
 mkdir -p "$SCRIPT_DIR/build"
-for d in rvd rsd rad rhd rod ric rmr rmd rfs rwc rwd rsp raptorctl ringdump rac; do
+for d in rvd rsd rad rhd rod ric rmr rmd rfs rwc rwd rsp rsd-555 raptorctl ringdump rac; do
     [ -f "$SCRIPT_DIR/$d/$d" ] && cp -f "$SCRIPT_DIR/$d/$d" "$SCRIPT_DIR/build/"
 done
 
