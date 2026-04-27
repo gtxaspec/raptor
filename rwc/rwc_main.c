@@ -102,7 +102,7 @@ static void fill_streaming_control(struct uvc_streaming_control *ctrl, uint8_t f
 	ctrl->dwFrameInterval = interval;
 
 	ctrl->dwMaxVideoFrameSize = rwc_frames[frame_idx].max_size;
-	ctrl->dwMaxPayloadTransferSize = ctrl->dwMaxVideoFrameSize;
+	ctrl->dwMaxPayloadTransferSize = 64 * 1024;
 	ctrl->bmFramingInfo = 3;
 	ctrl->bPreferedVersion = 1;
 	ctrl->bMinVersion = 1;
@@ -792,7 +792,7 @@ int main(int argc, char **argv)
 			}
 		}
 
-		int timeout = st.streaming ? 30 : 500;
+		int timeout = st.streaming ? 5 : 500;
 		int n = poll(fds, nfds, timeout);
 
 		if (n < 0) {
