@@ -14,9 +14,7 @@
 
 #include "rsd.h"
 
-/* Forward declarations — called by send thread, defined below */
-static void rsd_send_video_frame(rsd_client_t *c, const uint8_t *data, uint32_t len,
-				 uint32_t rtp_ts);
+/* Forward declaration — called by send thread, defined below */
 static void rsd_send_audio_frame(rsd_client_t *c, uint32_t codec, const uint8_t *data, uint32_t len,
 				 uint32_t rtp_ts);
 
@@ -83,78 +81,6 @@ static void rsd_cache_sps_pps(rsd_ring_ctx_t *rctx, const uint8_t *data, uint32_
 		}
 
 		p = nalu_end;
-	}
-}
-
-/*
- * Parse Annex B start codes and send each NALU via compy.
- *
- * The ring data is a concatenation of NALUs with 4-byte start codes
- * (0x00 0x00 0x00 0x01) as written by RVD's linearize_frame().
- */
-static void rsd_send_video_frame(rsd_client_t *c, const uint8_t *data, uint32_t len,
-				 uint32_t rtp_ts)
-{
-	if (!c->video.nal || !c->video.playing)
-		return;
-
-	bool is_h265 = (c->video_codec == 1); /* RSS_CODEC_H265 */
-	int hdr_size = is_h265 ? 2 : 1;	      /* H.265=2 bytes, H.264=1 byte */
-
-	const uint8_t *p = data;
-	const uint8_t *end = data + len;
-
-	while (p + 4 < end) {
-		/* Find 4-byte start code */
-		if (!(p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] == 1)) {
-			p++;
-			continue;
-		}
-
-		const uint8_t *nalu_start = p + 4;
-
-		/* Find next start code or end */
-		const uint8_t *nalu_end = end;
-		for (const uint8_t *q = nalu_start + 1; q + 3 < end; q++) {
-			if (q[0] == 0 && q[1] == 0 && q[2] == 0 && q[3] == 1) {
-				nalu_end = q;
-				break;
-			}
-		}
-
-		uint32_t nalu_len = (uint32_t)(nalu_end - nalu_start);
-		if (nalu_len < (uint32_t)hdr_size) {
-			p = nalu_end;
-			continue;
-		}
-
-		Compy_NalUnit nalu;
-		if (is_h265) {
-			nalu = (Compy_NalUnit){
-				.header = Compy_NalHeader_H265(
-					Compy_H265NalHeader_parse((uint8_t *)nalu_start)),
-				.payload = U8Slice99_new((uint8_t *)(nalu_start + 2), nalu_len - 2),
-			};
-		} else {
-			nalu = (Compy_NalUnit){
-				.header = Compy_NalHeader_H264(
-					Compy_H264NalHeader_parse(nalu_start[0])),
-				.payload = U8Slice99_new((uint8_t *)(nalu_start + 1), nalu_len - 1),
-			};
-		}
-
-		(void)!Compy_NalTransport_send_packet(c->video.nal, Compy_RtpTimestamp_Raw(rtp_ts),
-						      nalu);
-
-		p = nalu_end;
-	}
-
-	if (c->srv->rtcp_sr) {
-		int64_t now = rss_timestamp_us();
-		if (c->video.rtcp && now - c->video.last_rtcp > 30000000) {
-			(void)!Compy_Rtcp_send_sr(c->video.rtcp);
-			c->video.last_rtcp = now;
-		}
 	}
 }
 
@@ -312,6 +238,124 @@ static int rsd_sendq_push_audio(rsd_sendq_t *q, uint32_t codec, const uint8_t *d
 	return RSD_SENDQ_OK;
 }
 
+/* Try to pop and send one audio entry from the sendq.
+ * Called between video NALUs to interleave audio with large IDR frames. */
+static void sendq_drain_audio(rsd_client_t *c)
+{
+	rsd_sendq_t *q = &c->sendq;
+	rsd_sendq_entry_t audio;
+	bool got = false;
+
+	pthread_mutex_lock(&q->lock);
+	/* Scan for the first audio entry (may not be at the tail) */
+	for (int i = 0; i < q->count; i++) {
+		int idx = (q->tail + i) % RSD_SENDQ_SLOTS;
+		if (q->entries[idx].type == RSD_FRAME_AUDIO) {
+			audio = q->entries[idx];
+			q->entries[idx].data = NULL;
+			/* Shift remaining entries to fill the gap */
+			for (int j = i; j > 0; j--) {
+				int dst = (q->tail + j) % RSD_SENDQ_SLOTS;
+				int src = (q->tail + j - 1) % RSD_SENDQ_SLOTS;
+				q->entries[dst] = q->entries[src];
+			}
+			q->entries[q->tail].data = NULL;
+			q->tail = (q->tail + 1) % RSD_SENDQ_SLOTS;
+			q->count--;
+			got = true;
+			break;
+		}
+	}
+	pthread_mutex_unlock(&q->lock);
+
+	if (got) {
+		pthread_mutex_lock(&c->write_lock);
+		rsd_send_audio_frame(c, audio.codec, audio.data, audio.len, audio.rtp_ts);
+		pthread_mutex_unlock(&c->write_lock);
+		sendq_release_entry(&audio);
+	}
+}
+
+/*
+ * Send a video frame with audio interleaving. Parses Annex B NALUs
+ * and sends each one, draining queued audio between NALUs to prevent
+ * large IDR frames from starving audio delivery.
+ */
+static void rsd_send_video_interleaved(rsd_client_t *c, const uint8_t *data,
+				       uint32_t len, uint32_t rtp_ts)
+{
+	if (!c->video.nal || !c->video.playing)
+		return;
+
+	bool is_h265 = (c->video_codec == 1);
+	int hdr_size = is_h265 ? 2 : 1;
+	int nalu_count = 0;
+
+	const uint8_t *p = data;
+	const uint8_t *end = data + len;
+
+	while (p + 4 < end) {
+		if (!(p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] == 1)) {
+			p++;
+			continue;
+		}
+
+		const uint8_t *nalu_start = p + 4;
+		const uint8_t *nalu_end = end;
+		for (const uint8_t *q = nalu_start + 1; q + 3 < end; q++) {
+			if (q[0] == 0 && q[1] == 0 && q[2] == 0 && q[3] == 1) {
+				nalu_end = q;
+				break;
+			}
+		}
+
+		uint32_t nalu_len = (uint32_t)(nalu_end - nalu_start);
+		if (nalu_len < (uint32_t)hdr_size) {
+			p = nalu_end;
+			continue;
+		}
+
+		Compy_NalUnit nalu;
+		if (is_h265) {
+			nalu = (Compy_NalUnit){
+				.header = Compy_NalHeader_H265(
+					Compy_H265NalHeader_parse((uint8_t *)nalu_start)),
+				.payload = U8Slice99_new((uint8_t *)(nalu_start + 2), nalu_len - 2),
+			};
+		} else {
+			nalu = (Compy_NalUnit){
+				.header = Compy_NalHeader_H264(
+					Compy_H264NalHeader_parse(nalu_start[0])),
+				.payload = U8Slice99_new((uint8_t *)(nalu_start + 1), nalu_len - 1),
+			};
+		}
+
+		pthread_mutex_lock(&c->write_lock);
+		(void)!Compy_NalTransport_send_packet(c->video.nal,
+						      Compy_RtpTimestamp_Raw(rtp_ts), nalu);
+		pthread_mutex_unlock(&c->write_lock);
+
+		nalu_count++;
+		p = nalu_end;
+
+		/* After every ~10 video packets, drain one audio entry.
+		 * 10 packets ≈ 12KB at 1200-byte MTU — enough to keep
+		 * video throughput high while letting audio through. */
+		if (nalu_count % 10 == 0)
+			sendq_drain_audio(c);
+	}
+
+	if (c->srv->rtcp_sr) {
+		int64_t now = rss_timestamp_us();
+		if (c->video.rtcp && now - c->video.last_rtcp > 30000000) {
+			pthread_mutex_lock(&c->write_lock);
+			(void)!Compy_Rtcp_send_sr(c->video.rtcp);
+			pthread_mutex_unlock(&c->write_lock);
+			c->video.last_rtcp = now;
+		}
+	}
+}
+
 /* Per-client send thread — drains sendq through compy (blocking I/O) */
 void *rsd_client_send_thread(void *arg)
 {
@@ -334,9 +378,7 @@ void *rsd_client_send_thread(void *arg)
 		q->count--;
 		pthread_mutex_unlock(&q->lock);
 
-		/* Zero-copy: validate encoder buffer wasn't recycled.
-		 * Ring may have been closed by the reader thread (idle timeout)
-		 * while this entry sat in the sendq — treat as stale. */
+		/* Zero-copy: validate encoder buffer wasn't recycled. */
 		if (entry.zerocopy && c->srv) {
 			rss_ring_t *ring = c->srv->video[c->stream_idx].ring;
 			if (!ring) {
@@ -354,18 +396,15 @@ void *rsd_client_send_thread(void *arg)
 			}
 		}
 
-		pthread_mutex_lock(&c->write_lock);
-		if (entry.type == RSD_FRAME_VIDEO)
-			rsd_send_video_frame(c, entry.data, entry.len, entry.rtp_ts);
-		else
+		if (entry.type == RSD_FRAME_VIDEO) {
+			rsd_send_video_interleaved(c, entry.data, entry.len, entry.rtp_ts);
+		} else {
+			pthread_mutex_lock(&c->write_lock);
 			rsd_send_audio_frame(c, entry.codec, entry.data, entry.len, entry.rtp_ts);
-		pthread_mutex_unlock(&c->write_lock);
+			pthread_mutex_unlock(&c->write_lock);
+		}
 
-		/* Post-send zerocopy validation: detect if the encoder recycled
-		 * the buffer during packetization (TOCTOU between pre-send gen
-		 * check and compy's RTP packet construction). The window is
-		 * narrow (microseconds of packetization vs 33ms+ buffer cycle)
-		 * but a slow send path could widen it. */
+		/* Post-send zerocopy validation */
 		if (entry.zerocopy && c->srv) {
 			rss_ring_t *ring = c->srv->video[c->stream_idx].ring;
 			if (ring) {
@@ -568,17 +607,19 @@ void *rsd_video_reader_thread(void *arg)
 				if (c->stream_idx != stream_idx)
 					continue;
 
-				if (c->waiting_keyframe) {
-					if (!meta.is_key)
-						continue;
-					c->waiting_keyframe = false;
+				/* Set timestamp base on first frame (any type).
+				 * Pre-IDR P-frames establish the PTS chain even
+				 * though the decoder can't display them. */
+				if (!c->video_ts_base_set) {
 					c->video_ts_offset = rtp_ts;
 					c->video_ts_base_set = true;
-					RSS_DEBUG("client[%d] got keyframe (ts_offset=%u)",
-						  stream_idx, rtp_ts);
+				}
+				if (c->waiting_keyframe && meta.is_key) {
+					c->waiting_keyframe = false;
+					RSS_DEBUG("client[%d] got keyframe", stream_idx);
 				}
 
-				uint32_t client_ts = rtp_ts - c->video_ts_offset;
+				uint32_t client_ts = rtp_ts - c->video_ts_offset + c->video_ts_rand;
 				if (c->has_last_video_client_ts &&
 				    (int32_t)(client_ts - c->last_video_client_ts) <= 0)
 					client_ts = c->last_video_client_ts + frame_dur;
@@ -795,10 +836,8 @@ void *rsd_audio_reader_thread(void *arg)
 				if (!c || !c->audio.playing)
 					continue;
 
-				/* Gate audio on video keyframe — don't send audio
-				 * until the client has received its first video
-				 * keyframe, so both RTP timelines start together.
-				 * Skip gate for audio-only clients (no video SETUP). */
+				/* Gate audio on first video frame (not keyframe).
+				 * Both timelines anchor to the same instant. */
 				if (c->video.nal && c->video.playing && !c->video_ts_base_set)
 					continue;
 
@@ -806,7 +845,7 @@ void *rsd_audio_reader_thread(void *arg)
 					c->audio_ts_offset = rtp_ts;
 					c->audio_ts_base_set = true;
 				}
-				uint32_t client_ts = rtp_ts - c->audio_ts_offset;
+				uint32_t client_ts = rtp_ts - c->audio_ts_offset + c->audio_ts_rand;
 				rsd_sendq_push_audio(&c->sendq, audio_codec, audio_buf, length,
 						     client_ts);
 			}

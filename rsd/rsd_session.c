@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <rss_net.h>
 
 #include "rsd.h"
 
@@ -334,11 +335,23 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 	Compy_Writer sdp_w = compy_string_writer(sdp);
 	ssize_t ret = 0;
 
+	/* Derive server IP from the client's connection (same address
+	 * the client connected to). Session ID from monotonic clock. */
+	char server_ip[INET6_ADDRSTRLEN] = "0.0.0.0";
+	{
+		struct sockaddr_storage local;
+		socklen_t llen = sizeof(local);
+		if (getsockname(self->fd, (struct sockaddr *)&local, &llen) == 0)
+			rss_addr_str(&local, server_ip, sizeof(server_ip));
+	}
+	uint64_t sdp_sess_id = (uint64_t)rss_timestamp_us();
+
 	COMPY_SDP_DESCRIBE(
 		ret, sdp_w, (COMPY_SDP_VERSION, "0"),
-		(COMPY_SDP_ORIGIN, "- 0 0 IN IP4 0.0.0.0"),
+		(COMPY_SDP_ORIGIN, "- %llu 1 IN IP4 %s",
+		 (unsigned long long)sdp_sess_id, server_ip),
 		(COMPY_SDP_SESSION_NAME, "%s", self->srv->session_name),
-		(COMPY_SDP_CONNECTION, "IN IP4 0.0.0.0"), (COMPY_SDP_TIME, "0 0"),
+		(COMPY_SDP_TIME, "0 0"),
 		(COMPY_SDP_ATTR, "tool:Raptor RSS"), (COMPY_SDP_ATTR, "type:broadcast"),
 		(COMPY_SDP_ATTR, "control:*"), (COMPY_SDP_ATTR, "range:npt=now-"));
 
@@ -352,9 +365,11 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 			/* H.265 / HEVC (RFC 7798) */
 			COMPY_SDP_DESCRIBE(
 				ret, sdp_w, (COMPY_SDP_MEDIA, "video 0 RTP/AVP %d", RSD_VIDEO_PT),
-				(COMPY_SDP_ATTR, "control:video"), (COMPY_SDP_ATTR, "recvonly"),
+				(COMPY_SDP_CONNECTION, "IN IP4 0.0.0.0"),
+				(COMPY_SDP_BANDWIDTH, "AS:2000"),
 				(COMPY_SDP_ATTR, "rtpmap:%d H265/%d", RSD_VIDEO_PT,
 				 RSD_VIDEO_CLOCK),
+				(COMPY_SDP_ATTR, "control:video"),
 				(COMPY_SDP_ATTR, "framerate:%u", rctx->last_fps_num));
 		} else {
 			/* H.264 / AVC (RFC 6184) */
@@ -389,10 +404,12 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 
 			COMPY_SDP_DESCRIBE(
 				ret, sdp_w, (COMPY_SDP_MEDIA, "video 0 RTP/AVP %d", RSD_VIDEO_PT),
-				(COMPY_SDP_ATTR, "control:video"), (COMPY_SDP_ATTR, "recvonly"),
+				(COMPY_SDP_CONNECTION, "IN IP4 0.0.0.0"),
+				(COMPY_SDP_BANDWIDTH, "AS:2000"),
 				(COMPY_SDP_ATTR, "rtpmap:%d H264/%d", RSD_VIDEO_PT,
 				 RSD_VIDEO_CLOCK),
 				(COMPY_SDP_ATTR, "%s", fmtp),
+				(COMPY_SDP_ATTR, "control:video"),
 				(COMPY_SDP_ATTR, "framerate:%u", rctx->last_fps_num));
 		}
 	}
@@ -404,20 +421,20 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 
 		if (codec == RSD_CODEC_PCMU) {
 			COMPY_SDP_DESCRIBE(ret, sdp_w, (COMPY_SDP_MEDIA, "audio 0 RTP/AVP 0"),
-					   (COMPY_SDP_ATTR, "control:audio"),
-					   (COMPY_SDP_ATTR, "recvonly"));
+					   (COMPY_SDP_CONNECTION, "IN IP4 0.0.0.0"),
+					   (COMPY_SDP_BANDWIDTH, "AS:64"),
+					   (COMPY_SDP_ATTR, "control:audio"));
 		} else if (codec == RSD_CODEC_PCMA) {
 			COMPY_SDP_DESCRIBE(ret, sdp_w, (COMPY_SDP_MEDIA, "audio 0 RTP/AVP 8"),
-					   (COMPY_SDP_ATTR, "control:audio"),
-					   (COMPY_SDP_ATTR, "recvonly"));
+					   (COMPY_SDP_CONNECTION, "IN IP4 0.0.0.0"),
+					   (COMPY_SDP_BANDWIDTH, "AS:64"),
+					   (COMPY_SDP_ATTR, "control:audio"));
 		} else if (codec == RSD_CODEC_AAC) {
-			/* AAC-LC (RFC 3640, AAC-hbr mode)
-			 * AudioSpecificConfig: 2 bytes encoding profile + sample rate + channels
-			 *   audioObjectType=2 (AAC-LC), channelConfig=1 (mono) */
+			/* AAC-LC (RFC 3640, AAC-hbr mode) */
 			static const int sr_table[] = {96000, 88200, 64000, 48000, 44100,
 						       32000, 24000, 22050, 16000, 12000,
 						       11025, 8000,  7350};
-			int sr_idx = 4; /* default 44100 */
+			int sr_idx = 4;
 			for (int i = 0; i < 13; i++) {
 				if (sr_table[i] == aclk) {
 					sr_idx = i;
@@ -429,30 +446,31 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 			COMPY_SDP_DESCRIBE(
 				ret, sdp_w,
 				(COMPY_SDP_MEDIA, "audio 0 RTP/AVP %d", RSD_AUDIO_PT_AAC),
-				(COMPY_SDP_ATTR, "control:audio"),
+				(COMPY_SDP_CONNECTION, "IN IP4 0.0.0.0"),
+				(COMPY_SDP_BANDWIDTH, "AS:64"),
 				(COMPY_SDP_ATTR, "rtpmap:%d mpeg4-generic/%d/1", RSD_AUDIO_PT_AAC,
 				 aclk),
 				(COMPY_SDP_ATTR,
 				 "fmtp:%d streamtype=5;profile-level-id=1;mode=AAC-hbr;"
 				 "sizelength=13;indexlength=3;indexdeltalength=3;config=%04X",
 				 RSD_AUDIO_PT_AAC, asc),
-				(COMPY_SDP_ATTR, "recvonly"));
+				(COMPY_SDP_ATTR, "control:audio"));
 		} else if (codec == RSD_CODEC_OPUS) {
-			/* Opus (RFC 7587) — always 48000/2 in SDP regardless of actual rate */
 			COMPY_SDP_DESCRIBE(
 				ret, sdp_w,
 				(COMPY_SDP_MEDIA, "audio 0 RTP/AVP %d", RSD_AUDIO_PT_OPUS),
-				(COMPY_SDP_ATTR, "control:audio"),
+				(COMPY_SDP_CONNECTION, "IN IP4 0.0.0.0"),
+				(COMPY_SDP_BANDWIDTH, "AS:64"),
 				(COMPY_SDP_ATTR, "rtpmap:%d opus/48000/2", RSD_AUDIO_PT_OPUS),
-				(COMPY_SDP_ATTR, "recvonly"));
+				(COMPY_SDP_ATTR, "control:audio"));
 		} else {
-			/* L16 or unknown — dynamic PT with rtpmap */
 			COMPY_SDP_DESCRIBE(
 				ret, sdp_w,
 				(COMPY_SDP_MEDIA, "audio 0 RTP/AVP %d", RSD_AUDIO_PT_L16),
-				(COMPY_SDP_ATTR, "control:audio"),
+				(COMPY_SDP_CONNECTION, "IN IP4 0.0.0.0"),
+				(COMPY_SDP_BANDWIDTH, "AS:256"),
 				(COMPY_SDP_ATTR, "rtpmap:%d L16/%d/1", RSD_AUDIO_PT_L16, aclk),
-				(COMPY_SDP_ATTR, "recvonly"));
+				(COMPY_SDP_ATTR, "control:audio"));
 		}
 	}
 
@@ -697,8 +715,10 @@ static void rsd_client_t_play(VSelf, Compy_Context *ctx, const Compy_Request *re
 	 * timestamps and reports "No video PTS." */
 
 	/* Build RTP-Info header (RFC 2326 Section 12.33).
-	 * Use the request URI as base for stream URLs.
-	 * Per-client timestamps are zero-based, so rtptime=0. */
+	 * Generate random initial RTP timestamps (RFC 3550 §5.1) so clients
+	 * can distinguish "timestamp=0" from "no timestamp".
+	 * Strip userinfo (credentials) from the URI — ffmpeg strips them
+	 * internally and fails to match if they're present in RTP-Info. */
 	{
 		char rtp_info[512];
 		int off = 0;
@@ -708,19 +728,47 @@ static void rsd_client_t_play(VSelf, Compy_Context *ctx, const Compy_Request *re
 		while (base.len > 0 && base.ptr[base.len - 1] == '/')
 			base.len--;
 
+		/* Strip userinfo: rtsp://user:pass@host → rtsp://host */
+		const char *at = NULL;
+		for (size_t i = 0; i < base.len; i++) {
+			if (base.ptr[i] == '@') { at = base.ptr + i; break; }
+			if (base.ptr[i] == '/') break;
+		}
+		char clean_url[512];
+		if (at) {
+			const char *scheme_end = NULL;
+			for (size_t i = 0; i + 2 < base.len; i++) {
+				if (base.ptr[i] == '/' && base.ptr[i+1] == '/') {
+					scheme_end = base.ptr + i + 2;
+					break;
+				}
+			}
+			if (scheme_end && at > scheme_end) {
+				int slen = (int)(scheme_end - base.ptr);
+				int rlen = (int)(base.len - (at + 1 - base.ptr));
+				snprintf(clean_url, sizeof(clean_url), "%.*s%.*s",
+					 slen, base.ptr, rlen, at + 1);
+				base = CharSlice99_from_str(clean_url);
+			}
+		}
+
 		if (self->video.rtp) {
+			self->video_ts_rand = (uint32_t)rand();
 			uint16_t vseq = Compy_RtpTransport_get_seq(self->video.rtp);
 			off += snprintf(rtp_info + off, sizeof(rtp_info) - off,
-					"url=%.*s/video;seq=%u;rtptime=0", (int)base.len, base.ptr,
-					vseq);
+					"url=%.*s/video;seq=%u;rtptime=%u",
+					(int)base.len, base.ptr, vseq,
+					self->video_ts_rand);
 		}
 		if (self->audio.rtp) {
+			self->audio_ts_rand = (uint32_t)rand();
 			uint16_t aseq = Compy_RtpTransport_get_seq(self->audio.rtp);
 			if (off > 0)
 				off += snprintf(rtp_info + off, sizeof(rtp_info) - off, ",");
 			off += snprintf(rtp_info + off, sizeof(rtp_info) - off,
-					"url=%.*s/audio;seq=%u;rtptime=0", (int)base.len, base.ptr,
-					aseq);
+					"url=%.*s/audio;seq=%u;rtptime=%u",
+					(int)base.len, base.ptr, aseq,
+					self->audio_ts_rand);
 		}
 
 		if (off > 0)
