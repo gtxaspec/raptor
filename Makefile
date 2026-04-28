@@ -184,7 +184,10 @@ LIVE555_INC := -I$(LIVE555_SYSROOT)/usr/include/liveMedia \
                -I$(LIVE555_SYSROOT)/usr/include/groupsock \
                -I$(LIVE555_SYSROOT)/usr/include/UsageEnvironment \
                -I$(LIVE555_SYSROOT)/usr/include/BasicUsageEnvironment
-LIVE555_LIBS := -lliveMedia -lgroupsock -lBasicUsageEnvironment -lUsageEnvironment
+LIVE555_LIBS := $(LIVE555_SYSROOT)/usr/lib/libliveMedia.a \
+                $(LIVE555_SYSROOT)/usr/lib/libgroupsock.a \
+                $(LIVE555_SYSROOT)/usr/lib/libBasicUsageEnvironment.a \
+                $(LIVE555_SYSROOT)/usr/lib/libUsageEnvironment.a
 
 # Targets
 DAEMONS := rvd rsd rad rhd rod ric rmr rmd rwd rwc rfs rsp rsd-555
