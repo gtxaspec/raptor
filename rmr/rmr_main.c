@@ -88,14 +88,20 @@ static int clip_write(const void *buf, uint32_t len, void *ctx)
 static void setup_mux_tracks(rmr_mux_t *mux, rmr_state_t *st)
 {
 	rmr_video_params_t vp = {
-		.codec = (st->video_codec == 1) ? RMR_CODEC_H265 : RMR_CODEC_H264,
+		.codec = (st->video_codec == 2)	  ? RMR_CODEC_MJPEG
+			 : (st->video_codec == 1) ? RMR_CODEC_H265
+						  : RMR_CODEC_H264,
 		.width = st->width,
 		.height = st->height,
 		.timescale = 90000,
 	};
-	rmr_mux_set_video(mux, &vp, st->params.sps, st->params.sps_len, st->params.pps,
-			  st->params.pps_len, st->params.vps_len > 0 ? st->params.vps : NULL,
-			  st->params.vps_len);
+	if (st->video_codec == 2)
+		rmr_mux_set_video(mux, &vp, NULL, 0, NULL, 0, NULL, 0);
+	else
+		rmr_mux_set_video(mux, &vp, st->params.sps, st->params.sps_len, st->params.pps,
+				  st->params.pps_len,
+				  st->params.vps_len > 0 ? st->params.vps : NULL,
+				  st->params.vps_len);
 
 	if (st->audio_ring) {
 		rmr_audio_params_t ap = {.sample_rate = st->audio_sample_rate, .channels = 1};
@@ -475,6 +481,7 @@ static void record_loop(rmr_state_t *st)
 				st->params.ready = false;
 				video_idle = 0;
 				last_video_ws = 0;
+				rss_ring_acquire(st->video_ring);
 				RSS_DEBUG("video ring reconnected (%s)", st->video_ring_name);
 			} else {
 				usleep(200000);
@@ -503,6 +510,7 @@ static void record_loop(rmr_state_t *st)
 			last_video_ws = ws;
 			if (video_idle >= 50) { /* ~2s at 40ms wait */
 				RSS_DEBUG("video ring idle, closing (%s)", st->video_ring_name);
+				rss_ring_release(st->video_ring);
 				rss_ring_close(st->video_ring);
 				st->video_ring = NULL;
 				video_idle = 0;
@@ -515,34 +523,47 @@ static void record_loop(rmr_state_t *st)
 			continue;
 		video_idle = 0;
 
-		/* Extract codec params from first keyframe */
-		if (meta.is_key && !st->params.ready)
-			rmr_extract_params(st->frame_buf, length, st->video_codec, &st->params);
-		if (!st->params.ready)
-			continue;
+		/* Prepare frame data for muxer */
+		const uint8_t *mux_data;
+		uint32_t mux_len;
+		bool is_mjpeg = (st->video_codec == 2);
 
-		/* Convert Annex B to AVCC */
-		int avcc_len = rmr_annexb_to_avcc(st->frame_buf, length, st->avcc_buf,
-						  st->avcc_buf_size, st->video_codec);
-		if (avcc_len <= 0)
-			continue;
-
-		/* Verify AVCC: first 4 bytes must be a valid NAL length */
-		if (avcc_len >= 5) {
-			uint32_t nal_len = ((uint32_t)st->avcc_buf[0] << 24) |
-					   ((uint32_t)st->avcc_buf[1] << 16) |
-					   ((uint32_t)st->avcc_buf[2] << 8) |
-					   (uint32_t)st->avcc_buf[3];
-			if (nal_len > (uint32_t)avcc_len - 4) {
-				RSS_WARN("AVCC corrupt: nal_len=%u avcc_len=%d", nal_len, avcc_len);
+		if (is_mjpeg) {
+			if (!st->params.ready)
+				st->params.ready = true;
+			mux_data = st->frame_buf;
+			mux_len = length;
+		} else {
+			if (meta.is_key && !st->params.ready)
+				rmr_extract_params(st->frame_buf, length, st->video_codec,
+						   &st->params);
+			if (!st->params.ready)
 				continue;
+
+			int avcc_len = rmr_annexb_to_avcc(st->frame_buf, length, st->avcc_buf,
+							  st->avcc_buf_size, st->video_codec);
+			if (avcc_len <= 0)
+				continue;
+
+			if (avcc_len >= 5) {
+				uint32_t nal_len = ((uint32_t)st->avcc_buf[0] << 24) |
+						   ((uint32_t)st->avcc_buf[1] << 16) |
+						   ((uint32_t)st->avcc_buf[2] << 8) |
+						   (uint32_t)st->avcc_buf[3];
+				if (nal_len > (uint32_t)avcc_len - 4) {
+					RSS_WARN("AVCC corrupt: nal_len=%u avcc_len=%d", nal_len,
+						 avcc_len);
+					continue;
+				}
 			}
+			mux_data = st->avcc_buf;
+			mux_len = (uint32_t)avcc_len;
 		}
 
 		/* Push to video pre-buffer (always, for motion clips) */
 		if (st->video_pb)
-			rmr_prebuf_push(st->video_pb, st->avcc_buf, (uint32_t)avcc_len,
-					meta.timestamp, meta.is_key);
+			rmr_prebuf_push(st->video_pb, mux_data, mux_len, meta.timestamp,
+					meta.is_key);
 
 		/* ── Read audio frames and push to pre-buffer ── */
 		/* Audio frame data saved for writing below */
@@ -654,8 +675,8 @@ static void record_loop(rmr_state_t *st)
 			int64_t v_dts = (meta.timestamp - v_ts_base) * 90 / 1000;
 
 			rmr_video_sample_t vs = {
-				.data = st->avcc_buf,
-				.size = (uint32_t)avcc_len,
+				.data = mux_data,
+				.size = mux_len,
 				.dts = v_dts,
 				.pts = v_dts,
 				.is_key = meta.is_key,
@@ -695,8 +716,8 @@ static void record_loop(rmr_state_t *st)
 
 			/* Write live frames to clip */
 			if (st->clip_mux) {
-				clip_write_video(st, st->avcc_buf, (uint32_t)avcc_len,
-						 meta.timestamp, meta.is_key);
+				clip_write_video(st, mux_data, mux_len, meta.timestamp,
+						 meta.is_key);
 
 				for (int i = 0; i < audio_count; i++)
 					clip_write_audio(st, audio_frames[i].data,
@@ -789,7 +810,8 @@ int main(int argc, char **argv)
 	st.clip_length_sec = rss_config_get_int(dctx.cfg, "recording", "clip_length_sec", 60);
 
 	/* Open video ring (stream 0-5 for multi-sensor) */
-	static const char *ring_names[] = {"main", "sub", "s1_main", "s1_sub", "s2_main", "s2_sub"};
+	static const char *ring_names[] = {"main",   "sub",   "s1_main",  "s1_sub",  "s2_main",
+					   "s2_sub", "jpeg0", "s1_jpeg0", "s2_jpeg0"};
 	int ri = st.stream_idx;
 	if (ri < 0 || ri >= (int)(sizeof(ring_names) / sizeof(ring_names[0])))
 		ri = 0;
@@ -808,9 +830,8 @@ int main(int argc, char **argv)
 		RSS_FATAL("video ring not available");
 		goto cleanup;
 	}
-	{
-		rss_ring_check_version(st.video_ring, "video");
-	}
+	rss_ring_check_version(st.video_ring, "video");
+	rss_ring_acquire(st.video_ring);
 
 	/* Read ring metadata */
 	const rss_ring_header_t *vhdr = rss_ring_get_header(st.video_ring);
@@ -818,8 +839,10 @@ int main(int argc, char **argv)
 	st.width = vhdr->width;
 	st.height = vhdr->height;
 	st.fps_num = vhdr->fps_num;
-	RSS_INFO("video: %s %ux%u @ %u fps", st.video_codec == 1 ? "H.265" : "H.264", st.width,
-		 st.height, st.fps_num);
+	const char *vcodec_name = st.video_codec == 2	? "MJPEG"
+				  : st.video_codec == 1 ? "H.265"
+							: "H.264";
+	RSS_INFO("video: %s %ux%u @ %u fps", vcodec_name, st.width, st.height, st.fps_num);
 
 	/* Allocate buffers */
 	st.frame_buf_size = rss_ring_max_frame_size(st.video_ring);
@@ -941,8 +964,10 @@ cleanup:
 		rmr_storage_destroy(st.clip_storage);
 	if (st.storage)
 		rmr_storage_destroy(st.storage);
-	if (st.video_ring)
+	if (st.video_ring) {
+		rss_ring_release(st.video_ring);
 		rss_ring_close(st.video_ring);
+	}
 	if (st.audio_ring)
 		rss_ring_close(st.audio_ring);
 	if (st.video_pb)

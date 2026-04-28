@@ -25,8 +25,9 @@
 #include <stdbool.h>
 
 /* Video codec */
-#define RMR_CODEC_H264 0
-#define RMR_CODEC_H265 1
+#define RMR_CODEC_H264	0
+#define RMR_CODEC_H265	1
+#define RMR_CODEC_MJPEG 2
 
 /* Audio codec (values match RAD ring header codec IDs) */
 #define RMR_AUDIO_PCMU 0   /* G.711 mu-law */
@@ -38,7 +39,7 @@
 typedef struct rmr_mux rmr_mux_t;
 
 typedef struct {
-	uint8_t codec; /* RMR_CODEC_H264 or RMR_CODEC_H265 */
+	uint8_t codec; /* RMR_CODEC_H264 / RMR_CODEC_H265 / RMR_CODEC_MJPEG */
 	uint16_t width;
 	uint16_t height;
 	uint32_t timescale; /* typically 90000 */

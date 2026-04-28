@@ -453,6 +453,30 @@ static void write_stsd_hev1(rmr_mux_t *m)
 	bb_box_end(m, stsd_off);
 }
 
+/* stsd — sample description (MJPEG) */
+static void write_stsd_jpeg(rmr_mux_t *m)
+{
+	uint32_t stsd_off = bb_fullbox_begin(m, "stsd", 0, 0);
+	bb_w32(m, 1); /* entry_count */
+
+	uint32_t jpeg_off = bb_box_begin(m, "jpeg");
+	bb_zeros(m, 6);	 /* reserved */
+	bb_w16(m, 1);	 /* data_reference_index */
+	bb_zeros(m, 16); /* pre_defined + reserved */
+	bb_w16(m, m->video.width);
+	bb_w16(m, m->video.height);
+	bb_w32(m, 0x00480000); /* horiz resolution 72 dpi */
+	bb_w32(m, 0x00480000); /* vert resolution 72 dpi */
+	bb_w32(m, 0);	       /* reserved */
+	bb_w16(m, 1);	       /* frame_count */
+	bb_zeros(m, 32);       /* compressorname */
+	bb_w16(m, 0x0018);     /* depth = 24 */
+	bb_w16(m, 0xFFFF);     /* pre_defined = -1 */
+	bb_box_end(m, jpeg_off);
+
+	bb_box_end(m, stsd_off);
+}
+
 /* AAC AudioSpecificConfig — compute from sample rate + AAC-LC + mono */
 static uint16_t aac_audio_specific_config(uint32_t sample_rate)
 {
@@ -584,7 +608,9 @@ static void write_empty_stbl(rmr_mux_t *m, bool is_video)
 
 	/* stsd */
 	if (is_video) {
-		if (m->video.codec == RMR_CODEC_H265)
+		if (m->video.codec == RMR_CODEC_MJPEG)
+			write_stsd_jpeg(m);
+		else if (m->video.codec == RMR_CODEC_H265)
 			write_stsd_hev1(m);
 		else
 			write_stsd_avc1(m);
@@ -907,15 +933,22 @@ int rmr_mux_set_video(rmr_mux_t *mux, const rmr_video_params_t *params, const ui
 		      uint32_t sps_len, const uint8_t *pps, uint32_t pps_len, const uint8_t *vps,
 		      uint32_t vps_len)
 {
-	if (!mux || !params || !sps || !sps_len || !pps || !pps_len)
+	if (!mux || !params)
+		return -1;
+
+	mux->video = *params;
+	mux->has_video = true;
+
+	if (params->codec == RMR_CODEC_MJPEG)
+		return 0;
+
+	if (!sps || !sps_len || !pps || !pps_len)
 		return -1;
 	if (sps_len > sizeof(mux->sps) || pps_len > sizeof(mux->pps))
 		return -1;
 	if (vps && vps_len > 0 && vps_len > sizeof(mux->vps))
 		return -1;
 
-	mux->video = *params;
-	mux->has_video = true;
 	memcpy(mux->sps, sps, sps_len);
 	mux->sps_len = sps_len;
 	memcpy(mux->pps, pps, pps_len);

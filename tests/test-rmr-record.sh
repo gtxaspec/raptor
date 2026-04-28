@@ -109,6 +109,9 @@ enabled = $audio_enabled
 sample_rate = 16000
 codec = pcma
 
+[ring]
+refmode = true
+
 [osd]
 enabled = false
 
