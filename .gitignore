@@ -31,5 +31,4 @@ tests/sdp_parse.c
 fuzz/fuzz_sdp
 fuzz/fuzz_stun
 fuzz/fuzz_http_auth
-tests/stream-health.conf
 tests/tools/

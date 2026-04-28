@@ -299,6 +299,15 @@ validate_mode() {
         fi
     done
 
+    # ── Backchannel SDP check ──
+    bc_sdp=$(printf 'DESCRIBE rtsp://%s:%s/stream0 RTSP/1.0\r\nCSeq: 1\r\nAccept: application/sdp\r\n\r\n' \
+        "$DEVICE_IP" "$RTSP_PORT" | nc -w3 "$DEVICE_IP" "$RTSP_PORT" 2>/dev/null || echo "")
+    if echo "$bc_sdp" | grep -q 'a=sendonly'; then
+        pass "$prefix backchannel SDP" "sendonly track present"
+    else
+        fail "$prefix backchannel SDP" "sendonly track missing"
+    fi
+
     # ── Bitrate measurement (skip for fixqp — no target) ──
     if [ "$mode" != "fixqp" ]; then
         local_file=$(mktemp /tmp/raptor-br-XXXXXX.ts)
