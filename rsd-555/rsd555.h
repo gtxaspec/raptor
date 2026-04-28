@@ -33,6 +33,13 @@ typedef struct {
 	uint8_t level;
 } rss_ring_header_t __attribute__((aligned(64)));
 
+rss_ring_t *rss_ring_create(const char *name, uint32_t slot_count, uint32_t data_size);
+void rss_ring_destroy(rss_ring_t *ring);
+int rss_ring_publish(rss_ring_t *ring, const uint8_t *data, uint32_t length, int64_t timestamp,
+                     uint16_t nal_type, uint8_t is_key);
+void rss_ring_set_stream_info(rss_ring_t *ring, uint32_t stream_id, uint32_t codec, uint32_t width,
+                              uint32_t height, uint32_t fps_num, uint32_t fps_den, uint8_t profile,
+                              uint8_t level);
 rss_ring_t *rss_ring_open(const char *name);
 void rss_ring_close(rss_ring_t *ring);
 int rss_ring_wait(rss_ring_t *ring, uint32_t timeout_ms);
@@ -200,6 +207,7 @@ struct rsd555_state {
 	char stream_names[RSD555_STREAM_COUNT][64];
 	bool video_added[RSD555_STREAM_COUNT];
 	bool audio_added;
+	bool backchannel;
 
 	rsd555_video_ctx_t video[RSD555_STREAM_COUNT];
 	rsd555_audio_ctx_t audio;

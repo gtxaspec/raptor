@@ -2,7 +2,7 @@ CXX    ?= $(CROSS_COMPILE)g++
 CC     ?= $(CROSS_COMPILE)gcc
 
 SRCS_C   := rsd555_queue.c rsd555_reader.c rsd555_ctrl.c
-SRCS_CXX := rsd555_main.cpp rsd555_source.cpp rsd555_subsession.cpp
+SRCS_CXX := rsd555_main.cpp rsd555_source.cpp rsd555_subsession.cpp rsd555_backchannel.cpp
 
 OBJS := $(SRCS_C:.c=.o) $(SRCS_CXX:.cpp=.o)
 BIN  := rsd-555

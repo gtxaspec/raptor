@@ -13,6 +13,7 @@
 
 #include "rsd555_subsession.h"
 #include "rsd555_source.h"
+#include "rsd555_backchannel.h"
 
 #include "rsd555.h"
 #include <string.h>
@@ -32,7 +33,8 @@ static ServerMediaSession *create_stream_session(UsageEnvironment &env,
 						 const char *info,
 						 rsd555_video_ctx_t *vctx,
 						 rsd555_audio_ctx_t *actx,
-						 bool has_audio);
+						 bool has_audio,
+						 bool backchannel);
 
 /* Periodic check: rebuild sessions when readers discover new streams */
 static void check_streams(void * /*clientData*/)
@@ -56,7 +58,8 @@ static void check_streams(void * /*clientData*/)
 				*g_env, g_state.stream_names[s],
 				g_state.session_name,
 				&g_state.video[s], &g_state.audio,
-				g_state.audio.sample_rate > 0);
+				g_state.audio.sample_rate > 0,
+				g_state.backchannel);
 			if (sms) {
 				g_rtspServer->deleteServerMediaSession(
 					g_state.stream_names[s]);
@@ -80,7 +83,8 @@ static ServerMediaSession *create_stream_session(UsageEnvironment &env,
 						 const char *info,
 						 rsd555_video_ctx_t *vctx,
 						 rsd555_audio_ctx_t *actx,
-						 bool has_audio)
+						 bool has_audio,
+						 bool backchannel)
 {
 	ServerMediaSession *sms = ServerMediaSession::createNew(
 		env, name, info, "Raptor RSS (rsd-555)");
@@ -114,6 +118,11 @@ static ServerMediaSession *create_stream_session(UsageEnvironment &env,
 			break;
 		}
 	}
+
+	/* Backchannel: sendonly PCMU/8000 audio track for two-way audio.
+	 * Enabled by default. Disable with [rtsp] backchannel = false. */
+	if (backchannel)
+		sms->addSubsession(BackchannelSubsession::createNew(env));
 
 	return sms;
 }
@@ -169,6 +178,8 @@ int main(int argc, char **argv)
 	rss_strlcpy(g_state.session_info,
 		    rss_config_get_str(dctx.cfg, "rtsp", "session_info", ""),
 		    sizeof(g_state.session_info));
+
+	g_state.backchannel = rss_config_get_bool(dctx.cfg, "rtsp", "backchannel", false);
 
 	/* Load endpoint aliases (same config keys as RSD) */
 	static const char *const endpoint_keys[RSD555_STREAM_COUNT] = {
@@ -341,7 +352,8 @@ int main(int argc, char **argv)
 
 		ServerMediaSession *sms = create_stream_session(
 			*env, g_state.stream_names[s], g_state.session_name,
-			&g_state.video[s], &g_state.audio, g_state.has_audio);
+			&g_state.video[s], &g_state.audio, g_state.has_audio,
+			g_state.backchannel);
 		if (!sms)
 			continue;
 		rtspServer->addServerMediaSession(sms);
