@@ -24,6 +24,7 @@ buffers at runtime, gracefully skipping any that don't exist.
   [RVD] --shm rings--+              [RFS] --shm rings--+
    |  \               |                |               |
    |   \              +--> [RSD] RTSP/RTSPS server (via compy)
+   |   \              +--> [RSD-555] RTSP server (via live555)
    |    \             +--> [RHD] HTTP snapshots / MJPEG / audio
    |     \            +--> [RMR] fragmented MP4 recording
    |      \           +--> [RWD] WebRTC/WHIP server (DTLS-SRTP)
@@ -42,7 +43,8 @@ buffers at runtime, gracefully skipping any that don't exist.
 | Name | Binary | Description |
 |------|--------|-------------|
 | RVD  | `rvd`  | Raw Video Daemon. Initializes HAL, configures sensor and encoder channels, creates SHM ring buffers (`main`, `sub`, `jpeg0`, `jpeg1`), and runs the frame acquisition loop. Exposes ISP controls and encoder tuning via its control socket. |
-| RSD  | `rsd`  | RTSP Streaming Daemon. Reads video/audio rings and serves RTSP/RTP streams using the compy library. Supports video+audio, video-only, or audio-only sessions. Supports Digest authentication and RTSPS (TLS via mbedTLS, compile with `TLS=1`). |
+| RSD  | `rsd`  | RTSP Streaming Daemon. Reads video/audio rings and serves RTSP/RTP streams using the compy library. Supports video+audio, video-only, or audio-only sessions. Supports Digest authentication and RTSPS (TLS via mbedTLS, compile with `TLS=1`). Audio interleaving during IDR delivery prevents large keyframes from starving audio. |
+| RSD-555 | `rsd-555` | Alternative RTSP server using live555 instead of compy. Statically linked — no live555 shared libraries needed on device. Supports H.264/H.265 video, all five audio codecs (PCMU, PCMA, L16, AAC, Opus), Digest auth, per-client refcounted frame queues with fan-out. Reads the same `[rtsp]` config section as RSD (with `[rtsp-555] port` override). Can run alongside or instead of RSD on a different port. |
 | RAD  | `rad`  | Raw Audio Daemon. Captures PCM from the ISP audio input, encodes via pluggable codec (G.711 mu-law/A-law, L16, AAC, Opus), and publishes to the `audio` ring. Also handles speaker output via a `speaker` ring. Supports noise suppression, HPF, and AGC when libaudioProcess is available. Codec plugins are modular — adding a new codec requires one source file. |
 | ROD  | `rod`  | OSD Rendering Daemon. Renders timestamp, uptime, user text, and logo bitmaps into BGRA SHM double-buffers using libschrift. No HAL dependency -- RVD handles the hardware OSD regions. |
 | RHD  | `rhd`  | HTTP Streaming Daemon. Serves JPEG snapshots (`/snap`), MJPEG streams (`/mjpeg`), and audio streams (`/audio`) from SHM rings. Audio is served with proper container framing: WAV for PCM/G.711, ADTS for AAC, Ogg for Opus. Dual-stack IPv4/IPv6, Basic auth. Optional HTTPS via mbedTLS (`[http] https = true`). |
@@ -71,6 +73,7 @@ buffers at runtime, gracefully skipping any that don't exist.
 | [raptor-ipc](https://github.com/gtxaspec/raptor-ipc) | SHM ring buffers, OSD double-buffer SHM, and Unix domain control socket protocol. |
 | [raptor-common](https://github.com/gtxaspec/raptor-common) | Config parser, logging, daemonize, signal handling, timestamp utilities. |
 | [compy](https://github.com/gtxaspec/compy) | RTSP/RTP server library (used by RSD). |
+| [live555](http://www.live555.com/) | RTSP/RTP server library (used by RSD-555, statically linked). |
 | [raptor-docs](https://github.com/gtxaspec/raptor-docs) | Architecture docs, design notes, and API reference. |
 
 ## Dependencies
@@ -88,6 +91,7 @@ Runtime shared libraries from the Ingenic SDK / Buildroot sysroot:
 - `libopus` -- Opus codec (optional, `OPUS=1`)
 - `libaudioProcess` -- Ingenic audio effects (optional, `AUDIO_EFFECTS=1`)
 - `libmbedtls` / `libmbedcrypto` / `libmbedx509` -- TLS/DTLS (optional, `TLS=1`, required for RTSPS and WebRTC)
+- `libliveMedia` / `libgroupsock` / `libUsageEnvironment` / `libBasicUsageEnvironment` -- live555 RTSP (optional, statically linked by RSD-555)
 - `libmov` -- MP4 demuxer (statically compiled into RFS from [ireader/media-server](https://github.com/ireader/media-server), MIT license)
 
 ## Build
