@@ -210,14 +210,14 @@ void *rsd555_video_reader_thread(void *arg)
 				ctx->frame_buf = new_buf;
 				ctx->frame_buf_size = max_frame;
 			}
-			ctx->read_seq = 0;
+			const rss_ring_header_t *hdr = rss_ring_get_header(ctx->ring);
+			ctx->read_seq = __atomic_load_n(&hdr->write_seq, __ATOMIC_RELAXED);
 			last_write_seq = 0;
 			idle_count = 0;
 			__atomic_store_n(&ctx->vps_len, 0, __ATOMIC_RELAXED);
 			__atomic_store_n(&ctx->sps_len, 0, __ATOMIC_RELAXED);
 			__atomic_store_n(&ctx->pps_len, 0, __ATOMIC_RELAXED);
 
-			const rss_ring_header_t *hdr = rss_ring_get_header(ctx->ring);
 			ctx->codec = hdr->codec;
 			ctx->width = hdr->width;
 			ctx->height = hdr->height;
@@ -226,6 +226,7 @@ void *rsd555_video_reader_thread(void *arg)
 			ctx->profile = hdr->profile;
 			ctx->level = hdr->level;
 
+			rss_ring_request_idr(ctx->ring);
 			RSS_INFO("video reader[%d] connected (%s %ux%u)", ctx->idx,
 				 ctx->ring_name, ctx->width, ctx->height);
 		}
@@ -263,6 +264,14 @@ void *rsd555_video_reader_thread(void *arg)
 			if (ret == RSS_EOVERFLOW) {
 				ctx->read_seq = read_seq;
 				maybe_request_idr(ctx->ring, &ctx->last_idr_req_us);
+				/* Close and reopen on next iteration — handles
+				 * both normal overflow and incarnation change
+				 * (RVD restart). Reopen picks up new incarnation
+				 * and re-reads stream info. */
+				rss_ring_close(ctx->ring);
+				ctx->ring = NULL;
+				RSS_INFO("video reader[%d] overflow, reconnecting",
+					 ctx->idx);
 				break;
 			}
 			if (ret != 0)
@@ -363,6 +372,9 @@ void *rsd555_audio_reader_thread(void *arg)
 					    sizeof(audio_buf), &length, &meta);
 			if (ret == RSS_EOVERFLOW) {
 				ctx->read_seq = read_seq;
+				rss_ring_close(ctx->ring);
+				ctx->ring = NULL;
+				RSS_INFO("audio overflow, reconnecting");
 				break;
 			}
 			if (ret != 0)

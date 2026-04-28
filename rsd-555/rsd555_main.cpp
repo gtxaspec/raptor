@@ -25,12 +25,54 @@ static char g_watch = 0;
 
 static UsageEnvironment *g_env;
 
-static void check_running(void * /*clientData*/)
+static RTSPServer *g_rtspServer;
+
+static ServerMediaSession *create_stream_session(UsageEnvironment &env,
+						 const char *name,
+						 const char *info,
+						 rsd555_video_ctx_t *vctx,
+						 rsd555_audio_ctx_t *actx,
+						 bool has_audio);
+
+/* Periodic check: rebuild sessions when readers discover new streams */
+static void check_streams(void * /*clientData*/)
 {
-	if (!rss_running(g_state.running))
+	if (!rss_running(g_state.running)) {
 		g_watch = 1;
-	else
-		g_env->taskScheduler().scheduleDelayedTask(500000, check_running, NULL);
+		return;
+	}
+
+	for (int s = 0; s < 2; s++) {
+		bool need_rebuild = false;
+
+		if (g_state.video[s].width > 0 && !g_state.video_added[s])
+			need_rebuild = true;
+		if (g_state.audio.sample_rate > 0 && !g_state.audio_added &&
+		    g_state.stream_names[s][0])
+			need_rebuild = true;
+
+		if (need_rebuild && g_rtspServer && g_state.stream_names[s][0]) {
+			ServerMediaSession *sms = create_stream_session(
+				*g_env, g_state.stream_names[s],
+				g_state.session_name,
+				&g_state.video[s], &g_state.audio,
+				g_state.audio.sample_rate > 0);
+			if (sms) {
+				g_rtspServer->deleteServerMediaSession(
+					g_state.stream_names[s]);
+				g_rtspServer->addServerMediaSession(sms);
+				if (g_state.video[s].width > 0)
+					g_state.video_added[s] = true;
+				if (g_state.audio.sample_rate > 0)
+					g_state.audio_added = true;
+				char *url = g_rtspServer->rtspURL(sms);
+				RSS_INFO("stream %d rebuilt: %s", s, url);
+				delete[] url;
+			}
+		}
+	}
+
+	g_env->taskScheduler().scheduleDelayedTask(500000, check_streams, NULL);
 }
 
 static ServerMediaSession *create_stream_session(UsageEnvironment &env,
@@ -52,7 +94,7 @@ static ServerMediaSession *create_stream_session(UsageEnvironment &env,
 			sms->addSubsession(RingH264Subsession::createNew(env, vctx, False));
 	}
 
-	if (has_audio && actx) {
+	if (has_audio && actx && actx->sample_rate > 0) {
 		switch (actx->codec) {
 		case RSD555_CODEC_AAC:
 			sms->addSubsession(RingAACSubsession::createNew(env, actx, False));
@@ -165,10 +207,11 @@ int main(int argc, char **argv)
 		}
 	}
 
-	/* Wait for at least the main ring */
+	/* Brief wait for main ring — covers init script race where RVD
+	 * is still starting. 2s max, exit early on signal or success. */
 	if (g_state.video[0].width == 0) {
 		RSS_INFO("waiting for main video ring...");
-		for (int i = 0; i < 100 && rss_running(g_state.running); i++) {
+		for (int i = 0; i < 20 && rss_running(g_state.running); i++) {
 			usleep(100000);
 			rss_ring_t *probe = rss_ring_open("main");
 			if (probe) {
@@ -181,9 +224,32 @@ int main(int argc, char **argv)
 				g_state.video[0].profile = hdr->profile;
 				g_state.video[0].level = hdr->level;
 				rss_ring_close(probe);
+				RSS_INFO("stream 0 (main): %s %ux%u",
+					 g_state.video[0].codec == 0 ? "H.264" : "H.265",
+					 g_state.video[0].width, g_state.video[0].height);
 				break;
 			}
 		}
+		/* Also retry sub during the window */
+		if (g_state.video[1].width == 0) {
+			rss_ring_t *probe = rss_ring_open("sub");
+			if (probe) {
+				const rss_ring_header_t *hdr = rss_ring_get_header(probe);
+				g_state.video[1].codec = hdr->codec;
+				g_state.video[1].width = hdr->width;
+				g_state.video[1].height = hdr->height;
+				g_state.video[1].fps_num = hdr->fps_num;
+				g_state.video[1].fps_den = hdr->fps_den;
+				g_state.video[1].profile = hdr->profile;
+				g_state.video[1].level = hdr->level;
+				rss_ring_close(probe);
+				RSS_INFO("stream 1 (sub): %s %ux%u",
+					 g_state.video[1].codec == 0 ? "H.264" : "H.265",
+					 g_state.video[1].width, g_state.video[1].height);
+			}
+		}
+		if (g_state.video[0].width == 0)
+			RSS_WARN("main video ring not available (is RVD running?)");
 	}
 
 	/* Audio ring — probe and close */
@@ -206,9 +272,11 @@ int main(int argc, char **argv)
 	rss_mkdir_p(RSS_RUN_DIR);
 	g_state.ctrl = rss_ctrl_listen(RSS_RUN_DIR "/rsd-555.sock");
 
-	/* Start reader threads only for streams we detected */
+	/* Start reader threads for main+sub always (retry ring_open every
+	 * 200ms in background — DEBUG level, silent in production). Other
+	 * streams only if detected at probe. Handles RVD restart. */
 	for (int s = 0; s < RSD555_STREAM_COUNT; s++) {
-		if (g_state.video[s].width == 0)
+		if (s >= 2 && g_state.video[s].width == 0)
 			continue;
 		pthread_attr_t attr;
 		pthread_attr_init(&attr);
@@ -218,7 +286,7 @@ int main(int argc, char **argv)
 			g_state.video_started[s] = true;
 		pthread_attr_destroy(&attr);
 	}
-	if (g_state.has_audio) {
+	{
 		pthread_attr_t attr;
 		pthread_attr_init(&attr);
 		pthread_attr_setstacksize(&attr, 128 * 1024);
@@ -237,6 +305,7 @@ int main(int argc, char **argv)
 
 	UserAuthenticationDatabase *authDB = NULL;
 	RTSPServer *rtspServer = NULL;
+	g_rtspServer = NULL;
 
 	if (g_state.username[0] && g_state.password[0]) {
 		authDB = new UserAuthenticationDatabase;
@@ -251,27 +320,34 @@ int main(int argc, char **argv)
 			  g_state.port, env->getResultMsg());
 		goto cleanup;
 	}
+	g_rtspServer = rtspServer;
 	RSS_DEBUG("RTSPServer created on port %d", g_state.port);
 
-	/* Create stream endpoints — only for streams with an active video ring.
-	 * Use endpoint alias from config if set, otherwise default /streamN. */
+	/* Create endpoints for main+sub always, others only if detected.
+	 * Video subsession requires width > 0 (live555 SDP is immutable).
+	 * Audio subsession requires sample_rate > 0.
+	 * Store stream names so check_streams can rebuild sessions later
+	 * when readers discover rings that weren't available at startup. */
 	for (int s = 0; s < RSD555_STREAM_COUNT; s++) {
-		if (g_state.video[s].width == 0)
+		if (s >= 2 && g_state.video[s].width == 0)
 			continue;
 
 		const char *ep = g_state.endpoints[s];
-		char name[64];
 		if (ep[0])
-			rss_strlcpy(name, ep, sizeof(name));
+			rss_strlcpy(g_state.stream_names[s], ep, sizeof(g_state.stream_names[s]));
 		else
-			snprintf(name, sizeof(name), "stream%d", s);
+			snprintf(g_state.stream_names[s], sizeof(g_state.stream_names[s]),
+				 "stream%d", s);
 
 		ServerMediaSession *sms = create_stream_session(
-			*env, name, g_state.session_name,
+			*env, g_state.stream_names[s], g_state.session_name,
 			&g_state.video[s], &g_state.audio, g_state.has_audio);
 		if (!sms)
 			continue;
 		rtspServer->addServerMediaSession(sms);
+
+		g_state.video_added[s] = (g_state.video[s].width > 0);
+		g_state.audio_added = (g_state.has_audio && g_state.audio.sample_rate > 0);
 
 		char *url = rtspServer->rtspURL(sms);
 		RSS_INFO("stream %d: %s", s, url);
@@ -286,8 +362,8 @@ int main(int argc, char **argv)
 								&g_state);
 	}
 
-	/* Schedule periodic running-flag check */
-	env->taskScheduler().scheduleDelayedTask(500000, check_running, NULL);
+	/* Schedule periodic check: running flag + stream discovery */
+	env->taskScheduler().scheduleDelayedTask(500000, check_streams, NULL);
 
 	RSS_INFO("rsd-555 listening on port %d", g_state.port);
 

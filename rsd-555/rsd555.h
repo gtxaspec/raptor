@@ -197,6 +197,9 @@ struct rsd555_state {
 	char session_name[64];
 	char session_info[128];
 	char endpoints[RSD555_STREAM_COUNT][64];
+	char stream_names[RSD555_STREAM_COUNT][64];
+	bool video_added[RSD555_STREAM_COUNT];
+	bool audio_added;
 
 	rsd555_video_ctx_t video[RSD555_STREAM_COUNT];
 	rsd555_audio_ctx_t audio;
