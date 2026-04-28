@@ -4,9 +4,10 @@
 #
 # Stages:
 #   1. Build (ASAN or TSAN)
-#   2. Unit tests (host x86, ASAN)
-#   3. Integration tests (daemons + curl/ffprobe)
-#   4. Leak/race detection (lifecycle soak)
+#   2. Sibling repo tests (raptor-ipc, raptor-common)
+#   3. Unit tests (host x86, ASAN)
+#   4. Integration tests (daemons + curl/ffprobe)
+#   5. Leak/race detection (lifecycle soak)
 #
 # Usage:
 #   ./tests/test-all.sh                   # quick pass (~2 min)
@@ -89,14 +90,31 @@ else
     fi
 fi
 
-# ── Stage 2: Unit tests ──
+# ── Stage 2: Sibling repo tests ──
 
-echo "=== Stage 2: Unit tests ==="
+echo "=== Stage 2: Sibling repo tests ==="
 
 UNIT_SAN="address"
 if [ "$SAN_MODE" = "tsan" ]; then
     UNIT_SAN="thread"
 fi
+
+for repo in raptor-ipc raptor-common; do
+    REPO_DIR="$RAPTOR_DIR/../$repo"
+    if [ -d "$REPO_DIR/tests" ]; then
+        if (cd "$REPO_DIR/tests" && make clean > /dev/null 2>&1 && make tests SAN="$UNIT_SAN" > /dev/null 2>&1 && ./tests 2>/dev/null); then
+            stage_pass "$repo tests ($UNIT_SAN)"
+        else
+            stage_fail "$repo tests ($UNIT_SAN)"
+        fi
+    else
+        echo "  $repo/tests not found, skipping"
+    fi
+done
+
+# ── Stage 3: Unit tests ──
+
+echo "=== Stage 3: Unit tests ==="
 
 if (cd "$RAPTOR_DIR/tests" && make clean > /dev/null 2>&1 && make tests SAN="$UNIT_SAN" > /dev/null 2>&1 && ./tests 2>/dev/null); then
     stage_pass "unit tests ($UNIT_SAN)"
@@ -104,9 +122,9 @@ else
     stage_fail "unit tests ($UNIT_SAN)"
 fi
 
-# ── Stage 3: Integration tests ──
+# ── Stage 4: Integration tests ──
 
-echo "=== Stage 3: Integration tests ==="
+echo "=== Stage 4: Integration tests ==="
 
 if "$SCRIPT_DIR/test-integration.sh"; then
     stage_pass "integration tests"
@@ -114,9 +132,9 @@ else
     stage_fail "integration tests"
 fi
 
-# ── Stage 4: Leak / race detection ──
+# ── Stage 5: Leak / race detection ──
 
-echo "=== Stage 4: Leak/race detection ==="
+echo "=== Stage 5: Leak/race detection ==="
 
 LEAK_ARGS=""
 if [ "$SAN_MODE" = "tsan" ]; then
