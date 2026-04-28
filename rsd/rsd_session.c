@@ -474,10 +474,11 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 		}
 	}
 
-	/* Backchannel: only advertise when client requests it via Require header
-	 * (ONVIF Profile T). Non-backchannel clients (ffplay, mpv, VLC) choke
-	 * on the sendonly media line and retry SETUP, adding seconds of delay. */
-	if (compy_require_has_tag(&req->header_map,
+	/* Backchannel: advertise when client requests it via Require header
+	 * (ONVIF Profile T) AND config allows it. Disable with
+	 * [rtsp] backchannel = false. */
+	if (rss_config_get_bool(self->srv->cfg, "rtsp", "backchannel", false) &&
+	    compy_require_has_tag(&req->header_map,
 				  CharSlice99_from_str("www.onvif.org/ver20/backchannel"))) {
 		COMPY_SDP_DESCRIBE(ret, sdp_w, (COMPY_SDP_MEDIA, "audio 0 RTP/AVP 0"),
 				   (COMPY_SDP_ATTR, "control:backchannel"),
