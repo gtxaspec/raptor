@@ -55,6 +55,8 @@ private:
 	rsd555_audio_ctx_t *fCtx;
 	rsd555_frame_queue_t fQueue;
 	bool fValid;
+	struct timeval fNextPTS;
+	bool fPTSInitialized;
 };
 
 #endif /* RSD555_SOURCE_H */

@@ -50,6 +50,8 @@ RingVideoSource::RingVideoSource(UsageEnvironment &env, rsd555_video_ctx_t *ctx)
 		fQueue.event_fd, onDataAvailable, this);
 	if (fCtx->state)
 		__atomic_add_fetch(&fCtx->state->active_clients, 1, __ATOMIC_RELAXED);
+	if (fCtx->ring)
+		rss_ring_request_idr(fCtx->ring);
 	fValid = true;
 }
 
@@ -163,7 +165,7 @@ RingAudioSource *RingAudioSource::createNew(UsageEnvironment &env, rsd555_audio_
 }
 
 RingAudioSource::RingAudioSource(UsageEnvironment &env, rsd555_audio_ctx_t *ctx)
-	: FramedSource(env), fCtx(ctx), fValid(false)
+	: FramedSource(env), fCtx(ctx), fValid(false), fPTSInitialized(false)
 {
 	if (rsd555_queue_init(&fQueue, 32) != 0) {
 		envir() << "RingAudioSource: queue init failed\n";
@@ -217,7 +219,20 @@ void RingAudioSource::deliverFrame()
 		return;
 
 	rsd555_shared_frame_t *sf = f->shared;
-	gettimeofday(&fPresentationTime, NULL);
+
+	/* Synthetic timestamps: advance by exactly one frame duration
+	 * per audio frame. All raptor audio codecs use 20ms frames
+	 * (320 samples at 16kHz). Wall-clock init, pure accumulation. */
+	if (!fPTSInitialized) {
+		gettimeofday(&fNextPTS, NULL);
+		fPTSInitialized = true;
+	}
+	fPresentationTime = fNextPTS;
+	fNextPTS.tv_usec += 20000;
+	if (fNextPTS.tv_usec >= 1000000) {
+		fNextPTS.tv_sec++;
+		fNextPTS.tv_usec -= 1000000;
+	}
 
 	if (sf->len > fMaxSize) {
 		fFrameSize = fMaxSize;
