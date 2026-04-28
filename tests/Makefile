@@ -17,7 +17,7 @@ LIB_SRCS = ../rmr/rmr_nal.c ../rmr/rmr_prebuf.c ../rmr/rmr_mux.c \
 CTRL_SRCS = ../rvd/rvd_ctrl.c mock_hal.c \
             ../../raptor-common/src/rss_config.c ../../raptor-common/src/rss_ctrl_cmds.c
 IPC_SRCS = ../../raptor-ipc/src/rss_ring.c ../../raptor-ipc/src/rss_ctrl.c \
-           ../../raptor-ipc/src/rss_osd_shm.c
+           ../../raptor-ipc/src/rss_osd_shm.c ../../raptor-ipc/src/rss_ipc_log.c
 
 # rwd_sdp.c includes rwd.h which pulls in compy+mbedTLS — compile it with
 # a minimal shim header instead (only needs rwd_sdp_offer_t + rss_strlcpy).
