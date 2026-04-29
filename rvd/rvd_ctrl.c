@@ -1493,6 +1493,58 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		return rss_ctrl_resp_ok(resp, resp_size);
 	}
 
+	if (strcmp(cmd, "set-jpeg-quality") == 0) {
+		int quality;
+		if (rss_json_get_int(cmd_json, "channel", &chn) != 0 || chn < 0 ||
+		    chn >= st->stream_count || !st->streams[chn].is_jpeg) {
+			return rss_ctrl_resp_error(resp, resp_size,
+						   "need valid jpeg channel");
+		}
+		if (rss_json_get_int(cmd_json, "value", &quality) != 0 ||
+		    quality < 1 || quality > 100) {
+			return rss_ctrl_resp_error(resp, resp_size, "need value (1-100)");
+		}
+
+		if (st->streams[chn].enc_cfg.init_qp == quality)
+			return rss_ctrl_resp_ok(resp, resp_size);
+
+		int old_qp = st->streams[chn].enc_cfg.init_qp;
+
+		/* Try QL tables first (old SDK: instant, no teardown) */
+		int ret = RSS_HAL_CALL(st->ops, enc_set_jpeg_qp, st->hal_ctx,
+				       st->streams[chn].chn, quality);
+		if (ret == RSS_OK) {
+			st->streams[chn].enc_cfg.init_qp = quality;
+			rss_config_set_int(st->cfg, st->streams[chn].cfg_sect,
+					   "jpeg_quality", quality);
+			RSS_INFO("set-jpeg-quality: chn %d quality %d → %d (ql tables)",
+				 chn, old_qp, quality);
+			return rss_ctrl_resp_ok(resp, resp_size);
+		}
+
+		/* Fallback: channel recreate (new SDK) */
+		rvd_stream_stop(st, chn);
+		rvd_stream_deinit(st, chn);
+
+		st->streams[chn].enc_cfg.init_qp = quality;
+
+		ret = rvd_stream_init(st, chn);
+		if (ret != RSS_OK) {
+			RSS_ERROR("set-jpeg-quality: init failed: %d, restoring", ret);
+			st->streams[chn].enc_cfg.init_qp = old_qp;
+			if (rvd_stream_init(st, chn) == RSS_OK)
+				rvd_stream_start(st, chn);
+			return rss_ctrl_resp_error(resp, resp_size, "init failed");
+		}
+		rvd_stream_start(st, chn);
+
+		rss_config_set_int(st->cfg, st->streams[chn].cfg_sect,
+				   "jpeg_quality", quality);
+		RSS_INFO("set-jpeg-quality: chn %d quality %d → %d (recreate)",
+			 chn, old_qp, quality);
+		return rss_ctrl_resp_ok(resp, resp_size);
+	}
+
 	if (strcmp(cmd, "osd-show") == 0) {
 		int stream = -1, show = -1;
 		char region[RVD_OSD_NAME_LEN] = "";

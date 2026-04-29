@@ -190,6 +190,7 @@ static const struct cmd_def cmd_table[] = {
 	{"stream-start", NULL, 1, args_ch},
 	{"stream-restart", NULL, 1, args_ch},
 	{"set-resolution", NULL, 3, args_resolution},
+	{"set-jpeg-quality", NULL, 2, args_ch_val},
 	{"set-rc-mode", NULL, 2, args_rc_mode},
 
 	/* Audio */
