@@ -1,10 +1,20 @@
 #!/bin/sh
 # Launch raptor daemons from NFS — run directly on device
-# Usage: /mnt/nfs/projects/thingino/raptor/run.sh [config]
+# Usage: /mnt/nfs/projects/thingino/raptor/run.sh [-n] [config]
+#   -n  Normal mode (daemonize). Without -n, runs with -f -d (foreground+debug).
 #
 # If no config given, uses /etc/raptor.conf or generates a minimal one.
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
+DEBUG_FLAGS="-f -d"
+DEBUG_LOG=1
+
+if [ "$1" = "-n" ]; then
+    DEBUG_FLAGS=""
+    DEBUG_LOG=0
+    shift
+fi
+
 CONF="${1:-/etc/raptor.conf}"
 
 log() { echo "[raptor] $*"; }
@@ -139,7 +149,11 @@ SKIPPED=""
 launch() {
     local name="$1"; shift
     log "starting $name..."
-    "$@" >> /tmp/${name}.log 2>&1 &
+    if [ "$DEBUG_LOG" = 1 ]; then
+        "$@" >> /tmp/${name}.log 2>&1 &
+    else
+        "$@" &
+    fi
     eval "PID_${name}=$!"
 }
 
@@ -172,30 +186,30 @@ check() {
 }
 
 # RVD must start first (creates rings, encoder, ISP)
-launch rvd $DIR/rvd/rvd -c "$CONF" -f -d
+launch rvd $DIR/rvd/rvd -c "$CONF" $DEBUG_FLAGS
 sleep 4
 check rvd || { log "rvd is required — aborting"; exit 1; }
 
 # Audio producer
-launch rad $DIR/rad/rad -c "$CONF" -f -d
+launch rad $DIR/rad/rad -c "$CONF" $DEBUG_FLAGS
 sleep 2
 check rad
 
 # OSD renderer
-launch rod $DIR/rod/rod -c "$CONF" -f -d
+launch rod $DIR/rod/rod -c "$CONF" $DEBUG_FLAGS
 
 # Stream consumers
-launch rsd $DIR/rsd/rsd -c "$CONF" -f -d
-launch rhd $DIR/rhd/rhd -c "$CONF" -f -d
-launch rmr $DIR/rmr/rmr -c "$CONF" -f -d
-launch rwd $DIR/rwd/rwd -c "$CONF" -f -d
-launch rsp $DIR/rsp/rsp -c "$CONF" -f -d
+launch rsd $DIR/rsd/rsd -c "$CONF" $DEBUG_FLAGS
+launch rhd $DIR/rhd/rhd -c "$CONF" $DEBUG_FLAGS
+launch rmr $DIR/rmr/rmr -c "$CONF" $DEBUG_FLAGS
+launch rwd $DIR/rwd/rwd -c "$CONF" $DEBUG_FLAGS
+launch rsp $DIR/rsp/rsp -c "$CONF" $DEBUG_FLAGS
 sleep 1
 for d in rod rsd rhd rmr rwd rsp; do check $d; done
 
 # Aux daemons
-launch ric $DIR/ric/ric -c "$CONF" -f -d
-launch rmd $DIR/rmd/rmd -c "$CONF" -f -d
+launch ric $DIR/ric/ric -c "$CONF" $DEBUG_FLAGS
+launch rmd $DIR/rmd/rmd -c "$CONF" $DEBUG_FLAGS
 sleep 2
 for d in ric rmd; do check $d; done
 
@@ -219,7 +233,7 @@ echo ""
 [ -n "$SKIPPED" ] && log "skipped (disabled in config):$SKIPPED"
 if [ -n "$FAILED" ]; then
     log "FAILED:$FAILED"
-    log "check logs: /tmp/{daemon}.log"
+    [ "$DEBUG_LOG" = 1 ] && log "check logs: /tmp/{daemon}.log"
     exit 1
 fi
-log "logs: /tmp/{rvd,rad,rod,rsd,rhd,rmr,rwd,rsp,ric,rmd}.log"
+[ "$DEBUG_LOG" = 1 ] && log "logs: /tmp/{rvd,rad,rod,rsd,rhd,rmr,rwd,rsp,ric,rmd}.log"
