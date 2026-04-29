@@ -86,7 +86,8 @@ static void gpio_export(int pin)
 		int len = snprintf(buf, sizeof(buf), "%d", pin);
 		int fd = open("/sys/class/gpio/export", O_WRONLY);
 		if (fd >= 0) {
-			write(fd, buf, len);
+			if (write(fd, buf, len) < 0)
+				RSS_WARN("gpio %d export: %s", pin, strerror(errno));
 			close(fd);
 		}
 	}
