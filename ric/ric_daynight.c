@@ -72,26 +72,29 @@ void ric_adc_cleanup(ric_state_t *st)
 	st->adc_initialized = false;
 }
 
-/* Export a GPIO pin via sysfs (ignore errors if already exported) */
 static void gpio_export(int pin)
 {
 	if (pin < 0)
 		return;
-	char buf[16];
-	int len = snprintf(buf, sizeof(buf), "%d", pin);
-	int fd = open("/sys/class/gpio/export", O_WRONLY);
-	if (fd >= 0) {
-		if (write(fd, buf, len) < 0)
-			RSS_WARN("gpio export %d: write failed: %s", pin, strerror(errno));
-		close(fd);
-	}
-	/* Set direction to output */
+
 	char path[64];
 	snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/direction", pin);
-	fd = open(path, O_WRONLY);
+	if (access(path, F_OK) == 0) {
+		RSS_DEBUG("gpio %d already exported", pin);
+	} else {
+		char buf[16];
+		int len = snprintf(buf, sizeof(buf), "%d", pin);
+		int fd = open("/sys/class/gpio/export", O_WRONLY);
+		if (fd >= 0) {
+			write(fd, buf, len);
+			close(fd);
+		}
+	}
+
+	int fd = open(path, O_WRONLY);
 	if (fd >= 0) {
 		if (write(fd, "out", 3) < 0)
-			RSS_WARN("gpio %d direction: write failed: %s", pin, strerror(errno));
+			RSS_WARN("gpio %d direction: %s", pin, strerror(errno));
 		close(fd);
 	}
 }
@@ -207,15 +210,19 @@ void ric_poll_exposure(ric_state_t *st)
 	char resp[512];
 	int ret = rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", "{\"cmd\":\"get-exposure\"}", resp,
 					sizeof(resp), 1000);
-	if (ret < 0)
+	if (ret < 0) {
+		RSS_DEBUG("RVD query failed (%d)", ret);
 		return;
+	}
 
 	uint32_t total_gain = 0, ae_luma = 0;
 	uint32_t ev = 0;
 	uint16_t wb_rgain = 0, wb_bgain = 0;
 	cJSON *parsed = cJSON_Parse(resp);
-	if (!parsed)
+	if (!parsed) {
+		RSS_DEBUG("RVD response parse failed: %.80s", resp);
 		return;
+	}
 	total_gain = json_get_uint(parsed, "total_gain");
 	ae_luma = json_get_uint(parsed, "ae_luma");
 	ev = json_get_uint(parsed, "ev");
