@@ -136,7 +136,7 @@ endif
 # Sysroot for finding shared libs (set by Buildroot or manually)
 SYSROOT ?=
 ifneq ($(SYSROOT),)
-LDFLAGS_SYSROOT := -L$(SYSROOT)/usr/lib -Wl,-rpath-link,$(SYSROOT)/usr/lib -Wl,-rpath-link,$(SYSROOT)/lib
+LDFLAGS_SYSROOT := -L$(SYSROOT)/usr/lib -Wl,-rpath-link,$(SYSROOT)/usr/lib -Wl,-rpath-link,$(SYSROOT)/lib -Wl,--allow-shlib-undefined
 else
 LDFLAGS_SYSROOT :=
 endif
