@@ -882,6 +882,8 @@ void *rwd_audio_reader_thread(void *arg)
 	int opus_frame_size = 0;  /* valid Opus frame size for current sample rate */
 	uint32_t opus_rtp_ts = 0; /* running RTP timestamp for Opus output */
 	bool opus_rtp_ts_init = false;
+	uint32_t pcmu_rtp_ts = 0; /* running RTP timestamp for PCMU output */
+	bool pcmu_rtp_ts_init = false;
 
 	/* Transcoding state (created when needed) */
 	OpusEncoder *opus_enc = NULL;
@@ -907,6 +909,8 @@ void *rwd_audio_reader_thread(void *arg)
 			pcm_accum_fill = 0;
 			opus_rtp_ts = 0;
 			opus_rtp_ts_init = false;
+			pcmu_rtp_ts = 0;
+			pcmu_rtp_ts_init = false;
 
 			/* Tear down old transcoder if codec changed */
 			if (opus_enc) {
@@ -954,6 +958,11 @@ void *rwd_audio_reader_thread(void *arg)
 					need_transcode = true;
 					break;
 				}
+			} else if (srv->audio_mode == RWD_AUDIO_MODE_PCMU) {
+				srv->wire_codec = RWD_CODEC_PCMU;
+				srv->wire_pt = 0;
+				srv->wire_clock = 8000;
+				need_transcode = (audio_codec != RWD_CODEC_PCMU);
 			} else {
 				/* opus mode: always transcode to Opus */
 				srv->wire_codec = RWD_CODEC_OPUS;
@@ -976,20 +985,20 @@ void *rwd_audio_reader_thread(void *arg)
 							 OPUS_SET_COMPLEXITY(srv->opus_complexity));
 					opus_frame_size = sample_rate / 50; /* 20ms */
 				}
-#ifdef RAPTOR_AAC
-				if (audio_codec == RWD_CODEC_AAC) {
-					aac_dec = AACInitDecoder();
-					if (aac_dec) {
-						AACFrameInfo fi = {0};
-						fi.nChans = 1;
-						fi.sampRateCore = sample_rate;
-						AACSetRawBlockParams(aac_dec, 0, &fi);
-					} else {
-						RSS_WARN("media: AAC decoder init failed");
-					}
-				}
-#endif
 			}
+#ifdef RAPTOR_AAC
+			if (need_transcode && audio_codec == RWD_CODEC_AAC) {
+				aac_dec = AACInitDecoder();
+				if (aac_dec) {
+					AACFrameInfo fi = {0};
+					fi.nChans = 1;
+					fi.sampRateCore = sample_rate;
+					AACSetRawBlockParams(aac_dec, 0, &fi);
+				} else {
+					RSS_WARN("media: AAC decoder init failed");
+				}
+			}
+#endif
 
 			/* Set has_audio last — signaling thread reads it to
 			 * gate SDP audio, must see wire fields first. */
@@ -1073,6 +1082,7 @@ void *rwd_audio_reader_thread(void *arg)
 					pcm_accum_fill = 0;
 					opus_rtp_ts_init = false;
 				}
+				pcmu_rtp_ts_init = false;
 				continue;
 			}
 
@@ -1097,23 +1107,49 @@ void *rwd_audio_reader_thread(void *arg)
 				}
 				pthread_mutex_unlock(&srv->clients_lock);
 			} else if (srv->wire_codec == RWD_CODEC_PCMU) {
-				/* L16 → PCMU (table lookup) */
-				int enc_len = rwd_l16_to_pcmu(audio_buf, length, transcode_out,
-							      sizeof(transcode_out), sample_rate);
+				int enc_len;
+				if (audio_codec == RWD_CODEC_L16) {
+					enc_len = rwd_l16_to_pcmu(audio_buf, length, transcode_out,
+								  sizeof(transcode_out), sample_rate);
+				} else {
+					int n = rwd_decode_to_pcm(audio_codec, audio_buf, length,
+#ifdef RAPTOR_AAC
+								  aac_dec,
+#endif
+								  pcm_accum, 2048);
+					int step = (sample_rate > 8000) ? sample_rate / 8000 : 1;
+					n -= n % step;
+					enc_len = n / step;
+					if (enc_len > (int)sizeof(transcode_out))
+						enc_len = (int)sizeof(transcode_out);
+					if (step == 2) {
+						for (int i = 0; i < enc_len; i++)
+							transcode_out[i] = ulaw_encode(
+								(int16_t)((pcm_accum[i * 2] + pcm_accum[i * 2 + 1]) / 2));
+					} else {
+						for (int i = 0; i < enc_len; i++)
+							transcode_out[i] = ulaw_encode(pcm_accum[i * step]);
+					}
+				}
 				if (enc_len > 0) {
+					if (!pcmu_rtp_ts_init) {
+						pcmu_rtp_ts = rtp_ts;
+						pcmu_rtp_ts_init = true;
+					}
 					pthread_mutex_lock(&srv->clients_lock);
 					for (int i = 0; i < RWD_MAX_CLIENTS; i++) {
 						rwd_client_t *c = srv->clients[i];
 						if (!c || !c->sending || !c->rtp_audio)
 							continue;
 						if (!c->audio_ts_base_set) {
-							c->audio_ts_offset = rtp_ts;
+							c->audio_ts_offset = pcmu_rtp_ts;
 							c->audio_ts_base_set = true;
 						}
 						rwd_send_audio_frame(c, transcode_out, enc_len,
-								     rtp_ts - c->audio_ts_offset);
+								     pcmu_rtp_ts - c->audio_ts_offset);
 					}
 					pthread_mutex_unlock(&srv->clients_lock);
+					pcmu_rtp_ts += (uint32_t)enc_len;
 				}
 			} else if (opus_enc && opus_frame_size > 0) {
 				/* Decode → accumulate → encode Opus in 20ms frames.

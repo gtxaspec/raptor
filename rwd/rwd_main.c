@@ -457,6 +457,7 @@ static int rwd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 	}
 
+#ifdef RAPTOR_WEBTORRENT
 	if (strcmp(cmd, "share-rotate") == 0) {
 		if (srv->webtorrent) {
 			rwd_webtorrent_t *wt = srv->webtorrent;
@@ -485,6 +486,7 @@ static int rwd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		}
 		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "webtorrent not enabled");
 	}
+#endif
 
 	/* Default: status */
 	{
@@ -672,9 +674,13 @@ int main(int argc, char **argv)
 		srv.max_clients = 1;
 	if (srv.max_clients > RWD_MAX_CLIENTS)
 		srv.max_clients = RWD_MAX_CLIENTS;
-	const char *audio_mode_str = rss_config_get_str(dctx.cfg, "webrtc", "audio_mode", "auto");
-	srv.audio_mode =
-		(strcmp(audio_mode_str, "opus") == 0) ? RWD_AUDIO_MODE_OPUS : RWD_AUDIO_MODE_AUTO;
+	const char *audio_mode_str = rss_config_get_str(dctx.cfg, "webrtc", "audio_mode", "opus");
+	if (strcmp(audio_mode_str, "auto") == 0)
+		srv.audio_mode = RWD_AUDIO_MODE_AUTO;
+	else if (strcmp(audio_mode_str, "pcmu") == 0)
+		srv.audio_mode = RWD_AUDIO_MODE_PCMU;
+	else
+		srv.audio_mode = RWD_AUDIO_MODE_OPUS;
 	srv.opus_complexity = rss_config_get_int(dctx.cfg, "webrtc", "opus_complexity", 2);
 	if (srv.opus_complexity < 0)
 		srv.opus_complexity = 0;

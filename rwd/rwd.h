@@ -55,6 +55,7 @@
 /* Audio wire mode: how RWD sends audio to browsers */
 #define RWD_AUDIO_MODE_OPUS 0 /* always transcode to Opus */
 #define RWD_AUDIO_MODE_AUTO 1 /* passthrough when possible */
+#define RWD_AUDIO_MODE_PCMU 2 /* always send PCMU */
 
 /* STUN constants (RFC 5389) */
 #define STUN_HEADER_SIZE	    20
