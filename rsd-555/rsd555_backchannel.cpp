@@ -1,10 +1,10 @@
 /*
  * rsd555_backchannel.cpp -- ONVIF backchannel implementation
  *
- * Receives PCMU/8000 audio from the RTSP client via RTP, decodes
- * to PCM16, upsamples 8kHz→16kHz (duplicate each sample), and
- * publishes to the "speaker" ring. RAD's AO playback thread reads
- * the ring and sends to the hardware speaker.
+ * Subclasses ServerMediaSubsession directly to handle the inverted
+ * direction (receive RTP from client). Creates SimpleRTPSource +
+ * BackchannelSink per client session. Decoded PCMU audio is
+ * upsampled 8kHz→16kHz and published to the "speaker" ring.
  */
 
 #include "rsd555_backchannel.h"
@@ -75,9 +75,9 @@ void BackchannelSink::processFrame(unsigned frameSize)
 		if (!fSpeakerRing)
 			return;
 		rss_ring_set_stream_info(fSpeakerRing, 0x11, 0, 0, 0, 16000, 1, 0, 0);
+		RSS_INFO("backchannel: speaker ring ready");
 	}
 
-	/* PCMU/8000 → PCM16/16kHz: decode + 2x upsample (duplicate samples) */
 	int n = (int)frameSize;
 	if (n > 480)
 		n = 480;
@@ -95,6 +95,16 @@ void BackchannelSink::processFrame(unsigned frameSize)
  * BackchannelStreamState — per-client cleanup
  * ================================================================ */
 
+BackchannelStreamState::BackchannelStreamState()
+	: rtpSource(NULL), sink(NULL), rtcpInstance(NULL),
+	  rtpGroupsock(NULL), rtcpGroupsock(NULL),
+	  tcpSocketNum(-1), rtpChannelId(0), rtcpChannelId(0),
+	  tlsState(NULL)
+{
+	gethostname(cname, sizeof(cname));
+	cname[sizeof(cname) - 1] = '\0';
+}
+
 BackchannelStreamState::~BackchannelStreamState()
 {
 	if (rtcpInstance) {
@@ -111,14 +121,14 @@ BackchannelStreamState::~BackchannelStreamState()
 		rtpSource = NULL;
 	}
 	delete rtpGroupsock;
-	if (rtcpGroupsock != rtpGroupsock)
+	if (rtcpGroupsock && rtcpGroupsock != rtpGroupsock)
 		delete rtcpGroupsock;
 	rtpGroupsock = NULL;
 	rtcpGroupsock = NULL;
 }
 
 /* ================================================================
- * BackchannelSubsession — inverted-direction ServerMediaSubsession
+ * BackchannelSubsession — direct ServerMediaSubsession subclass
  * ================================================================ */
 
 BackchannelSubsession *BackchannelSubsession::createNew(UsageEnvironment &env)
@@ -127,10 +137,8 @@ BackchannelSubsession *BackchannelSubsession::createNew(UsageEnvironment &env)
 }
 
 BackchannelSubsession::BackchannelSubsession(UsageEnvironment &env)
-	: OnDemandServerMediaSubsession(env, False), fSDPLines(NULL)
+	: ServerMediaSubsession(env), fSDPLines(NULL)
 {
-	gethostname(fCNAME, sizeof(fCNAME));
-	fCNAME[sizeof(fCNAME) - 1] = '\0';
 }
 
 BackchannelSubsession::~BackchannelSubsession()
@@ -159,27 +167,12 @@ char const *BackchannelSubsession::sdpLines(int /*addressFamily*/)
 	return fSDPLines;
 }
 
-/* Not used — backchannel receives, doesn't source */
-FramedSource *BackchannelSubsession::createNewStreamSource(
-	unsigned /*clientSessionId*/, unsigned & /*estBitrate*/)
-{
-	return NULL;
-}
-
-RTPSink *BackchannelSubsession::createNewRTPSink(
-	Groupsock * /*rtpGroupsock*/,
-	unsigned char /*rtpPayloadTypeIfDynamic*/,
-	FramedSource * /*inputSource*/)
-{
-	return NULL;
-}
-
 void BackchannelSubsession::getStreamParameters(
 	unsigned clientSessionId,
 	struct sockaddr_storage const &clientAddress,
 	Port const & /*clientRTPPort*/, Port const & /*clientRTCPPort*/,
-	int tcpSocketNum, unsigned char /*rtpChannelId*/,
-	unsigned char /*rtcpChannelId*/, TLSState * /*tlsState*/,
+	int tcpSocketNum, unsigned char rtpChannelId,
+	unsigned char rtcpChannelId, TLSState *tlsState,
 	struct sockaddr_storage &destinationAddress,
 	u_int8_t & /*destinationTTL*/, Boolean &isMulticast,
 	Port &serverRTPPort, Port &serverRTCPPort,
@@ -194,56 +187,32 @@ void BackchannelSubsession::getStreamParameters(
 	BackchannelStreamState *state = new BackchannelStreamState();
 	if (!state)
 		return;
-	state->clientSessionId = clientSessionId;
+	state->tcpSocketNum = tcpSocketNum;
+	state->rtpChannelId = rtpChannelId;
+	state->rtcpChannelId = rtcpChannelId;
+	state->tlsState = tlsState;
 
-	/* Create groupsocks */
+	/* Dummy groupsocks — actual transport is TCP interleaved */
 	struct sockaddr_storage nullAddr;
 	memset(&nullAddr, 0, sizeof(nullAddr));
 	nullAddr.ss_family = AF_INET;
 	Port dummyPort(0);
 
-	if (tcpSocketNum >= 0) {
-		/* TCP interleaved */
-		serverRTPPort = 0;
-		serverRTCPPort = 0;
-		state->rtpGroupsock = new Groupsock(envir(), nullAddr, dummyPort, 0);
-		state->rtcpGroupsock = new Groupsock(envir(), nullAddr, dummyPort, 0);
-	} else {
-		/* UDP — allocate server-side ports */
-		portNumBits portNum = 6970;
-		while (true) {
-			serverRTPPort = portNum;
-			state->rtpGroupsock = new Groupsock(envir(), nullAddr, serverRTPPort, 0);
-			if (state->rtpGroupsock->socketNum() >= 0)
-				break;
-			delete state->rtpGroupsock;
-			portNum += 2;
-			if (portNum > 65534) {
-				delete state;
-				return;
-			}
-		}
-		serverRTCPPort = portNum + 1;
-		state->rtcpGroupsock = new Groupsock(envir(), nullAddr, serverRTCPPort, 0);
-		if (state->rtcpGroupsock->socketNum() < 0) {
-			delete state->rtpGroupsock;
-			delete state->rtcpGroupsock;
-			state->rtpGroupsock = NULL;
-			state->rtcpGroupsock = NULL;
-			delete state;
-			return;
-		}
-	}
+	serverRTPPort = 0;
+	serverRTCPPort = 0;
+	state->rtpGroupsock = new Groupsock(envir(), nullAddr, dummyPort, 0);
+	state->rtcpGroupsock = new Groupsock(envir(), nullAddr, dummyPort, 0);
 
-	/* Create RTP source (receives from client) */
-	state->rtpSource = SimpleRTPSource::createNew(envir(), state->rtpGroupsock,
-						      0, 8000, "audio/PCMU", 0, False);
+	/* RTP source — receives PCMU from client */
+	state->rtpSource = SimpleRTPSource::createNew(
+		envir(), state->rtpGroupsock, 0, 8000,
+		"audio/PCMU", 0, False);
 	if (!state->rtpSource) {
 		delete state;
 		return;
 	}
 
-	/* Create sink (decodes and publishes to speaker ring) */
+	/* Sink — decodes and publishes to speaker ring */
 	state->sink = BackchannelSink::createNew(envir());
 	if (!state->sink) {
 		Medium::close(state->rtpSource);
@@ -252,13 +221,15 @@ void BackchannelSubsession::getStreamParameters(
 		return;
 	}
 
-	/* RTCP instance for receiver reports */
-	unsigned totalBW = 64;
+	/* RTCP for receiver reports */
 	state->rtcpInstance = RTCPInstance::createNew(
-		envir(), state->rtcpGroupsock, totalBW, (unsigned char *)fCNAME,
+		envir(), state->rtcpGroupsock, 64,
+		(unsigned char *)state->cname,
 		NULL, state->rtpSource, False);
 
 	streamToken = (void *)state;
+	RSS_DEBUG("backchannel SETUP: session=%u tcp=%d ch=%u/%u",
+		  clientSessionId, tcpSocketNum, rtpChannelId, rtcpChannelId);
 }
 
 void BackchannelSubsession::startStream(
@@ -272,18 +243,33 @@ void BackchannelSubsession::startStream(
 	if (!state || !state->sink || !state->rtpSource)
 		return;
 
-	/* Set up TCP interleaved receive if needed */
-	if (handler)
-		RTPInterface::setServerRequestAlternativeByteHandler(
-			envir(), state->rtpSource->RTPgs()->socketNum(),
-			handler, handlerClientData);
-
-	/* Start receiving */
-	if (!state->sink->startPlaying(*state->rtpSource, NULL, NULL))
-		envir() << "BackchannelSubsession: startPlaying failed\n";
-
 	rtpSeqNum = 0;
 	rtpTimestamp = 0;
+
+	/* Wire up TCP interleaved receive */
+	if (state->tcpSocketNum >= 0) {
+		state->rtpSource->setStreamSocket(
+			state->tcpSocketNum, state->rtpChannelId,
+			state->tlsState);
+		if (state->rtcpInstance)
+			state->rtcpInstance->addStreamSocket(
+				state->tcpSocketNum, state->rtcpChannelId,
+				state->tlsState);
+		if (handler) {
+			RTPInterface::setServerRequestAlternativeByteHandler(
+				envir(), state->tcpSocketNum,
+				handler, handlerClientData);
+		}
+		RSS_DEBUG("backchannel: tcp=%d rtp_ch=%u rtcp_ch=%u handler=%p",
+			  state->tcpSocketNum, state->rtpChannelId,
+			  state->rtcpChannelId, (void *)handler);
+	}
+
+	/* Start receiving audio */
+	if (!state->sink->startPlaying(*state->rtpSource, NULL, NULL))
+		RSS_WARN("backchannel: startPlaying failed");
+	else
+		RSS_INFO("backchannel: streaming started");
 }
 
 void BackchannelSubsession::deleteStream(unsigned /*clientSessionId*/,
@@ -297,4 +283,17 @@ void BackchannelSubsession::deleteStream(unsigned /*clientSessionId*/,
 void BackchannelSubsession::pauseStream(unsigned /*clientSessionId*/,
 					 void * /*streamToken*/)
 {
+}
+
+void BackchannelSubsession::getRTPSinkandRTCP(void * /*streamToken*/,
+					       RTPSink *&rtpSink,
+					       RTCPInstance *&rtcp)
+{
+	rtpSink = NULL;
+	rtcp = NULL;
+}
+
+FramedSource *BackchannelSubsession::getStreamSource(void * /*streamToken*/)
+{
+	return NULL;
 }

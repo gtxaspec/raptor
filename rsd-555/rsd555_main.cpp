@@ -120,9 +120,13 @@ static ServerMediaSession *create_stream_session(UsageEnvironment &env,
 	}
 
 	/* Backchannel: sendonly PCMU/8000 audio track for two-way audio.
-	 * Enabled by default. Disable with [rtsp] backchannel = false. */
-	if (backchannel)
-		sms->addSubsession(BackchannelSubsession::createNew(env));
+	 * Requires live555 patch 0011 (ONVIF Require header support).
+	 * setRequireTag gates SDP inclusion on the client's Require header. */
+	if (backchannel) {
+		BackchannelSubsession *bc = BackchannelSubsession::createNew(env);
+		bc->setRequireTag("www.onvif.org/ver20/backchannel");
+		sms->addSubsession(bc);
+	}
 
 	return sms;
 }

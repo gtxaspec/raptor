@@ -662,6 +662,11 @@ LIB_SUFFIX =		a
 PREFIX =		/usr
 EOCFG
 
+    # Apply thingino patches (strict-aliasing fix + ONVIF backchannel)
+    for p in "$SCRIPT_DIR/rsd-555/patches/"*.patch; do
+        [ -f "$p" ] && patch -p1 -N < "$p" 2>/dev/null || true
+    done
+
     ./genMakefiles raptor
 
     run live555-groupsock make -C groupsock -j"$JOBS"
