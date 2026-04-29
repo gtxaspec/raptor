@@ -52,9 +52,11 @@ typedef struct {
 	struct uvc_streaming_control commit;
 	uint8_t last_cs;
 
-	/* Video rings */
+	/* Video rings — main (1080p) and sub (360p) */
 	rss_ring_t *jpeg_ring;
 	rss_ring_t *video_ring;
+	rss_ring_t *jpeg_sub_ring;
+	rss_ring_t *video_sub_ring;
 	uint64_t read_seq;
 	uint8_t *frame_buf;
 	uint32_t frame_buf_size;
@@ -62,8 +64,12 @@ typedef struct {
 	/* Video ring idle tracking */
 	uint64_t jpeg_last_ws;
 	uint64_t video_last_ws;
+	uint64_t jpeg_sub_last_ws;
+	uint64_t video_sub_last_ws;
 	int jpeg_idle;
 	int video_idle;
+	int jpeg_sub_idle;
+	int video_sub_idle;
 
 	/* Audio */
 	int mic_fd;
@@ -410,7 +416,11 @@ static void deliver_frame(rwc_state_t *st)
 	uint32_t copy_len;
 	int ret;
 
-	ring = (st->cur_format == RWC_FMT_H264) ? st->video_ring : st->jpeg_ring;
+	bool use_sub = (st->cur_frame == RWC_FRAME_360P);
+	if (st->cur_format == RWC_FMT_H264)
+		ring = use_sub ? st->video_sub_ring : st->video_ring;
+	else
+		ring = use_sub ? st->jpeg_sub_ring : st->jpeg_ring;
 	if (!ring)
 		return;
 
@@ -726,6 +736,9 @@ int main(int argc, char **argv)
 
 	const char *jpeg_name = rss_config_get_str(ctx.cfg, "webcam", "jpeg_stream", "jpeg0");
 	const char *h264_name = rss_config_get_str(ctx.cfg, "webcam", "h264_stream", "main");
+	const char *jpeg_sub_name =
+		rss_config_get_str(ctx.cfg, "webcam", "jpeg_sub_stream", "jpeg1");
+	const char *h264_sub_name = rss_config_get_str(ctx.cfg, "webcam", "h264_sub_stream", "sub");
 	st.audio_enabled = rss_config_get_bool(ctx.cfg, "webcam", "audio", true);
 	const char *audio_name = rss_config_get_str(ctx.cfg, "webcam", "audio_stream", "audio");
 
@@ -743,6 +756,10 @@ int main(int argc, char **argv)
 			st.jpeg_ring = try_open_ring(jpeg_name);
 		if (!st.video_ring)
 			st.video_ring = try_open_ring(h264_name);
+		if (!st.jpeg_sub_ring)
+			st.jpeg_sub_ring = try_open_ring(jpeg_sub_name);
+		if (!st.video_sub_ring)
+			st.video_sub_ring = try_open_ring(h264_sub_name);
 		if (st.jpeg_ring || st.video_ring)
 			break;
 		RSS_DEBUG("waiting for video rings...");
@@ -768,8 +785,9 @@ int main(int argc, char **argv)
 	rss_mkdir_p(RSS_RUN_DIR);
 	st.ctrl = rss_ctrl_listen(RSS_RUN_DIR "/rwc.sock");
 
-	RSS_INFO("rwc running (jpeg=%s video=%s audio=%s)", st.jpeg_ring ? "yes" : "no",
-		 st.video_ring ? "yes" : "no", st.audio_enabled ? "yes" : "no");
+	RSS_INFO("rwc running (jpeg=%s/%s video=%s/%s audio=%s)", st.jpeg_ring ? "yes" : "no",
+		 st.jpeg_sub_ring ? "yes" : "no", st.video_ring ? "yes" : "no",
+		 st.video_sub_ring ? "yes" : "no", st.audio_enabled ? "yes" : "no");
 
 	/* ---- Main loop ---- */
 
@@ -822,11 +840,19 @@ int main(int argc, char **argv)
 				st.jpeg_ring = try_open_ring(jpeg_name);
 			if (!st.video_ring)
 				st.video_ring = try_open_ring(h264_name);
+			if (!st.jpeg_sub_ring)
+				st.jpeg_sub_ring = try_open_ring(jpeg_sub_name);
+			if (!st.video_sub_ring)
+				st.video_sub_ring = try_open_ring(h264_sub_name);
 			if (st.audio_enabled && !st.audio_ring)
 				st.audio_ring = try_open_ring(audio_name);
 
 			check_ring_idle(&st.jpeg_ring, &st.jpeg_last_ws, &st.jpeg_idle, "jpeg");
 			check_ring_idle(&st.video_ring, &st.video_last_ws, &st.video_idle, "video");
+			check_ring_idle(&st.jpeg_sub_ring, &st.jpeg_sub_last_ws, &st.jpeg_sub_idle,
+					"jpeg_sub");
+			check_ring_idle(&st.video_sub_ring, &st.video_sub_last_ws,
+					&st.video_sub_idle, "video_sub");
 			if (st.audio_enabled)
 				check_ring_idle(&st.audio_ring, &st.audio_last_ws, &st.audio_idle,
 						"audio");
@@ -843,6 +869,10 @@ int main(int argc, char **argv)
 		rss_ring_close(st.jpeg_ring);
 	if (st.video_ring)
 		rss_ring_close(st.video_ring);
+	if (st.jpeg_sub_ring)
+		rss_ring_close(st.jpeg_sub_ring);
+	if (st.video_sub_ring)
+		rss_ring_close(st.video_sub_ring);
 	if (st.audio_ring)
 		rss_ring_close(st.audio_ring);
 	if (st.mic_fd >= 0)
