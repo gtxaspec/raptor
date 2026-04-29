@@ -15,7 +15,7 @@
 #define DAY_RATIO_HIGH	  1.13
 #define FIXED_RATIO_LOW	  0.92
 #define FIXED_RATIO_HIGH  1.08
-#define FIXED_DRIFT_THR	  1.30
+#define FIXED_DRIFT_THR	  0.70
 #define INTERF_RATIO_HIGH 1.12
 #define INTERF_RATIO_LOW  0.88
 
