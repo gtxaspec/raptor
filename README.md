@@ -84,7 +84,6 @@ Runtime shared libraries from the Ingenic SDK / Buildroot sysroot:
 
 - `libimp` -- Ingenic multimedia platform
 - `libalog` -- Ingenic logging
-- `libsysutils` -- Ingenic system utilities
 - `libschrift` -- TrueType font rasterizer (ROD)
 - `libfaac` -- AAC encoder (optional, `AAC=1`)
 - `libhelix-aac` / `libhelix-mp3` -- AAC/MP3 decoders (optional, for rac playback)
@@ -96,20 +95,21 @@ Runtime shared libraries from the Ingenic SDK / Buildroot sysroot:
 
 ## Build
 
-Raptor cross-compiles with a MIPS toolchain from a thingino Buildroot output.
-
-### Quick build (using build.sh)
+### Standalone build (no Buildroot)
 
 ```sh
-./build.sh t31 /path/to/buildroot/output              # full distclean + rebuild
-./build.sh t31 /path/to/buildroot/output rvd rsd       # rebuild specific targets
-./build.sh t31 /path/to/buildroot/output clean          # clean only
+./build-standalone.sh t31                # downloads toolchain + deps, builds everything
+./build-standalone.sh t31 --local        # use sibling repo checkouts instead of cloning
+./build-standalone.sh t31 --static       # static binaries
+./build-standalone.sh t31 --clean        # clean all build artifacts
 ```
 
-Supported platforms: `t20`, `t21`, `t23`, `t30`, `t31`, `t32`, `t40`, `t41`, `a1`.
+Supported platforms: `t20`, `t21`, `t23`, `t30`, `t31`, `t32`, `t33`, `t40`, `t41`, `a1`.
 
-`build.sh` takes the Buildroot output directory as the second argument. It
-auto-detects the sysroot tuple and TLS support (mbedTLS).
+First run downloads the toolchain and all dependencies automatically.
+Output binaries go to `build/`. Options: `--no-tls`, `--no-aac`,
+`--no-opus`, `--no-mp3`, `--no-audio-effects`, `--alt` (jz-crypto HW
+accel), `--libc=musl|uclibc|glibc`.
 
 ### Manual build
 
@@ -134,13 +134,6 @@ Optional variables:
 - `WEBTORRENT=1` -- enable WebTorrent external sharing in RWD (requires `TLS=1`)
 - `V=1` -- verbose build output
 
-Build individual targets:
-
-```sh
-make PLATFORM=T31 CROSS_COMPILE=mipsel-linux- rvd ringdump raptorctl
-make PLATFORM=T31 CROSS_COMPILE=mipsel-linux- build   # collect binaries into build/
-```
-
 Install to a staging directory:
 
 ```sh
@@ -153,126 +146,17 @@ and the init script to `$DESTDIR/etc/init.d/S31raptor`.
 ## Configuration
 
 All daemons share a single INI-style config file: `/etc/raptor.conf`.
+See [raptor-docs/23-rss-config.md](https://github.com/gtxaspec/raptor-docs/blob/main/23-rss-config.md)
+for the complete reference (all sections, keys, types, defaults).
 
-Sections: `[sensor]`, `[stream0]`, `[stream1]`, `[image]`, `[jpeg]`, `[ring]`,
-`[audio]`, `[rtsp]`, `[http]`, `[osd]`, `[ircut]`, `[recording]`, `[webrtc]`,
-`[webcam]`, `[webtorrent]`, `[motion]`, `[filesource]`, `[push]`, `[log]`.
-
-See `config/raptor.conf` for the full reference with defaults and comments.
-
-Runtime configuration changes can be made without restart via raptorctl:
+Runtime changes via `raptorctl`:
 
 ```sh
-raptorctl status                      # show which daemons are running
-raptorctl memory                      # per-daemon memory usage
-raptorctl cpu                         # per-daemon CPU usage (1s sample)
-raptorctl rvd                         # show RVD commands (works for any daemon)
-
-# Encoder (basic)
-raptorctl rvd set-bitrate 0 3000000   # change main stream bitrate
-raptorctl rvd set-gop 0 50            # change GOP length
-raptorctl rvd set-fps 0 25            # change frame rate
-raptorctl rvd set-rc-mode 0 vbr       # rate control: fixqp/cbr/vbr/smart/capped_vbr/capped_quality
-raptorctl rvd set-qp-bounds 0 15 45   # QP range
-raptorctl rvd request-idr             # force keyframe
-
-# Encoder (advanced — table-driven, SoC-dependent)
-raptorctl rvd enc-list                # list all encoder params with support status
-raptorctl rvd enc-list 0              # list with current values for channel 0
-raptorctl rvd enc-set 0 gop_mode 2    # set encoder param (channel, name, value)
-raptorctl rvd enc-get 0 gop_mode      # get encoder param
-raptorctl rvd get-enc-caps            # show which struct features this SoC supports
-raptorctl rvd set-roi 0 0 1 100 100 200 200 30  # ROI region (struct command)
-raptorctl rvd get-bitrate 0           # query target + average bitrate
-
-# ISP
-raptorctl rvd set-brightness 128      # ISP brightness (0-255)
-raptorctl rvd set-wb daylight         # white balance: auto/manual/daylight/cloudy/incandescent/
-                                      #   flourescent/twilight/shade/warm_flourescent/custom
-raptorctl rvd set-wb manual 200 300   # manual WB with r_gain/b_gain
-raptorctl rvd get-isp                 # show all ISP settings
-raptorctl rvd get-wb                  # show white balance
-
-# OSD
-raptorctl rod privacy on              # privacy mode (all streams)
-raptorctl rod privacy on 0            # privacy mode (stream 0 only)
-raptorctl rod set-text "Front Door"   # change OSD text
-raptorctl rod set-font-color 0xFFFF0000    # text color (0xAARRGGBB)
-raptorctl rod set-stroke-color 0xFF000000  # stroke color
-raptorctl rod set-stroke-size 2            # stroke width (0-5)
-
-# Audio
-raptorctl rad set-volume 80           # input volume
-raptorctl rad set-gain 25             # input gain
-raptorctl rad set-alc-gain 5          # ALC PGA gain 0-7 (T21/T31 only)
-raptorctl rad set-ns 1 moderate       # noise suppression (low/moderate/high/veryhigh)
-raptorctl rad set-hpf 1               # high-pass filter
-raptorctl rad set-agc 1 10 0          # AGC (target_level, compression)
-raptorctl rad ao-set-volume 80        # output (speaker) volume
-raptorctl rad ao-set-gain 25          # output (speaker) gain
-
-# Other
-raptorctl ric mode night              # force night mode
-raptorctl rsd clients                 # list RTSP clients
-raptorctl rhd clients                 # list HTTP clients
-raptorctl rwd clients                 # list WebRTC clients
-raptorctl rwd share                   # show WebTorrent share URL
-raptorctl rsp status                  # show RTMP push status
-raptorctl rsp start                   # start push stream
-raptorctl rsp stop                    # stop push stream
-raptorctl config get audio             # show all [audio] config keys
-raptorctl config get rtsp port        # read single config value
-raptorctl config set audio codec pcmu # change config value
+raptorctl status                      # show running daemons
+raptorctl rvd set-bitrate 0 2000000   # change encoder bitrate at runtime
 raptorctl config save                 # persist running config to disk
+raptorctl rvd                         # show all RVD commands
 ```
-
-## ISP OSD
-
-On T23/T32/T40/T41, OSD can optionally use the ISP hardware overlay instead
-of the IPU bind chain. ISP OSD works with IVDC (`direct_mode=2`) and has
-zero DDR bandwidth overhead. Enable in config:
-
-```ini
-[osd]
-isp_osd = true
-```
-
-ISP OSD applies to main streams only (T23 hardware limitation per Ingenic
-docs). Sub streams do not receive ISP OSD. Each sensor supports up to 8
-picture regions. Per-stream OSD can be disabled:
-
-```ini
-[stream1]
-osd_enabled = false
-```
-
-IPU OSD remains the default and works on all platforms including
-T20/T21/T30/T31 which do not have ISP OSD.
-
-### Per-Stream JPEG
-
-JPEG snapshots are enabled per-stream with per-stream quality and fps
-overrides. Global defaults are in `[jpeg]`, per-stream settings in `[streamN]`:
-
-```ini
-[jpeg]
-quality = 75
-fps = 1
-
-[stream0]
-jpeg = true
-jpeg_quality = 90         # higher quality for main
-
-[stream1]
-jpeg = false              # no JPEG for sub stream
-```
-
-### IVDC + JPEG
-
-On T23 with IVDC enabled, full-resolution JPEG snapshots are not available
-(SDK rejects JPEG+IVDC in the same encoder group). Sub-stream JPEG works
-normally for lower-resolution snapshots. JPEG indices are preserved so
-`jpeg0` (main) is simply absent while `jpeg1` (sub) remains accessible.
 
 ## Ring Reconnection
 
@@ -307,15 +191,9 @@ code changes required. JPEG snapshots stay embedded (not affected by refmode).
 
 ## Init Script
 
-The init script `config/S31raptor` (installed as `/etc/init.d/S31raptor`)
-manages startup order:
-
-1. **RVD** starts first and creates the SHM ring buffers.
-2. The script waits (up to 5 seconds) for `/dev/shm/rss_ring_main` to appear.
-3. **RAD**, **ROD**, **RSD**, **RHD**, **RMR**, **RIC**, **RMD**, **RWD**, and **RSP** start.
-   Each daemon checks its own `enabled` flag in the config and exits cleanly
-   if disabled, so all can be started unconditionally.
-4. Shutdown reverses the order: consumers stop first, then RVD.
+A reference init script is included at `config/S31raptor`. RVD must start
+first (creates SHM rings); all other daemons start after the ring appears.
+Each daemon checks its own `enabled` config flag and exits cleanly if disabled.
 
 ## Latency
 
