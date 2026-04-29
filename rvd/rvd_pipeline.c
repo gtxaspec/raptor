@@ -1167,8 +1167,29 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 		RSS_DEBUG("stream%d bind: %d stages", idx, chain_len);
 	}
 
-	/* ── Create ring ── */
-	{
+	/* ── Create ring (or reuse existing across encoder restart) ── */
+	if (s->ring) {
+		if (s->is_jpeg) {
+			int jpeg_idx = 0;
+			for (int j = 0; j < st->jpeg_count; j++) {
+				if (st->jpeg_streams[j] == idx) {
+					jpeg_idx = j;
+					break;
+				}
+			}
+			rss_ring_set_stream_info(
+				s->ring, RVD_JPEG_STREAM_ID_BASE + jpeg_idx, RSS_CODEC_JPEG,
+				s->enc_cfg.width, s->enc_cfg.height, s->enc_cfg.fps_num,
+				s->enc_cfg.fps_den, 0, 0);
+		} else {
+			rss_ring_set_stream_info(
+				s->ring, idx, s->enc_cfg.codec, s->enc_cfg.width,
+				s->enc_cfg.height, s->enc_cfg.fps_num, s->enc_cfg.fps_den,
+				rvd_profile_idc(s->enc_cfg.profile),
+				rvd_level_idc(s->enc_cfg.width, s->enc_cfg.height));
+		}
+		RSS_DEBUG("stream%d ring: reused", idx);
+	} else {
 		int local = s->fs_chn - fs_base_channel(s->sensor_idx);
 		bool is_main = (local == 0);
 		char ring_name[24];
@@ -1383,12 +1404,6 @@ void rvd_stream_deinit(rvd_state_t *st, int idx)
 		st->enc_shm_fd[idx] = -1;
 	}
 
-	/* Destroy ring */
-	if (s->ring) {
-		rss_ring_destroy(s->ring);
-		s->ring = NULL;
-	}
-
 	RSS_DEBUG("stream%d deinit complete", idx);
 }
 
@@ -1446,6 +1461,14 @@ void rvd_pipeline_deinit(rvd_state_t *st)
 	/* Tear down all streams in reverse order */
 	for (int i = st->stream_count - 1; i >= 0; i--)
 		rvd_stream_deinit(st, i);
+
+	/* Destroy rings (kept alive across encoder restarts, only destroyed here) */
+	for (int i = st->stream_count - 1; i >= 0; i--) {
+		if (st->streams[i].ring) {
+			rss_ring_destroy(st->streams[i].ring);
+			st->streams[i].ring = NULL;
+		}
+	}
 
 	/* IVS group destroy — after unbind (SDK requirement) */
 	if (st->ivs_active)
