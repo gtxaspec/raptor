@@ -57,13 +57,12 @@ static void load_config(ric_state_t *st)
 	c->adc_night = rss_config_get_int(cfg, "ircut", "adc_night", 200);
 	c->adc_day = rss_config_get_int(cfg, "ircut", "adc_day", 600);
 
-	/* Photo trigger thresholds (defaults from gc2053/jxf37 profile) */
-	c->photo.ev_day = (uint32_t)rss_config_get_int(cfg, "ircut", "photo_ev_day", 188000);
-	c->photo.ev_1lux = (uint32_t)rss_config_get_int(cfg, "ircut", "photo_ev_1lux", 10000);
-	c->photo.ev_3lux = (uint32_t)rss_config_get_int(cfg, "ircut", "photo_ev_3lux", 3000);
-	c->photo.ev_6lux = (uint32_t)rss_config_get_int(cfg, "ircut", "photo_ev_6lux", 1200);
-	c->photo.rgain_rec = (uint16_t)rss_config_get_int(cfg, "ircut", "photo_rgain_rec", 250);
-	c->photo.bgain_rec = (uint16_t)rss_config_get_int(cfg, "ircut", "photo_bgain_rec", 187);
+	/* Photo trigger thresholds (high ev = dark on Ingenic) */
+	c->photo.ev_night = (uint32_t)rss_config_get_int(cfg, "ircut", "photo_ev_night", 50000);
+	c->photo.ev_deep = (uint32_t)rss_config_get_int(cfg, "ircut", "photo_ev_deep", 150000);
+	c->photo.ev_day = (uint32_t)rss_config_get_int(cfg, "ircut", "photo_ev_day", 5000);
+	c->photo.rgain_rec = (uint16_t)rss_config_get_int(cfg, "ircut", "photo_rgain_rec", 0);
+	c->photo.bgain_rec = (uint16_t)rss_config_get_int(cfg, "ircut", "photo_bgain_rec", 0);
 
 	/* Gain thresholds (legacy, only used when trigger=gain) */
 	c->night_threshold = rss_config_get_int(cfg, "ircut", "night_threshold", 40000);
@@ -285,8 +284,16 @@ int main(int argc, char **argv)
 	}
 
 	/* Init photo mode state */
-	if (st.settings.trigger == RIC_TRIGGER_PHOTO)
+	if (st.settings.trigger == RIC_TRIGGER_PHOTO) {
 		ric_photo_reset(&st.photo, PHOTO_PHASE_NIGHT_DETECT);
+		if (st.settings.photo.rgain_rec > 0 && st.settings.photo.bgain_rec > 0) {
+			st.photo.rgain_base = st.settings.photo.rgain_rec;
+			st.photo.bgain_base = st.settings.photo.bgain_rec;
+			st.photo.calibrated = true;
+			RSS_INFO("photo AWB baseline from config: rg=%u bg=%u", st.photo.rgain_base,
+				 st.photo.bgain_base);
+		}
+	}
 
 	/* Apply initial mode */
 	if (st.settings.opmode == RIC_FORCE_DAY)
@@ -321,10 +328,10 @@ int main(int argc, char **argv)
 		RSS_DEBUG("  adc: channel=%d night=%d day=%d", st.settings.adc_channel,
 			  st.settings.adc_night, st.settings.adc_day);
 	} else if (st.settings.trigger == RIC_TRIGGER_PHOTO) {
-		RSS_DEBUG("  photo: ev_day=%u ev_1lux=%u ev_3lux=%u ev_6lux=%u rg=%u bg=%u",
-			  st.settings.photo.ev_day, st.settings.photo.ev_1lux,
-			  st.settings.photo.ev_3lux, st.settings.photo.ev_6lux,
-			  st.settings.photo.rgain_rec, st.settings.photo.bgain_rec);
+		RSS_DEBUG("  photo: ev_night=%u ev_deep=%u ev_day=%u rg=%u bg=%u (0=auto)",
+			  st.settings.photo.ev_night, st.settings.photo.ev_deep,
+			  st.settings.photo.ev_day, st.settings.photo.rgain_rec,
+			  st.settings.photo.bgain_rec);
 	} else if (st.settings.trigger == RIC_TRIGGER_LUMA) {
 		RSS_DEBUG("  luma: night_luma=%d night_gain=%d day_gain_pct=%d",
 			  st.settings.night_luma, st.settings.night_gain, st.settings.day_gain_pct);

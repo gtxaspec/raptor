@@ -43,15 +43,23 @@ typedef enum {
 #define PHOTO_INTERF_RING_SIZE 8
 #define PHOTO_FIXED_RING_SIZE  8
 
-/* Photo mode thresholds */
+/*
+ * Photo mode thresholds.
+ *
+ * EV direction: on Ingenic, ev = integration_time × gain product.
+ * HIGH ev = dark (more exposure needed), LOW ev = bright.
+ * Thresholds are compared with > for darkness, < for brightness.
+ */
 typedef struct {
-	uint32_t ev_day;    /* EV above this starts day detection (default 188000) */
-	uint32_t ev_1lux;   /* EV below this forces night after drift (default 10000) */
-	uint32_t ev_3lux;   /* EV below this increments 3lux night counter (default 3000) */
-	uint32_t ev_6lux;   /* EV below this increments 6lux night counter (default 1200) */
-	uint16_t rgain_rec; /* R-gain record threshold (default 250) */
-	uint16_t bgain_rec; /* B-gain record threshold (default 187) */
+	uint32_t ev_night;  /* EV above this → dark (default 50000) */
+	uint32_t ev_deep;   /* EV above this → very dark (default 150000) */
+	uint32_t ev_day;    /* EV below this → bright (default 5000) */
+	uint16_t rgain_rec; /* R-gain baseline (0 = auto-calibrate) */
+	uint16_t bgain_rec; /* B-gain baseline (0 = auto-calibrate) */
 } ric_photo_thresholds_t;
+
+/* Auto-calibration sample count */
+#define PHOTO_CAL_SAMPLES 16
 
 /* Photo mode runtime state */
 typedef struct {
@@ -62,12 +70,20 @@ typedef struct {
 	uint16_t rgain;
 	uint16_t bgain;
 
+	/* AWB baseline auto-calibration */
+	bool calibrated;
+	uint8_t cal_count;
+	uint32_t cal_rgain_sum;
+	uint32_t cal_bgain_sum;
+	uint16_t rgain_base;
+	uint16_t bgain_base;
+
 	/* Night detection (phase == NIGHT_DETECT) */
 	uint8_t settle_count;
 	uint8_t rgain_dev[2];
 	uint8_t bgain_dev[2];
-	uint8_t ev_3lux_count;
-	uint8_t ev_6lux_count;
+	uint8_t ev_night_count;
+	uint8_t ev_deep_count;
 
 	/* Day detection (phase == DAY_DETECT) */
 	uint8_t day_ring_idx;
