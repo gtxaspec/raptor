@@ -69,7 +69,8 @@ static void load_config(ric_state_t *st)
 	c->day_threshold = rss_config_get_int(cfg, "ircut", "day_threshold", 25000);
 
 	c->hysteresis_sec = rss_config_get_int(cfg, "ircut", "hysteresis_sec", 5);
-	c->poll_interval_ms = rss_config_get_int(cfg, "ircut", "poll_interval_ms", 1000);
+	int default_poll = (c->trigger == RIC_TRIGGER_PHOTO) ? 100 : 1000;
+	c->poll_interval_ms = rss_config_get_int(cfg, "ircut", "poll_interval_ms", default_poll);
 }
 
 /*
