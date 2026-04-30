@@ -466,9 +466,10 @@ int rvd_pipeline_init(rvd_state_t *st)
 	const rss_hal_caps_t *caps = st->ops->get_caps ? st->ops->get_caps(st->hal_ctx) : NULL;
 
 	/* ── 3b. Set sensor FPS (per sensor for multi-sensor) ── */
+	int sensor_fps;
 	{
 		const char *fps_section = multi ? "sensor0" : "sensor";
-		int sensor_fps = rss_config_get_int(cfg, fps_section, "fps", 0);
+		sensor_fps = rss_config_get_int(cfg, fps_section, "fps", 0);
 		if (sensor_fps <= 0) {
 			char *s = rss_read_file("/proc/jz/sensor/max_fps", NULL);
 			if (s) {
@@ -680,7 +681,8 @@ int rvd_pipeline_init(rvd_state_t *st)
 
 		/* Main stream */
 		int si = st->stream_count;
-		load_stream_config(cfg, main_sect, &st->streams[si], def_w, def_h, 25, 3000000);
+		load_stream_config(cfg, main_sect, &st->streams[si], def_w, def_h, sensor_fps,
+				   3000000);
 		st->streams[si].enc_cfg.ivdc = rss_config_get_bool(cfg, main_sect, "ivdc", false);
 		st->streams[si].fs_chn = fs_base;
 		st->streams[si].chn = enc_grp_counter++;
@@ -697,8 +699,8 @@ int rvd_pipeline_init(rvd_state_t *st)
 					    : rss_config_get_bool(cfg, sub_sect, "enabled", true);
 		if (sub_enabled) {
 			si = st->stream_count;
-			load_stream_config(cfg, sub_sect, &st->streams[si], sub_w, sub_h, 25,
-					   1000000);
+			load_stream_config(cfg, sub_sect, &st->streams[si], sub_w, sub_h,
+					   sensor_fps, 1000000);
 			st->streams[si].fs_chn = fs_base + 1;
 			st->streams[si].chn = enc_grp_counter++;
 			st->streams[si].sensor_idx = s;
@@ -1177,14 +1179,14 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 					break;
 				}
 			}
-			rss_ring_set_stream_info(
-				s->ring, RVD_JPEG_STREAM_ID_BASE + jpeg_idx, RSS_CODEC_JPEG,
-				s->enc_cfg.width, s->enc_cfg.height, s->enc_cfg.fps_num,
-				s->enc_cfg.fps_den, 0, 0);
+			rss_ring_set_stream_info(s->ring, RVD_JPEG_STREAM_ID_BASE + jpeg_idx,
+						 RSS_CODEC_JPEG, s->enc_cfg.width,
+						 s->enc_cfg.height, s->enc_cfg.fps_num,
+						 s->enc_cfg.fps_den, 0, 0);
 		} else {
 			rss_ring_set_stream_info(
-				s->ring, idx, s->enc_cfg.codec, s->enc_cfg.width,
-				s->enc_cfg.height, s->enc_cfg.fps_num, s->enc_cfg.fps_den,
+				s->ring, idx, s->enc_cfg.codec, s->enc_cfg.width, s->enc_cfg.height,
+				s->enc_cfg.fps_num, s->enc_cfg.fps_den,
 				rvd_profile_idc(s->enc_cfg.profile),
 				rvd_level_idc(s->enc_cfg.width, s->enc_cfg.height));
 		}
