@@ -156,7 +156,7 @@ if [ ! -f "$COMPY_BUILD/libcompy.a" ]; then
 fi
 
 # Build libsrt for x86 with mbedTLS
-SRT_VER="1.5.5"
+SRT_VER="1.5.4"
 SRT_DIR="$DEPS/srt"
 SRT_BUILD="$OUT/srt-build"
 SRT_PREFIX="$OUT/srt-install"
