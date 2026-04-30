@@ -184,10 +184,13 @@ username =
 password =
 
 [osd]
-enabled = false
+enabled = true
+font = /usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf
+time_format = %H:%M:%S
 
 [ircut]
-enabled = false
+enabled = true
+mode = day
 
 [motion]
 enabled = false
@@ -227,7 +230,7 @@ mkdir -p /var/run/rss 2>/dev/null || { sudo mkdir -p /var/run/rss && sudo chmod 
 rm -f /var/run/rss/*.pid /var/run/rss/*.sock 2>/dev/null || true
 rm -f /dev/shm/rss_ring_* /dev/shm/rss_osd_* 2>/dev/null || true
 
-for d in rvd rsd rhd rwd rsr create_rings; do
+for d in rvd rsd rhd rod ric rmr rwd rsr create_rings; do
     pkill -f "asan-out/$d" 2>/dev/null || true
 done
 sleep 0.5
@@ -255,6 +258,8 @@ start_daemon rvd "$OUT/rvd" -c "$CONFIG" -f
 start_daemon rsd "$OUT/rsd" -c "$CONFIG" -f
 start_daemon rad "$OUT/rad" -c "$CONFIG" -f
 start_daemon rhd "$OUT/rhd" -c "$CONFIG" -f
+start_daemon rod "$OUT/rod" -c "$CONFIG" -f
+start_daemon ric "$OUT/ric" -c "$CONFIG" -f
 start_daemon rwd "$OUT/rwd" -c "$CONFIG" -f
 start_daemon rsr "$OUT/rsr" -c "$CONFIG" -f
 
