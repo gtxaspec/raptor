@@ -129,10 +129,16 @@ void rsr_stream_release(rsr_state_t *st, rsr_stream_t *s)
 static uint8_t audio_codec_to_ts(uint32_t codec)
 {
 	switch (codec) {
-	case 4:
+	case 97:
 		return RSS_TS_STREAM_AAC;
-	case 6:
+	case 111:
 		return RSS_TS_STREAM_OPUS;
+	case 0:
+		return RSS_TS_STREAM_PCMU;
+	case 8:
+		return RSS_TS_STREAM_PCMA;
+	case 11:
+		return RSS_TS_STREAM_L16;
 	default:
 		return RSS_TS_STREAM_NONE;
 	}
