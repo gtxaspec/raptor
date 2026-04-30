@@ -275,10 +275,10 @@ int rsr_srt_send_to_client(rsr_client_t *c, const uint8_t *data, size_t len)
 		if (ret == SRT_ERROR) {
 			int err = srt_getlasterror(NULL);
 
-			if (err == SRT_EASYNCSND) {
-				RSS_DEBUG("srt send buffer full, dropping");
-				return -1;
-			}
+			if (err == SRT_EASYNCSND)
+				RSS_DEBUG("srt send buffer full, dropping %zu bytes", len - off);
+			else
+				RSS_DEBUG("srt send error: %s", srt_getlasterror_str());
 			return -1;
 		}
 		off += (size_t)ret;

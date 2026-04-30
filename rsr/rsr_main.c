@@ -303,6 +303,8 @@ static void serve_loop(rsr_state_t *st)
 				rsr_stream_t *reopened = rsr_stream_get_or_open(st, s->name);
 
 				if (reopened && reopened != s) {
+					RSS_INFO("stream '%s' reopened for %d clients", s->name,
+						 s->client_count);
 					for (int j = 0; j < st->client_count; j++) {
 						if (st->clients[j].stream == s)
 							st->clients[j].stream = reopened;
@@ -326,8 +328,8 @@ static void serve_loop(rsr_state_t *st)
 						st->frame_buf_size, &length, &meta);
 
 			if (ret == RSS_EOVERFLOW) {
+				RSS_DEBUG("ring overflow on '%s', requesting IDR", s->name);
 				rss_ring_request_idr(s->ring);
-				/* Reset waiting_keyframe for all clients on this stream */
 				for (int ci = 0; ci < st->client_count; ci++) {
 					if (st->clients[ci].stream == s)
 						st->clients[ci].waiting_keyframe = true;
@@ -365,6 +367,9 @@ static void serve_loop(rsr_state_t *st)
 			got_frame = true;
 			uint64_t pts = meta.timestamp * 9 / 100;
 
+			RSS_TRACE("frame: %s len=%u key=%d pts=%" PRIu64, s->name, length,
+				  meta.is_key, pts);
+
 			/* Distribute to clients on this stream */
 			for (int ci = st->client_count - 1; ci >= 0; ci--) {
 				rsr_client_t *c = &st->clients[ci];
@@ -378,6 +383,8 @@ static void serve_loop(rsr_state_t *st)
 					c->waiting_keyframe = false;
 					c->video_pts_base = pts;
 					c->video_pts_set = true;
+					RSS_DEBUG("client %d: keyframe acquired on '%s'", ci,
+						  s->name);
 				}
 
 				uint64_t vpts = c->video_pts_set ? pts - c->video_pts_base : pts;
@@ -409,6 +416,11 @@ static void serve_loop(rsr_state_t *st)
 				c->frames_sent++;
 				st->total_frames++;
 				st->total_bytes += ts_len;
+
+				if ((c->frames_sent % 300) == 0)
+					RSS_DEBUG("client %d: %" PRIu64 " frames, %" PRIu64
+						  " bytes on '%s'",
+						  ci, c->frames_sent, c->bytes_sent, s->name);
 			}
 		}
 
@@ -424,6 +436,7 @@ static void serve_loop(rsr_state_t *st)
 						      audio_buf, sizeof(audio_buf), &alen, &ameta);
 
 				if (ret == RSS_EOVERFLOW) {
+					RSS_DEBUG("audio ring overflow, resetting");
 					const rss_ring_header_t *ahdr =
 						rss_ring_get_header(st->audio_ring);
 					st->audio_read_seq =
@@ -435,6 +448,8 @@ static void serve_loop(rsr_state_t *st)
 
 				audio_got = true;
 				uint64_t apts = ameta.timestamp * 9 / 100;
+
+				RSS_TRACE("audio: len=%u pts=%" PRIu64, alen, apts);
 
 				/* AAC needs ADTS framing for MPEG-TS */
 				uint8_t *adata = audio_buf;
