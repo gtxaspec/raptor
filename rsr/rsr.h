@@ -67,6 +67,7 @@ typedef struct {
 	uint64_t audio_last_ws;
 	int audio_idle;
 	uint32_t audio_codec;
+	uint32_t audio_sample_rate;
 	uint8_t audio_ts_type;
 
 	uint8_t *frame_buf;

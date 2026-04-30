@@ -230,6 +230,32 @@ static int rsr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 
 /* ── Main loop ── */
 
+static void build_adts_header(uint8_t *buf, uint32_t sample_rate, int frame_len)
+{
+	static const int sr_table[] = {96000, 88200, 64000, 48000, 44100, 32000, 24000,
+				       22050, 16000, 12000, 11025, 8000,  7350};
+	int sr_idx = 4;
+
+	for (int i = 0; i < 13; i++) {
+		if (sr_table[i] == (int)sample_rate) {
+			sr_idx = i;
+			break;
+		}
+	}
+
+	int total = frame_len + 7;
+
+	if (total > 8191)
+		total = 8191;
+	buf[0] = 0xFF;
+	buf[1] = 0xF1;
+	buf[2] = (uint8_t)(((2 - 1) << 6) | (sr_idx << 2));
+	buf[3] = (uint8_t)((1 << 6) | ((total >> 11) & 0x03));
+	buf[4] = (uint8_t)((total >> 3) & 0xFF);
+	buf[5] = (uint8_t)(((total & 0x07) << 5) | 0x1F);
+	buf[6] = 0xFC;
+}
+
 static void serve_loop(rsr_state_t *st)
 {
 	uint8_t audio_buf[8192];
@@ -259,10 +285,12 @@ static void serve_loop(rsr_state_t *st)
 				rss_ring_check_version(st->audio_ring, "audio");
 				const rss_ring_header_t *ahdr = rss_ring_get_header(st->audio_ring);
 				st->audio_codec = ahdr->codec;
+				st->audio_sample_rate = ahdr->fps_num;
 				st->audio_ts_type = audio_codec_to_ts(ahdr->codec);
 				st->audio_read_seq = ahdr->write_seq;
 				rss_ring_acquire(st->audio_ring);
-				RSS_INFO("audio ring attached: codec=%u", st->audio_codec);
+				RSS_INFO("audio ring attached: codec=%u rate=%u", st->audio_codec,
+					 st->audio_sample_rate);
 			}
 		}
 
@@ -338,9 +366,6 @@ static void serve_loop(rsr_state_t *st)
 			got_frame = true;
 			uint64_t pts = meta.timestamp * 9 / 100;
 
-			RSS_DEBUG("ring: %s len=%u key=%d seq=%" PRIu64,
-				  s->name, length, meta.is_key, s->read_seq);
-
 			/* Distribute to clients on this stream */
 			for (int ci = st->client_count - 1; ci >= 0; ci--) {
 				rsr_client_t *c = &st->clients[ci];
@@ -371,8 +396,6 @@ static void serve_loop(rsr_state_t *st)
 				size_t ts_len = rss_ts_write_video(&c->ts, st->ts_buf,
 								   st->ts_buf_size, st->frame_buf,
 								   length, pts, pts, meta.is_key);
-				RSS_DEBUG("ts_write: in=%u out=%zu buf=%u",
-					  length, ts_len, st->ts_buf_size);
 				if (ts_len > 0) {
 					if (rsr_srt_send_to_client(c, st->ts_buf, ts_len) < 0) {
 						rsr_remove_client(st, ci);
@@ -410,6 +433,20 @@ static void serve_loop(rsr_state_t *st)
 				audio_got = true;
 				uint64_t apts = ameta.timestamp * 9 / 100;
 
+				/* AAC needs ADTS framing for MPEG-TS */
+				uint8_t *adata = audio_buf;
+				uint32_t adatalen = alen;
+				uint8_t adts_buf[7 + 8192];
+
+				if (st->audio_ts_type == RSS_TS_STREAM_AAC &&
+				    alen <= sizeof(audio_buf)) {
+					build_adts_header(adts_buf, st->audio_sample_rate,
+							  (int)alen);
+					memcpy(adts_buf + 7, audio_buf, alen);
+					adata = adts_buf;
+					adatalen = alen + 7;
+				}
+
 				for (int ci = st->client_count - 1; ci >= 0; ci--) {
 					rsr_client_t *c = &st->clients[ci];
 
@@ -417,8 +454,8 @@ static void serve_loop(rsr_state_t *st)
 						continue;
 
 					size_t ats_len = rss_ts_write_audio(&c->ts, st->ts_buf,
-									    st->ts_buf_size,
-									    audio_buf, alen, apts);
+									    st->ts_buf_size, adata,
+									    adatalen, apts);
 					if (ats_len > 0) {
 						if (rsr_srt_send_to_client(c, st->ts_buf, ats_len) <
 						    0) {
@@ -545,11 +582,12 @@ int main(int argc, char **argv)
 			const rss_ring_header_t *ahdr = rss_ring_get_header(st.audio_ring);
 
 			st.audio_codec = ahdr->codec;
+			st.audio_sample_rate = ahdr->fps_num;
 			st.audio_ts_type = audio_codec_to_ts(ahdr->codec);
 			st.audio_read_seq = ahdr->write_seq;
 			rss_ring_acquire(st.audio_ring);
-			RSS_INFO("audio: codec=%u ts_type=0x%02x", st.audio_codec,
-				 st.audio_ts_type);
+			RSS_INFO("audio: codec=%u rate=%u ts_type=0x%02x", st.audio_codec,
+				 st.audio_sample_rate, st.audio_ts_type);
 		} else {
 			RSS_WARN("audio ring not available");
 		}
