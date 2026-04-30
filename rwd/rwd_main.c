@@ -821,6 +821,10 @@ cleanup:
 	}
 	if (srv.audio_ring)
 		rss_ring_close(srv.audio_ring);
+	if (srv.ctrl)
+		rss_ctrl_destroy(srv.ctrl);
+	for (int s = 0; s < RWD_STREAM_COUNT; s++)
+		free(srv.video_bufs[s]);
 	if (srv.dtls) {
 		rwd_dtls_free(srv.dtls);
 		free(srv.dtls);
