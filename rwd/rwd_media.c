@@ -319,15 +319,17 @@ void rwd_media_teardown(rwd_client_t *c)
 	memset(&c->srtp_video, 0, sizeof(c->srtp_video));
 	memset(&c->srtp_audio, 0, sizeof(c->srtp_audio));
 
-	/* Backchannel cleanup.  Compy DYN() is a non-owning trait reference —
-	 * Backchannel_drop frees compy's internal state, rwd_bc_recv_t_drop
-	 * cleans up the opus decoder, and we free the struct. No double-free. */
 	if (c->backchannel) {
 		VCALL(DYN(Compy_Backchannel, Compy_Droppable, c->backchannel), drop);
 		c->backchannel = NULL;
 	}
-	free(c->bc_recv);
-	c->bc_recv = NULL;
+	if (c->bc_recv) {
+		rwd_bc_recv_t *bc = c->bc_recv;
+		if (bc->opus_dec)
+			opus_decoder_destroy(bc->opus_dec);
+		free(bc);
+		c->bc_recv = NULL;
+	}
 	if (c->srtp_recv) {
 		compy_srtp_recv_free(c->srtp_recv);
 		c->srtp_recv = NULL;
@@ -1109,8 +1111,9 @@ void *rwd_audio_reader_thread(void *arg)
 			} else if (srv->wire_codec == RWD_CODEC_PCMU) {
 				int enc_len;
 				if (audio_codec == RWD_CODEC_L16) {
-					enc_len = rwd_l16_to_pcmu(audio_buf, length, transcode_out,
-								  sizeof(transcode_out), sample_rate);
+					enc_len =
+						rwd_l16_to_pcmu(audio_buf, length, transcode_out,
+								sizeof(transcode_out), sample_rate);
 				} else {
 					int n = rwd_decode_to_pcm(audio_codec, audio_buf, length,
 #ifdef RAPTOR_AAC
@@ -1125,10 +1128,13 @@ void *rwd_audio_reader_thread(void *arg)
 					if (step == 2) {
 						for (int i = 0; i < enc_len; i++)
 							transcode_out[i] = ulaw_encode(
-								(int16_t)((pcm_accum[i * 2] + pcm_accum[i * 2 + 1]) / 2));
+								(int16_t)((pcm_accum[i * 2] +
+									   pcm_accum[i * 2 + 1]) /
+									  2));
 					} else {
 						for (int i = 0; i < enc_len; i++)
-							transcode_out[i] = ulaw_encode(pcm_accum[i * step]);
+							transcode_out[i] =
+								ulaw_encode(pcm_accum[i * step]);
 					}
 				}
 				if (enc_len > 0) {
@@ -1146,7 +1152,8 @@ void *rwd_audio_reader_thread(void *arg)
 							c->audio_ts_base_set = true;
 						}
 						rwd_send_audio_frame(c, transcode_out, enc_len,
-								     pcmu_rtp_ts - c->audio_ts_offset);
+								     pcmu_rtp_ts -
+									     c->audio_ts_offset);
 					}
 					pthread_mutex_unlock(&srv->clients_lock);
 					pcmu_rtp_ts += (uint32_t)enc_len;
