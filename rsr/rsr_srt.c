@@ -76,6 +76,9 @@ int rsr_srt_init(rsr_state_t *st)
 
 	int val;
 
+	val = SRTT_LIVE;
+	srt_setsockflag(st->listener, SRTO_TRANSTYPE, &val, sizeof(val));
+
 	val = st->latency_ms;
 	srt_setsockflag(st->listener, SRTO_LATENCY, &val, sizeof(val));
 
