@@ -92,6 +92,7 @@ Runtime shared libraries from the Ingenic SDK / Buildroot sysroot:
 - `libopus` -- Opus codec (optional, `OPUS=1`)
 - `libaudioProcess` -- Ingenic audio effects (optional, `AUDIO_EFFECTS=1`)
 - `libmbedtls` / `libmbedcrypto` / `libmbedx509` -- TLS/DTLS (optional, `TLS=1`, required for RTSPS and WebRTC)
+- `libsrt` -- SRT protocol (optional, statically linked into RSR, built from source by `build-standalone.sh`)
 - `libliveMedia` / `libgroupsock` / `libUsageEnvironment` / `libBasicUsageEnvironment` -- live555 RTSP (optional, statically linked by RSD-555)
 - `libmov` -- MP4 demuxer (statically compiled into RFS from [ireader/media-server](https://github.com/ireader/media-server), MIT license)
 
