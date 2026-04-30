@@ -409,7 +409,6 @@ void rvd_osd_init_stream(rvd_state_t *st, int s)
 	}
 }
 
-
 /* ── SHM staleness and discovery ── */
 
 static bool shm_is_stale(rss_osd_shm_t *shm, int s, const char *name)
@@ -961,7 +960,7 @@ void *rvd_osd_thread(void *arg)
 	pthread_mutex_unlock(&st->osd_lock);
 	RSS_INFO("osd regions shown");
 
-	while (*st->running) {
+	while (rss_running(st->running)) {
 		rvd_osd_check(st);
 		usleep(100000);
 	}
@@ -1025,4 +1024,3 @@ void rvd_osd_deinit_stream(rvd_state_t *st, int s)
 		st->privacy_handles[s] = -1;
 	}
 }
-

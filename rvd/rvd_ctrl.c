@@ -307,10 +307,14 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 	typedef int (*enc_get_u32_fn)(void *, int, uint32_t *);
 	typedef int (*enc_get_bool_fn)(void *, int, bool *);
 
-	/* Read a function pointer from ops at a given offset without
-	 * violating strict aliasing (memcpy is aliasing-safe). */
-	#define OPS_FN(ops, off, type) \
-		({ type __fn; memcpy(&__fn, (const char *)(ops) + (off), sizeof(__fn)); __fn; })
+/* Read a function pointer from ops at a given offset without
+ * violating strict aliasing (memcpy is aliasing-safe). */
+#define OPS_FN(ops, off, type)                                                                     \
+	({                                                                                         \
+		type __fn;                                                                         \
+		memcpy(&__fn, (const char *)(ops) + (off), sizeof(__fn));                          \
+		__fn;                                                                              \
+	})
 
 #define EP_OFF(field) offsetof(rss_hal_ops_t, field)
 
@@ -359,16 +363,16 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 			int hw_chn = st->streams[chn].chn;
 			switch (enc_params[i].type) {
 			case EP_INT:
-				ret = OPS_FN(st->ops, enc_params[i].set_off, enc_set_int_fn)(
-					st->hal_ctx, hw_chn, val);
+				ret = OPS_FN(st->ops, enc_params[i].set_off,
+					     enc_set_int_fn)(st->hal_ctx, hw_chn, val);
 				break;
 			case EP_U32:
-				ret = OPS_FN(st->ops, enc_params[i].set_off, enc_set_u32_fn)(
-					st->hal_ctx, hw_chn, (uint32_t)val);
+				ret = OPS_FN(st->ops, enc_params[i].set_off,
+					     enc_set_u32_fn)(st->hal_ctx, hw_chn, (uint32_t)val);
 				break;
 			case EP_BOOL:
-				ret = OPS_FN(st->ops, enc_params[i].set_off, enc_set_bool_fn)(
-					st->hal_ctx, hw_chn, (bool)val);
+				ret = OPS_FN(st->ops, enc_params[i].set_off,
+					     enc_set_bool_fn)(st->hal_ctx, hw_chn, (bool)val);
 				break;
 			default:
 				ret = RSS_ERR;
@@ -401,8 +405,8 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 			switch (enc_params[i].type) {
 			case EP_INT: {
 				int out = 0;
-				ret = OPS_FN(st->ops, enc_params[i].get_off, enc_get_int_fn)(
-					st->hal_ctx, hw_chn, &out);
+				ret = OPS_FN(st->ops, enc_params[i].get_off,
+					     enc_get_int_fn)(st->hal_ctx, hw_chn, &out);
 				if (ret == 0) {
 					cJSON_AddStringToObject(r, "status", "ok");
 					cJSON_AddStringToObject(r, "param", param);
@@ -413,8 +417,8 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 			}
 			case EP_U32: {
 				uint32_t out = 0;
-				ret = OPS_FN(st->ops, enc_params[i].get_off, enc_get_u32_fn)(
-					st->hal_ctx, hw_chn, &out);
+				ret = OPS_FN(st->ops, enc_params[i].get_off,
+					     enc_get_u32_fn)(st->hal_ctx, hw_chn, &out);
 				if (ret == 0) {
 					cJSON_AddStringToObject(r, "status", "ok");
 					cJSON_AddStringToObject(r, "param", param);
@@ -425,8 +429,8 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 			}
 			case EP_BOOL: {
 				bool out = false;
-				ret = OPS_FN(st->ops, enc_params[i].get_off, enc_get_bool_fn)(
-					st->hal_ctx, hw_chn, &out);
+				ret = OPS_FN(st->ops, enc_params[i].get_off,
+					     enc_get_bool_fn)(st->hal_ctx, hw_chn, &out);
 				if (ret == 0) {
 					cJSON_AddStringToObject(r, "status", "ok");
 					cJSON_AddStringToObject(r, "param", param);
@@ -464,10 +468,8 @@ static int handle_encoder_advanced_cmd(const char *cmd, const char *cmd_json, rv
 				continue;
 			cJSON_AddStringToObject(obj, "name", p->name);
 			cJSON_AddStringToObject(obj, "type", ep_type_str[p->type]);
-			bool has_set =
-				p->set_off && OPS_FN(st->ops, p->set_off, void *) != NULL;
-			bool has_get =
-				p->get_off && OPS_FN(st->ops, p->get_off, void *) != NULL;
+			bool has_set = p->set_off && OPS_FN(st->ops, p->set_off, void *) != NULL;
+			bool has_get = p->get_off && OPS_FN(st->ops, p->get_off, void *) != NULL;
 			cJSON_AddBoolToObject(obj, "set", has_set);
 			cJSON_AddBoolToObject(obj, "get", has_get);
 
@@ -1137,8 +1139,8 @@ static int handle_ivs_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 
 	if (strcmp(cmd, "ivs-set-sensitivity") == 0) {
 		int sens = -1;
-		if (rss_json_get_int(cmd_json, "value", &sens) == 0 && atomic_load(&st->ivs_active) &&
-		    sens >= 0 && sens <= 4) {
+		if (rss_json_get_int(cmd_json, "value", &sens) == 0 &&
+		    atomic_load(&st->ivs_active) && sens >= 0 && sens <= 4) {
 			rss_ivs_move_param_t mp;
 			memset(&mp, 0, sizeof(mp));
 			if (RSS_HAL_CALL(st->ops, ivs_get_param, st->hal_ctx, st->ivs_chn, &mp) ==
@@ -1157,7 +1159,8 @@ static int handle_ivs_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 
 	if (strcmp(cmd, "ivs-set-skip-frames") == 0) {
 		int val = -1;
-		if (rss_json_get_int(cmd_json, "value", &val) == 0 && atomic_load(&st->ivs_active) && val >= 0) {
+		if (rss_json_get_int(cmd_json, "value", &val) == 0 &&
+		    atomic_load(&st->ivs_active) && val >= 0) {
 			rss_ivs_move_param_t mp;
 			memset(&mp, 0, sizeof(mp));
 			if (RSS_HAL_CALL(st->ops, ivs_get_param, st->hal_ctx, st->ivs_chn, &mp) ==
@@ -1305,7 +1308,8 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 			return rss_ctrl_resp_ok(resp, resp_size);
 
 		int jpeg = find_jpeg_for_video_ctrl(st, chn);
-		bool has_ivs = (st->streams[chn].fs_chn == st->ivs_fs_chn && atomic_load(&st->ivs_active));
+		bool has_ivs =
+			(st->streams[chn].fs_chn == st->ivs_fs_chn && atomic_load(&st->ivs_active));
 
 		RSS_INFO("stream-stop: channel %d (jpeg=%d ivs=%d)", chn, jpeg, has_ivs);
 
@@ -1329,7 +1333,8 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 			return rss_ctrl_resp_error(resp, resp_size, "stream not initialized");
 
 		int jpeg = find_jpeg_for_video_ctrl(st, chn);
-		bool has_ivs = (st->streams[chn].fs_chn == st->ivs_fs_chn && st->ivs_enabled && !atomic_load(&st->ivs_active));
+		bool has_ivs = (st->streams[chn].fs_chn == st->ivs_fs_chn && st->ivs_enabled &&
+				!atomic_load(&st->ivs_active));
 
 		RSS_INFO("stream-start: channel %d (jpeg=%d ivs=%d)", chn, jpeg, has_ivs);
 
@@ -1417,7 +1422,8 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		int old_sc_h = st->streams[chn].fs_cfg.scaler.out_height;
 
 		int jpeg = find_jpeg_for_video_ctrl(st, chn);
-		bool has_ivs = (st->streams[chn].fs_chn == st->ivs_fs_chn && atomic_load(&st->ivs_active));
+		bool has_ivs =
+			(st->streams[chn].fs_chn == st->ivs_fs_chn && atomic_load(&st->ivs_active));
 
 		/* Stop first, then mutate config */
 		if (has_ivs)
@@ -1497,11 +1503,10 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		int quality;
 		if (rss_json_get_int(cmd_json, "channel", &chn) != 0 || chn < 0 ||
 		    chn >= st->stream_count || !st->streams[chn].is_jpeg) {
-			return rss_ctrl_resp_error(resp, resp_size,
-						   "need valid jpeg channel");
+			return rss_ctrl_resp_error(resp, resp_size, "need valid jpeg channel");
 		}
-		if (rss_json_get_int(cmd_json, "value", &quality) != 0 ||
-		    quality < 1 || quality > 100) {
+		if (rss_json_get_int(cmd_json, "value", &quality) != 0 || quality < 1 ||
+		    quality > 100) {
 			return rss_ctrl_resp_error(resp, resp_size, "need value (1-100)");
 		}
 
@@ -1511,14 +1516,14 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		int old_qp = st->streams[chn].enc_cfg.init_qp;
 
 		/* Try QL tables first (old SDK: instant, no teardown) */
-		int ret = RSS_HAL_CALL(st->ops, enc_set_jpeg_qp, st->hal_ctx,
-				       st->streams[chn].chn, quality);
+		int ret = RSS_HAL_CALL(st->ops, enc_set_jpeg_qp, st->hal_ctx, st->streams[chn].chn,
+				       quality);
 		if (ret == RSS_OK) {
 			st->streams[chn].enc_cfg.init_qp = quality;
-			rss_config_set_int(st->cfg, st->streams[chn].cfg_sect,
-					   "jpeg_quality", quality);
-			RSS_INFO("set-jpeg-quality: chn %d quality %d → %d (ql tables)",
-				 chn, old_qp, quality);
+			rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, "jpeg_quality",
+					   quality);
+			RSS_INFO("set-jpeg-quality: chn %d quality %d → %d (ql tables)", chn,
+				 old_qp, quality);
 			return rss_ctrl_resp_ok(resp, resp_size);
 		}
 
@@ -1538,10 +1543,9 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		}
 		rvd_stream_start(st, chn);
 
-		rss_config_set_int(st->cfg, st->streams[chn].cfg_sect,
-				   "jpeg_quality", quality);
-		RSS_INFO("set-jpeg-quality: chn %d quality %d → %d (recreate)",
-			 chn, old_qp, quality);
+		rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, "jpeg_quality", quality);
+		RSS_INFO("set-jpeg-quality: chn %d quality %d → %d (recreate)", chn, old_qp,
+			 quality);
 		return rss_ctrl_resp_ok(resp, resp_size);
 	}
 
@@ -1555,11 +1559,12 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		if (stream < 0 || stream >= st->stream_count || show < 0 || !region[0])
 			return rss_ctrl_resp_error(resp, resp_size, "need stream, region, show");
 
-		rvd_osd_region_t *reg = rvd_osd_find_region(st, stream, region);
-		if (!reg || reg->hal_handle < 0)
-			return rss_ctrl_resp_error(resp, resp_size, "region not active");
-
 		pthread_mutex_lock(&st->osd_lock);
+		rvd_osd_region_t *reg = rvd_osd_find_region(st, stream, region);
+		if (!reg || reg->hal_handle < 0) {
+			pthread_mutex_unlock(&st->osd_lock);
+			return rss_ctrl_resp_error(resp, resp_size, "region not active");
+		}
 		if (st->use_isp_osd && st->streams[stream].fs_chn % 3 == 0) {
 			int sensor = st->streams[stream].sensor_idx;
 			RSS_HAL_CALL(st->ops, isp_osd_show_region, st->hal_ctx, sensor,
@@ -1586,14 +1591,14 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		if (stream < 0 || stream >= st->stream_count || !region[0] || !pos[0])
 			return rss_ctrl_resp_error(resp, resp_size, "need stream, region, pos");
 
-		/* Always save position to config — even if region doesn't
-		 * exist yet. scan_new_shm reads it when creating the region. */
+		pthread_mutex_lock(&st->osd_lock);
+
 		char pos_key[64];
 		snprintf(pos_key, sizeof(pos_key), "stream%d_%s_pos", stream, region);
 		rss_config_set_str(st->cfg, "osd", pos_key, pos);
-
 		rvd_osd_region_t *reg = rvd_osd_find_region(st, stream, region);
 		if (!reg || reg->hal_handle < 0) {
+			pthread_mutex_unlock(&st->osd_lock);
 			RSS_DEBUG("osd-position: stream %d %s -> %s (saved, region pending)",
 				  stream, region, pos);
 			return rss_ctrl_resp_ok(resp, resp_size);
@@ -1604,8 +1609,6 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		int x, y;
 		rvd_osd_calc_position(stream_w, stream_h, (int)reg->width, (int)reg->height, pos,
 				      &x, &y);
-
-		pthread_mutex_lock(&st->osd_lock);
 		rss_osd_region_t attr = {
 			.type = RSS_OSD_PIC,
 			.x = x,
@@ -1660,7 +1663,8 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		/* IVS: stop before streams (IVS is bound to sub-stream) */
 		bool has_ivs = false;
 		for (int j = 0; j < video_count; j++) {
-			if (st->streams[video_indices[j]].fs_chn == st->ivs_fs_chn && atomic_load(&st->ivs_active)) {
+			if (st->streams[video_indices[j]].fs_chn == st->ivs_fs_chn &&
+			    atomic_load(&st->ivs_active)) {
 				has_ivs = true;
 				break;
 			}

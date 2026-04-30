@@ -64,10 +64,10 @@ typedef struct {
 	const uint8_t *data; /* malloc'd copy or rmem pointer (zerocopy) */
 	uint32_t len;
 	uint32_t rtp_ts;
-	uint8_t type;	 /* RSD_FRAME_VIDEO or RSD_FRAME_AUDIO */
-	uint32_t codec;	 /* audio codec (RSD_FRAME_AUDIO only) */
-	bool zerocopy;	 /* true = rmem pointer, don't free */
-	uint8_t buf_idx; /* refmode: encoder buffer index */
+	uint8_t type;	  /* RSD_FRAME_VIDEO or RSD_FRAME_AUDIO */
+	uint32_t codec;	  /* audio codec (RSD_FRAME_AUDIO only) */
+	bool zerocopy;	  /* true = rmem pointer, don't free */
+	uint8_t buf_idx;  /* refmode: encoder buffer index */
 	uint32_t buf_gen; /* refmode: generation at peek time */
 } rsd_sendq_entry_t;
 
@@ -95,9 +95,9 @@ typedef struct rsd_client {
 	uint64_t video_read_seq;
 	bool waiting_keyframe;
 	bool active;
-	uint32_t video_ts_offset; /* subtracted from global RTP ts for per-client rebase */
-	uint32_t video_ts_rand;   /* random initial offset (declared in RTP-Info rtptime) */
-	bool video_ts_base_set;	  /* true after first keyframe sets the offset */
+	uint32_t video_ts_offset;      /* subtracted from global RTP ts for per-client rebase */
+	uint32_t video_ts_rand;	       /* random initial offset (declared in RTP-Info rtptime) */
+	bool video_ts_base_set;	       /* true after first keyframe sets the offset */
 	uint32_t last_video_client_ts; /* per-client monotonic enforcement */
 	bool has_last_video_client_ts;
 	uint32_t audio_ts_offset;
@@ -161,16 +161,15 @@ typedef struct {
 	const char *ring_name; /* for reconnection after RVD restart */
 
 	/* Cached stream info — written by reader thread on ring open,
-	 * read by session thread during DESCRIBE. Avoids dereferencing
-	 * the ring pointer from the session thread (UAF if reader closes
-	 * the ring between snapshot and header read). */
-	uint32_t last_codec;
-	uint32_t last_width;
-	uint32_t last_height;
-	uint32_t last_fps_num;
-	uint32_t last_fps_den;
-	uint8_t last_profile;
-	uint8_t last_level;
+	 * read by session thread during DESCRIBE. Atomic to avoid
+	 * TSAN races between reader and session threads. */
+	_Atomic uint32_t last_codec;
+	_Atomic uint32_t last_width;
+	_Atomic uint32_t last_height;
+	_Atomic uint32_t last_fps_num;
+	_Atomic uint32_t last_fps_den;
+	_Atomic uint8_t last_profile;
+	_Atomic uint8_t last_level;
 
 	/* Cached SPS/PPS for SDP sprop-parameter-sets.
 	 * Written by the reader thread (release), read by session thread
