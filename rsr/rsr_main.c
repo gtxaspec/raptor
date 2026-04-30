@@ -338,6 +338,9 @@ static void serve_loop(rsr_state_t *st)
 			got_frame = true;
 			uint64_t pts = meta.timestamp * 9 / 100;
 
+			RSS_DEBUG("ring: %s len=%u key=%d seq=%" PRIu64,
+				  s->name, length, meta.is_key, s->read_seq);
+
 			/* Distribute to clients on this stream */
 			for (int ci = st->client_count - 1; ci >= 0; ci--) {
 				rsr_client_t *c = &st->clients[ci];
@@ -368,6 +371,8 @@ static void serve_loop(rsr_state_t *st)
 				size_t ts_len = rss_ts_write_video(&c->ts, st->ts_buf,
 								   st->ts_buf_size, st->frame_buf,
 								   length, pts, pts, meta.is_key);
+				RSS_DEBUG("ts_write: in=%u out=%zu buf=%u",
+					  length, ts_len, st->ts_buf_size);
 				if (ts_len > 0) {
 					if (rsr_srt_send_to_client(c, st->ts_buf, ts_len) < 0) {
 						rsr_remove_client(st, ci);
