@@ -16,6 +16,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <signal.h>
+#include <stdbool.h>
 #include <rss_ipc.h>
 #include <rss_common.h>
 
@@ -126,7 +127,16 @@ int main(int argc, char **argv)
 
 	rss_log_init("create_rings", RSS_LOG_INFO, RSS_LOG_TARGET_STDERR, NULL);
 
-	int audio_codec = parse_codec(argc > 1 ? argv[1] : NULL);
+	bool no_audio = false;
+	const char *codec_arg = NULL;
+	for (int i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "--no-audio") == 0)
+			no_audio = true;
+		else
+			codec_arg = argv[i];
+	}
+
+	int audio_codec = parse_codec(codec_arg);
 	if (audio_codec < 0)
 		return 1;
 
@@ -150,18 +160,22 @@ int main(int argc, char **argv)
 	if (jpeg1)
 		rss_ring_set_stream_info(jpeg1, 33, 2, 640, 360, 1, 1, 0, 0);
 
-	/* Create audio ring */
-	rss_ring_t *audio = rss_ring_create("audio", 64, 256 * 1024);
-	if (audio)
-		rss_ring_set_stream_info(audio, 64, audio_codec, 0, 0, sample_rate, 1, 0, 0);
+	/* Create audio ring (skip if RAD handles audio) */
+	rss_ring_t *audio = NULL;
+	if (!no_audio) {
+		audio = rss_ring_create("audio", 64, 256 * 1024);
+		if (audio)
+			rss_ring_set_stream_info(audio, 64, audio_codec, 0, 0, sample_rate, 1, 0,
+						 0);
+	}
 
 	/* Create speaker ring (for RAD output / backchannel) */
 	rss_ring_t *speaker = rss_ring_create("speaker", 32, 128 * 1024);
 	if (speaker)
 		rss_ring_set_stream_info(speaker, 65, CODEC_L16, 0, 0, 16000, 1, 0, 0);
 
-	RSS_INFO("created rings: main sub jpeg0 jpeg1 audio(codec=%d rate=%d) speaker",
-		 audio_codec, sample_rate);
+	RSS_INFO("created rings: main sub jpeg0 jpeg1 audio(codec=%d rate=%d) speaker", audio_codec,
+		 sample_rate);
 
 	/* Publish initial JPEG frames so RHD has data immediately */
 	if (jpeg0)
@@ -197,8 +211,8 @@ int main(int argc, char **argv)
 	/* Audio frame buffer */
 	uint8_t audio_frame[4096];
 
-	int64_t vts = 0;  /* video timestamp (µs) */
-	int64_t ats = 0;  /* audio timestamp (µs) */
+	int64_t vts = 0; /* video timestamp (µs) */
+	int64_t ats = 0; /* audio timestamp (µs) */
 	uint32_t frame_num = 0;
 
 	RSS_INFO("publishing fake H.264+audio at 25fps (audio codec=%d)...", audio_codec);
@@ -231,8 +245,8 @@ int main(int argc, char **argv)
 
 		/* 2 audio frames per video frame (20ms audio × 2 = 40ms = 1 video frame) */
 		for (int a = 0; a < 2; a++) {
-			int alen = make_audio_frame(audio_frame, sizeof(audio_frame),
-						    audio_codec, frame_num * 2 + a);
+			int alen = make_audio_frame(audio_frame, sizeof(audio_frame), audio_codec,
+						    frame_num * 2 + a);
 			if (alen > 0 && audio) {
 				rss_iov_t aiov = {.data = audio_frame, .length = (uint32_t)alen};
 				rss_ring_publish_iov(audio, &aiov, 1, ats, audio_codec, 0);

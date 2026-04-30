@@ -183,10 +183,13 @@ username =
 password =
 
 [osd]
-enabled = false
+enabled = true
+font = /usr/share/fonts/truetype/noto/NotoMono-Regular.ttf
+time_format = %H:%M:%S
 
 [ircut]
-enabled = false
+enabled = true
+mode = day
 
 [motion]
 enabled = false
@@ -225,19 +228,6 @@ for d in rvd rsd rhd rod ric rmr rwd create_rings; do
 done
 sleep 0.5
 
-# ── Start ring producer ──
-
-echo "=== Starting ring producer ==="
-"$OUT/create_rings" > "$LOG_DIR/rings.log" 2>&1 &
-RINGS_PID=$!
-sleep 1
-
-if ! kill -0 "$RINGS_PID" 2>/dev/null; then
-    echo "ERROR: create_rings failed to start"
-    cat "$LOG_DIR/rings.log"
-    exit 1
-fi
-
 # ── Start daemons ──
 
 start_daemon() {
@@ -259,8 +249,24 @@ start_daemon() {
 echo "=== Starting daemons ==="
 start_daemon rvd "$OUT/rvd" -c "$CONFIG" -f
 start_daemon rsd "$OUT/rsd" -c "$CONFIG" -f
+start_daemon rad "$OUT/rad" -c "$CONFIG" -f
 start_daemon rhd "$OUT/rhd" -c "$CONFIG" -f
+start_daemon rod "$OUT/rod" -c "$CONFIG" -f
+start_daemon ric "$OUT/ric" -c "$CONFIG" -f
 start_daemon rwd "$OUT/rwd" -c "$CONFIG" -f
+
+# ── Start ring producer (after daemons so it owns the video rings) ──
+
+echo "=== Starting ring producer ==="
+"$OUT/create_rings" --no-audio > "$LOG_DIR/rings.log" 2>&1 &
+RINGS_PID=$!
+sleep 1
+
+if ! kill -0 "$RINGS_PID" 2>/dev/null; then
+    echo "ERROR: create_rings failed to start"
+    cat "$LOG_DIR/rings.log"
+    exit 1
+fi
 sleep 1
 
 # ── WHIP helper: POST SDP offer, extract session, DELETE to teardown ──
@@ -330,6 +336,24 @@ whip_cycle
 echo "  phase 1 done"
 sleep 1
 
+# ── Phase 1b: RAD codec cycling ──
+
+echo ""
+echo "=== Phase 1b: RAD codec cycling ==="
+
+for codec in opus aac pcmu pcma l16; do
+    echo "  switching to $codec..."
+    "$OUT/raptorctl" rad set-codec "$codec" > /dev/null 2>&1 || true
+    sleep 0.5
+
+    # Exercise audio consumers after codec switch
+    timeout 2 curl -s -o /dev/null "http://127.0.0.1:$HTTP_PORT/audio" 2>/dev/null || true
+    timeout 2 ffprobe -v quiet -rtsp_transport tcp \
+        "rtsp://127.0.0.1:$RTSP_PORT/stream0" > /dev/null 2>&1 || true
+    echo "  $codec done"
+done
+sleep 1
+
 # ── Phase 2: Rapid connect/disconnect (amplify per-client leaks) ──
 
 echo ""
@@ -390,7 +414,7 @@ wait "$RINGS_PID" 2>/dev/null || true
 sleep 1
 
 echo "  restarting ring producer..."
-"$OUT/create_rings" > "$LOG_DIR/rings-restart.log" 2>&1 &
+"$OUT/create_rings" --no-audio > "$LOG_DIR/rings-restart.log" 2>&1 &
 RINGS_PID=$!
 sleep 2
 
@@ -489,7 +513,7 @@ if [ "$DURATION" -gt 0 ]; then
             kill "$RINGS_PID" 2>/dev/null || true
             wait "$RINGS_PID" 2>/dev/null || true
             sleep 1
-            "$OUT/create_rings" > "$LOG_DIR/rings-soak.log" 2>&1 &
+            "$OUT/create_rings" --no-audio > "$LOG_DIR/rings-soak.log" 2>&1 &
             RINGS_PID=$!
             sleep 2
             LAST_RECONNECT=$NOW

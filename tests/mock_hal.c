@@ -285,12 +285,20 @@ static int mock_audio_read_frame(void *ctx, int dev, int chn, rss_audio_frame_t 
 	(void)ctx;
 	(void)dev;
 	(void)chn;
-	(void)frame;
 	(void)block;
-	/* Sleep briefly, return no data */
-	struct timespec ts = {.tv_sec = 0, .tv_nsec = 100000000};
+	static int16_t pcm_buf[320]; /* 20ms at 16kHz */
+	static uint32_t seq;
+
+	/* 20ms cadence (50 fps audio) */
+	struct timespec ts = {.tv_sec = 0, .tv_nsec = 20000000};
 	nanosleep(&ts, NULL);
-	return -EAGAIN;
+
+	frame->data = pcm_buf;
+	frame->length = sizeof(pcm_buf);
+	frame->timestamp = (int64_t)seq * 20000; /* 20ms in µs */
+	frame->seq = seq++;
+	frame->_priv = NULL;
+	return RSS_OK;
 }
 
 static int mock_ivs_get_result(void *ctx, int chn, void **result)
