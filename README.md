@@ -30,6 +30,7 @@ buffers at runtime, gracefully skipping any that don't exist.
    |      \           +--> [RWD] WebRTC/WHIP server (DTLS-SRTP)
    |       \          +--> [RWC] USB webcam (UVC + UAC1)
    |       \          +--> [RSP] RTMP/RTMPS push (YouTube, Twitch)
+   |       \          +--> [RSR] SRT listener (MPEG-TS)
    |        `--osd shm <-- [ROD] OSD text / logo renderer
    |        `--ivs ------> [RMD] motion detection → triggers RMR
    |
@@ -55,6 +56,7 @@ buffers at runtime, gracefully skipping any that don't exist.
 | RWC  | `rwc`  | USB Webcam Daemon. Reads JPEG (or H.264) video from rings and raw PCM audio, feeds them to the Linux UVC+UAC gadget via V4L2 and `/dev/uac_mic`. Camera appears as a standard USB webcam with microphone on any connected host. MJPEG + H.264 at 1080p/720p/360p, 16kHz mono mic. Bulk video endpoint (works through USB hubs), isochronous audio. No ALSA dependency — custom minimal UAC1 kernel function. Requires `CONFIG_USB_G_WEBCAM=m` and the thingino kernel webcam patches. |
 | RFS  | `rfs`  | File Source Daemon. Reads video+audio from MP4/MOV containers or raw Annex B H.264/H.265 files, publishes to ring buffers at real-time rate. Replaces RVD+RAD on platforms without ISP/encoder hardware (A1, x86 testing). MP4 demuxing via libmov (zero-copy mmap, AVCC→Annex B on-the-fly). B-frame display reorder for raw files. Audio: direct passthrough for AAC/Opus/G.711, MP3 transcode via libhelix, raw PCM encoding via RAD codec plugins (L16/PCMU/PCMA/AAC/Opus). Control socket: status, pause/resume, seek. No HAL dependency. |
 | RSP  | `rsp`  | Stream Push Daemon. Reads H.264/H.265 video + audio from SHM rings and pushes to RTMP/RTMPS servers (YouTube Live, Twitch, Facebook Live, custom endpoints). Custom RTMP client with AMF0 encoding, chunk stream framing, and FLV tag construction. H.264 via standard FLV, H.265 via Enhanced RTMP FourCC. Audio transcode: any ring codec (G.711 µ/A-law, L16, Opus) is decoded to PCM and re-encoded to AAC-LC via faac; native AAC is passed through. Zero-copy ring peek in refmode. RTMPS via mbedTLS client-side TLS. Auto-reconnect with configurable backoff. Requires `TLS=1` for RTMPS, `AAC=1` for audio transcode. |
+| RSR  | `rsr`  | SRT Listener Daemon. Serves live H.264/H.265 video + audio as MPEG-TS over SRT protocol (ISO 13818-1 compliant muxer). Multi-client with per-client TS state, multi-stream via SRT STREAMID routing (clients select main/sub/sensor streams). AES-128/192/256 encryption via libsrt+mbedTLS. All five audio codecs supported (AAC, Opus, G.711 µ/A-law, L16) with proper PES stream_id and PMT registration descriptors. Dual-stack IPv4/IPv6. Ring stale detection with auto-reopen on RVD restart. Compatible with ffplay, VLC, OBS, go2rtc, and any SRT-capable player or NVR. |
 
 ### Tools
 
