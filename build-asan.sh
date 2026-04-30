@@ -43,9 +43,9 @@ DEPS="$OUT/deps"
 if [ "$1" = "clean" ]; then
     rm -f "$OUT"/*.o "$OUT"/*.a "$OUT"/rss_build_info.c
     rm -f "$OUT"/rvd "$OUT"/rsd "$OUT"/rad "$OUT"/rhd "$OUT"/rod "$OUT"/ric
-    rm -f "$OUT"/rmd "$OUT"/rmr "$OUT"/rwc "$OUT"/rwd "$OUT"/rsp
+    rm -f "$OUT"/rmd "$OUT"/rmr "$OUT"/rwc "$OUT"/rwd "$OUT"/rsp "$OUT"/rsr
     rm -f "$OUT"/raptorctl "$OUT"/ringdump "$OUT"/rac "$OUT"/create_rings
-    rm -rf "$OUT"/mbedtls-build "$OUT"/mbedtls-install "$OUT"/compy-build
+    rm -rf "$OUT"/mbedtls-build "$OUT"/mbedtls-install "$OUT"/compy-build "$OUT"/srt-build "$OUT"/srt-install
     echo "Cleaned asan-out/ (deps kept — use distclean to remove)"
     exit 0
 fi
@@ -155,6 +155,35 @@ if [ ! -f "$COMPY_BUILD/libcompy.a" ]; then
     echo "  -> libcompy.a (with TLS)"
 fi
 
+# Build libsrt for x86 with mbedTLS
+SRT_VER="1.5.4"
+SRT_DIR="$DEPS/srt"
+SRT_BUILD="$OUT/srt-build"
+SRT_PREFIX="$OUT/srt-install"
+if [ ! -f "$SRT_PREFIX/lib/libsrt.a" ]; then
+    if [ ! -d "$SRT_DIR" ]; then
+        echo "  fetch   srt-$SRT_VER"
+        git clone --quiet --depth 1 --branch "v$SRT_VER" https://github.com/Haivision/srt.git "$SRT_DIR"
+    fi
+    echo "=== libsrt $SRT_VER (cmake + mbedTLS) ==="
+    mkdir -p "$SRT_BUILD"
+    cmake -S "$SRT_DIR" -B "$SRT_BUILD" \
+        -DCMAKE_C_FLAGS="$SANITIZE -O1 -g" \
+        -DCMAKE_CXX_FLAGS="$SANITIZE -O1 -g" \
+        -DCMAKE_BUILD_TYPE=Debug \
+        -DCMAKE_INSTALL_PREFIX="$SRT_PREFIX" \
+        -DCMAKE_PREFIX_PATH="$MBEDTLS_PREFIX" \
+        -DENABLE_APPS=OFF -DENABLE_TESTING=OFF \
+        -DENABLE_SHARED=OFF -DENABLE_STATIC=ON \
+        -DUSE_ENCLIB=mbedtls \
+        > /dev/null 2>&1
+    cmake --build "$SRT_BUILD" -j"$(nproc)" > /dev/null 2>&1
+    cmake --install "$SRT_BUILD" > /dev/null 2>&1
+    echo "  -> libsrt.a"
+fi
+SRT_CFLAGS="-I$SRT_PREFIX/include"
+SRT_LIBS="$SRT_PREFIX/lib/libsrt.a -lstdc++ -latomic"
+
 # Compy include paths (fetched by cmake)
 COMPY_CFLAGS="-I$COMPY_DIR/include -DCOMPY_HAS_TLS"
 COMPY_CFLAGS="$COMPY_CFLAGS -I$COMPY_BUILD/_deps/slice99-src"
@@ -181,6 +210,7 @@ $CC $CFLAGS -c "$COMMON_DIR/src/rss_daemon.c" -o "$OUT/rss_daemon.o"
 $CC $CFLAGS -c "$COMMON_DIR/src/rss_util.c" -o "$OUT/rss_util.o"
 $CC $CFLAGS -c "$COMMON_DIR/src/rss_ctrl_cmds.c" -o "$OUT/rss_ctrl_common.o"
 $CC $CFLAGS -c "$COMMON_DIR/src/rss_http.c" -o "$OUT/rss_http.o"
+$CC $CFLAGS -c "$COMMON_DIR/src/rss_ts.c" -o "$OUT/rss_ts.o"
 $CC $CFLAGS -c "$COMMON_DIR/src/cJSON.c" -o "$OUT/cJSON.o"
 cat > "$OUT/rss_build_info.c" << 'BUILDEOF'
 const char *rss_build_hash = "asan";
@@ -188,7 +218,7 @@ const char *rss_build_time = "asan-build";
 const char *rss_build_platform = "x86_64";
 BUILDEOF
 $CC $CFLAGS -c "$OUT/rss_build_info.c" -o "$OUT/rss_build_info.o"
-ar rcs "$OUT/librss_common.a" "$OUT"/rss_log.o "$OUT"/rss_config.o "$OUT"/rss_daemon.o "$OUT"/rss_util.o "$OUT"/rss_ctrl_common.o "$OUT"/rss_http.o "$OUT"/cJSON.o
+ar rcs "$OUT/librss_common.a" "$OUT"/rss_log.o "$OUT"/rss_config.o "$OUT"/rss_daemon.o "$OUT"/rss_util.o "$OUT"/rss_ctrl_common.o "$OUT"/rss_http.o "$OUT"/rss_ts.o "$OUT"/cJSON.o
 
 echo "=== raptor-ipc ==="
 $CC $CFLAGS -c "$IPC_DIR/src/rss_ring.c" -o "$OUT/rss_ring.o"
@@ -280,6 +310,12 @@ $CC $CFLAGS $RSP_CFLAGS -c "$RAPTOR_DIR/rsp/rsp_rtmp.c" -o "$OUT/rsp_rtmp.o"
 $CC $CFLAGS $RSP_CFLAGS -c "$RAPTOR_DIR/rsp/rsp_audio.c" -o "$OUT/rsp_audio.o"
 $CC -o "$OUT/rsp" "$OUT"/rsp_main.o "$OUT"/rsp_rtmp.o "$OUT"/rsp_audio.o "$OUT"/rmr_nal.o $LIBS $LIBS_TLS $LDFLAGS
 echo "  -> rsp"
+
+echo "=== RSR ==="
+$CC $CFLAGS $SRT_CFLAGS -c "$RAPTOR_DIR/rsr/rsr_main.c" -o "$OUT/rsr_main.o"
+$CC $CFLAGS $SRT_CFLAGS -c "$RAPTOR_DIR/rsr/rsr_srt.c" -o "$OUT/rsr_srt.o"
+$CC -o "$OUT/rsr" "$OUT"/rsr_main.o "$OUT"/rsr_srt.o $LIBS $SRT_LIBS $LIBS_TLS $LDFLAGS
+echo "  -> rsr"
 
 echo "=== raptorctl ==="
 for f in raptorctl raptorctl_dispatch raptorctl_config raptorctl_ipc raptorctl_help raptorctl_info; do
@@ -384,4 +420,4 @@ echo "  -> rwd"
 
 echo ""
 echo "Done. All binaries in asan-out/"
-ls -1 "$OUT"/rvd "$OUT"/rsd "$OUT"/rad "$OUT"/rhd "$OUT"/rod "$OUT"/ric "$OUT"/rmd "$OUT"/rmr "$OUT"/rwd "$OUT"/rwc "$OUT"/rsp "$OUT"/raptorctl "$OUT"/ringdump "$OUT"/rac "$OUT"/create_rings 2>/dev/null | while read f; do echo "  $(basename $f)"; done
+ls -1 "$OUT"/rvd "$OUT"/rsd "$OUT"/rad "$OUT"/rhd "$OUT"/rod "$OUT"/ric "$OUT"/rmd "$OUT"/rmr "$OUT"/rwd "$OUT"/rwc "$OUT"/rsp "$OUT"/rsr "$OUT"/raptorctl "$OUT"/ringdump "$OUT"/rac "$OUT"/create_rings 2>/dev/null | while read f; do echo "  $(basename $f)"; done

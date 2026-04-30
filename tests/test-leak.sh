@@ -37,6 +37,7 @@ RTSP_PORT=15654
 HTTP_PORT=18180
 RWD_HTTP_PORT=18554
 RWD_UDP_PORT=18443
+SRT_PORT=19000
 
 DAEMON_PIDS=""
 RINGS_PID=""
@@ -206,6 +207,12 @@ key = $LOG_DIR/test.key
 https = false
 audio_mode = opus
 
+[srt]
+enabled = true
+port = $SRT_PORT
+max_clients = 4
+audio = true
+
 [log]
 level = warn
 CONF
@@ -223,7 +230,7 @@ mkdir -p /var/run/rss 2>/dev/null || { sudo mkdir -p /var/run/rss && sudo chmod 
 rm -f /var/run/rss/*.pid /var/run/rss/*.sock 2>/dev/null || true
 rm -f /dev/shm/rss_ring_* /dev/shm/rss_osd_* 2>/dev/null || true
 
-for d in rvd rsd rhd rod ric rmr rwd create_rings; do
+for d in rvd rsd rhd rod ric rmr rwd rsr create_rings; do
     pkill -f "asan-out/$d" 2>/dev/null || true
 done
 sleep 0.5
@@ -254,6 +261,7 @@ start_daemon rhd "$OUT/rhd" -c "$CONFIG" -f
 start_daemon rod "$OUT/rod" -c "$CONFIG" -f
 start_daemon ric "$OUT/ric" -c "$CONFIG" -f
 start_daemon rwd "$OUT/rwd" -c "$CONFIG" -f
+start_daemon rsr "$OUT/rsr" -c "$CONFIG" -f
 
 # ── Start ring producer (after daemons so it owns the video rings) ──
 
