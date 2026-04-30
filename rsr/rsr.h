@@ -41,6 +41,10 @@ typedef struct {
 	rsr_stream_t *stream;
 	rss_ts_mux_t ts;
 	bool waiting_keyframe;
+	bool video_pts_set;
+	bool audio_pts_set;
+	uint64_t video_pts_base;
+	uint64_t audio_pts_base;
 	uint64_t frames_sent;
 	uint64_t bytes_sent;
 	int64_t connect_time_us;

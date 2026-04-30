@@ -377,7 +377,11 @@ static void serve_loop(rsr_state_t *st)
 					if (!meta.is_key)
 						continue;
 					c->waiting_keyframe = false;
+					c->video_pts_base = pts;
+					c->video_pts_set = true;
 				}
+
+				uint64_t vpts = c->video_pts_set ? pts - c->video_pts_base : pts;
 
 				/* PAT/PMT before keyframes */
 				if (meta.is_key) {
@@ -395,7 +399,7 @@ static void serve_loop(rsr_state_t *st)
 				/* Video TS packets (DTS == PTS for I/P-only streams) */
 				size_t ts_len = rss_ts_write_video(&c->ts, st->ts_buf,
 								   st->ts_buf_size, st->frame_buf,
-								   length, pts, pts, meta.is_key);
+								   length, vpts, vpts, meta.is_key);
 				if (ts_len > 0) {
 					if (rsr_srt_send_to_client(c, st->ts_buf, ts_len) < 0) {
 						rsr_remove_client(st, ci);
@@ -453,9 +457,14 @@ static void serve_loop(rsr_state_t *st)
 					if (c->waiting_keyframe)
 						continue;
 
+					if (!c->audio_pts_set) {
+						c->audio_pts_base = apts;
+						c->audio_pts_set = true;
+					}
+					uint64_t capts = apts - c->audio_pts_base;
 					size_t ats_len = rss_ts_write_audio(&c->ts, st->ts_buf,
 									    st->ts_buf_size, adata,
-									    adatalen, apts);
+									    adatalen, capts);
 					if (ats_len > 0) {
 						if (rsr_srt_send_to_client(c, st->ts_buf, ats_len) <
 						    0) {
