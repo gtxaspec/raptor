@@ -314,10 +314,10 @@ static void serve_loop(rsr_state_t *st)
 					}
 				}
 
-				/* Video TS packets */
-				size_t ts_len =
-					rss_ts_write_video(&c->ts, st->ts_buf, st->ts_buf_size,
-							   st->frame_buf, length, pts, meta.is_key);
+				/* Video TS packets (DTS == PTS for I/P-only streams) */
+				size_t ts_len = rss_ts_write_video(&c->ts, st->ts_buf,
+								   st->ts_buf_size, st->frame_buf,
+								   length, pts, pts, meta.is_key);
 				if (ts_len > 0) {
 					if (rsr_srt_send_to_client(c, st->ts_buf, ts_len) < 0) {
 						rsr_remove_client(st, ci);
