@@ -35,6 +35,8 @@ done
 
 RTSP_PORT=15654
 HTTP_PORT=18180
+RWD_HTTP_PORT=18554
+RWD_UDP_PORT=18443
 
 DAEMON_PIDS=""
 RINGS_PID=""
@@ -192,9 +194,23 @@ enabled = false
 [recording]
 enabled = false
 
+[webrtc]
+enabled = true
+udp_port = $RWD_UDP_PORT
+http_port = $RWD_HTTP_PORT
+cert = $LOG_DIR/test.crt
+key = $LOG_DIR/test.key
+https = false
+audio_mode = opus
+
 [log]
 level = warn
 CONF
+
+# Generate self-signed cert for DTLS
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+    -keyout "$LOG_DIR/test.key" -out "$LOG_DIR/test.crt" \
+    -days 1 -nodes -subj "/CN=test" 2>/dev/null
 
 CONFIG="$LOG_DIR/leak-test.conf"
 
@@ -244,7 +260,50 @@ echo "=== Starting daemons ==="
 start_daemon rvd "$OUT/rvd" -c "$CONFIG" -f
 start_daemon rsd "$OUT/rsd" -c "$CONFIG" -f
 start_daemon rhd "$OUT/rhd" -c "$CONFIG" -f
+start_daemon rwd "$OUT/rwd" -c "$CONFIG" -f
 sleep 1
+
+# ── WHIP helper: POST SDP offer, extract session, DELETE to teardown ──
+
+WHIP_SDP="v=0
+o=- 0 0 IN IP4 0.0.0.0
+s=-
+t=0 0
+a=group:BUNDLE 0 1
+m=video 9 UDP/TLS/RTP/SAVPF 96
+c=IN IP4 0.0.0.0
+a=mid:0
+a=ice-ufrag:leak
+a=ice-pwd:leaktestleaktestleaktest
+a=fingerprint:sha-256 AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99
+a=setup:actpass
+a=rtpmap:96 H264/90000
+a=fmtp:96 packetization-mode=1;profile-level-id=42e01f
+a=sendrecv
+m=audio 9 UDP/TLS/RTP/SAVPF 111
+c=IN IP4 0.0.0.0
+a=mid:1
+a=ice-ufrag:leak
+a=ice-pwd:leaktestleaktestleaktest
+a=fingerprint:sha-256 AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99
+a=setup:actpass
+a=rtpmap:111 opus/48000/2
+a=sendrecv"
+
+whip_cycle() {
+    local resp
+    resp=$(curl -s -D - -o /dev/null --max-time 3 \
+        -X POST "http://127.0.0.1:$RWD_HTTP_PORT/whip" \
+        -H "Content-Type: application/sdp" \
+        -d "$WHIP_SDP" 2>/dev/null)
+    local loc
+    loc=$(echo "$resp" | grep -i "^Location:" | tr -d '\r' | awk '{print $2}')
+    if [ -n "$loc" ]; then
+        sleep 0.2
+        curl -s -o /dev/null --max-time 2 \
+            -X DELETE "http://127.0.0.1:$RWD_HTTP_PORT$loc" 2>/dev/null || true
+    fi
+}
 
 # ── Phase 1: Single client connect/disconnect ──
 
@@ -265,6 +324,9 @@ timeout 2 curl -s -o /dev/null "http://127.0.0.1:$HTTP_PORT/mjpeg" 2>/dev/null |
 echo "  audio stream (2s)..."
 timeout 2 curl -s -o /dev/null "http://127.0.0.1:$HTTP_PORT/audio" 2>/dev/null || true
 
+echo "  WHIP connect + delete..."
+whip_cycle
+
 echo "  phase 1 done"
 sleep 1
 
@@ -284,6 +346,9 @@ for i in $(seq 1 5); do
     # MJPEG (brief)
     timeout 1 curl -s -o /dev/null "http://127.0.0.1:$HTTP_PORT/mjpeg" 2>/dev/null || true
 
+    # WebRTC WHIP (create + teardown)
+    whip_cycle
+
     echo "  cycle $i/5 done"
 done
 sleep 1
@@ -301,6 +366,12 @@ done
 timeout 3 ffprobe -v quiet -rtsp_transport tcp \
     "rtsp://127.0.0.1:$RTSP_PORT/stream0" > /dev/null 2>&1 &
 CPIDS="$CPIDS $!"
+
+# Concurrent WHIP sessions
+for i in $(seq 1 2); do
+    whip_cycle &
+    CPIDS="$CPIDS $!"
+done
 
 for pid in $CPIDS; do
     wait "$pid" 2>/dev/null || true
@@ -334,6 +405,9 @@ timeout 3 ffprobe -v quiet -rtsp_transport tcp \
 
 echo "  post-reconnect HTTP snapshot..."
 curl -s -o /dev/null --max-time 3 "http://127.0.0.1:$HTTP_PORT/snap" || true
+
+echo "  post-reconnect WHIP..."
+whip_cycle
 
 echo "  ring reconnect done"
 sleep 1
@@ -384,6 +458,9 @@ if [ "$DURATION" -gt 0 ]; then
 
         # Audio stream (1s)
         timeout 1 curl -s -o /dev/null "http://127.0.0.1:$HTTP_PORT/audio" 2>/dev/null || true
+
+        # WebRTC WHIP (create + teardown)
+        whip_cycle
 
         # Concurrent burst every 5 cycles
         if [ $((CYCLE % 5)) -eq 0 ]; then
