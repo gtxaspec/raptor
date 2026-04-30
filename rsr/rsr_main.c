@@ -137,11 +137,10 @@ static uint8_t audio_codec_to_ts(uint32_t codec)
 	case 111:
 		return RSS_TS_STREAM_OPUS;
 	case 0:
-		return RSS_TS_STREAM_PCMU;
 	case 8:
-		return RSS_TS_STREAM_PCMA;
 	case 11:
-		return RSS_TS_STREAM_L16;
+		RSS_WARN("audio codec %u not supported in MPEG-TS, use aac or opus", codec);
+		return RSS_TS_STREAM_NONE;
 	default:
 		return RSS_TS_STREAM_NONE;
 	}
