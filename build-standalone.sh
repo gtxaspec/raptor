@@ -15,6 +15,7 @@
 #   --no-opus      Disable Opus codec
 #   --no-mp3       Disable MP3 codec
 #   --no-audio-effects  Disable audio effects (NS/HPF/AGC)
+#   --no-srt       Disable SRT (no RSR daemon)
 #   --static-vendor-libs  Statically link vendor libs (libimp, libalog; requires --static)
 #   --clean        Clean all build artifacts
 #   --deps-only    Only build dependencies, not raptor
@@ -108,6 +109,7 @@ HELIX_VERSION=05f2fb0045cc294b4e0d1a1a9747b89c22c1fea4
 SCHRIFT_VERSION=24737d2922b23df4a5692014f5ba03da0c296112
 MUSL_SHIM_VERSION=HEAD
 UCLIBC_SHIM_VERSION=HEAD
+LIBSRT_VERSION=v1.5.4
 
 # ── Parse arguments ──
 
@@ -119,6 +121,7 @@ OPT_AAC=1
 OPT_OPUS=1
 OPT_MP3=1
 OPT_AUDIO_EFFECTS=1
+OPT_SRT=1
 OPT_CLEAN=0
 OPT_CLEAN_ALL=0
 OPT_DEPS_ONLY=0
@@ -138,6 +141,7 @@ usage() {
     echo "  --no-opus      Disable Opus codec"
     echo "  --no-mp3       Disable MP3 codec"
     echo "  --no-audio-effects  Disable audio effects (NS/HPF/AGC)"
+    echo "  --no-srt       Disable SRT (no RSR daemon)"
     echo "  --static       Statically link optional deps (fewer .so files needed)"
     echo "  --static-vendor-libs  Also statically link vendor libs (libimp, libalog; requires --static)"
     echo "  --clean        Clean build artifacts (keep downloaded deps)"
@@ -157,6 +161,7 @@ for arg in "$@"; do
         --no-opus)   OPT_OPUS= ;;
         --no-mp3)    OPT_MP3= ;;
         --no-audio-effects) OPT_AUDIO_EFFECTS= ;;
+        --no-srt)    OPT_SRT= ;;
         --static)    OPT_STATIC=1 ;;
         --static-vendor-libs) OPT_STATIC_VENDOR=1 ;;
         --local)     OPT_LOCAL=1 ;;
@@ -691,6 +696,50 @@ EOCFG
     cd "$SCRIPT_DIR"
 }
 
+build_libsrt() {
+    local src="$DEPS_DIR/srt"
+    local builddir="$DEPS_DIR/srt-build"
+    if [ "$OPT_STATIC" = 1 ]; then
+        [ -f "$SYSROOT_DIR/usr/lib/libsrt.a" ] && return
+    else
+        [ -f "$SYSROOT_DIR/usr/lib/libsrt.so" ] && return
+    fi
+
+    echo "Building libsrt..."
+    rm -rf "$builddir"
+    mkdir -p "$builddir"
+    cd "$builddir"
+    local shared=ON static=OFF
+    if [ "$OPT_STATIC" = 1 ]; then shared=OFF; static=ON; fi
+    local enclib=mbedtls
+    # If TLS is disabled, build SRT without encryption
+    [ "$OPT_TLS" != 1 ] && enclib=""
+    local enc_flags="-DUSE_ENCLIB=$enclib"
+    [ -z "$enclib" ] && enc_flags="-DENABLE_ENCRYPTION=OFF"
+    run libsrt-cmake cmake "$src" \
+        -DCMAKE_C_COMPILER="${CROSS_COMPILE}gcc" \
+        -DCMAKE_CXX_COMPILER="${CROSS_COMPILE}g++" \
+        -DCMAKE_SYSTEM_NAME=Linux \
+        -DCMAKE_SYSTEM_PROCESSOR=mips \
+        -DCMAKE_FIND_ROOT_PATH="$SYSROOT_DIR" \
+        -DCMAKE_INSTALL_PREFIX="$SYSROOT_DIR/usr" \
+        -DENABLE_APPS=OFF \
+        -DENABLE_TESTING=OFF \
+        -DENABLE_SHARED="$shared" \
+        -DENABLE_STATIC="$static" \
+        $enc_flags \
+        -DCMAKE_C_FLAGS="-Os" \
+        -DCMAKE_CXX_FLAGS="-Os"
+    run libsrt-build make -j"$JOBS"
+    run libsrt-install make install
+    if [ "$OPT_STATIC" = 1 ]; then
+        rm -f "$SYSROOT_DIR"/usr/lib/libsrt*.so*
+    else
+        rm -f "$SYSROOT_DIR"/usr/lib/libsrt*.a
+    fi
+    cd "$SCRIPT_DIR"
+}
+
 build_raptor_common() {
     local src="$DEPS_DIR/raptor-common"
     echo "Building raptor-common..."
@@ -764,7 +813,7 @@ build_compy() {
 
 echo "=== Raptor standalone build ==="
 echo "Platform:  $PLATFORM_UPPER (SDK $SDK_VERSION)"
-echo "Features:  TLS=$OPT_TLS ALT=$OPT_ALT AAC=$OPT_AAC OPUS=$OPT_OPUS MP3=$OPT_MP3 EFFECTS=$OPT_AUDIO_EFFECTS STATIC=$OPT_STATIC STATIC_VENDOR=$OPT_STATIC_VENDOR LOCAL=$OPT_LOCAL"
+echo "Features:  TLS=$OPT_TLS ALT=$OPT_ALT AAC=$OPT_AAC OPUS=$OPT_OPUS MP3=$OPT_MP3 EFFECTS=$OPT_AUDIO_EFFECTS SRT=$OPT_SRT STATIC=$OPT_STATIC STATIC_VENDOR=$OPT_STATIC_VENDOR LOCAL=$OPT_LOCAL"
 echo "Deps dir:  $DEPS_DIR"
 echo ""
 
@@ -796,6 +845,7 @@ fi
 if [ "$OPT_AAC" = 1 ] || [ "$OPT_MP3" = 1 ]; then
     clone_repo ESP8266Audio https://github.com/earlephilhower/ESP8266Audio "$HELIX_VERSION"
 fi
+[ "$OPT_SRT" = 1 ] && clone_repo srt https://github.com/Haivision/srt "$LIBSRT_VERSION"
 
 # Build deps in order
 build_ingenic_lib
@@ -807,6 +857,7 @@ build_libc_shim
 [ "$OPT_MP3" = 1 ]  && build_helix_mp3
 build_schrift
 build_live555
+[ "$OPT_SRT" = 1 ] && build_libsrt
 build_raptor_common
 build_raptor_ipc
 if [ "$PLATFORM" = "a1" ]; then
@@ -839,6 +890,7 @@ else
     TARGETS="rvd rsd rad rhd rod ric rmr rmd rfs rwc rsd-555 raptorctl ringdump rac"
 fi
 [ "$OPT_TLS" = 1 ] && TARGETS="$TARGETS rwd rsp"
+[ "$OPT_SRT" = 1 ] && TARGETS="$TARGETS rsr"
 
 HAL_VIDEO="$SYSROOT_DIR/usr/lib/libraptor_hal_video.a"
 HAL_AUDIO="$SYSROOT_DIR/usr/lib/libraptor_hal_audio.a"
@@ -876,7 +928,7 @@ make -j"$JOBS" \
 
 # Collect binaries
 mkdir -p "$SCRIPT_DIR/build"
-for d in rvd rsd rad rhd rod ric rmr rmd rfs rwc rwd rsp rsd-555 raptorctl ringdump rac; do
+for d in rvd rsd rad rhd rod ric rmr rmd rfs rwc rwd rsp rsr rsd-555 raptorctl ringdump rac; do
     [ -f "$SCRIPT_DIR/$d/$d" ] && cp -f "$SCRIPT_DIR/$d/$d" "$SCRIPT_DIR/build/"
 done
 
