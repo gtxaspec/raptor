@@ -24,6 +24,8 @@ typedef struct {
 	rss_ring_t *ring;
 	const char *name;
 	uint64_t read_seq;
+	uint64_t last_write_seq;
+	int idle_count;
 	uint32_t codec;
 	uint32_t width;
 	uint32_t height;
@@ -62,6 +64,8 @@ typedef struct {
 
 	rss_ring_t *audio_ring;
 	uint64_t audio_read_seq;
+	uint64_t audio_last_ws;
+	int audio_idle;
 	uint32_t audio_codec;
 	uint8_t audio_ts_type;
 
@@ -93,8 +97,7 @@ void rsr_srt_cleanup(rsr_state_t *st);
 
 /* ── Stream helpers ── */
 
-static const char *rsr_ring_names[RSR_MAX_STREAMS] = {"main",	"sub",	   "s1_main",
-						      "s1_sub", "s2_main", "s2_sub"};
+extern const char *const rsr_ring_names[RSR_MAX_STREAMS];
 
 rsr_stream_t *rsr_stream_get_or_open(rsr_state_t *st, const char *name);
 void rsr_stream_release(rsr_state_t *st, rsr_stream_t *s);

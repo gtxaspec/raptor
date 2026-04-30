@@ -16,6 +16,9 @@
 
 #include "rsr.h"
 
+const char *const rsr_ring_names[RSR_MAX_STREAMS] = {"main",   "sub",	  "s1_main",
+						     "s1_sub", "s2_main", "s2_sub"};
+
 /* ── Stream management ── */
 
 rsr_stream_t *rsr_stream_get_or_open(rsr_state_t *st, const char *name)
@@ -265,6 +268,24 @@ static void serve_loop(rsr_state_t *st)
 
 		bool got_frame = false;
 
+		/* Reopen dead streams that still have clients */
+		for (int ci = 0; ci < st->client_count; ci++) {
+			rsr_stream_t *s = st->clients[ci].stream;
+
+			if (s && !s->active && s->client_count > 0) {
+				rsr_stream_t *reopened = rsr_stream_get_or_open(st, s->name);
+
+				if (reopened && reopened != s) {
+					for (int j = 0; j < st->client_count; j++) {
+						if (st->clients[j].stream == s)
+							st->clients[j].stream = reopened;
+					}
+					reopened->client_count = s->client_count;
+					s->client_count = 0;
+				}
+			}
+		}
+
 		/* Read from each active stream */
 		for (int si = 0; si < RSR_MAX_STREAMS; si++) {
 			rsr_stream_t *s = &st->streams[si];
@@ -286,11 +307,34 @@ static void serve_loop(rsr_state_t *st)
 				}
 				continue;
 			}
-			if (ret == -EAGAIN)
+			if (ret == -EAGAIN) {
+				const rss_ring_header_t *hdr = rss_ring_get_header(s->ring);
+				uint64_t ws = hdr->write_seq;
+
+				if (ws == s->last_write_seq)
+					s->idle_count++;
+				else
+					s->idle_count = 0;
+				s->last_write_seq = ws;
+
+				if (s->idle_count >= 50) {
+					RSS_WARN("stream '%s' idle, closing ring", s->name);
+					for (int ci = 0; ci < st->client_count; ci++) {
+						if (st->clients[ci].stream == s)
+							st->clients[ci].waiting_keyframe = true;
+					}
+					rss_ring_release(s->ring);
+					rss_ring_close(s->ring);
+					s->ring = NULL;
+					s->active = false;
+					s->idle_count = 0;
+				}
 				continue;
+			}
 			if (ret != 0)
 				continue;
 
+			s->idle_count = 0;
 			got_frame = true;
 			uint64_t pts = meta.timestamp * 9 / 100;
 
@@ -331,6 +375,7 @@ static void serve_loop(rsr_state_t *st)
 					}
 				}
 
+				c->frames_sent++;
 				st->total_frames++;
 				st->total_bytes += ts_len;
 			}
@@ -338,6 +383,8 @@ static void serve_loop(rsr_state_t *st)
 
 		/* Read and send audio (shared across all non-waiting clients) */
 		if (st->audio_ring) {
+			bool audio_got = false;
+
 			for (int burst = 0; burst < 4; burst++) {
 				uint32_t alen;
 				rss_ring_slot_t ameta;
@@ -355,6 +402,7 @@ static void serve_loop(rsr_state_t *st)
 				if (ret != 0)
 					break;
 
+				audio_got = true;
 				uint64_t apts = ameta.timestamp * 9 / 100;
 
 				for (int ci = st->client_count - 1; ci >= 0; ci--) {
@@ -375,6 +423,27 @@ static void serve_loop(rsr_state_t *st)
 					}
 					st->total_bytes += ats_len;
 				}
+			}
+
+			if (!audio_got) {
+				const rss_ring_header_t *ahdr = rss_ring_get_header(st->audio_ring);
+				uint64_t ws = ahdr->write_seq;
+
+				if (ws == st->audio_last_ws)
+					st->audio_idle++;
+				else
+					st->audio_idle = 0;
+				st->audio_last_ws = ws;
+
+				if (st->audio_idle >= 50) {
+					RSS_DEBUG("audio ring idle, closing");
+					rss_ring_release(st->audio_ring);
+					rss_ring_close(st->audio_ring);
+					st->audio_ring = NULL;
+					st->audio_idle = 0;
+				}
+			} else {
+				st->audio_idle = 0;
 			}
 		}
 

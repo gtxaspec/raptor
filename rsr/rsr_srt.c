@@ -14,8 +14,10 @@ void rsr_client_addr_str(const struct sockaddr_storage *addr, char *buf, size_t 
 {
 	if (addr->ss_family == AF_INET) {
 		const struct sockaddr_in *a4 = (const struct sockaddr_in *)addr;
+		char ip[INET_ADDRSTRLEN];
 
-		snprintf(buf, buf_size, "%s:%d", inet_ntoa(a4->sin_addr), ntohs(a4->sin_port));
+		inet_ntop(AF_INET, &a4->sin_addr, ip, sizeof(ip));
+		snprintf(buf, buf_size, "%s:%d", ip, ntohs(a4->sin_port));
 	} else if (addr->ss_family == AF_INET6) {
 		const struct sockaddr_in6 *a6 = (const struct sockaddr_in6 *)addr;
 		char ip[INET6_ADDRSTRLEN];
@@ -283,7 +285,6 @@ int rsr_srt_send_to_client(rsr_client_t *c, const uint8_t *data, size_t len)
 		c->bytes_sent += (uint64_t)ret;
 	}
 
-	c->frames_sent++;
 	return 0;
 }
 
