@@ -196,13 +196,8 @@ static int rsr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				continue;
 
 			char addr_str[64];
-			const struct sockaddr_in *a4 = (const struct sockaddr_in *)&c->addr;
 
-			if (c->addr.ss_family == AF_INET)
-				snprintf(addr_str, sizeof(addr_str), "%s:%d",
-					 inet_ntoa(a4->sin_addr), ntohs(a4->sin_port));
-			else
-				snprintf(addr_str, sizeof(addr_str), "unknown");
+			rsr_client_addr_str(&c->addr, addr_str, sizeof(addr_str));
 
 			cJSON_AddStringToObject(obj, "addr", addr_str);
 			cJSON_AddStringToObject(obj, "stream", c->stream ? c->stream->name : "?");

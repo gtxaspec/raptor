@@ -84,6 +84,7 @@ typedef struct {
 
 /* ── SRT functions (rsr_srt.c) ── */
 
+void rsr_client_addr_str(const struct sockaddr_storage *addr, char *buf, size_t buf_size);
 int rsr_srt_init(rsr_state_t *st);
 void rsr_srt_poll(rsr_state_t *st);
 int rsr_srt_send_to_client(rsr_client_t *c, const uint8_t *data, size_t len);

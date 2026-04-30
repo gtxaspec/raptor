@@ -10,7 +10,7 @@
 
 /* ── Helpers ── */
 
-static void client_addr_str(const struct sockaddr_storage *addr, char *buf, size_t buf_size)
+void rsr_client_addr_str(const struct sockaddr_storage *addr, char *buf, size_t buf_size)
 {
 	if (addr->ss_family == AF_INET) {
 		const struct sockaddr_in *a4 = (const struct sockaddr_in *)addr;
@@ -72,17 +72,17 @@ int rsr_srt_init(rsr_state_t *st)
 		return -1;
 	}
 
-	int lat = st->latency_ms;
+	int val;
 
-	srt_setsockflag(st->listener, SRTO_LATENCY, &lat, sizeof(lat));
+	val = st->latency_ms;
+	srt_setsockflag(st->listener, SRTO_LATENCY, &val, sizeof(val));
 
-	int no = 0;
+	val = 0;
+	srt_setsockflag(st->listener, SRTO_RCVSYN, &val, sizeof(val));
+	srt_setsockflag(st->listener, SRTO_IPV6ONLY, &val, sizeof(val));
 
-	srt_setsockflag(st->listener, SRTO_RCVSYN, &no, sizeof(no));
-
-	int yes = 1;
-
-	srt_setsockflag(st->listener, SRTO_SENDER, &yes, sizeof(yes));
+	val = 1;
+	srt_setsockflag(st->listener, SRTO_SENDER, &val, sizeof(val));
 
 	if (st->passphrase[0] != '\0') {
 		srt_setsockflag(st->listener, SRTO_PASSPHRASE, st->passphrase,
@@ -92,12 +92,12 @@ int rsr_srt_init(rsr_state_t *st)
 
 	srt_listen_callback(st->listener, listen_callback, st);
 
-	struct sockaddr_in addr;
+	struct sockaddr_in6 addr;
 
 	memset(&addr, 0, sizeof(addr));
-	addr.sin_family = AF_INET;
-	addr.sin_port = htons((uint16_t)st->port);
-	addr.sin_addr.s_addr = INADDR_ANY;
+	addr.sin6_family = AF_INET6;
+	addr.sin6_port = htons((uint16_t)st->port);
+	addr.sin6_addr = in6addr_any;
 
 	if (srt_bind(st->listener, (struct sockaddr *)&addr, sizeof(addr)) == SRT_ERROR) {
 		RSS_ERROR("srt_bind port %d: %s", st->port, srt_getlasterror_str());
@@ -198,7 +198,7 @@ static void accept_client(rsr_state_t *st)
 
 	char addr_str[64];
 
-	client_addr_str(&peer, addr_str, sizeof(addr_str));
+	rsr_client_addr_str(&peer, addr_str, sizeof(addr_str));
 	RSS_INFO("client connected: %s stream=%s (%d/%d)", addr_str, ring_name, st->client_count,
 		 st->max_clients);
 }
@@ -210,7 +210,7 @@ void rsr_remove_client(rsr_state_t *st, int idx)
 	rsr_client_t *c = &st->clients[idx];
 	char addr_str[64];
 
-	client_addr_str(&c->addr, addr_str, sizeof(addr_str));
+	rsr_client_addr_str(&c->addr, addr_str, sizeof(addr_str));
 	RSS_INFO("client disconnected: %s (sent %" PRIu64 " frames, %" PRIu64 " bytes)", addr_str,
 		 c->frames_sent, c->bytes_sent);
 
