@@ -90,14 +90,14 @@ int rsr_srt_init(rsr_state_t *st)
 		int plen = (int)strlen(st->passphrase);
 
 		if (plen < 10 || plen > 79) {
-			RSS_ERROR("passphrase must be 10-79 characters (got %d)", plen);
+			RSS_FATAL("passphrase must be 10-79 characters (got %d)", plen);
 			srt_close(st->listener);
 			srt_cleanup();
 			return -1;
 		}
 		if (srt_setsockflag(st->listener, SRTO_PASSPHRASE, st->passphrase, plen) ==
 		    SRT_ERROR) {
-			RSS_ERROR("failed to set passphrase: %s", srt_getlasterror_str());
+			RSS_FATAL("failed to set passphrase: %s", srt_getlasterror_str());
 			srt_close(st->listener);
 			srt_cleanup();
 			return -1;
