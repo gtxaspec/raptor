@@ -281,6 +281,8 @@ static int detect_stream_idx(const rsd_server_t *srv, CharSlice99 uri)
 	}
 
 	for (int s = 0; s < RSD_STREAM_COUNT; s++) {
+		if (!srv->jpeg_enabled && s >= RSD_STREAM_JPEG)
+			continue;
 		if (uri_ends_with(base, srv->endpoints[s]))
 			return s;
 	}
@@ -290,6 +292,8 @@ static int detect_stream_idx(const rsd_server_t *srv, CharSlice99 uri)
 		"/stream4", "/stream5", "/jpeg",    "/jpeg_sub",
 	};
 	for (int s = 0; s < RSD_STREAM_COUNT; s++) {
+		if (!srv->jpeg_enabled && s >= RSD_STREAM_JPEG)
+			continue;
 		if (srv->endpoints[s][0])
 			continue;
 		if (CharSlice99_primitive_ends_with(base, CharSlice99_from_str(default_paths[s])))
