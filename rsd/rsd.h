@@ -36,10 +36,11 @@
 #define RSD_BACKCHANNEL_PT 110 /* backchannel audio PT (PCMU default) */
 
 /* Stream index for per-ring state */
-#define RSD_STREAM_MAIN	 0
-#define RSD_STREAM_SUB	 1
-#define RSD_STREAM_JPEG	 6
-#define RSD_STREAM_COUNT 7 /* main+sub per sensor (6) + jpeg (1) */
+#define RSD_STREAM_MAIN	    0
+#define RSD_STREAM_SUB	    1
+#define RSD_STREAM_JPEG	    6
+#define RSD_STREAM_JPEG_SUB 7
+#define RSD_STREAM_COUNT    8 /* main+sub per sensor (6) + jpeg main+sub (2) */
 
 /* Per-client stream state */
 typedef struct {
@@ -212,6 +213,7 @@ typedef struct rsd_server {
 	int session_timeout; /* RTSP session timeout in seconds */
 	int tcp_sndbuf;	     /* TCP send buffer size (bytes) */
 	bool rtcp_sr;	     /* send RTCP Sender Reports (default false) */
+	bool jpeg_enabled;   /* expose JPEG streams (default false) */
 
 	/* Digest auth (NULL = no auth required) */
 	Compy_Auth *auth;

@@ -327,7 +327,7 @@ int rsd_server_init(rsd_server_t *srv)
 {
 	/* Ring names for multi-sensor: sensor 0 = main/sub, sensor N = sN_main/sN_sub */
 	static const char *ring_names[RSD_STREAM_COUNT] = {"main",    "sub",	"s1_main", "s1_sub",
-							   "s2_main", "s2_sub", "jpeg0"};
+							   "s2_main", "s2_sub", "jpeg0",   "jpeg1"};
 
 	/* Try to open audio ring first (fast — no waiting) */
 	srv->ring_audio = rss_ring_open("audio");
@@ -360,6 +360,8 @@ int rsd_server_init(rsd_server_t *srv)
 
 	/* Try to open remaining video rings (all optional) */
 	for (int s = 1; s < RSD_STREAM_COUNT; s++) {
+		if (!srv->jpeg_enabled && s >= RSD_STREAM_JPEG)
+			continue;
 		srv->video[s].ring = rss_ring_open(ring_names[s]);
 		srv->video[s].idx = s;
 		srv->video[s].ring_name = ring_names[s];

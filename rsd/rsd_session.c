@@ -152,7 +152,7 @@ static CharSlice99 uri_strip_last(CharSlice99 uri)
  * between the two should go through this table. */
 static const char *const ENDPOINT_KEYS[RSD_STREAM_COUNT] = {
 	"endpoint_main",    "endpoint_sub",    "endpoint_s1_main", "endpoint_s1_sub",
-	"endpoint_s2_main", "endpoint_s2_sub", "endpoint_jpeg",
+	"endpoint_s2_main", "endpoint_s2_sub", "endpoint_jpeg",	   "endpoint_jpeg_sub",
 };
 
 /* Allowed alias characters: alphanumerics plus '-', '_', '.'. Restrictive
@@ -192,7 +192,7 @@ static bool alias_looks_like_default(const char *s)
 void rsd_endpoints_load(rsd_server_t *srv, rss_config_t *cfg)
 {
 	static const char *const reserved_paths[] = {
-		"main", "sub", "jpeg", "audio", "backchannel", ".", "..", NULL,
+		"main", "sub", "jpeg", "jpeg_sub", "audio", "backchannel", ".", "..", NULL,
 	};
 
 	for (int s = 0; s < RSD_STREAM_COUNT; s++) {
@@ -286,7 +286,8 @@ static int detect_stream_idx(const rsd_server_t *srv, CharSlice99 uri)
 	}
 
 	static char *const default_paths[RSD_STREAM_COUNT] = {
-		"/stream0", "/stream1", "/stream2", "/stream3", "/stream4", "/stream5", "/jpeg",
+		"/stream0", "/stream1", "/stream2", "/stream3",
+		"/stream4", "/stream5", "/jpeg",    "/jpeg_sub",
 	};
 	for (int s = 0; s < RSD_STREAM_COUNT; s++) {
 		if (srv->endpoints[s][0])
