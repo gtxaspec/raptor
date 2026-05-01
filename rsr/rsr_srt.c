@@ -87,8 +87,21 @@ int rsr_srt_init(rsr_state_t *st)
 	srt_setsockflag(st->listener, SRTO_SENDER, &val, sizeof(val));
 
 	if (st->passphrase[0] != '\0') {
-		srt_setsockflag(st->listener, SRTO_PASSPHRASE, st->passphrase,
-				(int)strlen(st->passphrase));
+		int plen = (int)strlen(st->passphrase);
+
+		if (plen < 10 || plen > 79) {
+			RSS_ERROR("passphrase must be 10-79 characters (got %d)", plen);
+			srt_close(st->listener);
+			srt_cleanup();
+			return -1;
+		}
+		if (srt_setsockflag(st->listener, SRTO_PASSPHRASE, st->passphrase, plen) ==
+		    SRT_ERROR) {
+			RSS_ERROR("failed to set passphrase: %s", srt_getlasterror_str());
+			srt_close(st->listener);
+			srt_cleanup();
+			return -1;
+		}
 		srt_setsockflag(st->listener, SRTO_PBKEYLEN, &st->pbkeylen, sizeof(st->pbkeylen));
 	}
 
