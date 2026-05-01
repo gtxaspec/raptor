@@ -151,8 +151,8 @@ static CharSlice99 uri_strip_last(CharSlice99 uri)
  * [rtsp] config names and stream slots — any code that needs to translate
  * between the two should go through this table. */
 static const char *const ENDPOINT_KEYS[RSD_STREAM_COUNT] = {
-	"endpoint_main",   "endpoint_sub",     "endpoint_s1_main",
-	"endpoint_s1_sub", "endpoint_s2_main", "endpoint_s2_sub",
+	"endpoint_main",    "endpoint_sub",    "endpoint_s1_main", "endpoint_s1_sub",
+	"endpoint_s2_main", "endpoint_s2_sub", "endpoint_jpeg",
 };
 
 /* Allowed alias characters: alphanumerics plus '-', '_', '.'. Restrictive
@@ -192,7 +192,7 @@ static bool alias_looks_like_default(const char *s)
 void rsd_endpoints_load(rsd_server_t *srv, rss_config_t *cfg)
 {
 	static const char *const reserved_paths[] = {
-		"main", "sub", "audio", "backchannel", ".", "..", NULL,
+		"main", "sub", "jpeg", "audio", "backchannel", ".", "..", NULL,
 	};
 
 	for (int s = 0; s < RSD_STREAM_COUNT; s++) {
@@ -286,7 +286,7 @@ static int detect_stream_idx(const rsd_server_t *srv, CharSlice99 uri)
 	}
 
 	static char *const default_paths[RSD_STREAM_COUNT] = {
-		"/stream0", "/stream1", "/stream2", "/stream3", "/stream4", "/stream5",
+		"/stream0", "/stream1", "/stream2", "/stream3", "/stream4", "/stream5", "/jpeg",
 	};
 	for (int s = 0; s < RSD_STREAM_COUNT; s++) {
 		if (srv->endpoints[s][0])
@@ -346,14 +346,13 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 	}
 	uint64_t sdp_sess_id = (uint64_t)rss_timestamp_us();
 
-	COMPY_SDP_DESCRIBE(
-		ret, sdp_w, (COMPY_SDP_VERSION, "0"),
-		(COMPY_SDP_ORIGIN, "- %llu 1 IN IP4 %s",
-		 (unsigned long long)sdp_sess_id, server_ip),
-		(COMPY_SDP_SESSION_NAME, "%s", self->srv->session_name),
-		(COMPY_SDP_TIME, "0 0"),
-		(COMPY_SDP_ATTR, "tool:Raptor RSS"), (COMPY_SDP_ATTR, "type:broadcast"),
-		(COMPY_SDP_ATTR, "control:*"), (COMPY_SDP_ATTR, "range:npt=now-"));
+	COMPY_SDP_DESCRIBE(ret, sdp_w, (COMPY_SDP_VERSION, "0"),
+			   (COMPY_SDP_ORIGIN, "- %llu 1 IN IP4 %s", (unsigned long long)sdp_sess_id,
+			    server_ip),
+			   (COMPY_SDP_SESSION_NAME, "%s", self->srv->session_name),
+			   (COMPY_SDP_TIME, "0 0"), (COMPY_SDP_ATTR, "tool:Raptor RSS"),
+			   (COMPY_SDP_ATTR, "type:broadcast"), (COMPY_SDP_ATTR, "control:*"),
+			   (COMPY_SDP_ATTR, "range:npt=now-"));
 
 	if (self->srv->session_info[0])
 		COMPY_SDP_DESCRIBE(ret, sdp_w, (COMPY_SDP_INFO, "%s", self->srv->session_info));
@@ -361,16 +360,25 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 	if (has_video) {
 		self->video_codec = rctx->last_codec;
 
-		if (rctx->last_codec == 1) {
-			/* H.265 / HEVC (RFC 7798) */
+		if (rctx->last_codec == 2 || rctx->last_codec == 3) {
+			/* JPEG / MJPEG (RFC 2435) */
 			COMPY_SDP_DESCRIBE(
-				ret, sdp_w, (COMPY_SDP_MEDIA, "video 0 RTP/AVP %d", RSD_VIDEO_PT),
+				ret, sdp_w, (COMPY_SDP_MEDIA, "video 0 RTP/AVP %d", RSD_JPEG_PT),
 				(COMPY_SDP_CONNECTION, "IN IP4 0.0.0.0"),
 				(COMPY_SDP_BANDWIDTH, "AS:2000"),
-				(COMPY_SDP_ATTR, "rtpmap:%d H265/%d", RSD_VIDEO_PT,
-				 RSD_VIDEO_CLOCK),
+				(COMPY_SDP_ATTR, "rtpmap:%d JPEG/%d", RSD_JPEG_PT, RSD_VIDEO_CLOCK),
 				(COMPY_SDP_ATTR, "control:video"),
 				(COMPY_SDP_ATTR, "framerate:%u", rctx->last_fps_num));
+		} else if (rctx->last_codec == 1) {
+			/* H.265 / HEVC (RFC 7798) */
+			COMPY_SDP_DESCRIBE(ret, sdp_w,
+					   (COMPY_SDP_MEDIA, "video 0 RTP/AVP %d", RSD_VIDEO_PT),
+					   (COMPY_SDP_CONNECTION, "IN IP4 0.0.0.0"),
+					   (COMPY_SDP_BANDWIDTH, "AS:2000"),
+					   (COMPY_SDP_ATTR, "rtpmap:%d H265/%d", RSD_VIDEO_PT,
+					    RSD_VIDEO_CLOCK),
+					   (COMPY_SDP_ATTR, "control:video"),
+					   (COMPY_SDP_ATTR, "framerate:%u", rctx->last_fps_num));
 		} else {
 			/* H.264 / AVC (RFC 6184) */
 			uint16_t sps_l = atomic_load_explicit(&rctx->sps_len, memory_order_acquire);
@@ -408,8 +416,7 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 				(COMPY_SDP_BANDWIDTH, "AS:2000"),
 				(COMPY_SDP_ATTR, "rtpmap:%d H264/%d", RSD_VIDEO_PT,
 				 RSD_VIDEO_CLOCK),
-				(COMPY_SDP_ATTR, "%s", fmtp),
-				(COMPY_SDP_ATTR, "control:video"),
+				(COMPY_SDP_ATTR, "%s", fmtp), (COMPY_SDP_ATTR, "control:video"),
 				(COMPY_SDP_ATTR, "framerate:%u", rctx->last_fps_num));
 		}
 	}
@@ -676,8 +683,15 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 			compy_respond(ctx, COMPY_STATUS_NOT_FOUND, "Video not available");
 			return;
 		}
-		self->video.rtp = Compy_RtpTransport_new(rtp_t, RSD_VIDEO_PT, RSD_VIDEO_CLOCK);
-		self->video.nal = Compy_NalTransport_new(self->video.rtp);
+		if (self->video_codec == 2 || self->video_codec == 3) {
+			self->video.rtp =
+				Compy_RtpTransport_new(rtp_t, RSD_JPEG_PT, RSD_VIDEO_CLOCK);
+			self->video.jpeg = Compy_JpegTransport_new(self->video.rtp);
+		} else {
+			self->video.rtp =
+				Compy_RtpTransport_new(rtp_t, RSD_VIDEO_PT, RSD_VIDEO_CLOCK);
+			self->video.nal = Compy_NalTransport_new(self->video.rtp);
+		}
 		self->video.rtcp = Compy_Rtcp_new(self->video.rtp, rtcp_t, "raptor@camera");
 	}
 
@@ -705,7 +719,7 @@ static void rsd_client_t_play(VSelf, Compy_Context *ctx, const Compy_Request *re
 	VSELF(rsd_client_t);
 	(void)req;
 
-	if (!self->video.nal && !self->audio.rtp) {
+	if (!self->video.nal && !self->video.jpeg && !self->audio.rtp) {
 		compy_respond(ctx, COMPY_STATUS_METHOD_NOT_VALID_IN_THIS_STATE, "SETUP not done");
 		return;
 	}
@@ -732,14 +746,18 @@ static void rsd_client_t_play(VSelf, Compy_Context *ctx, const Compy_Request *re
 		/* Strip userinfo: rtsp://user:pass@host → rtsp://host */
 		const char *at = NULL;
 		for (size_t i = 0; i < base.len; i++) {
-			if (base.ptr[i] == '@') { at = base.ptr + i; break; }
-			if (base.ptr[i] == '/') break;
+			if (base.ptr[i] == '@') {
+				at = base.ptr + i;
+				break;
+			}
+			if (base.ptr[i] == '/')
+				break;
 		}
 		char clean_url[512];
 		if (at) {
 			const char *scheme_end = NULL;
 			for (size_t i = 0; i + 2 < base.len; i++) {
-				if (base.ptr[i] == '/' && base.ptr[i+1] == '/') {
+				if (base.ptr[i] == '/' && base.ptr[i + 1] == '/') {
 					scheme_end = base.ptr + i + 2;
 					break;
 				}
@@ -747,8 +765,8 @@ static void rsd_client_t_play(VSelf, Compy_Context *ctx, const Compy_Request *re
 			if (scheme_end && at > scheme_end) {
 				int slen = (int)(scheme_end - base.ptr);
 				int rlen = (int)(base.len - (at + 1 - base.ptr));
-				snprintf(clean_url, sizeof(clean_url), "%.*s%.*s",
-					 slen, base.ptr, rlen, at + 1);
+				snprintf(clean_url, sizeof(clean_url), "%.*s%.*s", slen, base.ptr,
+					 rlen, at + 1);
 				base = CharSlice99_from_str(clean_url);
 			}
 		}
@@ -757,9 +775,8 @@ static void rsd_client_t_play(VSelf, Compy_Context *ctx, const Compy_Request *re
 			self->video_ts_rand = (uint32_t)rand();
 			uint16_t vseq = Compy_RtpTransport_get_seq(self->video.rtp);
 			off += snprintf(rtp_info + off, sizeof(rtp_info) - off,
-					"url=%.*s/video;seq=%u;rtptime=%u",
-					(int)base.len, base.ptr, vseq,
-					self->video_ts_rand);
+					"url=%.*s/video;seq=%u;rtptime=%u", (int)base.len, base.ptr,
+					vseq, self->video_ts_rand);
 		}
 		if (self->audio.rtp) {
 			self->audio_ts_rand = (uint32_t)rand();
@@ -767,9 +784,8 @@ static void rsd_client_t_play(VSelf, Compy_Context *ctx, const Compy_Request *re
 			if (off > 0)
 				off += snprintf(rtp_info + off, sizeof(rtp_info) - off, ",");
 			off += snprintf(rtp_info + off, sizeof(rtp_info) - off,
-					"url=%.*s/audio;seq=%u;rtptime=%u",
-					(int)base.len, base.ptr, aseq,
-					self->audio_ts_rand);
+					"url=%.*s/audio;seq=%u;rtptime=%u", (int)base.len, base.ptr,
+					aseq, self->audio_ts_rand);
 		}
 
 		if (off > 0)
@@ -787,7 +803,8 @@ static void rsd_client_t_play(VSelf, Compy_Context *ctx, const Compy_Request *re
 	 * clients_lock (reader threads hold clients_lock → write_lock). */
 	self->play_pending = true;
 
-	RSS_DEBUG("client PLAY%s (pending)", self->video.nal ? "" : " (audio only)");
+	RSS_DEBUG("client PLAY%s (pending)",
+		  (self->video.nal || self->video.jpeg) ? "" : " (audio only)");
 }
 
 static void rsd_client_t_pause_method(VSelf, Compy_Context *ctx, const Compy_Request *req)
@@ -946,8 +963,8 @@ void rsd_handle_rtsp_data(rsd_client_t *client, const char *data, size_t len)
 		if (client->play_pending) {
 			client->play_pending = false;
 			pthread_mutex_lock(&client->srv->clients_lock);
-			if (client->video.nal) {
-				client->waiting_keyframe = true;
+			if (client->video.nal || client->video.jpeg) {
+				client->waiting_keyframe = (client->video.jpeg == NULL);
 				client->video_ts_base_set = false;
 				client->audio_ts_base_set = false;
 				atomic_store(&client->video.playing, true);
@@ -963,8 +980,8 @@ void rsd_handle_rtsp_data(rsd_client_t *client, const char *data, size_t len)
 			if (client->video.nal) {
 				char resp[128];
 				rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock",
-						     "{\"cmd\":\"request-idr\"}", resp,
-						     sizeof(resp), 1000);
+						      "{\"cmd\":\"request-idr\"}", resp,
+						      sizeof(resp), 1000);
 				RSS_DEBUG("client PLAY (IDR requested)");
 			}
 		}

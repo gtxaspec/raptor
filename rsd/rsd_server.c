@@ -94,8 +94,12 @@ static void remove_client(rsd_server_t *srv, rsd_client_t *client)
 		(void)bye_ret;
 	}
 
-	/* Video cleanup */
-	if (client->video.nal) {
+	/* Video cleanup — NalTransport or JpegTransport owns the RtpTransport */
+	if (client->video.jpeg) {
+		VCALL(DYN(Compy_JpegTransport, Compy_Droppable, client->video.jpeg), drop);
+		client->video.jpeg = NULL;
+		client->video.rtp = NULL;
+	} else if (client->video.nal) {
 		VCALL(DYN(Compy_NalTransport, Compy_Droppable, client->video.nal), drop);
 		client->video.nal = NULL;
 		client->video.rtp = NULL;
@@ -322,8 +326,8 @@ static void handle_client_data(rsd_server_t *srv, int fd)
 int rsd_server_init(rsd_server_t *srv)
 {
 	/* Ring names for multi-sensor: sensor 0 = main/sub, sensor N = sN_main/sN_sub */
-	static const char *ring_names[RSD_STREAM_COUNT] = {"main",   "sub",	"s1_main",
-							   "s1_sub", "s2_main", "s2_sub"};
+	static const char *ring_names[RSD_STREAM_COUNT] = {"main",    "sub",	"s1_main", "s1_sub",
+							   "s2_main", "s2_sub", "jpeg0"};
 
 	/* Try to open audio ring first (fast — no waiting) */
 	srv->ring_audio = rss_ring_open("audio");
@@ -388,8 +392,11 @@ int rsd_server_init(rsd_server_t *srv)
 			srv->video[s].ring = NULL;
 			continue;
 		}
-		RSS_INFO("ring[%d]: %s %ux%u @ %u/%u fps", s, hdr->codec == 0 ? "H.264" : "H.265",
-			 hdr->width, hdr->height, hdr->fps_num, hdr->fps_den);
+		const char *codec_name = hdr->codec == 0   ? "H.264"
+					 : hdr->codec == 1 ? "H.265"
+							   : "JPEG";
+		RSS_INFO("ring[%d]: %s %ux%u @ %u/%u fps", s, codec_name, hdr->width, hdr->height,
+			 hdr->fps_num, hdr->fps_den);
 		srv->video[s].last_codec = hdr->codec;
 		srv->video[s].last_width = hdr->width;
 		srv->video[s].last_height = hdr->height;

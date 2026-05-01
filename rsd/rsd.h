@@ -17,6 +17,7 @@
 
 #define RSD_MAX_CLIENTS	     8
 #define RSD_VIDEO_PT	     96
+#define RSD_JPEG_PT	     26
 #define RSD_VIDEO_CLOCK	     90000
 #define RSD_BUF_SIZE	     4096
 #define RSD_IDLE_TIMEOUT_SEC 60 /* disconnect idle clients (slowloris protection) */
@@ -37,12 +38,14 @@
 /* Stream index for per-ring state */
 #define RSD_STREAM_MAIN	 0
 #define RSD_STREAM_SUB	 1
-#define RSD_STREAM_COUNT 6 /* main+sub per sensor, up to 3 sensors */
+#define RSD_STREAM_JPEG	 6
+#define RSD_STREAM_COUNT 7 /* main+sub per sensor (6) + jpeg (1) */
 
 /* Per-client stream state */
 typedef struct {
 	Compy_RtpTransport *rtp;
-	Compy_NalTransport *nal; /* video only */
+	Compy_NalTransport *nal;   /* H.264/H.265 video */
+	Compy_JpegTransport *jpeg; /* JPEG video (RFC 2435) */
 	Compy_Rtcp *rtcp;
 	int64_t last_rtcp;
 	atomic_bool playing;

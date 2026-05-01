@@ -14,9 +14,11 @@
 
 #include "rsd.h"
 
-/* Forward declaration — called by send thread, defined below */
+/* Forward declarations — called by send thread, defined below */
 static void rsd_send_audio_frame(rsd_client_t *c, uint32_t codec, const uint8_t *data, uint32_t len,
 				 uint32_t rtp_ts);
+static void rsd_send_jpeg_frame(rsd_client_t *c, const uint8_t *data, uint32_t len,
+				uint32_t rtp_ts);
 
 /*
  * Minimum interval between IDR requests from the reader's lag-recovery
@@ -204,7 +206,7 @@ static int rsd_sendq_push_zerocopy(rsd_sendq_t *q, const uint8_t *data, uint32_t
 }
 
 static int rsd_sendq_push_audio(rsd_sendq_t *q, uint32_t codec, const uint8_t *data, uint32_t len,
-			       uint32_t rtp_ts)
+				uint32_t rtp_ts)
 {
 	uint8_t *copy = malloc(len);
 	if (!copy)
@@ -281,8 +283,8 @@ static void sendq_drain_audio(rsd_client_t *c)
  * and sends each one, draining queued audio between NALUs to prevent
  * large IDR frames from starving audio delivery.
  */
-static void rsd_send_video_interleaved(rsd_client_t *c, const uint8_t *data,
-				       uint32_t len, uint32_t rtp_ts)
+static void rsd_send_video_interleaved(rsd_client_t *c, const uint8_t *data, uint32_t len,
+				       uint32_t rtp_ts)
 {
 	if (!c->video.nal || !c->video.playing)
 		return;
@@ -331,8 +333,8 @@ static void rsd_send_video_interleaved(rsd_client_t *c, const uint8_t *data,
 		}
 
 		pthread_mutex_lock(&c->write_lock);
-		(void)!Compy_NalTransport_send_packet(c->video.nal,
-						      Compy_RtpTimestamp_Raw(rtp_ts), nalu);
+		(void)!Compy_NalTransport_send_packet(c->video.nal, Compy_RtpTimestamp_Raw(rtp_ts),
+						      nalu);
 		pthread_mutex_unlock(&c->write_lock);
 
 		nalu_count++;
@@ -397,7 +399,10 @@ void *rsd_client_send_thread(void *arg)
 		}
 
 		if (entry.type == RSD_FRAME_VIDEO) {
-			rsd_send_video_interleaved(c, entry.data, entry.len, entry.rtp_ts);
+			if (c->video.jpeg)
+				rsd_send_jpeg_frame(c, entry.data, entry.len, entry.rtp_ts);
+			else
+				rsd_send_video_interleaved(c, entry.data, entry.len, entry.rtp_ts);
 		} else {
 			pthread_mutex_lock(&c->write_lock);
 			rsd_send_audio_frame(c, entry.codec, entry.data, entry.len, entry.rtp_ts);
@@ -595,7 +600,7 @@ void *rsd_video_reader_thread(void *arg)
 			last_rtp_ts = rtp_ts;
 			has_last_rtp_ts = true;
 
-			if (meta.is_key &&
+			if (meta.is_key && rctx->last_codec != 2 && rctx->last_codec != 3 &&
 			    atomic_load_explicit(&rctx->sps_len, memory_order_relaxed) == 0)
 				rsd_cache_sps_pps(rctx, frame_data, length);
 
@@ -638,7 +643,7 @@ void *rsd_video_reader_thread(void *arg)
 				if (qret == RSD_SENDQ_OK)
 					total_pushed++;
 				else if (qret == RSD_SENDQ_DROPPED) {
-					c->waiting_keyframe = true;
+					c->waiting_keyframe = (c->video.jpeg == NULL);
 					c->audio_ts_base_set = false;
 					rsd_maybe_request_idr(rctx->ring, &last_idr_req_us);
 				}
@@ -658,6 +663,29 @@ void *rsd_video_reader_thread(void *arg)
 
 	RSS_DEBUG("video reader[%d] exiting", stream_idx);
 	return NULL;
+}
+
+/* ── JPEG send path (RFC 2435) ── */
+
+static void rsd_send_jpeg_frame(rsd_client_t *c, const uint8_t *data, uint32_t len, uint32_t rtp_ts)
+{
+	if (!c->video.jpeg || !c->video.playing)
+		return;
+
+	pthread_mutex_lock(&c->write_lock);
+	(void)!Compy_JpegTransport_send_frame(c->video.jpeg, Compy_RtpTimestamp_Raw(rtp_ts),
+					      U8Slice99_new((uint8_t *)data, len));
+	pthread_mutex_unlock(&c->write_lock);
+
+	if (c->srv->rtcp_sr) {
+		int64_t now = rss_timestamp_us();
+		if (c->video.rtcp && now - c->video.last_rtcp > 30000000) {
+			pthread_mutex_lock(&c->write_lock);
+			(void)!Compy_Rtcp_send_sr(c->video.rtcp);
+			pthread_mutex_unlock(&c->write_lock);
+			c->video.last_rtcp = now;
+		}
+	}
 }
 
 /* ── Audio ring reader thread ── */
@@ -838,7 +866,8 @@ void *rsd_audio_reader_thread(void *arg)
 
 				/* Gate audio on first video frame (not keyframe).
 				 * Both timelines anchor to the same instant. */
-				if (c->video.nal && c->video.playing && !c->video_ts_base_set)
+				if ((c->video.nal || c->video.jpeg) && c->video.playing &&
+				    !c->video_ts_base_set)
 					continue;
 
 				if (!c->audio_ts_base_set) {
