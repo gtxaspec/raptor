@@ -139,6 +139,7 @@ const struct help_entry help_entries[] = {
 	{NULL, "test-motion [sec]                   Trigger clip recording (default 10s)"},
 	{"rsp", "start                               Start push stream"},
 	{"rsp", "stop                                Stop push stream"},
+	{"rsp", "set-url <rtmp://...>                Change target URL (reconnects)"},
 	{"rsr", "clients                             List connected SRT clients"},
 	{NULL, "<daemon> set-affinity <cpu>          Pin daemon to CPU core"},
 	{NULL, "<daemon> get-affinity                Show CPU affinity and sched policy"},

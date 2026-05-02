@@ -223,6 +223,7 @@ static const struct cmd_def cmd_table[] = {
 	{"set-font-size", NULL, 1, args_val},
 	{"set-stroke-size", NULL, 1, args_val},
 	{"set-time-format", NULL, 1, args_val_str},
+	{"set-url", NULL, 1, args_val_str},
 	{"set-position", NULL, 2, args_position},
 	{"remove-element", NULL, 1, args_name},
 	{"show-element", NULL, 1, args_name},

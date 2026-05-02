@@ -21,6 +21,8 @@
 #include "rsp.h"
 #include "rmr_nal.h"
 
+static void rsp_disconnect(rsp_state_t *st);
+
 /* ── Control socket handler ── */
 
 static int rsp_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, void *userdata)
@@ -43,6 +45,35 @@ static int rsp_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 
 	if (strcmp(cmd, "stop") == 0) {
 		atomic_store(&st->pushing, false);
+		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+	}
+
+	if (strcmp(cmd, "set-url") == 0) {
+		char url[512] = "";
+		if (rss_json_get_str(cmd_json, "value", url, sizeof(url)) != 0 || !url[0])
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value");
+
+		char host[256];
+		char app[256];
+		char key[512];
+		int port;
+		bool tls;
+		if (rsp_rtmp_parse_url(url, host, sizeof(host), &port, app, sizeof(app), key,
+				       sizeof(key), &tls) < 0)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "invalid RTMP URL");
+
+		rss_strlcpy(st->url, url, sizeof(st->url));
+		rss_strlcpy(st->host, host, sizeof(st->host));
+		st->port = port;
+		rss_strlcpy(st->app, app, sizeof(st->app));
+		rss_strlcpy(st->stream_key, key, sizeof(st->stream_key));
+		st->use_tls = tls;
+		rss_config_set_str(st->cfg, "push", "url", url);
+
+		if (st->rtmp.state >= RSP_STATE_CONNECTED)
+			rsp_disconnect(st);
+
+		RSS_INFO("URL changed to %s:%d (tls=%d)", host, port, tls);
 		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
 	}
 
