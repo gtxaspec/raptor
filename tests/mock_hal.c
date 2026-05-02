@@ -448,6 +448,8 @@ static const rss_hal_ops_t mock_ops = {
 	.isp_set_dpc_strength = (void *)mock_ok,
 	.isp_set_drc_strength = (void *)mock_ok,
 	.isp_set_highlight_depress = (void *)mock_ok,
+	.isp_set_backlight_comp = (void *)mock_ok,
+	.isp_set_defog_strength = (void *)mock_ok,
 
 	/* ISP getters */
 	.isp_get_exposure = (void *)mock_get_exposure,
@@ -462,6 +464,11 @@ static const rss_hal_ops_t mock_ops = {
 	.isp_get_max_dgain = (void *)mock_isp_get_u32,
 	.isp_get_sinter_strength = (void *)mock_isp_get_u8,
 	.isp_get_temper_strength = (void *)mock_isp_get_u8,
+	.isp_get_dpc_strength = (void *)mock_isp_get_u8,
+	.isp_get_drc_strength = (void *)mock_isp_get_u8,
+	.isp_get_highlight_depress = (void *)mock_isp_get_u8,
+	.isp_get_backlight_comp = (void *)mock_isp_get_u8,
+	.isp_get_defog_strength = (void *)mock_isp_get_u8,
 	.isp_get_wb = mock_isp_get_wb,
 
 	/* ISP multi-sensor setters */

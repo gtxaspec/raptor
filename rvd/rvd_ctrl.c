@@ -980,6 +980,8 @@ static int handle_isp_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 	ISP_SET("set-dpc", isp_set_dpc_strength)
 	ISP_SET("set-drc", isp_set_drc_strength)
 	ISP_SET("set-highlight-depress", isp_set_highlight_depress)
+	ISP_SET("set-backlight-comp", isp_set_backlight_comp)
+	ISP_SET("set-defog-strength", isp_set_defog_strength)
 	ISP_SET_N("set-ae-comp", isp_set_ae_comp)
 	ISP_SET_N("set-max-again", isp_set_max_again)
 	ISP_SET_N("set-max-dgain", isp_set_max_dgain)
@@ -1026,6 +1028,7 @@ static int handle_isp_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 
 	if (strcmp(cmd, "get-isp") == 0) {
 		uint8_t bri = 0, con = 0, sat = 0, shp = 0, hue = 0, sin = 0, tem = 0;
+		uint8_t dpc = 0, drc = 0, hld = 0, blc = 0, dfg = 0;
 		int hf = 0, vf = 0, ae = 0;
 		uint32_t again = 0, dgain = 0;
 		RSS_HAL_CALL(st->ops, isp_get_brightness, st->hal_ctx, &bri);
@@ -1039,6 +1042,11 @@ static int handle_isp_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 		RSS_HAL_CALL(st->ops, isp_get_ae_comp, st->hal_ctx, &ae);
 		RSS_HAL_CALL(st->ops, isp_get_max_again, st->hal_ctx, &again);
 		RSS_HAL_CALL(st->ops, isp_get_max_dgain, st->hal_ctx, &dgain);
+		RSS_HAL_CALL(st->ops, isp_get_dpc_strength, st->hal_ctx, &dpc);
+		RSS_HAL_CALL(st->ops, isp_get_drc_strength, st->hal_ctx, &drc);
+		RSS_HAL_CALL(st->ops, isp_get_highlight_depress, st->hal_ctx, &hld);
+		RSS_HAL_CALL(st->ops, isp_get_backlight_comp, st->hal_ctx, &blc);
+		RSS_HAL_CALL(st->ops, isp_get_defog_strength, st->hal_ctx, &dfg);
 		rss_wb_config_t wb = {0};
 		RSS_HAL_CALL(st->ops, isp_get_wb, st->hal_ctx, &wb);
 		cJSON *r = cJSON_CreateObject();
@@ -1055,6 +1063,11 @@ static int handle_isp_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 		cJSON_AddNumberToObject(r, "ae_comp", (double)ae);
 		cJSON_AddNumberToObject(r, "max_again", (double)again);
 		cJSON_AddNumberToObject(r, "max_dgain", (double)dgain);
+		cJSON_AddNumberToObject(r, "dpc_strength", (double)dpc);
+		cJSON_AddNumberToObject(r, "drc_strength", (double)drc);
+		cJSON_AddNumberToObject(r, "highlight_depress", (double)hld);
+		cJSON_AddNumberToObject(r, "backlight_comp", (double)blc);
+		cJSON_AddNumberToObject(r, "defog_strength", (double)dfg);
 		cJSON_AddStringToObject(r, "wb_mode", wb.mode == RSS_WB_MANUAL ? "manual" : "auto");
 		cJSON_AddNumberToObject(r, "wb_r", (double)wb.r_gain);
 		cJSON_AddNumberToObject(r, "wb_g", (double)wb.g_gain);

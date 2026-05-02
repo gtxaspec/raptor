@@ -74,7 +74,12 @@ const struct help_entry help_entries[] = {
 	{"rvd", "set-ae-comp <val>                   AE compensation"},
 	{"rvd", "set-max-again <val>                 Max analog gain"},
 	{"rvd", "set-max-dgain <val>                 Max digital gain"},
+	{"rvd", "set-dpc <val>                       Dead pixel correction (0-255)"},
+	{"rvd", "set-drc <val>                       Dynamic range compression (0-255)"},
+	{"rvd", "set-highlight-depress <val>         Highlight suppression (0-255)"},
+	{"rvd", "set-backlight-comp <val>            Backlight compensation (0-10)"},
 	{"rvd", "set-defog <0|1>                     Defog enable"},
+	{"rvd", "set-defog-strength <val>            Defog strength (0-255)"},
 	{"rvd", "set-wb <mode> [r] [b]               White balance"},
 	{"rvd", "get-wb                              Show white balance settings"},
 	{"rvd", "get-isp                             Show all ISP settings"},
@@ -173,5 +178,6 @@ void usage(FILE *out)
 		"  -j '{\"daemon\":\"rvd\",\"cmd\":\"...\"}'\n"
 		"  -j "
 		"'[{\"daemon\":\"rvd\",\"cmd\":\"...\"},{\"daemon\":\"rad\",\"cmd\":\"...\"}]'\n");
-	fprintf(out, "\nDaemons: rvd, rsd, rad, rod, rhd, ric, rmr, rmd, rwd, rwc, rfs, rsp, rsr\n");
+	fprintf(out,
+		"\nDaemons: rvd, rsd, rad, rod, rhd, ric, rmr, rmd, rwd, rwc, rfs, rsp, rsr\n");
 }
