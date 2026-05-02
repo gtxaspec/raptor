@@ -356,9 +356,27 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 {
 	rmr_state_t *st = userdata;
 
+	int common =
+		rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, st->cfg, st->config_path);
+	if (common >= 0)
+		return common;
+
 	char cmd[64];
 	if (rss_json_get_str(cmd_json, "cmd", cmd, sizeof(cmd)) != 0)
 		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "missing cmd");
+
+	if (strcmp(cmd, "enable") == 0) {
+		atomic_store(&st->recording, true);
+		if (st->mode == RMR_MODE_BOTH)
+			atomic_store(&st->clip_recording, true);
+		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+	}
+
+	if (strcmp(cmd, "disable") == 0) {
+		atomic_store(&st->recording, false);
+		atomic_store(&st->clip_recording, false);
+		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+	}
 
 	if (strcmp(cmd, "start") == 0) {
 		if (st->mode == RMR_MODE_MOTION)
@@ -377,10 +395,11 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 	if (strcmp(cmd, "status") == 0) {
+		static const char *mode_names[] = {"continuous", "motion", "both"};
 		cJSON *r = cJSON_CreateObject();
 		cJSON_AddBoolToObject(r, "recording", atomic_load(&st->recording));
 		cJSON_AddBoolToObject(r, "clip", atomic_load(&st->clip_recording));
-		cJSON_AddNumberToObject(r, "mode", st->mode);
+		cJSON_AddStringToObject(r, "mode", mode_names[st->mode]);
 		cJSON_AddStringToObject(r, "file", st->segment_path);
 		cJSON_AddNumberToObject(r, "frames", (double)st->frames_written);
 		cJSON_AddNumberToObject(r, "dropped", (double)st->frames_dropped);
@@ -388,7 +407,7 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 	}
 
-	return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+	return rss_ctrl_resp_error(resp_buf, resp_buf_size, "unknown command");
 }
 
 /* ── Main loop ── */
