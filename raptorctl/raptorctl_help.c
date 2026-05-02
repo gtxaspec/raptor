@@ -125,6 +125,8 @@ const struct help_entry help_entries[] = {
 	{"rod", "set-stroke-size <0-5>               Global stroke width"},
 	{"ric", "mode <auto|day|night>               Set day/night mode (GPIO + ISP)"},
 	{"ric", "isp-mode <day|night>                Set ISP mode only (no GPIO)"},
+	{"ric", "set-threshold <key> <val>           Set day/night threshold"},
+	{"ric", "get-thresholds                      Show all thresholds"},
 	{"rhd", "clients                             List connected clients"},
 	{"rwd", "clients                             List connected clients"},
 	{"rwd", "share                               Show WebTorrent share URL"},

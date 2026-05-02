@@ -119,6 +119,8 @@ static const struct cmd_arg args_pool_kb[] = {{"pool_kb", A_INT}, {NULL, A_END}}
 
 static const struct cmd_arg args_cpu[] = {{"cpu", A_INT}, {NULL, A_END}};
 
+static const struct cmd_arg args_key_val[] = {{"key", A_STR}, {"value", A_INT}, {NULL, A_END}};
+
 static const struct cmd_arg args_enc_set[] = {
 	{"channel", A_INT}, {"param", A_STR}, {"value", A_INT}, {NULL, A_END}};
 
@@ -211,6 +213,8 @@ static const struct cmd_def cmd_table[] = {
 	/* IRcut */
 	{"mode", NULL, 1, args_val_str},
 	{"isp-mode", NULL, 1, args_val_str},
+	{"set-threshold", NULL, 2, args_key_val},
+	{"get-thresholds", NULL, 0, args_none},
 
 	/* OSD */
 	{"osd-restart", NULL, 0, args_pool_kb},

@@ -199,6 +199,68 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 	}
 
+	if (strcmp(cmd, "set-threshold") == 0) {
+		char key[32] = "";
+		int val;
+		if (rss_json_get_str(cmd_json, "key", key, sizeof(key)) != 0 ||
+		    rss_json_get_int(cmd_json, "value", &val) != 0)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need key and value");
+
+		ric_config_t *c = &st->settings;
+		const char *cfg_key = NULL;
+		if (strcmp(key, "night_luma") == 0) {
+			c->night_luma = val;
+			cfg_key = "night_luma";
+		} else if (strcmp(key, "night_gain") == 0) {
+			c->night_gain = val;
+			cfg_key = "night_gain";
+		} else if (strcmp(key, "day_gain_pct") == 0) {
+			c->day_gain_pct = val;
+			cfg_key = "day_gain_pct";
+		} else if (strcmp(key, "night_threshold") == 0) {
+			c->night_threshold = val;
+			cfg_key = "night_threshold";
+		} else if (strcmp(key, "day_threshold") == 0) {
+			c->day_threshold = val;
+			cfg_key = "day_threshold";
+		} else if (strcmp(key, "hysteresis_sec") == 0) {
+			c->hysteresis_sec = val;
+			cfg_key = "hysteresis_sec";
+		} else if (strcmp(key, "poll_interval_ms") == 0) {
+			if (val < 50)
+				val = 50;
+			c->poll_interval_ms = val;
+			cfg_key = "poll_interval_ms";
+		} else {
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "unknown key");
+		}
+
+		char valbuf[16];
+		snprintf(valbuf, sizeof(valbuf), "%d", val);
+		rss_config_set_str(st->cfg, "ircut", cfg_key, valbuf);
+		RSS_INFO("threshold %s set to %d", key, val);
+		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+	}
+
+	if (strcmp(cmd, "get-thresholds") == 0) {
+		ric_config_t *c = &st->settings;
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddStringToObject(r, "status", "ok");
+		cJSON_AddStringToObject(r, "trigger",
+					c->trigger == RIC_TRIGGER_LUMA	 ? "luma"
+					: c->trigger == RIC_TRIGGER_GAIN ? "gain"
+					: c->trigger == RIC_TRIGGER_ADC	 ? "adc"
+									 : "photo");
+		cJSON_AddNumberToObject(r, "night_luma", c->night_luma);
+		cJSON_AddNumberToObject(r, "night_gain", c->night_gain);
+		cJSON_AddNumberToObject(r, "day_gain_pct", c->day_gain_pct);
+		cJSON_AddNumberToObject(r, "night_threshold", c->night_threshold);
+		cJSON_AddNumberToObject(r, "day_threshold", c->day_threshold);
+		cJSON_AddNumberToObject(r, "hysteresis_sec", c->hysteresis_sec);
+		cJSON_AddNumberToObject(r, "poll_interval_ms", c->poll_interval_ms);
+		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
+	}
+
 	if (strcmp(cmd, "config-show") == 0) {
 		char exp_resp[256] = {0};
 		rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", "{\"cmd\":\"get-exposure\"}",
@@ -214,8 +276,13 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		cJSON *sub = exp_resp[0] ? cJSON_Parse(exp_resp) : NULL;
 		if (sub)
 			cJSON_AddItemToObject(r, "exposure", sub);
+		cJSON_AddNumberToObject(r, "night_luma", st->settings.night_luma);
+		cJSON_AddNumberToObject(r, "night_gain", st->settings.night_gain);
+		cJSON_AddNumberToObject(r, "day_gain_pct", st->settings.day_gain_pct);
 		cJSON_AddNumberToObject(r, "night_threshold", st->settings.night_threshold);
 		cJSON_AddNumberToObject(r, "day_threshold", st->settings.day_threshold);
+		cJSON_AddNumberToObject(r, "hysteresis_sec", st->settings.hysteresis_sec);
+		cJSON_AddNumberToObject(r, "poll_interval_ms", st->settings.poll_interval_ms);
 		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 	}
 
