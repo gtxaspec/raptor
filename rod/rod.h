@@ -162,6 +162,7 @@ typedef struct {
 	int64_t ip_refresh_ts;
 
 	bool detect_enabled;
+	bool paused;
 
 	rss_ctrl_t *ctrl;
 	rss_config_t *cfg;

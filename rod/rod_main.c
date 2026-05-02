@@ -71,8 +71,8 @@ static void render_image_element(rod_state_t *st, rod_element_t *e, int s)
 static void render_detections(rod_state_t *st, rod_element_t *e)
 {
 	char resp[2048];
-	int ret = rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", "{\"cmd\":\"ivs-detections\"}", resp,
-					sizeof(resp), 500);
+	int ret = rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", "{\"cmd\":\"ivs-detections\"}",
+					resp, sizeof(resp), 500);
 	if (ret < 0)
 		return;
 
@@ -120,6 +120,9 @@ static void render_detections(rod_state_t *st, rod_element_t *e)
 
 static void render_tick(rod_state_t *st)
 {
+	if (st->paused)
+		return;
+
 	for (int i = 0; i < st->elem_count; i++) {
 		rod_element_t *e = &st->elements[i];
 		if (!e->active || !e->visible)
@@ -294,7 +297,8 @@ int main(int argc, char **argv)
 			cJSON_PrintPreallocated(j, fwd, sizeof(fwd), 0);
 			cJSON_Delete(j);
 			char rvd_resp[256];
-			rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", fwd, rvd_resp, sizeof(rvd_resp), 1000);
+			rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", fwd, rvd_resp,
+					      sizeof(rvd_resp), 1000);
 		}
 	}
 

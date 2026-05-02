@@ -38,7 +38,8 @@ static void notify_rvd_osd_restart(rod_state_t *st)
 		cJSON_PrintPreallocated(j, fwd, sizeof(fwd), 0);
 		cJSON_Delete(j);
 		char rvd_resp[256];
-		rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", fwd, rvd_resp, sizeof(rvd_resp), 5000);
+		rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", fwd, rvd_resp, sizeof(rvd_resp),
+				      5000);
 		RSS_INFO("osd-restart: pool_kb=%u", pool_kb);
 	}
 }
@@ -83,7 +84,8 @@ static int handle_set_position(rod_state_t *st, const char *cmd_json, char *resp
 			cJSON_Delete(j);
 		}
 		char rvd_resp[256];
-		rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", fwd, rvd_resp, sizeof(rvd_resp), 1000);
+		rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", fwd, rvd_resp, sizeof(rvd_resp),
+				      1000);
 	}
 
 	RSS_INFO("set-position: %s -> %s", element, pos);
@@ -247,7 +249,8 @@ static int handle_add_element(rod_state_t *st, const char *cmd_json, char *resp,
 		cJSON_PrintPreallocated(j, fwd, sizeof(fwd), 0);
 		cJSON_Delete(j);
 		char rvd_resp[256];
-		rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", fwd, rvd_resp, sizeof(rvd_resp), 1000);
+		rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", fwd, rvd_resp, sizeof(rvd_resp),
+				      1000);
 	}
 	RSS_INFO("add-element: %s type=%s template=\"%s\" pos=%s", name, type_str, tmpl, position);
 	return rss_ctrl_resp_ok(resp, resp_size);
@@ -301,7 +304,8 @@ static int handle_set_element(rod_state_t *st, const char *cmd_json, char *resp,
 			cJSON_PrintPreallocated(j, fwd, sizeof(fwd), 0);
 			cJSON_Delete(j);
 			char rvd_resp[256];
-			rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", fwd, rvd_resp, sizeof(rvd_resp), 1000);
+			rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", fwd, rvd_resp,
+					      sizeof(rvd_resp), 1000);
 		}
 	}
 
@@ -460,7 +464,8 @@ static int handle_show_hide(rod_state_t *st, const char *cmd_json, char *resp, i
 		cJSON_PrintPreallocated(j, fwd, sizeof(fwd), 0);
 		cJSON_Delete(j);
 		char rvd_resp[256];
-		rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", fwd, rvd_resp, sizeof(rvd_resp), 1000);
+		rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", fwd, rvd_resp, sizeof(rvd_resp),
+				      1000);
 	}
 	return rss_ctrl_resp_ok(resp, resp_size);
 }
@@ -529,6 +534,48 @@ int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, vo
 	if (strcmp(cmd, "hide-element") == 0)
 		return handle_show_hide(st, cmd_json, resp_buf, resp_buf_size, false);
 
+	if (strcmp(cmd, "enable") == 0) {
+		if (st->paused) {
+			st->paused = false;
+			mark_all_dirty(st);
+			RSS_INFO("OSD rendering enabled");
+		}
+		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+	}
+
+	if (strcmp(cmd, "disable") == 0) {
+		if (!st->paused) {
+			st->paused = true;
+			for (int i = 0; i < st->elem_count; i++) {
+				rod_element_t *e = &st->elements[i];
+				if (!e->active)
+					continue;
+				for (int s = 0; s < st->stream_count; s++) {
+					rod_elem_stream_t *es = &e->streams[s];
+					if (!es->shm)
+						continue;
+					uint8_t *buf = rss_osd_get_draw_buffer(es->shm);
+					if (buf)
+						memset(buf, 0, es->width * es->height * 4);
+					rss_osd_publish(es->shm);
+				}
+			}
+			RSS_INFO("OSD rendering disabled");
+		}
+		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+	}
+
+	if (strcmp(cmd, "set-time-format") == 0) {
+		char fmt[64] = "";
+		if (rss_json_get_str(cmd_json, "value", fmt, sizeof(fmt)) != 0 || !fmt[0])
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value");
+		rss_strlcpy(st->settings.time_format, fmt, sizeof(st->settings.time_format));
+		rss_config_set_str(st->cfg, "osd", "time_format", fmt);
+		mark_all_dirty(st);
+		RSS_INFO("time format changed to %s", fmt);
+		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+	}
+
 	if (strcmp(cmd, "config-show") == 0) {
 		char fc[16], sc[16];
 		snprintf(fc, sizeof(fc), "0x%08X", st->settings.font_color);
@@ -538,10 +585,12 @@ int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, vo
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "alloc");
 		cJSON_AddStringToObject(r, "status", "ok");
 		cJSON *cfg = cJSON_AddObjectToObject(r, "config");
+		cJSON_AddBoolToObject(cfg, "enabled", !st->paused);
 		cJSON_AddNumberToObject(cfg, "font_size", st->settings.font_size);
 		cJSON_AddStringToObject(cfg, "font_color", fc);
 		cJSON_AddStringToObject(cfg, "stroke_color", sc);
 		cJSON_AddNumberToObject(cfg, "font_stroke", st->settings.font_stroke);
+		cJSON_AddStringToObject(cfg, "time_format", st->settings.time_format);
 		cJSON_AddNumberToObject(cfg, "elements", st->elem_count);
 		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 	}
