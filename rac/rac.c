@@ -2,7 +2,7 @@
  * rac.c -- Raptor Audio Client
  *
  * CLI tool for audio input/output:
- *   rac record <file|->         Record mic to file or stdout (PCM16 LE)
+ *   rac record <file|->         Record mic to file or stdout
  *   rac play <file|->           Play audio to speaker (PCM16; MP3/AAC/Opus if compiled)
  *   rac status                  Show audio daemon status
  *   rac ao-volume <val>         Set speaker volume
@@ -50,7 +50,7 @@ static void usage(void)
 	fprintf(stderr, "Usage: rac <command> [options]\n"
 			"\n"
 			"Commands:\n"
-			"  record [options] <file|->   Record mic audio as PCM16 LE\n"
+			"  record [options] <file|->   Record mic audio (format from ring)\n"
 			"    -d <seconds>              Duration limit\n"
 			"    -r <rate>                 Expected sample rate (info only)\n"
 			"  play [options] <file|->     Play audio to speaker\n"

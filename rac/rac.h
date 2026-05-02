@@ -12,6 +12,13 @@
 #include <rss_ipc.h>
 #include <rss_common.h>
 
+/* Ring codec IDs (RTP payload types, matches RAD_CODEC_* in rad.h) */
+#define RAC_CODEC_PCMU 0
+#define RAC_CODEC_PCMA 8
+#define RAC_CODEC_L16  11
+#define RAC_CODEC_AAC  97
+#define RAC_CODEC_OPUS 111
+
 /* Global run flag — defined in rac.c, set by signal handler */
 extern volatile sig_atomic_t g_running;
 
