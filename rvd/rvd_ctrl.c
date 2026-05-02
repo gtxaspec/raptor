@@ -1785,6 +1785,17 @@ static int handle_config_cmd(const char *cmd, const char *cmd_json, rvd_state_t 
 
 		rvd_osd_set_privacy(st, enable, channel);
 
+		/* Mute/unmute audio to match privacy state */
+		bool any_privacy = false;
+		for (int i = 0; i < st->stream_count; i++) {
+			if (!st->streams[i].is_jpeg && st->privacy[i])
+				any_privacy = true;
+		}
+		char rad_resp[64];
+		rss_ctrl_send_command(RSS_RUN_DIR "/rad.sock",
+				      any_privacy ? "{\"cmd\":\"mute\"}" : "{\"cmd\":\"unmute\"}",
+				      rad_resp, sizeof(rad_resp), 1000);
+
 		cJSON *r = cJSON_CreateObject();
 		cJSON_AddStringToObject(r, "status", "ok");
 		cJSON *arr = cJSON_AddArrayToObject(r, "privacy");
@@ -1794,6 +1805,7 @@ static int handle_config_cmd(const char *cmd, const char *cmd_json, rvd_state_t 
 			cJSON_AddItemToArray(arr,
 					     cJSON_CreateString(st->privacy[i] ? "on" : "off"));
 		}
+		cJSON_AddBoolToObject(r, "audio_muted", any_privacy);
 		return rss_ctrl_resp_json(resp, resp_size, r);
 	}
 
