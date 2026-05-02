@@ -229,9 +229,11 @@ static const struct cmd_def cmd_table[] = {
 	{"sensitivity", NULL, 1, args_val},
 	{"skip-frames", NULL, 1, args_val},
 
-	/* Scheduling (common to all daemons) */
+	/* Common to all daemons */
 	{"set-affinity", NULL, 1, args_cpu},
 	{"get-affinity", NULL, 0, args_none},
+	{"set-log-level", NULL, 1, args_val_str},
+	{"get-log-level", NULL, 0, args_none},
 
 	/* White balance */
 	{"set-wb", NULL, 1, args_wb},
