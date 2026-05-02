@@ -27,6 +27,20 @@
 
 #include "rad.h"
 
+/* ── AO thread context (needed by ctrl handler for ao-enable/ao-disable) ── */
+
+typedef struct {
+	const rss_hal_ops_t *ops;
+	rss_hal_ctx_t *hal_ctx;
+	volatile sig_atomic_t *running;
+	_Atomic bool stop;
+	_Atomic int flush;
+	_Atomic int rate_pending;
+	_Atomic int sample_rate;
+} ao_thread_ctx_t;
+
+static void *ao_playback_thread(void *arg);
+
 /* ── Control socket handler ── */
 
 typedef struct {
@@ -55,12 +69,18 @@ typedef struct {
 #endif
 	bool muted;
 	bool ao_muted;
+	bool ai_disabled;
+	/* AO thread lifecycle (for ao-disable/ao-enable) */
+	ao_thread_ctx_t *ao_ctx;
+	pthread_t *ao_tid;
+	bool *ao_thread_started;
 	/* Pipeline state — updated by ctrl handler on restart */
 	rss_ring_t **ring;
 	const rad_codec_ops_t **codec_ops;
 	rad_codec_ctx_t *codec_ctx;
 	uint8_t **encode_buf;
 	int *encode_buf_size;
+	int64_t *synth_audio_ts;
 } rad_ctrl_ctx_t;
 
 static int rad_fmt_result(char *buf, int bufsz, int ret)
@@ -89,6 +109,8 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "missing cmd");
 
 	if (strcmp(cmd, "set-volume") == 0) {
+		if (ctx->ai_disabled)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "ai disabled");
 		if (rss_json_get_int(cmd_json, "value", &val) == 0) {
 			int ret = RSS_HAL_CALL(ctx->ops, audio_set_volume, ctx->hal_ctx,
 					       ctx->ai_dev, 0, val);
@@ -102,6 +124,8 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 	if (strcmp(cmd, "set-gain") == 0) {
+		if (ctx->ai_disabled)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "ai disabled");
 		if (rss_json_get_int(cmd_json, "value", &val) == 0) {
 			int ret = RSS_HAL_CALL(ctx->ops, audio_set_gain, ctx->hal_ctx, ctx->ai_dev,
 					       0, val);
@@ -115,6 +139,8 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 	if (strcmp(cmd, "set-alc-gain") == 0) {
+		if (ctx->ai_disabled)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "ai disabled");
 		if (rss_json_get_int(cmd_json, "value", &val) == 0) {
 			int ret = RSS_HAL_CALL(ctx->ops, audio_set_alc_gain, ctx->hal_ctx,
 					       ctx->ai_dev, 0, val);
@@ -131,6 +157,8 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 	if (strcmp(cmd, "mute") == 0) {
+		if (ctx->ai_disabled)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "ai disabled");
 		int ret = RSS_HAL_CALL(ctx->ops, audio_set_mute, ctx->hal_ctx, ctx->ai_dev, 0, 1);
 		if (ret == 0)
 			ctx->muted = true;
@@ -138,6 +166,8 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 	if (strcmp(cmd, "unmute") == 0) {
+		if (ctx->ai_disabled)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "ai disabled");
 		int ret = RSS_HAL_CALL(ctx->ops, audio_set_mute, ctx->hal_ctx, ctx->ai_dev, 0, 0);
 		if (ret == 0)
 			ctx->muted = false;
@@ -146,6 +176,8 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 
 #ifdef RAPTOR_AUDIO_EFFECTS
 	if (strcmp(cmd, "set-ns") == 0) {
+		if (ctx->ai_disabled)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "ai disabled");
 		int level = RSS_NS_MODERATE;
 		rss_json_get_int(cmd_json, "level", &level);
 		if (rss_json_get_int(cmd_json, "value", &val) == 0) {
@@ -172,6 +204,8 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 	if (strcmp(cmd, "set-hpf") == 0) {
+		if (ctx->ai_disabled)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "ai disabled");
 		if (rss_json_get_int(cmd_json, "value", &val) == 0) {
 			int ret = RSS_OK;
 			if (val && !ctx->hpf_enabled)
@@ -192,6 +226,8 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 	if (strcmp(cmd, "set-agc") == 0) {
+		if (ctx->ai_disabled)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "ai disabled");
 		if (rss_json_get_int(cmd_json, "value", &val) == 0) {
 			int ret = RSS_OK;
 			if (val) {
@@ -220,6 +256,116 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value (0/1)");
 	}
 #endif /* RAPTOR_AUDIO_EFFECTS */
+
+	/* ── Audio input enable/disable ── */
+
+	if (strcmp(cmd, "ai-disable") == 0) {
+		if (ctx->ai_disabled)
+			return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+
+		/* Tear down codec */
+		if (*ctx->codec_ops && (*ctx->codec_ops)->deinit)
+			(*ctx->codec_ops)->deinit(ctx->codec_ctx);
+		memset(ctx->codec_ctx, 0, sizeof(*ctx->codec_ctx));
+		*ctx->codec_ops = NULL;
+
+		/* Destroy ring */
+		if (*ctx->ring) {
+			rss_ring_destroy(*ctx->ring);
+			*ctx->ring = NULL;
+		}
+
+		/* Deinit HAL audio input */
+		RSS_HAL_CALL(ctx->ops, audio_deinit, ctx->hal_ctx);
+
+		ctx->ai_disabled = true;
+		RSS_INFO("audio input disabled");
+		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+	}
+
+	if (strcmp(cmd, "ai-enable") == 0) {
+		if (!ctx->ai_disabled)
+			return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+
+		/* Reinit HAL audio input */
+		rss_audio_config_t audio_cfg = {
+			.sample_rate = ctx->sample_rate,
+			.samples_per_frame = ctx->sample_rate / 50,
+			.chn_count = 1,
+			.frame_depth = 20,
+			.ai_vol = ctx->volume,
+			.ai_gain = ctx->gain,
+			.input_type = ctx->input_type,
+			.dmic_count = rss_config_get_int(ctx->cfg, "audio", "dmic_count", 1),
+			.dmic_aec_id = rss_config_get_int(ctx->cfg, "audio", "dmic_aec_id", 0),
+		};
+		int ret = RSS_HAL_CALL(ctx->ops, audio_init, ctx->hal_ctx, &audio_cfg);
+		if (ret != RSS_OK)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "audio_init failed");
+
+		RSS_HAL_CALL(ctx->ops, audio_set_volume, ctx->hal_ctx, ctx->ai_dev, 0, ctx->volume);
+		RSS_HAL_CALL(ctx->ops, audio_set_gain, ctx->hal_ctx, ctx->ai_dev, 0, ctx->gain);
+
+		/* Re-apply audio effects */
+#ifdef RAPTOR_AUDIO_EFFECTS
+		if (ctx->ns_enabled) {
+			int ns_level =
+				rss_config_get_int(ctx->cfg, "audio", "ns_level", RSS_NS_MODERATE);
+			RSS_HAL_CALL(ctx->ops, audio_enable_ns, ctx->hal_ctx,
+				     (rss_ns_level_t)ns_level);
+		}
+		if (ctx->hpf_enabled)
+			RSS_HAL_CALL(ctx->ops, audio_enable_hpf, ctx->hal_ctx);
+		if (ctx->agc_enabled) {
+			rss_agc_config_t agc_cfg = {
+				.target_level_dbfs = rss_config_get_int(ctx->cfg, "audio",
+									"agc_target_dbfs", 10),
+				.compression_gain_db = rss_config_get_int(ctx->cfg, "audio",
+									  "agc_compression_db", 0),
+			};
+			RSS_HAL_CALL(ctx->ops, audio_enable_agc, ctx->hal_ctx, &agc_cfg);
+		}
+		if (ctx->aec_enabled && ctx->ao_enabled)
+			RSS_HAL_CALL(ctx->ops, audio_enable_aec, ctx->hal_ctx, ctx->ai_dev, 0, 0,
+				     0);
+#endif
+
+		/* Reinit codec */
+		const rad_codec_ops_t *ops = rad_codec_find(ctx->codec_str);
+		if (!ops)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "codec not found");
+
+		ctx->codec_ctx->codec_id = ctx->codec_id;
+		if (ops->init(ctx->codec_ctx, ctx->cfg, ctx->sample_rate) != 0) {
+			memset(ctx->codec_ctx, 0, sizeof(*ctx->codec_ctx));
+			RSS_HAL_CALL(ctx->ops, audio_deinit, ctx->hal_ctx);
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "codec init failed");
+		}
+		*ctx->codec_ops = ops;
+
+		/* Recreate ring */
+		int ring_data_size = (ctx->codec_id == RAD_CODEC_L16) ? 256 * 1024 : 128 * 1024;
+		*ctx->ring = rss_ring_create("audio", 32, ring_data_size);
+		if (!*ctx->ring) {
+			*ctx->ring = rss_ring_create("audio", 32, 128 * 1024);
+		}
+		if (!*ctx->ring) {
+			if (*ctx->codec_ops && (*ctx->codec_ops)->deinit)
+				(*ctx->codec_ops)->deinit(ctx->codec_ctx);
+			memset(ctx->codec_ctx, 0, sizeof(*ctx->codec_ctx));
+			*ctx->codec_ops = NULL;
+			RSS_HAL_CALL(ctx->ops, audio_deinit, ctx->hal_ctx);
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "ring create failed");
+		}
+		rss_ring_set_stream_info(*ctx->ring, 0x10, ctx->codec_id, 0, 0, ctx->sample_rate, 1,
+					 0, 0);
+		ctx->codec_ctx->ring = *ctx->ring;
+
+		ctx->ai_disabled = false;
+		*ctx->synth_audio_ts = rss_timestamp_us();
+		RSS_INFO("audio input enabled: %s %d Hz", ctx->codec_str, ctx->sample_rate);
+		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+	}
 
 	if (strcmp(cmd, "ao-set-volume") == 0) {
 		if (rss_json_get_int(cmd_json, "value", &val) == 0 && ctx->ao_enabled) {
@@ -276,10 +422,81 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
 	}
 
+	/* ── Audio output enable/disable ── */
+
+	if (strcmp(cmd, "ao-disable") == 0) {
+		if (!ctx->ao_enabled)
+			return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+
+#ifdef RAPTOR_AUDIO_EFFECTS
+		if (ctx->aec_enabled) {
+			RSS_HAL_CALL(ctx->ops, audio_disable_aec, ctx->hal_ctx);
+			ctx->aec_enabled = false;
+			rss_config_set_bool(ctx->cfg, "audio", "aec_enabled", false);
+			RSS_INFO("AEC disabled (ao going down)");
+		}
+#endif
+		/* Signal AO thread to stop and wait */
+		atomic_store(&ctx->ao_ctx->stop, true);
+		pthread_join(*ctx->ao_tid, NULL);
+		*ctx->ao_thread_started = false;
+
+		RSS_HAL_CALL(ctx->ops, ao_deinit, ctx->hal_ctx);
+		ctx->ao_enabled = false;
+		ctx->ao_flush = NULL;
+		ctx->ao_rate_pending = NULL;
+		ctx->ao_sample_rate = NULL;
+		rss_config_set_bool(ctx->cfg, "audio", "ao_enabled", false);
+		RSS_INFO("audio output disabled");
+		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+	}
+
+	if (strcmp(cmd, "ao-enable") == 0) {
+		if (ctx->ao_enabled)
+			return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+
+		int ao_rate =
+			rss_config_get_int(ctx->cfg, "audio", "ao_sample_rate", ctx->sample_rate);
+		rss_audio_config_t ao_cfg = {
+			.sample_rate = ao_rate,
+			.samples_per_frame = ao_rate / 50,
+			.chn_count = 1,
+			.frame_depth = 20,
+		};
+		int ret = RSS_HAL_CALL(ctx->ops, ao_init, ctx->hal_ctx, &ao_cfg);
+		if (ret != RSS_OK)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "ao_init failed");
+
+		RSS_HAL_CALL(ctx->ops, ao_set_volume, ctx->hal_ctx, ctx->ao_volume);
+		RSS_HAL_CALL(ctx->ops, ao_set_gain, ctx->hal_ctx, ctx->ao_gain);
+
+		/* Reset and start AO thread */
+		atomic_store(&ctx->ao_ctx->stop, false);
+		atomic_store(&ctx->ao_ctx->flush, 0);
+		atomic_store(&ctx->ao_ctx->rate_pending, 0);
+		atomic_store(&ctx->ao_ctx->sample_rate, ao_rate);
+
+		if (pthread_create(ctx->ao_tid, NULL, ao_playback_thread, ctx->ao_ctx) != 0) {
+			RSS_HAL_CALL(ctx->ops, ao_deinit, ctx->hal_ctx);
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "thread create failed");
+		}
+		*ctx->ao_thread_started = true;
+		ctx->ao_enabled = true;
+		ctx->ao_flush = &ctx->ao_ctx->flush;
+		ctx->ao_rate_pending = &ctx->ao_ctx->rate_pending;
+		ctx->ao_sample_rate = &ctx->ao_ctx->sample_rate;
+		ctx->ao_muted = false;
+		rss_config_set_bool(ctx->cfg, "audio", "ao_enabled", true);
+		RSS_INFO("audio output enabled: %d Hz", ao_rate);
+		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+	}
+
 #ifdef RAPTOR_AUDIO_EFFECTS
 	if (strcmp(cmd, "set-aec") == 0) {
 		if (rss_json_get_int(cmd_json, "value", &val) != 0)
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value (0/1)");
+		if (ctx->ai_disabled)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "ai disabled");
 		if (!ctx->ao_enabled)
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "ao disabled");
 		int ret = RSS_OK;
@@ -304,6 +521,11 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 #endif
 
 	/* ── Input sample rate change (validates, then falls through to restart) ── */
+
+	if (ctx->ai_disabled &&
+	    (strcmp(cmd, "set-sample-rate") == 0 || strcmp(cmd, "set-codec") == 0 ||
+	     strcmp(cmd, "audio-restart") == 0))
+		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "ai disabled");
 
 	int requested_sample_rate = 0;
 	if (strcmp(cmd, "set-sample-rate") == 0) {
@@ -373,6 +595,8 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			.ai_vol = ctx->volume,
 			.ai_gain = ctx->gain,
 			.input_type = ctx->input_type,
+			.dmic_count = rss_config_get_int(ctx->cfg, "audio", "dmic_count", 1),
+			.dmic_aec_id = rss_config_get_int(ctx->cfg, "audio", "dmic_aec_id", 0),
 		};
 		int ret = RSS_HAL_CALL(ctx->ops, audio_init, ctx->hal_ctx, &audio_cfg);
 		if (ret != RSS_OK) {
@@ -439,13 +663,14 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 					RSS_FATAL("audio-restart: HAL restore to %dHz failed",
 						  old_sample_rate);
 					*ctx->codec_ops = NULL;
-					return rss_ctrl_resp_error(resp_buf, resp_buf_size,
-								   "HAL restore failed, audio disabled");
+					return rss_ctrl_resp_error(
+						resp_buf, resp_buf_size,
+						"HAL restore failed, audio disabled");
 				}
-				RSS_HAL_CALL(ctx->ops, audio_set_volume, ctx->hal_ctx,
-					     ctx->ai_dev, 0, ctx->volume);
-				RSS_HAL_CALL(ctx->ops, audio_set_gain, ctx->hal_ctx,
-					     ctx->ai_dev, 0, ctx->gain);
+				RSS_HAL_CALL(ctx->ops, audio_set_volume, ctx->hal_ctx, ctx->ai_dev,
+					     0, ctx->volume);
+				RSS_HAL_CALL(ctx->ops, audio_set_gain, ctx->hal_ctx, ctx->ai_dev, 0,
+					     ctx->gain);
 			}
 
 			memset(ctx->codec_ctx, 0, sizeof(*ctx->codec_ctx));
@@ -532,6 +757,7 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	if (strcmp(cmd, "status") == 0) {
 		cJSON *r = cJSON_CreateObject();
 		cJSON_AddStringToObject(r, "status", "ok");
+		cJSON_AddBoolToObject(r, "ai_enabled", !ctx->ai_disabled);
 		cJSON_AddStringToObject(r, "codec", ctx->codec_str);
 		cJSON_AddNumberToObject(r, "sample_rate", ctx->sample_rate);
 		cJSON_AddNumberToObject(r, "volume", ctx->volume);
@@ -561,15 +787,6 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 }
 
 /* ── AO playback thread: reads from speaker ring, sends to hardware ── */
-
-typedef struct {
-	const rss_hal_ops_t *ops;
-	rss_hal_ctx_t *hal_ctx;
-	volatile sig_atomic_t *running;
-	_Atomic int flush;
-	_Atomic int rate_pending;
-	_Atomic int sample_rate;
-} ao_thread_ctx_t;
 
 static void ao_apply_rate_change(ao_thread_ctx_t *ctx)
 {
@@ -606,11 +823,11 @@ static void *ao_playback_thread(void *arg)
 
 	RSS_DEBUG("ao playback thread started");
 
-	while (rss_running(ctx->running)) {
+	while (rss_running(ctx->running) && !atomic_load(&ctx->stop)) {
 		ao_apply_rate_change(ctx);
 
 		/* ── Phase 1: wait for speaker ring ── */
-		while (rss_running(ctx->running) && !ring) {
+		while (rss_running(ctx->running) && !atomic_load(&ctx->stop) && !ring) {
 			ao_apply_rate_change(ctx);
 			if (atomic_exchange(&ctx->flush, 0)) {
 				RSS_HAL_CALL(ctx->ops, ao_clear_buf, ctx->hal_ctx);
@@ -647,7 +864,7 @@ static void *ao_playback_thread(void *arg)
 		RSS_DEBUG("speaker ring connected");
 
 		/* ── Phase 2: read and play frames ── */
-		while (rss_running(ctx->running)) {
+		while (rss_running(ctx->running) && !atomic_load(&ctx->stop)) {
 			if (atomic_exchange(&ctx->flush, 0)) {
 				RSS_HAL_CALL(ctx->ops, ao_clear_buf, ctx->hal_ctx);
 				RSS_DEBUG("ao: flush requested, dropping ring");
@@ -865,6 +1082,11 @@ int main(int argc, char **argv)
 #endif
 
 	/* ── Audio output (speaker) ── */
+	ao_ctx = (ao_thread_ctx_t){
+		.ops = ops,
+		.hal_ctx = hal_ctx,
+		.running = dctx.running,
+	};
 	ao_enabled = rss_config_get_bool(dctx.cfg, "audio", "ao_enabled", false);
 
 	if (ao_enabled) {
@@ -886,12 +1108,7 @@ int main(int argc, char **argv)
 			RSS_HAL_CALL(ops, ao_set_volume, hal_ctx, ao_vol);
 			RSS_HAL_CALL(ops, ao_set_gain, hal_ctx, ao_gain_val);
 
-			ao_ctx = (ao_thread_ctx_t){
-				.ops = ops,
-				.hal_ctx = hal_ctx,
-				.running = dctx.running,
-				.sample_rate = ao_sample_rate,
-			};
+			atomic_store(&ao_ctx.sample_rate, ao_sample_rate);
 			if (pthread_create(&ao_tid, NULL, ao_playback_thread, &ao_ctx) == 0) {
 				ao_thread_started = true;
 				RSS_DEBUG("audio output: %d Hz vol=%d gain=%d", ao_sample_rate,
@@ -950,6 +1167,8 @@ int main(int argc, char **argv)
 	RSS_DEBUG("audio loop: %d samples/frame (%dms), %s", audio_cfg.samples_per_frame, 1000 / 50,
 		  codec_str);
 
+	int64_t synth_audio_ts = rss_timestamp_us();
+
 	rad_ctrl_ctx_t ctrl_ctx = {
 		.cfg = dctx.cfg,
 		.config_path = dctx.config_path,
@@ -974,17 +1193,21 @@ int main(int argc, char **argv)
 		.hpf_enabled = hpf_enabled,
 		.agc_enabled = agc_enabled,
 #endif
+		/* AO thread lifecycle */
+		.ao_ctx = &ao_ctx,
+		.ao_tid = &ao_tid,
+		.ao_thread_started = &ao_thread_started,
 		/* Pipeline state pointers (for audio-restart) */
 		.ring = &ring,
 		.codec_ops = &codec_ops,
 		.codec_ctx = &codec_ctx,
 		.encode_buf = &encode_buf,
 		.encode_buf_size = &encode_buf_size,
+		.synth_audio_ts = &synth_audio_ts,
 	};
 
 	uint64_t frame_count = 0;
 	int64_t last_stats = rss_timestamp_us();
-	int64_t synth_audio_ts = rss_timestamp_us();
 
 	while (*dctx.running) {
 		/* Check control socket (non-blocking) */
@@ -999,6 +1222,11 @@ int main(int argc, char **argv)
 					rss_ctrl_accept_and_handle(ctrl, rad_ctrl_handler,
 								   &ctrl_ctx);
 			}
+		}
+
+		if (ctrl_ctx.ai_disabled) {
+			usleep(50000);
+			continue;
 		}
 
 		rss_audio_frame_t frame;
@@ -1047,8 +1275,10 @@ int main(int argc, char **argv)
 	RSS_INFO("rad shutting down");
 
 cleanup:
-	if (ao_thread_started)
+	if (ao_thread_started) {
+		atomic_store(&ao_ctx.stop, true);
 		pthread_join(ao_tid, NULL);
+	}
 	if (ctrl)
 		rss_ctrl_destroy(ctrl);
 	free(encode_buf);
@@ -1057,9 +1287,10 @@ cleanup:
 	if (ring)
 		rss_ring_destroy(ring);
 	if (hal_ctx) {
-		if (ao_enabled)
+		if (ctrl_ctx.ao_enabled)
 			RSS_HAL_CALL(ops, ao_deinit, hal_ctx);
-		RSS_HAL_CALL(ops, audio_deinit, hal_ctx);
+		if (!ctrl_ctx.ai_disabled)
+			RSS_HAL_CALL(ops, audio_deinit, hal_ctx);
 		rss_hal_destroy(hal_ctx);
 	}
 	rss_config_free(dctx.cfg);
