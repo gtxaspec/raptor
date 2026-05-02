@@ -40,10 +40,10 @@
 
 /* ── Per-client send queue (decouples main loop from blocking writes) ── */
 
-#define RHD_SENDQ_SLOTS	 4
-#define RHD_FRAME_MJPEG	 0
-#define RHD_FRAME_AUDIO	 1
-#define RHD_SENDQ_OK	 0
+#define RHD_SENDQ_SLOTS	  4
+#define RHD_FRAME_MJPEG	  0
+#define RHD_FRAME_AUDIO	  1
+#define RHD_SENDQ_OK	  0
 #define RHD_SENDQ_DROPPED 1
 
 typedef struct {
@@ -69,6 +69,7 @@ typedef struct {
 typedef struct {
 	int fd;
 	bool is_mjpeg;		 /* streaming MJPEG */
+	int mjpeg_stream;	 /* JPEG ring index for this MJPEG client */
 	bool is_audio;		 /* streaming audio */
 	uint32_t audio_page_seq; /* Ogg page sequence (Opus only) */
 	uint64_t audio_granule;	 /* Ogg granule position (Opus only) */

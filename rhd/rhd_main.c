@@ -308,9 +308,14 @@ static void handle_request(rhd_server_t *srv, rhd_client_t *c)
 			http_error(c, "404 Not Found", "Stream not available");
 		}
 	} else if (strncmp(path, "/mjpeg", 6) == 0 || strncmp(path, "/mjpg", 5) == 0) {
-		/* Start MJPEG stream — don't close connection */
+		int si = parse_stream_param(path);
+		if (si >= RHD_MAX_JPEG || !srv->jpeg_rings[si]) {
+			http_error(c, "404 Not Found", "Stream not available");
+			return;
+		}
 		http_send_mjpeg_header(c);
 		c->is_mjpeg = true;
+		c->mjpeg_stream = si;
 		rhd_start_send_thread(c);
 		return; /* keep alive */
 	} else if (strcmp(path, "/audio") == 0) {
@@ -351,11 +356,11 @@ static void handle_request(rhd_server_t *srv, rhd_client_t *c)
 
 /* ── MJPEG streaming ── */
 
-static void stream_mjpeg_frame(rhd_server_t *srv, const uint8_t *data, uint32_t len)
+static void stream_mjpeg_frame(rhd_server_t *srv, int stream, const uint8_t *data, uint32_t len)
 {
 	for (int i = srv->client_count - 1; i >= 0; i--) {
 		rhd_client_t *c = srv->clients[i];
-		if (!c->is_mjpeg)
+		if (!c->is_mjpeg || c->mjpeg_stream != stream)
 			continue;
 		if (!c->send_thread_running) {
 			remove_client(srv, i);
@@ -536,7 +541,7 @@ static void server_run(rhd_server_t *srv)
 	bool was_streaming = false;
 
 	while (rss_running(srv->running)) {
-		/* Check for new JPEG frames from ring 0 for MJPEG streaming */
+		/* Check for new JPEG frames for MJPEG streaming */
 		bool has_mjpeg_clients = false;
 		for (int i = 0; i < srv->client_count; i++)
 			if (srv->clients[i]->is_mjpeg) {
@@ -557,21 +562,22 @@ static void server_run(rhd_server_t *srv)
 			was_streaming = false;
 		}
 
-		if (has_mjpeg_clients && srv->jpeg_rings[0] && frame_buf) {
-			uint32_t len;
-			rss_ring_slot_t meta;
-			int ret = rss_ring_read(srv->jpeg_rings[0], &jpeg_read_seqs[0], frame_buf,
-						frame_buf_size, &len, &meta);
-			if (ret == RSS_EOVERFLOW && jpeg_read_seqs[0] > 0) {
-				/* Fell behind — back up 1 to read latest completed frame */
-				jpeg_read_seqs[0]--;
-				ret = rss_ring_read(srv->jpeg_rings[0], &jpeg_read_seqs[0],
-						    frame_buf, frame_buf_size, &len, &meta);
-			}
-			if (ret == 0 && len >= 2 && frame_buf[0] == 0xFF && frame_buf[1] == 0xD8) {
-				stream_mjpeg_frame(srv, frame_buf, len);
-			} else if (ret == RSS_EOVERFLOW) {
-				/* still overflow after retry — skip */
+		if (has_mjpeg_clients && frame_buf) {
+			for (int j = 0; j < RHD_MAX_JPEG; j++) {
+				if (!srv->jpeg_rings[j])
+					continue;
+				uint32_t len;
+				rss_ring_slot_t meta;
+				int ret = rss_ring_read(srv->jpeg_rings[j], &jpeg_read_seqs[j],
+							frame_buf, frame_buf_size, &len, &meta);
+				if (ret == RSS_EOVERFLOW && jpeg_read_seqs[j] > 0) {
+					jpeg_read_seqs[j]--;
+					ret = rss_ring_read(srv->jpeg_rings[j], &jpeg_read_seqs[j],
+							    frame_buf, frame_buf_size, &len, &meta);
+				}
+				if (ret == 0 && len >= 2 && frame_buf[0] == 0xFF &&
+				    frame_buf[1] == 0xD8)
+					stream_mjpeg_frame(srv, j, frame_buf, len);
 			}
 		}
 
