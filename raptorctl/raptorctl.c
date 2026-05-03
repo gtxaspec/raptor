@@ -9,6 +9,8 @@
  *   raptorctl <daemon> <command> [args]    Send command to daemon
  */
 
+#include <errno.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -117,8 +119,15 @@ int main(int argc, char **argv)
 			return 1;
 		}
 		if (pid == 0) {
-			execlp(argv[1], argv[1], NULL);
-			fprintf(stderr, "%s: exec failed\n", argv[1]);
+			/* Pass any extra args (e.g. -c /path/to/config) */
+			char *child_argv[16];
+			child_argv[0] = argv[1];
+			int ci = 1;
+			for (int i = 3; i < argc && ci < 15; i++)
+				child_argv[ci++] = argv[i];
+			child_argv[ci] = NULL;
+			execvp(argv[1], child_argv);
+			fprintf(stderr, "%s: exec failed: %s\n", argv[1], strerror(errno));
 			_exit(127);
 		}
 		int status;
@@ -137,8 +146,25 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	if (strcmp(argv[2], "stop") == 0)
-		return send_cmd(argv[1], "{\"cmd\":\"shutdown\"}");
+	if (strcmp(argv[2], "stop") == 0) {
+		int pid = rss_daemon_check(argv[1]);
+		if (pid <= 0) {
+			fprintf(stderr, "%s: not running\n", argv[1]);
+			return 1;
+		}
+		send_cmd(argv[1], "{\"cmd\":\"shutdown\"}");
+		for (int i = 0; i < 20; i++) {
+			usleep(100000);
+			if (kill(pid, 0) != 0)
+				return 0;
+		}
+		kill(pid, SIGTERM);
+		usleep(200000);
+		if (kill(pid, 0) != 0)
+			return 0;
+		fprintf(stderr, "%s: pid %d did not exit\n", argv[1], pid);
+		return 1;
+	}
 
 	const char *daemon = argv[1];
 	const char *cmd = argv[2];
