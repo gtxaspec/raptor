@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <cJSON.h>
@@ -20,8 +21,8 @@
 
 #include "raptorctl.h"
 
-const char *daemons[] = {"rvd", "rsd", "rad", "rod", "rhd", "ric",
-			 "rmr", "rmd", "rwd", "rwc", "rfs", "rsp", "rsr", "rsd-555", NULL};
+const char *daemons[] = {"rvd", "rsd", "rad", "rod", "rhd", "ric",     "rmr", "rmd",
+			 "rwd", "rwc", "rfs", "rsp", "rsr", "rsd-555", NULL};
 
 int main(int argc, char **argv)
 {
@@ -103,6 +104,41 @@ int main(int argc, char **argv)
 		daemon_help(argv[1]);
 		return 0;
 	}
+
+	if (strcmp(argv[2], "start") == 0) {
+		int pid = rss_daemon_check(argv[1]);
+		if (pid > 0) {
+			printf("%s: already running (pid %d)\n", argv[1], pid);
+			return 0;
+		}
+		pid = fork();
+		if (pid < 0) {
+			perror("fork");
+			return 1;
+		}
+		if (pid == 0) {
+			execlp(argv[1], argv[1], NULL);
+			fprintf(stderr, "%s: exec failed\n", argv[1]);
+			_exit(127);
+		}
+		int status;
+		waitpid(pid, &status, 0);
+		if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+			usleep(100000);
+			int new_pid = rss_daemon_check(argv[1]);
+			if (new_pid > 0)
+				printf("%s: started (pid %d)\n", argv[1], new_pid);
+			else
+				printf("%s: started\n", argv[1]);
+			return 0;
+		}
+		fprintf(stderr, "%s: failed to start (exit %d)\n", argv[1],
+			WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+		return 1;
+	}
+
+	if (strcmp(argv[2], "stop") == 0)
+		return send_cmd(argv[1], "{\"cmd\":\"shutdown\"}");
 
 	const char *daemon = argv[1];
 	const char *cmd = argv[2];

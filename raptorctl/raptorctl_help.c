@@ -17,6 +17,8 @@ const struct help_entry help_entries[] = {
 	{NULL, "config save                         Save running config to disk"},
 	{NULL, "<daemon> status                     Show daemon details"},
 	{NULL, "<daemon> config                     Show running config"},
+	{NULL, "<daemon> start                      Start daemon"},
+	{NULL, "<daemon> stop                       Stop daemon (clean shutdown)"},
 	{NULL, "<daemon> restart                    Restart daemon (clean re-exec)"},
 	{NULL,
 	 "<daemon> set-log-level <level>      Set log level (fatal|error|warn|info|debug|trace)"},
