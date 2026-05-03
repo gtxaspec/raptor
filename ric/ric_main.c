@@ -209,26 +209,39 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		ric_config_t *c = &st->settings;
 		const char *cfg_key = NULL;
 		if (strcmp(key, "night_luma") == 0) {
+			if (val < 0 || val > 255)
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size, "range 0-255");
 			c->night_luma = val;
 			cfg_key = "night_luma";
 		} else if (strcmp(key, "night_gain") == 0) {
+			if (val < 0)
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size, "must be >= 0");
 			c->night_gain = val;
 			cfg_key = "night_gain";
 		} else if (strcmp(key, "day_gain_pct") == 0) {
+			if (val < 1 || val > 100)
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size, "range 1-100");
 			c->day_gain_pct = val;
 			cfg_key = "day_gain_pct";
 		} else if (strcmp(key, "night_threshold") == 0) {
+			if (val < 0)
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size, "must be >= 0");
 			c->night_threshold = val;
 			cfg_key = "night_threshold";
 		} else if (strcmp(key, "day_threshold") == 0) {
+			if (val < 0)
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size, "must be >= 0");
 			c->day_threshold = val;
 			cfg_key = "day_threshold";
 		} else if (strcmp(key, "hysteresis_sec") == 0) {
+			if (val < 1 || val > 300)
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size, "range 1-300");
 			c->hysteresis_sec = val;
 			cfg_key = "hysteresis_sec";
 		} else if (strcmp(key, "poll_interval_ms") == 0) {
-			if (val < 50)
-				val = 50;
+			if (val < 50 || val > 10000)
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+							   "range 50-10000");
 			c->poll_interval_ms = val;
 			cfg_key = "poll_interval_ms";
 		} else {
@@ -245,6 +258,8 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	if (strcmp(cmd, "get-thresholds") == 0) {
 		ric_config_t *c = &st->settings;
 		cJSON *r = cJSON_CreateObject();
+		if (!r)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "alloc");
 		cJSON_AddStringToObject(r, "status", "ok");
 		cJSON_AddStringToObject(r, "trigger",
 					c->trigger == RIC_TRIGGER_LUMA	 ? "luma"
@@ -266,6 +281,8 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", "{\"cmd\":\"get-exposure\"}",
 				      exp_resp, sizeof(exp_resp), 1000);
 		cJSON *r = cJSON_CreateObject();
+		if (!r)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "alloc");
 		cJSON_AddStringToObject(r, "status", "ok");
 		cJSON_AddStringToObject(r, "mode",
 					st->settings.opmode == RIC_AUTO	       ? "auto"
