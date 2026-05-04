@@ -975,6 +975,10 @@ int main(int argc, char **argv)
 	bool ao_thread_started = false;
 	ao_thread_ctx_t ao_ctx = {0};
 	const rss_hal_ops_t *ops = NULL;
+	/* Declared up here so every `goto cleanup` reads fully-initialized
+	 * state. ai_disabled defaults to true so cleanup skips audio_deinit
+	 * until audio_init has succeeded; ao_enabled defaults to false. */
+	rad_ctrl_ctx_t ctrl_ctx = {.ai_disabled = true};
 
 	rss_hal_ctx_t *hal_ctx = rss_hal_create();
 	if (!hal_ctx) {
@@ -1025,6 +1029,7 @@ int main(int argc, char **argv)
 		RSS_FATAL("audio_init failed: %d", ret);
 		goto cleanup;
 	}
+	ctrl_ctx.ai_disabled = false;
 
 	RSS_HAL_CALL(ops, audio_set_volume, hal_ctx, ai_dev, 0, volume);
 	RSS_HAL_CALL(ops, audio_set_gain, hal_ctx, ai_dev, 0, gain);
@@ -1119,6 +1124,7 @@ int main(int argc, char **argv)
 			}
 		}
 	}
+	ctrl_ctx.ao_enabled = ao_enabled;
 
 #ifdef RAPTOR_AUDIO_EFFECTS
 	bool aec_enabled = false;
@@ -1169,7 +1175,7 @@ int main(int argc, char **argv)
 
 	int64_t synth_audio_ts = rss_timestamp_us();
 
-	rad_ctrl_ctx_t ctrl_ctx = {
+	ctrl_ctx = (rad_ctrl_ctx_t){
 		.cfg = dctx.cfg,
 		.config_path = dctx.config_path,
 		.ops = ops,
