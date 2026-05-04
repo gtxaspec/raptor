@@ -27,6 +27,35 @@
 
 /* ── Play helpers ── */
 
+/*
+ * Deadline-based realtime pacer. start_us is captured at init; each
+ * pacer_advance() projects an output deadline from cumulative samples
+ * and sample_rate, then sleeps until that deadline. This stops the
+ * producer from drifting ahead of realtime over long files, which would
+ * otherwise leave a tail in the ring at EOF.
+ */
+typedef struct {
+	int64_t start_us;
+	uint64_t samples;
+	int sample_rate;
+} rac_pacer_t;
+
+static void pacer_init(rac_pacer_t *p, int sample_rate)
+{
+	p->start_us = rss_timestamp_us();
+	p->samples = 0;
+	p->sample_rate = sample_rate;
+}
+
+static void pacer_advance(rac_pacer_t *p, int samples)
+{
+	p->samples += (uint64_t)samples;
+	int64_t deadline = p->start_us + (int64_t)p->samples * 1000000 / p->sample_rate;
+	int64_t now = rss_timestamp_us();
+	if (deadline > now)
+		usleep((unsigned)(deadline - now));
+}
+
 static enum play_fmt detect_format(const char *path, const uint8_t *hdr, size_t hdr_len)
 {
 	/* Check file extension first */
@@ -94,8 +123,8 @@ static int resample_linear(const int16_t *in, int in_samples, int in_rate, int16
 }
 
 /* Resample (if needed), chunk into 20ms frames, publish to ring */
-static void publish_pcm(rss_ring_t *ring, const int16_t *pcm, int samples, int src_rate,
-			int dst_rate)
+static void publish_pcm(rss_ring_t *ring, rac_pacer_t *pacer, const int16_t *pcm, int samples,
+			int src_rate, int dst_rate)
 {
 	int16_t resamp_buf[8192];
 	const int16_t *data = pcm;
@@ -108,9 +137,6 @@ static void publish_pcm(rss_ring_t *ring, const int16_t *pcm, int samples, int s
 		data = resamp_buf;
 	}
 
-	/* Chunk into 20ms frames at the output rate.
-	 * The AO hardware blocks on SendFrame, which is the real playback clock.
-	 * We publish slightly ahead to keep the ring fed. */
 	int chunk = dst_rate / 50; /* 320 samples at 16kHz = 20ms */
 	if (chunk <= 0)
 		chunk = 320;
@@ -120,8 +146,7 @@ static void publish_pcm(rss_ring_t *ring, const int16_t *pcm, int samples, int s
 		rss_ring_publish(ring, (const uint8_t *)(data + off), n * 2, rss_timestamp_us(), 0,
 				 0);
 		off += n;
-		/* Sleep for the frame duration minus a bit to stay ahead of AO */
-		usleep((unsigned)(n * 1000000 / dst_rate) - 500);
+		pacer_advance(pacer, n);
 	}
 }
 #endif
@@ -188,6 +213,8 @@ int cmd_play(const char *src, int sample_rate)
 	int ret = 0;
 	int64_t start_time = rss_timestamp_us();
 	uint64_t total_samples = 0;
+	rac_pacer_t pacer;
+	pacer_init(&pacer, sample_rate);
 
 	if (fmt == FMT_PCM) {
 		/* Raw PCM16 LE — passthrough */
@@ -202,6 +229,7 @@ int cmd_play(const char *src, int sample_rate)
 		if (!can_rewind && peek_len > 0) {
 			rss_ring_publish(ring, peek, (uint32_t)peek_len, rss_timestamp_us(), 0, 0);
 			total_samples += peek_len / 2;
+			pacer_advance(&pacer, (int)(peek_len / 2));
 		}
 		while (g_running) {
 			size_t n = fread(buf, 1, frame_bytes, in);
@@ -209,7 +237,7 @@ int cmd_play(const char *src, int sample_rate)
 				break;
 			rss_ring_publish(ring, buf, (uint32_t)n, rss_timestamp_us(), 0, 0);
 			total_samples += n / 2;
-			usleep(18000);
+			pacer_advance(&pacer, (int)(n / 2));
 		}
 		free(buf);
 	}
@@ -307,7 +335,7 @@ int cmd_play(const char *src, int sample_rate)
 				for (int i = 0; i < samples; i++)
 					pcm_buf[i] = (pcm_buf[i * 2] + pcm_buf[i * 2 + 1]) / 2;
 			}
-			publish_pcm(ring, pcm_buf, samples, info.samprate, sample_rate);
+			publish_pcm(ring, &pacer, pcm_buf, samples, info.samprate, sample_rate);
 			total_samples += samples;
 		}
 		free(buf);
@@ -391,7 +419,7 @@ int cmd_play(const char *src, int sample_rate)
 				for (int i = 0; i < samples; i++)
 					pcm_buf[i] = (pcm_buf[i * 2] + pcm_buf[i * 2 + 1]) / 2;
 			}
-			publish_pcm(ring, pcm_buf, samples, info.sampRateOut, sample_rate);
+			publish_pcm(ring, &pacer, pcm_buf, samples, info.sampRateOut, sample_rate);
 			total_samples += samples;
 		}
 		free(buf);
@@ -500,8 +528,9 @@ int cmd_play(const char *src, int sample_rate)
 								opus_decode(opus_dec, pkt, pkt_len,
 									    pcm_buf, 5760, 0);
 							if (decoded > 0) {
-								publish_pcm(ring, pcm_buf, decoded,
-									    opus_rate, sample_rate);
+								publish_pcm(ring, &pacer, pcm_buf,
+									    decoded, opus_rate,
+									    sample_rate);
 								total_samples += decoded;
 							}
 						}
@@ -516,8 +545,8 @@ int cmd_play(const char *src, int sample_rate)
 					int decoded = opus_decode(opus_dec, pkt, pkt_len, pcm_buf,
 								  5760, 0);
 					if (decoded > 0) {
-						publish_pcm(ring, pcm_buf, decoded, opus_rate,
-							    sample_rate);
+						publish_pcm(ring, &pacer, pcm_buf, decoded,
+							    opus_rate, sample_rate);
 						total_samples += decoded;
 					}
 				}
