@@ -871,32 +871,38 @@ static void *ao_playback_thread(void *arg)
 				break;
 			}
 
-			int ret = rss_ring_wait(ring, 50);
-			if (ret != 0) {
-				uint64_t ws = atomic_load(&hdr->write_seq);
-				if (ws == last_write_seq)
-					idle_count++;
-				else
-					idle_count = 0;
-				last_write_seq = ws;
+			uint32_t length = 0;
+			rss_ring_slot_t meta;
+			int ret =
+				rss_ring_read(ring, &read_seq, buf, hdr->data_size, &length, &meta);
+			if (ret == -EAGAIN) {
+				ret = rss_ring_wait(ring, 50);
+				if (ret != 0) {
+					uint64_t ws = atomic_load(&hdr->write_seq);
+					if (ws == last_write_seq)
+						idle_count++;
+					else
+						idle_count = 0;
+					last_write_seq = ws;
 
-				/* ~500ms idle (10 × 50ms) — close and wait for fresh ring */
-				if (idle_count >= 10) {
-					RSS_DEBUG("speaker idle, closing ring");
-					break;
+					/* ~500ms idle (10 × 50ms) — close and wait for fresh ring
+					 */
+					if (idle_count >= 10) {
+						RSS_DEBUG("speaker idle, closing ring");
+						break;
+					}
+					continue;
 				}
+				ret = rss_ring_read(ring, &read_seq, buf, hdr->data_size, &length,
+						    &meta);
+			}
+			if (ret != 0) {
+				if (ret != -EAGAIN)
+					RSS_DEBUG("ao ring_read: %d seq=%llu", ret,
+						  (unsigned long long)read_seq);
 				continue;
 			}
 			idle_count = 0;
-
-			uint32_t length = 0;
-			rss_ring_slot_t meta;
-			ret = rss_ring_read(ring, &read_seq, buf, hdr->data_size, &length, &meta);
-			if (ret != 0) {
-				RSS_DEBUG("ao ring_read: %d seq=%llu", ret,
-					  (unsigned long long)read_seq);
-				continue;
-			}
 
 			RSS_HAL_CALL(ctx->ops, ao_send_frame, ctx->hal_ctx, (const int16_t *)buf,
 				     length, true);

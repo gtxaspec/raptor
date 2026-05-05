@@ -271,14 +271,20 @@ int cmd_record(const char *dest, int max_seconds)
 		if (max_us > 0 && (rss_timestamp_us() - start_time) >= max_us)
 			break;
 
-		int ret = rss_ring_wait(ring, 200);
-		if (ret != 0)
-			continue;
-
 		uint32_t length = 0;
 		rss_ring_slot_t meta;
-		ret = rss_ring_read(ring, &read_seq, frame_buf, rss_ring_max_frame_size(ring),
-				    &length, &meta);
+		int ret = rss_ring_read(ring, &read_seq, frame_buf, rss_ring_max_frame_size(ring),
+					&length, &meta);
+		/* Try the ring first; only block when it's actually empty.
+		 * Without this, frames published in rapid succession (rad
+		 * publishes pairs 1ms apart) get lost: ring_wait blocks for
+		 * the next publish even though one is already queued. */
+		if (ret == -EAGAIN) {
+			if (rss_ring_wait(ring, 200) != 0)
+				continue;
+			ret = rss_ring_read(ring, &read_seq, frame_buf,
+					    rss_ring_max_frame_size(ring), &length, &meta);
+		}
 		if (ret != 0)
 			continue;
 
