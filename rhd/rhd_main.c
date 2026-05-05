@@ -483,30 +483,19 @@ static void server_run(rhd_server_t *srv)
 	static const char *jpeg_ring_names[RHD_MAX_JPEG] = {"jpeg0",	"jpeg1",    "s1_jpeg0",
 							    "s1_jpeg1", "s2_jpeg0", "s2_jpeg1"};
 
-	/* Try to open JPEG rings */
-	for (int attempt = 0; attempt < 30 && rss_running(srv->running); attempt++) {
-		for (int j = 0; j < RHD_MAX_JPEG; j++) {
-			if (srv->jpeg_rings[j])
-				continue;
-			const char *name = jpeg_ring_names[j];
-			srv->jpeg_rings[j] = rss_ring_open(name);
-			if (srv->jpeg_rings[j]) {
-				rss_ring_check_version(srv->jpeg_rings[j], name);
-				const rss_ring_header_t *hdr =
-					rss_ring_get_header(srv->jpeg_rings[j]);
-				RSS_DEBUG("%s ring available: %ux%u", name, hdr->width,
-					  hdr->height);
-				srv->jpeg_ring_count++;
-				uint32_t mfs = rss_ring_max_frame_size(
-					srv->jpeg_rings[srv->jpeg_ring_count - 1]);
-				if (mfs > frame_buf_size)
-					frame_buf_size = mfs;
-			}
+	/* Try to open JPEG rings (non-blocking, reconnection loop handles late arrivals) */
+	for (int j = 0; j < RHD_MAX_JPEG; j++) {
+		const char *name = jpeg_ring_names[j];
+		srv->jpeg_rings[j] = rss_ring_open(name);
+		if (srv->jpeg_rings[j]) {
+			rss_ring_check_version(srv->jpeg_rings[j], name);
+			const rss_ring_header_t *hdr = rss_ring_get_header(srv->jpeg_rings[j]);
+			RSS_DEBUG("%s ring available: %ux%u", name, hdr->width, hdr->height);
+			srv->jpeg_ring_count++;
+			uint32_t mfs = rss_ring_max_frame_size(srv->jpeg_rings[j]);
+			if (mfs > frame_buf_size)
+				frame_buf_size = mfs;
 		}
-		if (srv->jpeg_ring_count > 0)
-			break;
-		RSS_DEBUG("waiting for jpeg rings...");
-		sleep(1);
 	}
 
 	/* Try to open audio ring */
@@ -520,19 +509,23 @@ static void server_run(rhd_server_t *srv)
 			 srv->audio_sample_rate);
 	}
 
-	frame_buf = malloc(frame_buf_size);
-	if (!frame_buf) {
-		RSS_FATAL("failed to allocate frame buffer (%u bytes)", frame_buf_size);
-		return;
-	}
+	if (srv->jpeg_ring_count == 0 && !srv->audio_ring)
+		RSS_INFO("no rings available at startup, waiting for producers...");
 
-	/* Snapshot buffer (shared with handle_request, single-threaded) */
-	srv->snap_buf_size = frame_buf_size;
-	srv->snap_buf = malloc(srv->snap_buf_size);
-	if (!srv->snap_buf) {
-		RSS_FATAL("failed to allocate snapshot buffer (%u bytes)", srv->snap_buf_size);
-		free(frame_buf);
-		return;
+	if (frame_buf_size > 0) {
+		frame_buf = malloc(frame_buf_size);
+		if (!frame_buf) {
+			RSS_FATAL("failed to allocate frame buffer (%u bytes)", frame_buf_size);
+			return;
+		}
+		srv->snap_buf_size = frame_buf_size;
+		srv->snap_buf = malloc(srv->snap_buf_size);
+		if (!srv->snap_buf) {
+			RSS_FATAL("failed to allocate snapshot buffer (%u bytes)",
+				  srv->snap_buf_size);
+			free(frame_buf);
+			return;
+		}
 	}
 
 	struct epoll_event events[16];
@@ -803,6 +796,15 @@ static void server_run(rhd_server_t *srv)
 							if (!frame_buf)
 								frame_buf_size = 0;
 						}
+						if (mfs > srv->snap_buf_size) {
+							free(srv->snap_buf);
+							srv->snap_buf_size = mfs;
+							srv->snap_buf = malloc(srv->snap_buf_size);
+							if (!srv->snap_buf)
+								srv->snap_buf_size = 0;
+						}
+						if (j + 1 > srv->jpeg_ring_count)
+							srv->jpeg_ring_count = j + 1;
 						RSS_DEBUG("jpeg ring reconnected (%s)",
 							  jpeg_ring_names[j]);
 					}
