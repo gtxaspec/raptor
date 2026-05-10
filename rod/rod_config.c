@@ -39,6 +39,9 @@ void load_config(rod_state_t *st)
 	rss_strlcpy(c->time_format,
 		    rss_config_get_str(cfg, "osd", "time_format", "%Y-%m-%d %H:%M:%S"),
 		    sizeof(c->time_format));
+	c->frame_rate = rss_config_get_int(cfg, "stream0", "fps", 25);
+	if (c->frame_rate < 1)
+		c->frame_rate = 25;
 
 	st->stream_w[0] = rss_config_get_int(cfg, "stream0", "width", 1920);
 	st->stream_h[0] = rss_config_get_int(cfg, "stream0", "height", 1080);

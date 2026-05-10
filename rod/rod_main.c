@@ -328,10 +328,13 @@ int main(int argc, char **argv)
 
 	int64_t last_tick = rss_timestamp_us();
 	int64_t last_detect = 0;
+	st.tick_interval = strstr(st.settings.time_format, "%f")
+				  ? 1000000 / st.settings.frame_rate
+				  : 1000000;
 
 	while (*st.running) {
 		int64_t now = rss_timestamp_us();
-		if (now - last_tick >= 1000000) {
+		if (now - last_tick >= st.tick_interval) {
 			render_tick(&st);
 			last_tick = now;
 		}

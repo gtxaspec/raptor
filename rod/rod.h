@@ -138,6 +138,7 @@ typedef struct {
 	uint32_t stroke_color;
 	int font_stroke;
 	char time_format[64];
+	int frame_rate;
 } rod_config_t;
 
 /* Global state */
@@ -163,6 +164,7 @@ typedef struct {
 
 	bool detect_enabled;
 	bool paused;
+	int64_t tick_interval;
 
 	rss_ctrl_t *ctrl;
 	rss_config_t *cfg;

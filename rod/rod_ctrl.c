@@ -571,8 +571,12 @@ int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, vo
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value");
 		rss_strlcpy(st->settings.time_format, fmt, sizeof(st->settings.time_format));
 		rss_config_set_str(st->cfg, "osd", "time_format", fmt);
+		st->tick_interval = strstr(fmt, "%f")
+					? 1000000 / st->settings.frame_rate
+					: 1000000;
 		mark_all_dirty(st);
-		RSS_INFO("time format changed to %s", fmt);
+		RSS_INFO("time format changed to %s (tick %lldus)", fmt,
+			 (long long)st->tick_interval);
 		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
 	}
 

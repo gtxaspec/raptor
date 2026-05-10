@@ -128,10 +128,24 @@ int rod_expand_template(rod_state_t *st, const char *tmpl, char *out, int out_si
 
 		char val[128] = "";
 		if (strcmp(varname, "time") == 0) {
-			time_t now = time(NULL);
+			struct timespec ts;
+			clock_gettime(CLOCK_REALTIME, &ts);
 			struct tm tm;
-			localtime_r(&now, &tm);
-			strftime(val, sizeof(val), st->settings.time_format, &tm);
+			localtime_r(&ts.tv_sec, &tm);
+
+			char fmt[64];
+			rss_strlcpy(fmt, st->settings.time_format, sizeof(fmt));
+			char *fp = strstr(fmt, "%f");
+			if (fp) {
+				int fps = st->settings.frame_rate;
+				int frame = (int)((int64_t)ts.tv_nsec * fps / 1000000000L);
+				if (frame >= fps)
+					frame = fps - 1;
+				char fn[4];
+				snprintf(fn, sizeof(fn), "%02d", frame);
+				memcpy(fp, fn, 2);
+			}
+			strftime(val, sizeof(val), fmt, &tm);
 		} else if (strcmp(varname, "uptime") == 0) {
 			format_uptime(val, sizeof(val));
 		} else if (strcmp(varname, "hostname") == 0) {
