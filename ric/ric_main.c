@@ -85,11 +85,17 @@ static void load_config(ric_state_t *st)
  *   "ir940": 9          (IR LED GPIO, used if ir850 absent)
  */
 #define THINGINO_JSON "/etc/thingino.json"
+#define GPIO_PIN_MAX 191
+
+static bool valid_gpio(int pin)
+{
+	return pin >= 0 && pin <= GPIO_PIN_MAX;
+}
 
 static void load_gpio_from_thingino_json(ric_config_t *c)
 {
 	if (c->gpio_ircut >= 0 && c->gpio_irled >= 0 && c->gpio_irled2 >= 0)
-		return; /* already configured */
+		return;
 
 	FILE *f = fopen(THINGINO_JSON, "r");
 	if (!f)
@@ -102,62 +108,48 @@ static void load_gpio_from_thingino_json(ric_config_t *c)
 		return;
 	buf[n] = '\0';
 
-	/* Find the "gpio" object — scan for keys within it.
-	 * This is a simple substring search, not a full JSON parser,
-	 * but sufficient for the flat key layout in thingino.json. */
+	cJSON *root = cJSON_Parse(buf);
+	if (!root)
+		return;
 
-	/* Parse ircut: can be string "57 58" or integer 57 */
+	cJSON *gpio = cJSON_GetObjectItemCaseSensitive(root, "gpio");
+	if (!cJSON_IsObject(gpio)) {
+		cJSON_Delete(root);
+		return;
+	}
+
 	if (c->gpio_ircut < 0) {
-		const char *p = strstr(buf, "\"ircut\"");
-		if (p) {
-			p += 7; /* skip "ircut" */
-			/* skip whitespace and colon */
-			while (*p == ' ' || *p == ':')
-				p++;
-			if (*p == '"') {
-				/* String value: "57 58" or "57" */
-				p++;
-				char *endp;
-				int val = (int)strtol(p, &endp, 10);
-				if (endp != p) {
-					c->gpio_ircut = val;
-					p = endp;
-					while (*p == ' ')
-						p++;
-					val = (int)strtol(p, &endp, 10);
-					if (endp != p)
-						c->gpio_ircut2 = val;
-				}
-			} else if (*p >= '0' && *p <= '9') {
-				/* Integer value */
-				char *endp;
-				int val = (int)strtol(p, &endp, 10);
-				if (endp != p)
-					c->gpio_ircut = val;
+		cJSON *ircut = cJSON_GetObjectItemCaseSensitive(gpio, "ircut");
+		if (cJSON_IsNumber(ircut) && valid_gpio(ircut->valueint)) {
+			c->gpio_ircut = ircut->valueint;
+		} else if (cJSON_IsString(ircut) && ircut->valuestring) {
+			char *endp;
+			int val = (int)strtol(ircut->valuestring, &endp, 10);
+			if (endp != ircut->valuestring && valid_gpio(val)) {
+				c->gpio_ircut = val;
+				while (*endp == ' ')
+					endp++;
+				char *endp2;
+				val = (int)strtol(endp, &endp2, 10);
+				if (endp2 != endp && valid_gpio(val))
+					c->gpio_ircut2 = val;
 			}
 		}
 	}
 
-	/* Parse ir850 and ir940 for IR LEDs */
-	const char *led_keys[] = {"\"ir850\"", "\"ir940\""};
-	int *led_slots[] = {&c->gpio_irled, &c->gpio_irled2};
-	for (int i = 0; i < 2; i++) {
-		if (*led_slots[i] >= 0)
-			continue;
-		const char *p = strstr(buf, led_keys[i]);
-		if (!p)
-			continue;
-		p = strchr(p, ':');
-		if (!p)
-			continue;
-		p++;
-		while (*p == ' ')
-			p++;
-		char *endp;
-		int val = (int)strtol(p, &endp, 10);
-		if (endp != p && val >= 0)
-			*led_slots[i] = val;
+	if (c->gpio_irled < 0) {
+		cJSON *ir850 = cJSON_GetObjectItemCaseSensitive(gpio, "ir850");
+		if (cJSON_IsNumber(ir850) && valid_gpio(ir850->valueint))
+			c->gpio_irled = ir850->valueint;
 	}
+
+	if (c->gpio_irled2 < 0) {
+		cJSON *ir940 = cJSON_GetObjectItemCaseSensitive(gpio, "ir940");
+		if (cJSON_IsNumber(ir940) && valid_gpio(ir940->valueint))
+			c->gpio_irled2 = ir940->valueint;
+	}
+
+	cJSON_Delete(root);
 
 	if (c->gpio_ircut >= 0 || c->gpio_irled >= 0)
 		RSS_INFO("GPIOs from %s: ircut=%d ircut2=%d irled=%d irled2=%d", THINGINO_JSON,
