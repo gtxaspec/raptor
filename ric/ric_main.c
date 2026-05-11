@@ -117,14 +117,23 @@ static void load_gpio_from_thingino_json(ric_config_t *c)
 			if (*p == '"') {
 				/* String value: "57 58" or "57" */
 				p++;
-				c->gpio_ircut = (int)strtol(p, (char **)&p, 10);
-				while (*p == ' ')
-					p++;
-				if (*p >= '0' && *p <= '9')
-					c->gpio_ircut2 = (int)strtol(p, NULL, 10);
+				char *endp;
+				int val = (int)strtol(p, &endp, 10);
+				if (endp != p) {
+					c->gpio_ircut = val;
+					p = endp;
+					while (*p == ' ')
+						p++;
+					val = (int)strtol(p, &endp, 10);
+					if (endp != p)
+						c->gpio_ircut2 = val;
+				}
 			} else if (*p >= '0' && *p <= '9') {
 				/* Integer value */
-				c->gpio_ircut = (int)strtol(p, NULL, 10);
+				char *endp;
+				int val = (int)strtol(p, &endp, 10);
+				if (endp != p)
+					c->gpio_ircut = val;
 			}
 		}
 	}
@@ -144,8 +153,9 @@ static void load_gpio_from_thingino_json(ric_config_t *c)
 		p++;
 		while (*p == ' ')
 			p++;
-		int val = (int)strtol(p, NULL, 10);
-		if (val >= 0)
+		char *endp;
+		int val = (int)strtol(p, &endp, 10);
+		if (endp != p && val >= 0)
 			*led_slots[i] = val;
 	}
 
