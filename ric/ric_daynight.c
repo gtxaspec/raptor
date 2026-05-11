@@ -121,6 +121,8 @@ void ric_gpio_init(ric_state_t *st)
 		gpio_export(st->settings.gpio_ircut2);
 	if (st->settings.gpio_irled >= 0)
 		gpio_export(st->settings.gpio_irled);
+	if (st->settings.gpio_irled2 >= 0)
+		gpio_export(st->settings.gpio_irled2);
 }
 
 /*
@@ -139,34 +141,54 @@ void ric_set_isp_mode(ric_mode_t mode)
 
 static void ric_set_gpio(ric_state_t *st, ric_mode_t mode)
 {
+	ric_config_t *c = &st->settings;
+
 	if (mode == RIC_MODE_NIGHT) {
-		if (st->settings.gpio_ircut >= 0) {
-			if (st->settings.gpio_ircut2 >= 0) {
-				gpio_set(st->settings.gpio_ircut, 0);
-				gpio_set(st->settings.gpio_ircut2, 1);
+		if (c->gpio_ircut >= 0) {
+			if (c->gpio_ircut2 >= 0) {
+				gpio_set(c->gpio_ircut, 0);
+				gpio_set(c->gpio_ircut2, 1);
 				usleep(100000);
-				gpio_set(st->settings.gpio_ircut, 0);
-				gpio_set(st->settings.gpio_ircut2, 0);
+				gpio_set(c->gpio_ircut, 0);
+				gpio_set(c->gpio_ircut2, 0);
+				RSS_INFO("ircut: gpio %d=0, gpio %d=0 (night)", c->gpio_ircut,
+					 c->gpio_ircut2);
 			} else {
-				gpio_set(st->settings.gpio_ircut, 0);
+				gpio_set(c->gpio_ircut, 0);
+				RSS_INFO("ircut: gpio %d=0 (night)", c->gpio_ircut);
 			}
 		}
-		if (st->settings.gpio_irled >= 0)
-			gpio_set(st->settings.gpio_irled, 1);
+		if (c->gpio_irled >= 0 && c->ir850_enabled) {
+			gpio_set(c->gpio_irled, 1);
+			RSS_INFO("ir850: gpio %d=1 (on)", c->gpio_irled);
+		}
+		if (c->gpio_irled2 >= 0 && c->ir940_enabled) {
+			gpio_set(c->gpio_irled2, 1);
+			RSS_INFO("ir940: gpio %d=1 (on)", c->gpio_irled2);
+		}
 	} else {
-		if (st->settings.gpio_ircut >= 0) {
-			if (st->settings.gpio_ircut2 >= 0) {
-				gpio_set(st->settings.gpio_ircut, 1);
-				gpio_set(st->settings.gpio_ircut2, 0);
+		if (c->gpio_ircut >= 0) {
+			if (c->gpio_ircut2 >= 0) {
+				gpio_set(c->gpio_ircut, 1);
+				gpio_set(c->gpio_ircut2, 0);
 				usleep(100000);
-				gpio_set(st->settings.gpio_ircut, 0);
-				gpio_set(st->settings.gpio_ircut2, 0);
+				gpio_set(c->gpio_ircut, 0);
+				gpio_set(c->gpio_ircut2, 0);
+				RSS_INFO("ircut: gpio %d=0, gpio %d=0 (day)", c->gpio_ircut,
+					 c->gpio_ircut2);
 			} else {
-				gpio_set(st->settings.gpio_ircut, 1);
+				gpio_set(c->gpio_ircut, 1);
+				RSS_INFO("ircut: gpio %d=1 (day)", c->gpio_ircut);
 			}
 		}
-		if (st->settings.gpio_irled >= 0)
-			gpio_set(st->settings.gpio_irled, 0);
+		if (c->gpio_irled >= 0 && c->ir850_enabled) {
+			gpio_set(c->gpio_irled, 0);
+			RSS_INFO("ir850: gpio %d=0 (off)", c->gpio_irled);
+		}
+		if (c->gpio_irled2 >= 0 && c->ir940_enabled) {
+			gpio_set(c->gpio_irled2, 0);
+			RSS_INFO("ir940: gpio %d=0 (off)", c->gpio_irled2);
+		}
 	}
 }
 

@@ -35,6 +35,9 @@ static void load_config(ric_state_t *st)
 	c->gpio_ircut = rss_config_get_int(cfg, "ircut", "gpio_ircut", -1);
 	c->gpio_ircut2 = rss_config_get_int(cfg, "ircut", "gpio_ircut2", -1);
 	c->gpio_irled = rss_config_get_int(cfg, "ircut", "gpio_irled", -1);
+	c->gpio_irled2 = rss_config_get_int(cfg, "ircut", "gpio_irled2", -1);
+	c->ir850_enabled = rss_config_get_bool(cfg, "ircut", "ir850", true);
+	c->ir940_enabled = rss_config_get_bool(cfg, "ircut", "ir940", false);
 
 	/* Trigger mode: "luma" (default), "gain" (legacy), "adc", "photo" */
 	const char *trigger = rss_config_get_str(cfg, "ircut", "trigger", "luma");
@@ -85,7 +88,7 @@ static void load_config(ric_state_t *st)
 
 static void load_gpio_from_thingino_json(ric_config_t *c)
 {
-	if (c->gpio_ircut >= 0 && c->gpio_irled >= 0)
+	if (c->gpio_ircut >= 0 && c->gpio_irled >= 0 && c->gpio_irled2 >= 0)
 		return; /* already configured */
 
 	FILE *f = fopen(THINGINO_JSON, "r");
@@ -126,19 +129,29 @@ static void load_gpio_from_thingino_json(ric_config_t *c)
 		}
 	}
 
-	/* Parse ir850 or ir940 for IR LED */
-	if (c->gpio_irled < 0) {
-		int val;
-		if (rss_json_get_int(buf, "ir850", &val) == 0 && val >= 0) {
-			c->gpio_irled = val;
-		} else if (rss_json_get_int(buf, "ir940", &val) == 0 && val >= 0) {
-			c->gpio_irled = val;
-		}
+	/* Parse ir850 and ir940 for IR LEDs */
+	const char *led_keys[] = {"\"ir850\"", "\"ir940\""};
+	int *led_slots[] = {&c->gpio_irled, &c->gpio_irled2};
+	for (int i = 0; i < 2; i++) {
+		if (*led_slots[i] >= 0)
+			continue;
+		const char *p = strstr(buf, led_keys[i]);
+		if (!p)
+			continue;
+		p = strchr(p, ':');
+		if (!p)
+			continue;
+		p++;
+		while (*p == ' ')
+			p++;
+		int val = (int)strtol(p, NULL, 10);
+		if (val >= 0)
+			*led_slots[i] = val;
 	}
 
 	if (c->gpio_ircut >= 0 || c->gpio_irled >= 0)
-		RSS_INFO("GPIOs from %s: ircut=%d ircut2=%d irled=%d", THINGINO_JSON, c->gpio_ircut,
-			 c->gpio_ircut2, c->gpio_irled);
+		RSS_INFO("GPIOs from %s: ircut=%d ircut2=%d irled=%d irled2=%d", THINGINO_JSON,
+			 c->gpio_ircut, c->gpio_ircut2, c->gpio_irled, c->gpio_irled2);
 }
 
 /* ── Control socket ── */
@@ -403,12 +416,12 @@ int main(int argc, char **argv)
 	}
 
 	static const char *trigger_names[] = {"luma", "gain", "adc", "photo"};
-	RSS_INFO("ric running (mode=%s, trigger=%s, gpio_ircut=%d, gpio_ircut2=%d, gpio_irled=%d)",
+	RSS_INFO("ric running (mode=%s, trigger=%s, gpio_ircut=%d, gpio_ircut2=%d, gpio_irled=%d, gpio_irled2=%d)",
 		 st.settings.opmode == RIC_AUTO
 			 ? "auto"
 			 : (st.settings.opmode == RIC_FORCE_DAY ? "day" : "night"),
 		 trigger_names[st.settings.trigger], st.settings.gpio_ircut,
-		 st.settings.gpio_ircut2, st.settings.gpio_irled);
+		 st.settings.gpio_ircut2, st.settings.gpio_irled, st.settings.gpio_irled2);
 	if (st.settings.trigger == RIC_TRIGGER_ADC) {
 		RSS_DEBUG("  adc: channel=%d night=%d day=%d", st.settings.adc_channel,
 			  st.settings.adc_night, st.settings.adc_day);
