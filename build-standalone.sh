@@ -1021,4 +1021,8 @@ fi
 echo ""
 echo "=== Build complete ==="
 ls -lh "$SCRIPT_DIR/build/"
-[ -d "$SCRIPT_DIR/build/lib" ] && echo "" && echo "Shared libs:" && ls -lh "$SCRIPT_DIR/build/lib/"
+if [ -d "$SCRIPT_DIR/build/lib" ]; then
+    echo ""
+    echo "Shared libs:"
+    ls -lh "$SCRIPT_DIR/build/lib/"
+fi
