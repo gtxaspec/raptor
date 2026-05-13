@@ -152,6 +152,13 @@ SHIM_LIB := $(if $(wildcard $(SYSROOT)/usr/lib/libmuslshim.so $(SYSROOT)/lib/lib
              $(if $(wildcard $(SYSROOT)/usr/lib/libuclibcshim.so $(SYSROOT)/lib/libuclibcshim.so),-luclibcshim,))
 endif
 
+# libstdc++ linkage (for JZDL, SRT, rsd-555)
+ifeq ($(STATIC_STDCXX),1)
+LINK_STDCXX := -Wl,-Bstatic -lstdc++ -Wl,-Bdynamic
+else
+LINK_STDCXX := -lstdc++
+endif
+
 # System libs for HAL-linked daemons
 # Shim must come BEFORE Ingenic SDK libs — symbols must be resolved first.
 LDFLAGS_HAL := $(LDFLAGS_SYSROOT) $(SHIM_LIB) -limp -lalog -lpthread -lrt -lm -ldl -latomic
@@ -159,7 +166,7 @@ LDFLAGS_HAL := $(LDFLAGS_SYSROOT) $(SHIM_LIB) -limp -lalog -lpthread -lrt -lm -l
 # IVS detection libs — optional, no MXU needed (statically linked in .so)
 ifeq ($(IVS_DETECT),1)
 CFLAGS += -DIVS_DETECT
-LDFLAGS_HAL += -ljzdl.m -lstdc++
+LDFLAGS_HAL += -ljzdl.m $(LINK_STDCXX)
 ifeq ($(PERSONDET),1)
 CFLAGS += -DPERSONDET
 LDFLAGS_HAL += -lpersonDet_inf -ljzdl
@@ -184,7 +191,7 @@ LIVE555_INC := -I$(LIVE555_SYSROOT)/usr/include/liveMedia \
                -I$(LIVE555_SYSROOT)/usr/include/groupsock \
                -I$(LIVE555_SYSROOT)/usr/include/UsageEnvironment \
                -I$(LIVE555_SYSROOT)/usr/include/BasicUsageEnvironment
-LIVE555_LIBS := $(LIVE555_SYSROOT)/usr/lib/libliveMedia.a \
+LIVE555_LIBS ?= $(LIVE555_SYSROOT)/usr/lib/libliveMedia.a \
                 $(LIVE555_SYSROOT)/usr/lib/libgroupsock.a \
                 $(LIVE555_SYSROOT)/usr/lib/libBasicUsageEnvironment.a \
                 $(LIVE555_SYSROOT)/usr/lib/libUsageEnvironment.a
@@ -237,7 +244,7 @@ rsd-555: $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_BUILD_OBJ)
 		LIVE555_INC="$(LIVE555_INC)" \
 		LIVE555_LIBS="$(LIVE555_LIBS)" \
 		LIBS="$(LIB_IPC) $(LIB_COMMON) $(RSS_BUILD_LIBS)" \
-		LDFLAGS="$(LDFLAGS)" Q="$(Q)"
+		LDFLAGS="$(LDFLAGS)" LINK_STDCXX="$(LINK_STDCXX)" Q="$(Q)"
 
 rad: $(LIB_HAL_AUDIO_FILE) $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   rad"
@@ -315,7 +322,7 @@ rsp: $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_TLS_OBJ) $(RSS_BUILD_OBJ)
 		LIBS="$(LIB_IPC) $(LIB_COMMON) $(RSS_TLS_OBJ) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS) $(LDFLAGS_TLS) $(RSP_LDFLAGS)" Q="$(Q)"
 
-LDFLAGS_SRT ?= -lsrt -lstdc++ -latomic $(LDFLAGS_TLS)
+LDFLAGS_SRT ?= -lsrt $(LINK_STDCXX) -latomic $(LDFLAGS_TLS)
 CFLAGS_SRT  ?= $(if $(SYSROOT),-I$(SYSROOT)/usr/include)
 
 rsr: $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_BUILD_OBJ)

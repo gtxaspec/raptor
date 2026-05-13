@@ -17,6 +17,8 @@
 #   --no-audio-effects  Disable audio effects (NS/HPF/AGC)
 #   --no-srt       Disable SRT (no RSR daemon)
 #   --static-vendor-libs  Statically link vendor libs (libimp, libalog; requires --static)
+#   --static-stdcxx       Statically link libstdc++ (no libstdc++.so needed on device)
+#   --release      Optimize for size and strip binaries
 #   --clean        Clean all build artifacts
 #   --deps-only    Only build dependencies, not raptor
 #   --libc=TYPE    uclibc (default), musl, or glibc
@@ -127,6 +129,8 @@ OPT_CLEAN_ALL=0
 OPT_DEPS_ONLY=0
 OPT_STATIC=0
 OPT_STATIC_VENDOR=0
+OPT_STATIC_STDCXX=0
+OPT_RELEASE=0
 OPT_LOCAL=0
 JOBS="${JOBS:-$(nproc)}"
 
@@ -144,6 +148,8 @@ usage() {
     echo "  --no-srt       Disable SRT (no RSR daemon)"
     echo "  --static       Statically link optional deps (fewer .so files needed)"
     echo "  --static-vendor-libs  Also statically link vendor libs (libimp, libalog; requires --static)"
+    echo "  --static-stdcxx       Statically link libstdc++ (no libstdc++.so needed on device)"
+    echo "  --release      Optimize for size and strip binaries"
     echo "  --clean        Clean build artifacts (keep downloaded deps)"
     echo "  --clean-all    Remove everything (.deps/ + build/)"
     echo "  --deps-only    Only build dependencies"
@@ -164,6 +170,8 @@ for arg in "$@"; do
         --no-srt)    OPT_SRT= ;;
         --static)    OPT_STATIC=1 ;;
         --static-vendor-libs) OPT_STATIC_VENDOR=1 ;;
+        --static-stdcxx) OPT_STATIC_STDCXX=1 ;;
+        --release)   OPT_RELEASE=1 ;;
         --local)     OPT_LOCAL=1 ;;
         --clean)     OPT_CLEAN=1 ;;
         --clean-all) OPT_CLEAN_ALL=1 ;;
@@ -649,6 +657,15 @@ build_live555() {
     local cxx="${CROSS_COMPILE}g++"
     local ar="${CROSS_COMPILE}ar"
 
+    if [ "$OPT_STATIC" = 1 ]; then
+        local lib_link="${ar} cr "
+        local lib_suffix="a"
+        local lib_link_opts=""
+    else
+        local lib_link="${cxx} -o "
+        local lib_suffix="so"
+        local lib_link_opts="-shared -Wl,-soname,\$(notdir \$@) -L$SYSROOT_DIR/usr/lib"
+    fi
     cat > config.raptor <<EOCFG
 COMPILE_OPTS =		\$(INCLUDES) -I. -DSOCKLEN_T=socklen_t -DNO_OPENSSL -DNO_STD_LIB -DLOCALE_NOT_USED -DALLOW_RTSP_SERVER_PORT_REUSE -Os -fPIC
 C =			c
@@ -661,13 +678,14 @@ OBJ =			o
 LINK =			${cxx} -o
 LINK_OPTS =		-L. \$(LDFLAGS)
 CONSOLE_LINK_OPTS =	\$(LINK_OPTS)
-LIBRARY_LINK =		${ar} cr 
-LIBRARY_LINK_OPTS =
-LIB_SUFFIX =		a
+LIBRARY_LINK =		${lib_link}
+LIBRARY_LINK_OPTS =	${lib_link_opts}
+LIB_SUFFIX =		${lib_suffix}
 PREFIX =		/usr
 EOCFG
 
     # Apply thingino patches (strict-aliasing fix + ONVIF backchannel)
+    chmod -R u+w .
     for p in "$SCRIPT_DIR/rsd-555/patches/"*.patch; do
         [ -f "$p" ] && patch -p1 -N < "$p" 2>/dev/null || true
     done
@@ -679,10 +697,11 @@ EOCFG
     run live555-UsageEnvironment make -C UsageEnvironment -j"$JOBS"
     run live555-BasicUsageEnvironment make -C BasicUsageEnvironment -j"$JOBS"
 
-    cp -f groupsock/libgroupsock.a "$SYSROOT_DIR/usr/lib/"
-    cp -f liveMedia/libliveMedia.a "$SYSROOT_DIR/usr/lib/"
-    cp -f UsageEnvironment/libUsageEnvironment.a "$SYSROOT_DIR/usr/lib/"
-    cp -f BasicUsageEnvironment/libBasicUsageEnvironment.a "$SYSROOT_DIR/usr/lib/"
+    local ext="$lib_suffix"
+    cp -f groupsock/libgroupsock.$ext "$SYSROOT_DIR/usr/lib/"
+    cp -f liveMedia/libliveMedia.$ext "$SYSROOT_DIR/usr/lib/"
+    cp -f UsageEnvironment/libUsageEnvironment.$ext "$SYSROOT_DIR/usr/lib/"
+    cp -f BasicUsageEnvironment/libBasicUsageEnvironment.$ext "$SYSROOT_DIR/usr/lib/"
 
     mkdir -p "$SYSROOT_DIR/usr/include/liveMedia" \
              "$SYSROOT_DIR/usr/include/groupsock" \
@@ -729,7 +748,8 @@ build_libsrt() {
         -DENABLE_STATIC="$static" \
         $enc_flags \
         -DCMAKE_C_FLAGS="-Os" \
-        -DCMAKE_CXX_FLAGS="-Os"
+        -DCMAKE_CXX_FLAGS="-Os" \
+        -DCMAKE_SHARED_LINKER_FLAGS="$([ "$OPT_STATIC_STDCXX" = 1 ] && echo '-static-libstdc++')"
     run libsrt-build make -j"$JOBS"
     run libsrt-install make install
     if [ "$OPT_STATIC" = 1 ]; then
@@ -746,6 +766,7 @@ build_raptor_common() {
     make -C "$src" clean 2>/dev/null || true
     run raptor-common make -C "$src" CC="${CROSS_COMPILE}gcc" AR="${CROSS_COMPILE}ar" -j"$JOBS"
     cp -f "$src/librss_common.a" "$SYSROOT_DIR/usr/lib/"
+    [ -f "$src/librss_common.so" ] && cp -f "$src/librss_common.so" "$SYSROOT_DIR/usr/lib/"
     cp -f "$src/include/rss_common.h" "$SYSROOT_DIR/usr/include/"
     cp -f "$src/include/rss_net.h" "$SYSROOT_DIR/usr/include/"
 }
@@ -756,6 +777,7 @@ build_raptor_ipc() {
     make -C "$src" clean 2>/dev/null || true
     run raptor-ipc make -C "$src" CC="${CROSS_COMPILE}gcc" AR="${CROSS_COMPILE}ar" -j"$JOBS"
     cp -f "$src/librss_ipc.a" "$SYSROOT_DIR/usr/lib/"
+    [ -f "$src/librss_ipc.so" ] && cp -f "$src/librss_ipc.so" "$SYSROOT_DIR/usr/lib/"
     cp -f "$src/include/rss_ipc.h" "$SYSROOT_DIR/usr/include/"
 }
 
@@ -789,7 +811,7 @@ build_compy() {
         -DCMAKE_SYSTEM_NAME=Linux \
         -DCOMPY_SHARED=OFF \
         -DCOMPY_TLS_MBEDTLS="$tls_opt" \
-        -DCMAKE_C_FLAGS="-I$SYSROOT_DIR/usr/include" \
+        -DCMAKE_C_FLAGS="-Oz -I$SYSROOT_DIR/usr/include" \
         -DCMAKE_PREFIX_PATH="$SYSROOT_DIR/usr"
     run compy-build make -j"$JOBS"
 
@@ -899,6 +921,18 @@ if [ "$PLATFORM" = "a1" ]; then
     HAL_AUDIO="/dev/null"
 fi
 
+if [ "$OPT_STATIC" = 1 ]; then
+    LINK_IPC="$SYSROOT_DIR/usr/lib/librss_ipc.a"
+    LINK_COMMON="$SYSROOT_DIR/usr/lib/librss_common.a"
+    LINK_COMPY="$SYSROOT_DIR/usr/lib/libcompy.a"
+    LINK_LIVE555=""
+else
+    LINK_IPC="-lrss_ipc"
+    LINK_COMMON="-lrss_common"
+    LINK_COMPY="-lcompy"
+    LINK_LIVE555="-lliveMedia -lgroupsock -lBasicUsageEnvironment -lUsageEnvironment"
+fi
+
 make -j"$JOBS" \
     PLATFORM="$PLATFORM_UPPER" \
     CROSS_COMPILE="$CROSS_COMPILE" \
@@ -909,16 +943,18 @@ make -j"$JOBS" \
     COMPY_DIR=".deps/compy" \
     LIB_HAL_VIDEO="$HAL_VIDEO" \
     LIB_HAL_AUDIO="$HAL_AUDIO" \
-    LIB_IPC="$SYSROOT_DIR/usr/lib/librss_ipc.a" \
+    LIB_IPC="$LINK_IPC" \
     LIB_IPC_FILE="$SYSROOT_DIR/usr/lib/librss_ipc.a" \
-    LIB_COMMON="$SYSROOT_DIR/usr/lib/librss_common.a" \
+    LIB_COMMON="$LINK_COMMON" \
     LIB_COMMON_FILE="$SYSROOT_DIR/usr/lib/librss_common.a" \
-    LIB_COMPY="$SYSROOT_DIR/usr/lib/libcompy.a" \
+    LIB_COMPY="$LINK_COMPY" \
     LIB_COMPY_FILE="$SYSROOT_DIR/usr/lib/libcompy.a" \
     COMPY_CFLAGS="$COMPY_CFLAGS" \
     LIVE555_SYSROOT="$SYSROOT_DIR" \
-    EXTRA_CFLAGS="-I$SYSROOT_DIR/usr/include" \
+    ${LINK_LIVE555:+LIVE555_LIBS="$LINK_LIVE555"} \
+    EXTRA_CFLAGS="-I$SYSROOT_DIR/usr/include $([ "$OPT_RELEASE" = 1 ] && echo "-Oz -DNDEBUG")" \
     ${OPT_STATIC_VENDOR:+EXTRA_LDFLAGS="-no-pie"} \
+    $([ "$OPT_STATIC_STDCXX" = 1 ] && echo "STATIC_STDCXX=1") \
     ${OPT_TLS:+TLS=1 WEBTORRENT=1} \
     ${OPT_AAC:+AAC=1} \
     ${OPT_OPUS:+OPUS=1} \
@@ -932,6 +968,33 @@ for d in rvd rsd rad rhd rod ric rmr rmd rfs rwc rwd rsp rsr rsd-555 raptorctl r
     [ -f "$SCRIPT_DIR/$d/$d" ] && cp -f "$SCRIPT_DIR/$d/$d" "$SCRIPT_DIR/build/"
 done
 
+if [ "$OPT_RELEASE" = 1 ]; then
+    echo "Stripping binaries..."
+    ${CROSS_COMPILE}strip "$SCRIPT_DIR/build/"*
+fi
+
+# Collect shared libs needed for deployment (when not using --static)
+if [ "$OPT_STATIC" != 1 ]; then
+    mkdir -p "$SCRIPT_DIR/build/lib"
+    for bin in "$SCRIPT_DIR/build/"*; do
+        [ -f "$bin" ] || continue
+        readelf -d "$bin" 2>/dev/null | grep NEEDED | awk '{print $5}' | tr -d '[]' | while read -r lib; do
+            for dir in "$SYSROOT_DIR/usr/lib" "$SYSROOT_DIR/lib"; do
+                # Follow symlinks to get the actual file
+                if [ -e "$dir/$lib" ]; then
+                    cp -fL "$dir/$lib" "$SCRIPT_DIR/build/lib/$lib"
+                    break
+                fi
+            done
+        done
+    done
+    # Remove system libs that are already on any device
+    rm -f "$SCRIPT_DIR/build/lib"/libc.so* "$SCRIPT_DIR/build/lib"/ld-*.so* \
+          "$SCRIPT_DIR/build/lib"/libgcc_s.so* "$SCRIPT_DIR/build/lib"/libatomic.so*
+    [ "$OPT_RELEASE" = 1 ] && ${CROSS_COMPILE}strip "$SCRIPT_DIR/build/lib/"* 2>/dev/null
+fi
+
 echo ""
 echo "=== Build complete ==="
 ls -lh "$SCRIPT_DIR/build/"
+[ -d "$SCRIPT_DIR/build/lib" ] && echo "" && echo "Shared libs:" && ls -lh "$SCRIPT_DIR/build/lib/"
