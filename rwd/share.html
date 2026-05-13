@@ -244,7 +244,8 @@ async function start() {
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' }
-    ]
+    ],
+    bundlePolicy: 'max-bundle'
   });
   pc.addTransceiver('video', { direction: 'recvonly' });
   const at = pc.addTransceiver('audio', { direction: 'sendrecv' });
@@ -277,6 +278,11 @@ async function start() {
       startStats();
     }
     if (state === 'failed' || state === 'disconnected') stop();
+  };
+
+  pc.onconnectionstatechange = () => {
+    dbg('conn state:', pc.connectionState);
+    if (pc.connectionState === 'failed') stop();
   };
 
   pc.onsignalingstatechange = () => { dbg('signaling:', pc.signalingState); };
@@ -398,6 +404,7 @@ function stopTalk() {
   talkBtn.innerHTML = '<i class="bi bi-mic-fill"></i> Talk';
   talkBtn.classList.replace('btn-danger', 'btn-outline-secondary');
 }
+window.addEventListener('beforeunload', () => { if (pc) stop(); });
 </script>
 </body>
 </html>
