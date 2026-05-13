@@ -292,8 +292,9 @@ async function start() {
   dbgSdp('Local offer', offer.sdp);
   await pc.setLocalDescription(offer);
   await new Promise(r => {
-    if (pc.iceGatheringState === 'complete') r();
-    else pc.onicegatheringstatechange = () => { dbg('ICE gathering:', pc.iceGatheringState); if (pc.iceGatheringState === 'complete') r(); };
+    const timeout = setTimeout(() => { dbg('ICE gathering timeout, proceeding with available candidates'); r(); }, 5000);
+    if (pc.iceGatheringState === 'complete') { clearTimeout(timeout); r(); }
+    else pc.onicegatheringstatechange = () => { dbg('ICE gathering:', pc.iceGatheringState); if (pc.iceGatheringState === 'complete') { clearTimeout(timeout); r(); } };
   });
   dbgSdp('Offer (with candidates)', pc.localDescription.sdp);
 
