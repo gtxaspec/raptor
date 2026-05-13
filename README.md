@@ -11,7 +11,7 @@ encoded frames to SHM rings; all other daemons are pure consumers or support
 services. On camera platforms, RVD owns the ISP/encoder hardware. On platforms
 without ISP (A1, x86 testing), RFS replaces RVD+RAD by reading from files.
 
-Raptor is fully modular -- run only the daemons your application requires.
+Raptor is fully *modular* -- **install and run only the daemons your application requires**.
 A headless recorder might run just RVD and RMR. A cloud-connected doorbell
 might run RVD, RSD, RAD, RIC, and ROD. A minimal RTSP-only camera needs
 just RVD and RSD. On an A1 media processor, RFS + RSD streams video from
