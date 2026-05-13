@@ -617,3 +617,6 @@ void rss_hal_check_platform(const char *name)
 {
 	(void)name;
 }
+
+__attribute__((weak)) void rss_daemon_request_shutdown(void) {}
+__attribute__((weak)) void rss_daemon_request_restart(void) {}
