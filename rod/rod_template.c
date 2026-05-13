@@ -141,7 +141,7 @@ int rod_expand_template(rod_state_t *st, const char *tmpl, char *out, int out_si
 				int frame = (int)((int64_t)ts.tv_nsec * fps / 1000000000L);
 				if (frame >= fps)
 					frame = fps - 1;
-				char fn[4];
+				char fn[12];
 				snprintf(fn, sizeof(fn), "%02d", frame);
 				memcpy(fp, fn, 2);
 			}
