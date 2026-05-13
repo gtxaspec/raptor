@@ -107,7 +107,7 @@ Runtime shared libraries from the Ingenic SDK / Buildroot sysroot:
 ./build-standalone.sh t31 --clean        # clean all build artifacts
 ```
 
-Supported platforms: `t20`, `t21`, `t23`, `t30`, `t31`, `t32`, `t33`, `t40`, `t41`, `a1`.
+Supported platforms: `t10`, `t20`, `t21`, `t23`, `t30`, `t31`, `t32`, `t33`, `t40`, `t41`, `a1`.
 
 First run downloads the toolchain and all dependencies automatically.
 Output binaries go to `build/`. Options: `--no-tls`, `--no-aac`,
@@ -122,7 +122,7 @@ make PLATFORM=T31 CROSS_COMPILE=mipsel-linux- SYSROOT=/path/to/sysroot
 
 Required variables:
 
-- `PLATFORM` -- target SoC: `T20`, `T21`, `T23`, `T30`, `T31`, `T32`, `T33`, `T40`, `T41`, `A1`
+- `PLATFORM` -- target SoC: `T10`, `T20`, `T21`, `T23`, `T30`, `T31`, `T32`, `T33`, `T40`, `T41`, `A1`
 - `CROSS_COMPILE` -- toolchain prefix (e.g., `mipsel-linux-`)
 
 Optional variables:
@@ -265,6 +265,7 @@ clock. Reports min/avg/max/stddev/P50/P95/P99.
 
 | SoC | SDK Generation | Status |
 |-----|---------------|--------|
+| T10 | Old (IMP v1)  | Supported (uses T20 SDK) |
 | T20 | Old (IMP v1)  | Supported |
 | T21 | Old (IMP v1)  | Supported |
 | T23 | Old (IMP v1)  | Supported |
