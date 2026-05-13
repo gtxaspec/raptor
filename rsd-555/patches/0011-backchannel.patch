@@ -277,12 +277,12 @@ index 5be74d9..95de163 100644
    prevClientConnection->changeClientInputSocket(fClientInputSocket, fInputTLS,
  						extraData, extraDataSize);
 @@ -655,7 +668,7 @@ void RTSPServer::RTSPClientConnection::handleHTTPCmd_StreamingGET(char const* /*
- 
+
  void RTSPServer::RTSPClientConnection::resetRequestBuffer() {
    ClientConnection::resetRequestBuffer();
 -  
 +
-   fLastCRLF = fRequestBuffer - 3; // hack: Ensures that we don't think we have end-of-msg if the data starts with <CR><LF>
+   fLastCRLF = &fRequestBuffer[-3]; // hack: Ensures that we don't think we have end-of-msg if the data starts with <CR><LF>
    fBase64RemainderCount = 0;
  }
 @@ -670,7 +683,7 @@ void RTSPServer::RTSPClientConnection::closeSocketsRTSP() {

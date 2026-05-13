@@ -20,7 +20,7 @@ all: $(BIN)
 
 $(BIN): $(OBJS)
 	@echo "  LD      $@"
-	$(Q)$(CXX) -o $@ $^ $(LIBS) $(LIVE555_LIBS) $(LDFLAGS) -lstdc++
+	$(Q)$(CXX) -o $@ $^ $(LIBS) $(LIVE555_LIBS) $(LDFLAGS) $(LINK_STDCXX)
 
 %.o: %.cpp
 	@echo "  CXX     $<"
