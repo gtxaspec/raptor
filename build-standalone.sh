@@ -402,7 +402,8 @@ build_ingenic_lib() {
             for f in "$accel/MXU/$ivs_libc"/libmxu_*.so; do
                 [ -f "$f" ] && cp -f "$f" "$SYSROOT_DIR/usr/lib/"
             done
-            cp -f "$accel/jzdl/$ivs_libc/libjzdl.m.so" "$SYSROOT_DIR/usr/lib/" 2>/dev/null || true
+            local jzdl_dir="$src/acceleration-modules/jzdl/lib/$GCC_VER/$ivs_libc"
+            [ -f "$jzdl_dir/libjzdl.m.so" ] && cp -f "$jzdl_dir/libjzdl.m.so" "$SYSROOT_DIR/usr/lib/"
         else
             echo "WARNING: IVS libs not found at $accel/IVS/$ivs_libc"
         fi
