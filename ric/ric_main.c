@@ -85,7 +85,7 @@ static void load_config(ric_state_t *st)
  *   "ir940": 9          (IR LED GPIO, used if ir850 absent)
  */
 #define THINGINO_JSON "/etc/thingino.json"
-#define GPIO_PIN_MAX 191
+#define GPIO_PIN_MAX  191
 
 static bool valid_gpio(int pin)
 {
@@ -259,6 +259,33 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 							   "range 50-10000");
 			c->poll_interval_ms = val;
 			cfg_key = "poll_interval_ms";
+		} else if (strcmp(key, "photo_ev_night") == 0) {
+			if (val < 0)
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size, "must be >= 0");
+			c->photo.ev_night = (uint32_t)val;
+			cfg_key = "photo_ev_night";
+		} else if (strcmp(key, "photo_ev_deep") == 0) {
+			if (val < 0)
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size, "must be >= 0");
+			c->photo.ev_deep = (uint32_t)val;
+			cfg_key = "photo_ev_deep";
+		} else if (strcmp(key, "photo_ev_day") == 0) {
+			if (val < 0)
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size, "must be >= 0");
+			c->photo.ev_day = (uint32_t)val;
+			cfg_key = "photo_ev_day";
+		} else if (strcmp(key, "photo_rgain_rec") == 0) {
+			if (val < 0 || val > 65535)
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+							   "range 0-65535");
+			c->photo.rgain_rec = (uint16_t)val;
+			cfg_key = "photo_rgain_rec";
+		} else if (strcmp(key, "photo_bgain_rec") == 0) {
+			if (val < 0 || val > 65535)
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+							   "range 0-65535");
+			c->photo.bgain_rec = (uint16_t)val;
+			cfg_key = "photo_bgain_rec";
 		} else {
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "unknown key");
 		}
@@ -288,6 +315,11 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		cJSON_AddNumberToObject(r, "day_threshold", c->day_threshold);
 		cJSON_AddNumberToObject(r, "hysteresis_sec", c->hysteresis_sec);
 		cJSON_AddNumberToObject(r, "poll_interval_ms", c->poll_interval_ms);
+		cJSON_AddNumberToObject(r, "photo_ev_night", c->photo.ev_night);
+		cJSON_AddNumberToObject(r, "photo_ev_deep", c->photo.ev_deep);
+		cJSON_AddNumberToObject(r, "photo_ev_day", c->photo.ev_day);
+		cJSON_AddNumberToObject(r, "photo_rgain_rec", c->photo.rgain_rec);
+		cJSON_AddNumberToObject(r, "photo_bgain_rec", c->photo.bgain_rec);
 		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 	}
 
@@ -395,13 +427,14 @@ int main(int argc, char **argv)
 		}
 	}
 
-	/* Apply initial mode */
+	/* Apply initial mode -- force GPIOs to known state at startup */
+	st.current_mode = -1;
 	if (st.settings.opmode == RIC_FORCE_DAY)
 		ric_set_mode(&st, RIC_MODE_DAY);
 	else if (st.settings.opmode == RIC_FORCE_NIGHT)
 		ric_set_mode(&st, RIC_MODE_NIGHT);
 	else
-		ric_set_mode(&st, RIC_MODE_DAY); /* start in day, auto will adjust */
+		ric_set_mode(&st, RIC_MODE_DAY);
 
 	/* Control socket */
 	rss_mkdir_p(RSS_RUN_DIR);
@@ -418,7 +451,8 @@ int main(int argc, char **argv)
 	}
 
 	static const char *trigger_names[] = {"luma", "gain", "adc", "photo"};
-	RSS_INFO("ric running (mode=%s, trigger=%s, gpio_ircut=%d, gpio_ircut2=%d, gpio_irled=%d, gpio_irled2=%d)",
+	RSS_INFO("ric running (mode=%s, trigger=%s, gpio_ircut=%d, gpio_ircut2=%d, gpio_irled=%d, "
+		 "gpio_irled2=%d)",
 		 st.settings.opmode == RIC_AUTO
 			 ? "auto"
 			 : (st.settings.opmode == RIC_FORCE_DAY ? "day" : "night"),
