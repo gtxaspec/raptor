@@ -18,6 +18,7 @@
 #   --no-srt       Disable SRT (no RSR daemon)
 #   --static-vendor-libs  Statically link vendor libs (libimp, libalog; requires --static)
 #   --static-stdcxx       Statically link libstdc++ (no libstdc++.so needed on device)
+#   --ivs          Enable IVS detection (persondet + JZDL)
 #   --release      Optimize for size and strip binaries
 #   --clean        Clean all build artifacts
 #   --deps-only    Only build dependencies, not raptor
@@ -131,6 +132,7 @@ OPT_STATIC=0
 OPT_STATIC_VENDOR=0
 OPT_STATIC_STDCXX=0
 OPT_RELEASE=0
+OPT_IVS=0
 OPT_LOCAL=0
 JOBS="${JOBS:-$(nproc)}"
 
@@ -149,6 +151,7 @@ usage() {
     echo "  --static       Statically link optional deps (fewer .so files needed)"
     echo "  --static-vendor-libs  Also statically link vendor libs (libimp, libalog; requires --static)"
     echo "  --static-stdcxx       Statically link libstdc++ (no libstdc++.so needed on device)"
+    echo "  --ivs          Enable IVS detection (persondet + JZDL)"
     echo "  --release      Optimize for size and strip binaries"
     echo "  --clean        Clean build artifacts (keep downloaded deps)"
     echo "  --clean-all    Remove everything (.deps/ + build/)"
@@ -172,6 +175,7 @@ for arg in "$@"; do
         --static-vendor-libs) OPT_STATIC_VENDOR=1 ;;
         --static-stdcxx) OPT_STATIC_STDCXX=1 ;;
         --release)   OPT_RELEASE=1 ;;
+        --ivs)       OPT_IVS=1 ;;
         --local)     OPT_LOCAL=1 ;;
         --clean)     OPT_CLEAN=1 ;;
         --clean-all) OPT_CLEAN_ALL=1 ;;
@@ -386,6 +390,22 @@ build_ingenic_lib() {
 
     if [ "$OPT_STATIC_VENDOR" = 1 ]; then
         rm -f "$SYSROOT_DIR/usr/lib/libimp.so" "$SYSROOT_DIR/usr/lib/libalog.so"
+    fi
+
+    if [ "$OPT_IVS" = 1 ]; then
+        local accel="$src/acceleration-modules/ivs/lib/$GCC_VER"
+        local ivs_libc="$sdk_libc"
+        if [ -d "$accel/IVS/$ivs_libc" ]; then
+            echo "Installing IVS libs (persondet + jzdl + mxu)"
+            cp -f "$accel/IVS/$ivs_libc/libpersonDet_inf.so" "$SYSROOT_DIR/usr/lib/"
+            cp -f "$accel/IVS/$ivs_libc/libjzdl.so" "$SYSROOT_DIR/usr/lib/"
+            for f in "$accel/MXU/$ivs_libc"/libmxu_*.so; do
+                [ -f "$f" ] && cp -f "$f" "$SYSROOT_DIR/usr/lib/"
+            done
+            cp -f "$accel/jzdl/$ivs_libc/libjzdl.m.so" "$SYSROOT_DIR/usr/lib/" 2>/dev/null || true
+        else
+            echo "WARNING: IVS libs not found at $accel/IVS/$ivs_libc"
+        fi
     fi
 }
 
@@ -790,6 +810,7 @@ build_raptor_hal() {
         PLATFORM="$PLATFORM_UPPER" \
         CROSS_COMPILE="$CROSS_COMPILE" \
         INGENIC_HEADERS="$src/ingenic-headers" \
+        $([ "$OPT_IVS" = 1 ] && echo "CXX=${CROSS_COMPILE}g++ JZDL_INCLUDE=$src/ingenic-headers/Txx/jzdl PERSONDET=1") \
         -j"$JOBS"
     cp -f "$src/libraptor_hal_video.a" "$SYSROOT_DIR/usr/lib/"
     cp -f "$src/libraptor_hal_audio.a" "$SYSROOT_DIR/usr/lib/"
@@ -957,6 +978,7 @@ make -j"$JOBS" \
     ${OPT_STATIC_VENDOR:+EXTRA_LDFLAGS="-no-pie"} \
     $([ "$OPT_STATIC_STDCXX" = 1 ] && echo "STATIC_STDCXX=1") \
     ${OPT_TLS:+TLS=1 WEBTORRENT=1} \
+    $([ "$OPT_IVS" = 1 ] && echo "IVS_DETECT=1 PERSONDET=1") \
     ${OPT_AAC:+AAC=1} \
     ${OPT_OPUS:+OPUS=1} \
     ${OPT_MP3:+MP3=1} \
