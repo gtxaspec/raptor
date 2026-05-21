@@ -630,7 +630,7 @@ int rsp_rtmp_parse_url(const char *url, char *host, int host_size, int *port, ch
 			hlen = host_size - 1;
 		memcpy(host, p, (size_t)hlen);
 		host[hlen] = '\0';
-		*port = atoi(colon + 1);
+		*port = (int)strtol(colon + 1, NULL, 10);
 	} else {
 		int hlen = (int)(slash - p);
 		if (hlen >= host_size)

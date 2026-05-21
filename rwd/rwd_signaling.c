@@ -383,8 +383,10 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 		int stream_idx = 0;
 		if (qs) {
 			const char *sp = strstr(qs + 1, "stream=");
-			if (sp)
-				stream_idx = (sp[7] == '1') ? 1 : 0;
+			if (sp) {
+				int idx = sp[7] - '0';
+				stream_idx = (idx >= 0 && idx < RWD_STREAM_COUNT) ? idx : 0;
+			}
 		}
 		/* Parse Content-Length */
 		size_t content_length = 0;
