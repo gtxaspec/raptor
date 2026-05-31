@@ -29,10 +29,13 @@ tests: $(TEST_SRCS) $(LIB_SRCS) $(CTRL_SRCS) $(IPC_SRCS) $(SDP_SRC) greatest.h
 	$(CC) $(CFLAGS) -DRWD_H -include ../fuzz/fuzz_rwd_shim.h \
 		-o $@ $(TEST_SRCS) $(LIB_SRCS) $(CTRL_SRCS) $(IPC_SRCS) $(SDP_SRC) $(LDFLAGS)
 
+test_slow_rtsp: test_slow_rtsp.c
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
 test: tests
 	./tests
 
 clean:
-	rm -f tests sdp_parse.c
+	rm -f tests test_slow_rtsp sdp_parse.c
 
 .PHONY: test clean

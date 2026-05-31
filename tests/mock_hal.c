@@ -1,14 +1,17 @@
 /*
- * mock_hal.c -- Minimal mock HAL for host-side ASan testing.
+ * mock_hal.c -- Mock HAL for host-side ASan testing.
  *
- * Provides rss_hal_create/destroy/get_ops with stub implementations.
- * All ops return RSS_OK (or RSS_ERR_NOTSUP if NULL). enc_poll returns
- * -EAGAIN to avoid infinite loops in encoder threads.
+ * Simulates an Ingenic encoder: produces H.264 frames at 25fps,
+ * supports SHM-backed refmode (zerocopy), and provides stubs for
+ * all HAL operations. Per-channel state tracks encoder config,
+ * SHM injection, and buffer ping-pong rotation.
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include <errno.h>
 #include <time.h>
 #include <raptor_hal.h>
@@ -38,10 +41,58 @@ void rss_hal_set_log_func(rss_hal_log_func_t func)
 	rss_hal_log_fn = func ? func : mock_log_stderr;
 }
 
-/* Minimal internal context */
+/* ── Per-channel encoder state ── */
+
+#define MOCK_MAX_CHANNELS 8
+#define MOCK_NAL_MAX      4
+#define MOCK_FRAME_BUF    8192
+
+/* H.264 NAL start codes */
+static const uint8_t h264_sps[] = {
+	0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0xC0,
+	0x1E, 0xD9, 0x00, 0xA0, 0x47, 0xFE, 0xC8,
+};
+static const uint8_t h264_pps[] = {
+	0x00, 0x00, 0x00, 0x01, 0x68, 0xCE, 0x38, 0x80,
+};
+static const uint8_t h264_idr_sc[] = {0x00, 0x00, 0x00, 0x01, 0x65};
+static const uint8_t h264_p_sc[]   = {0x00, 0x00, 0x00, 0x01, 0x41};
+
+/* H.265 NAL start codes (2-byte header: type<<1 | 0, tid=1) */
+static const uint8_t h265_vps[] = {
+	0x00, 0x00, 0x00, 0x01, 0x40, 0x01, 0x0C, 0x01,
+	0xFF, 0xFF, 0x01, 0x60, 0x00, 0x00, 0x00, 0x00,
+};
+static const uint8_t h265_sps[] = {
+	0x00, 0x00, 0x00, 0x01, 0x42, 0x01, 0x01, 0x01,
+	0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+};
+static const uint8_t h265_pps[] = {
+	0x00, 0x00, 0x00, 0x01, 0x44, 0x01, 0xC1, 0x72,
+};
+static const uint8_t h265_idr_sc[] = {0x00, 0x00, 0x00, 0x01, 0x26, 0x01};
+static const uint8_t h265_p_sc[]   = {0x00, 0x00, 0x00, 0x01, 0x02, 0x01};
+
+typedef struct {
+	bool active;
+	uint32_t frame_seq;
+	uint8_t buf_idx;
+
+	uint8_t *shm_addr;
+	uint32_t shm_size;
+	uint32_t buf_count;
+	uint32_t buf_stride;
+
+	rss_video_config_t cfg;
+
+	uint8_t frame_storage[MOCK_FRAME_BUF];
+	rss_nal_unit_t nals[MOCK_NAL_MAX];
+} mock_channel_t;
+
 struct rss_hal_ctx {
 	const rss_hal_ops_t *ops;
 	bool initialized;
+	mock_channel_t channels[MOCK_MAX_CHANNELS];
 };
 
 /* ── Stub implementations ── */
@@ -71,51 +122,253 @@ static void *mock_null_ptr(void *ctx, ...)
 	return NULL;
 }
 
+/* ── Encoder: per-channel operations ── */
+
+static int mock_enc_create_channel(void *ctx, int chn, const rss_video_config_t *cfg)
+{
+	rss_hal_ctx_t *hal = ctx;
+	if (chn < 0 || chn >= MOCK_MAX_CHANNELS)
+		return -EINVAL;
+
+	mock_channel_t *ch = &hal->channels[chn];
+	ch->cfg = *cfg;
+	ch->frame_seq = 0;
+	ch->active = true;
+	return RSS_OK;
+}
+
+static int mock_enc_inject_stream_shm(void *ctx, int chn, void *shm_addr, uint32_t shm_size)
+{
+	rss_hal_ctx_t *hal = ctx;
+	if (chn < 0 || chn >= MOCK_MAX_CHANNELS)
+		return -EINVAL;
+	if (!shm_addr || shm_size == 0)
+		return -EINVAL;
+
+	mock_channel_t *ch = &hal->channels[chn];
+	ch->shm_addr = shm_addr;
+	ch->shm_size = shm_size;
+	ch->buf_count = 2;
+	ch->buf_stride = shm_size / ch->buf_count;
+	ch->buf_idx = 0;
+	return RSS_OK;
+}
+
 static int mock_enc_poll(void *ctx, int chn, uint32_t timeout_ms)
 {
-	(void)ctx;
-	(void)chn;
-	/* Sleep briefly then return timeout to avoid busy spin */
-	struct timespec ts = {.tv_sec = 0, .tv_nsec = timeout_ms * 1000000ULL};
-	if (ts.tv_nsec > 100000000)
-		ts.tv_nsec = 100000000; /* cap at 100ms */
+	rss_hal_ctx_t *hal = ctx;
+	if (chn < 0 || chn >= MOCK_MAX_CHANNELS)
+		return -EAGAIN;
+
+	mock_channel_t *ch = &hal->channels[chn];
+	if (!ch->active)
+		return -EAGAIN;
+
+	uint32_t sleep_ms = 40;
+	if (sleep_ms > timeout_ms)
+		sleep_ms = timeout_ms;
+	struct timespec ts = {
+		.tv_sec = sleep_ms / 1000,
+		.tv_nsec = (sleep_ms % 1000) * 1000000ULL,
+	};
 	nanosleep(&ts, NULL);
-	return -EAGAIN;
+	return RSS_OK;
 }
 
 static int mock_enc_get_frame(void *ctx, int chn, rss_frame_t *frame)
 {
-	(void)ctx;
-	(void)chn;
-	(void)frame;
-	return -EAGAIN;
-}
+	rss_hal_ctx_t *hal = ctx;
+	if (chn < 0 || chn >= MOCK_MAX_CHANNELS)
+		return -EINVAL;
 
-static int mock_fs_create_channel(void *ctx, int chn, const rss_fs_config_t *cfg)
-{
-	(void)ctx;
-	(void)chn;
-	(void)cfg;
+	mock_channel_t *ch = &hal->channels[chn];
+	if (!ch->active)
+		return -EAGAIN;
+
+	uint32_t gop = ch->cfg.gop_length ? ch->cfg.gop_length : 50;
+	bool is_key = (ch->frame_seq % gop == 0);
+	bool is_jpeg = (ch->cfg.codec == RSS_CODEC_JPEG || ch->cfg.codec == RSS_CODEC_MJPEG);
+
+	uint8_t *dest;
+	uint32_t dest_cap;
+
+	if (ch->shm_addr && !is_jpeg) {
+		uint32_t offset = (uint32_t)ch->buf_idx * ch->buf_stride;
+		dest = ch->shm_addr + offset;
+		dest_cap = ch->buf_stride;
+	} else {
+		dest = ch->frame_storage;
+		dest_cap = MOCK_FRAME_BUF;
+	}
+
+	uint32_t pos = 0;
+	uint32_t nal_idx = 0;
+
+	bool is_h265 = (ch->cfg.codec == RSS_CODEC_H265);
+
+	if (is_jpeg) {
+		static const uint8_t fake_jpeg[] = {
+			0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46,
+			0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01,
+			0x00, 0x01, 0x00, 0x00, 0xFF, 0xD9,
+		};
+		if (sizeof(fake_jpeg) > dest_cap)
+			return -ENOSPC;
+		memcpy(dest, fake_jpeg, sizeof(fake_jpeg));
+		ch->nals[nal_idx++] = (rss_nal_unit_t){
+			.data = dest,
+			.length = sizeof(fake_jpeg),
+			.type = RSS_NAL_JPEG_FRAME,
+			.frame_end = true,
+		};
+		pos = sizeof(fake_jpeg);
+	} else if (is_key && is_h265) {
+		memcpy(dest + pos, h265_vps, sizeof(h265_vps));
+		ch->nals[nal_idx++] = (rss_nal_unit_t){
+			.data = dest + pos,
+			.length = sizeof(h265_vps),
+			.type = RSS_NAL_H265_VPS,
+			.frame_end = false,
+		};
+		pos += sizeof(h265_vps);
+
+		memcpy(dest + pos, h265_sps, sizeof(h265_sps));
+		ch->nals[nal_idx++] = (rss_nal_unit_t){
+			.data = dest + pos,
+			.length = sizeof(h265_sps),
+			.type = RSS_NAL_H265_SPS,
+			.frame_end = false,
+		};
+		pos += sizeof(h265_sps);
+
+		memcpy(dest + pos, h265_pps, sizeof(h265_pps));
+		ch->nals[nal_idx++] = (rss_nal_unit_t){
+			.data = dest + pos,
+			.length = sizeof(h265_pps),
+			.type = RSS_NAL_H265_PPS,
+			.frame_end = false,
+		};
+		pos += sizeof(h265_pps);
+
+		/* IDR_W_RADL slice after param sets */
+		uint32_t idr_start = pos;
+		memcpy(dest + pos, h265_idr_sc, sizeof(h265_idr_sc));
+		pos += sizeof(h265_idr_sc);
+		uint32_t fill = 2048;
+		if (pos + fill > dest_cap)
+			fill = dest_cap - pos;
+		memset(dest + pos, 0xAB, fill);
+		pos += fill;
+		ch->nals[nal_idx - 1].frame_end = false;
+		/* reuse last slot for IDR - need MOCK_NAL_MAX >= 4 */
+		if (nal_idx < MOCK_NAL_MAX) {
+			ch->nals[nal_idx++] = (rss_nal_unit_t){
+				.data = dest + idr_start,
+				.length = pos - idr_start,
+				.type = RSS_NAL_H265_IDR,
+				.frame_end = true,
+			};
+		}
+	} else if (is_key) {
+		memcpy(dest + pos, h264_sps, sizeof(h264_sps));
+		ch->nals[nal_idx++] = (rss_nal_unit_t){
+			.data = dest + pos,
+			.length = sizeof(h264_sps),
+			.type = RSS_NAL_H264_SPS,
+			.frame_end = false,
+		};
+		pos += sizeof(h264_sps);
+
+		memcpy(dest + pos, h264_pps, sizeof(h264_pps));
+		ch->nals[nal_idx++] = (rss_nal_unit_t){
+			.data = dest + pos,
+			.length = sizeof(h264_pps),
+			.type = RSS_NAL_H264_PPS,
+			.frame_end = false,
+		};
+		pos += sizeof(h264_pps);
+
+		uint32_t idr_start = pos;
+		memcpy(dest + pos, h264_idr_sc, sizeof(h264_idr_sc));
+		pos += sizeof(h264_idr_sc);
+		uint32_t fill = 16384;
+		if (pos + fill > dest_cap)
+			fill = dest_cap - pos;
+		memset(dest + pos, 0xAB, fill);
+		pos += fill;
+		ch->nals[nal_idx++] = (rss_nal_unit_t){
+			.data = dest + idr_start,
+			.length = pos - idr_start,
+			.type = RSS_NAL_H264_IDR,
+			.frame_end = true,
+		};
+	} else if (is_h265) {
+		memcpy(dest + pos, h265_p_sc, sizeof(h265_p_sc));
+		pos += sizeof(h265_p_sc);
+		uint32_t fill = 256;
+		if (pos + fill > dest_cap)
+			fill = dest_cap - pos;
+		memset(dest + pos, 0xCD, fill);
+		pos += fill;
+		ch->nals[nal_idx++] = (rss_nal_unit_t){
+			.data = dest,
+			.length = pos,
+			.type = RSS_NAL_H265_SLICE,
+			.frame_end = true,
+		};
+	} else {
+		memcpy(dest + pos, h264_p_sc, sizeof(h264_p_sc));
+		pos += sizeof(h264_p_sc);
+		uint32_t fill = 256;
+		if (pos + fill > dest_cap)
+			fill = dest_cap - pos;
+		memset(dest + pos, 0xCD, fill);
+		pos += fill;
+		ch->nals[nal_idx++] = (rss_nal_unit_t){
+			.data = dest,
+			.length = pos,
+			.type = RSS_NAL_H264_SLICE,
+			.frame_end = true,
+		};
+	}
+
+	memset(frame, 0, sizeof(*frame));
+	frame->nals = ch->nals;
+	frame->nal_count = nal_idx;
+	frame->codec = ch->cfg.codec;
+	frame->timestamp = (int64_t)ch->frame_seq * 40000;
+	frame->seq = ch->frame_seq;
+	frame->is_key = is_key;
+
+	if (ch->shm_addr && !is_jpeg)
+		ch->buf_idx = (ch->buf_idx + 1) % ch->buf_count;
+	ch->frame_seq++;
+
 	return RSS_OK;
 }
 
-static int mock_enc_create_channel(void *ctx, int chn, const rss_video_config_t *cfg)
+static int mock_enc_get_rmem_info(void *ctx, uintptr_t *virt_base, uint32_t *size,
+				  uint32_t *mmap_offset)
 {
 	(void)ctx;
-	(void)chn;
-	(void)cfg;
+	*virt_base = 0;
+	*size = 0;
+	*mmap_offset = 0;
 	return RSS_OK;
 }
 
 static int mock_enc_get_channel_attr(void *ctx, int chn, rss_video_config_t *cfg)
 {
-	(void)ctx;
-	(void)chn;
+	rss_hal_ctx_t *hal = ctx;
+	if (chn >= 0 && chn < MOCK_MAX_CHANNELS && hal->channels[chn].active) {
+		*cfg = hal->channels[chn].cfg;
+		return RSS_OK;
+	}
 	memset(cfg, 0, sizeof(*cfg));
 	cfg->codec = RSS_CODEC_H264;
 	cfg->width = 1920;
 	cfg->height = 1080;
-	cfg->profile = 2; /* high */
+	cfg->profile = 2;
 	cfg->rc_mode = RSS_RC_VBR;
 	cfg->bitrate = 2000000;
 	cfg->max_bitrate = 4000000;
@@ -128,6 +381,14 @@ static int mock_enc_get_channel_attr(void *ctx, int chn, rss_video_config_t *cfg
 	cfg->gop_mode = RSS_GOP_DEFAULT;
 	cfg->max_same_scene_cnt = 2;
 	cfg->buf_size = 1048576;
+	return RSS_OK;
+}
+
+static int mock_fs_create_channel(void *ctx, int chn, const rss_fs_config_t *cfg)
+{
+	(void)ctx;
+	(void)chn;
+	(void)cfg;
 	return RSS_OK;
 }
 
@@ -212,6 +473,8 @@ static int mock_enc_get_jpeg_qp(void *ctx, int chn, int *qp)
 	return RSS_OK;
 }
 
+/* ── OSD ── */
+
 static int mock_osd_create_region(void *ctx, int *handle, const rss_osd_region_t *attr)
 {
 	(void)ctx;
@@ -220,6 +483,8 @@ static int mock_osd_create_region(void *ctx, int *handle, const rss_osd_region_t
 	*handle = next_handle++;
 	return RSS_OK;
 }
+
+/* ── ISP ── */
 
 static int mock_get_exposure(void *ctx, rss_exposure_t *exp)
 {
@@ -273,6 +538,8 @@ static int mock_isp_get_wb(void *ctx, rss_wb_config_t *wb_cfg)
 	return RSS_OK;
 }
 
+/* ── Audio ── */
+
 static int mock_audio_init(void *ctx, const rss_audio_config_t *cfg)
 {
 	(void)ctx;
@@ -286,20 +553,21 @@ static int mock_audio_read_frame(void *ctx, int dev, int chn, rss_audio_frame_t 
 	(void)dev;
 	(void)chn;
 	(void)block;
-	static int16_t pcm_buf[320]; /* 20ms at 16kHz */
+	static int16_t pcm_buf[320];
 	static uint32_t seq;
 
-	/* 20ms cadence (50 fps audio) */
 	struct timespec ts = {.tv_sec = 0, .tv_nsec = 20000000};
 	nanosleep(&ts, NULL);
 
 	frame->data = pcm_buf;
 	frame->length = sizeof(pcm_buf);
-	frame->timestamp = (int64_t)seq * 20000; /* 20ms in µs */
+	frame->timestamp = (int64_t)seq * 20000;
 	frame->seq = seq++;
 	frame->_priv = NULL;
 	return RSS_OK;
 }
+
+/* ── IVS ── */
 
 static int mock_ivs_get_result(void *ctx, int chn, void **result)
 {
@@ -309,10 +577,12 @@ static int mock_ivs_get_result(void *ctx, int chn, void **result)
 	return -EAGAIN;
 }
 
+/* ── Capabilities ── */
+
 static const rss_hal_caps_t mock_caps = {
 	.soc_name = "T31_MOCK",
 	.sdk_version = "mock-1.0",
-	.has_h265 = false,
+	.has_h265 = true,
 	.has_smartp_gop = true,
 	.has_rc_options = true,
 	.has_roi = true,
@@ -321,7 +591,7 @@ static const rss_hal_caps_t mock_caps = {
 	.has_super_frame = true,
 	.has_gop_attr = true,
 	.has_set_bitrate = true,
-	.has_stream_buf_size = true,
+	.has_stream_buf_size = false,
 	.has_color2grey = true,
 	.has_mbrc = true,
 	.has_qpg_mode = true,
@@ -360,16 +630,18 @@ static const rss_hal_ops_t mock_ops = {
 	/* Encoder */
 	.enc_create_group = (void *)mock_ok,
 	.enc_destroy_group = (void *)mock_ok,
-	.enc_create_channel = (void *)mock_enc_create_channel,
+	.enc_create_channel = mock_enc_create_channel,
 	.enc_destroy_channel = (void *)mock_ok,
 	.enc_register_channel = (void *)mock_ok,
 	.enc_unregister_channel = (void *)mock_ok,
 	.enc_start = (void *)mock_ok,
 	.enc_stop = (void *)mock_ok,
 	.enc_poll = mock_enc_poll,
-	.enc_get_frame = (void *)mock_enc_get_frame,
+	.enc_get_frame = mock_enc_get_frame,
 	.enc_release_frame = (void *)mock_ok,
 	.enc_request_idr = (void *)mock_ok,
+	.enc_inject_stream_shm = mock_enc_inject_stream_shm,
+	.enc_get_rmem_info = mock_enc_get_rmem_info,
 	.enc_set_rc_mode = (void *)mock_ok,
 	.enc_set_bitrate = (void *)mock_ok,
 	.enc_set_gop = (void *)mock_ok,

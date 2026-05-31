@@ -399,6 +399,11 @@ $CC $CFLAGS -c "$RAPTOR_DIR/tests/create_rings.c" -o "$OUT/create_rings.o"
 $CC -o "$OUT/create_rings" "$OUT/create_rings.o" $LIBS $LDFLAGS
 echo "  -> create_rings"
 
+echo "=== test_slow_rtsp ==="
+$CC $CFLAGS -c "$RAPTOR_DIR/tests/test_slow_rtsp.c" -o "$OUT/test_slow_rtsp.o"
+$CC -o "$OUT/test_slow_rtsp" "$OUT/test_slow_rtsp.o" $LDFLAGS
+echo "  -> test_slow_rtsp"
+
 echo "=== RWC ==="
 $CC $CFLAGS -c "$RAPTOR_DIR/rwc/rwc_main.c" -o "$OUT/rwc_main.o"
 $CC -o "$OUT/rwc" "$OUT/rwc_main.o" $LIBS $LDFLAGS

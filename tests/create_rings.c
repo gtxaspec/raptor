@@ -4,8 +4,12 @@
  * Publishes fake H.264 video, JPEG snapshots, and audio in a continuous
  * loop to exercise all consumer daemons (RSD, RHD, RMR, RWD).
  *
+ * When RVD produces video frames (mock HAL), use --skip-video to only
+ * create auxiliary rings (audio, JPEG, speaker) that RVD does not own.
+ *
  * Usage:
- *   create_rings              # L16 audio (default)
+ *   create_rings              # all rings, L16 audio (default)
+ *   create_rings --skip-video # audio/JPEG/speaker only (RVD owns video)
  *   create_rings pcmu         # G.711 mu-law audio
  *   create_rings pcma         # G.711 A-law audio
  *   create_rings aac          # fake AAC frames
@@ -92,7 +96,7 @@ static int make_audio_frame(uint8_t *buf, int buf_size, int codec, uint32_t fram
 		return 640;
 
 	case CODEC_AAC: {
-		/* Fake raw AAC frame (no ADTS — matches RAD's RAW_STREAM output).
+		/* Fake raw AAC frame (no ADTS -- matches RAD's RAW_STREAM output).
 		 * Real AAC frames start with various bit patterns; use recognizable
 		 * but non-zero data so we can verify the ADTS wrapper works. */
 		int frame_len = 128; /* typical AAC frame at low bitrate */
@@ -128,10 +132,13 @@ int main(int argc, char **argv)
 	rss_log_init("create_rings", RSS_LOG_INFO, RSS_LOG_TARGET_STDERR, NULL);
 
 	bool no_audio = false;
+	bool skip_video = false;
 	const char *codec_arg = NULL;
 	for (int i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "--no-audio") == 0)
 			no_audio = true;
+		else if (strcmp(argv[i], "--skip-video") == 0)
+			skip_video = true;
 		else
 			codec_arg = argv[i];
 	}
@@ -142,14 +149,17 @@ int main(int argc, char **argv)
 
 	int sample_rate = audio_sample_rate(audio_codec);
 
-	/* Create video rings */
-	rss_ring_t *main_ring = rss_ring_create("main", 16, 2 * 1024 * 1024);
-	if (main_ring)
-		rss_ring_set_stream_info(main_ring, 0, 0, 1920, 1080, 25, 1, 100, 40);
+	/* Create video rings (unless RVD owns them) */
+	rss_ring_t *main_ring = NULL, *sub_ring = NULL;
+	if (!skip_video) {
+		main_ring = rss_ring_create("main", 16, 2 * 1024 * 1024);
+		if (main_ring)
+			rss_ring_set_stream_info(main_ring, 0, 0, 1920, 1080, 25, 1, 100, 40);
 
-	rss_ring_t *sub_ring = rss_ring_create("sub", 16, 512 * 1024);
-	if (sub_ring)
-		rss_ring_set_stream_info(sub_ring, 1, 0, 640, 360, 25, 1, 66, 30);
+		sub_ring = rss_ring_create("sub", 16, 512 * 1024);
+		if (sub_ring)
+			rss_ring_set_stream_info(sub_ring, 1, 0, 640, 360, 25, 1, 66, 30);
+	}
 
 	/* Create JPEG rings */
 	rss_ring_t *jpeg0 = rss_ring_create("jpeg0", 4, 512 * 1024);
@@ -174,8 +184,8 @@ int main(int argc, char **argv)
 	if (speaker)
 		rss_ring_set_stream_info(speaker, 65, CODEC_L16, 0, 0, 16000, 1, 0, 0);
 
-	RSS_INFO("created rings: main sub jpeg0 jpeg1 audio(codec=%d rate=%d) speaker", audio_codec,
-		 sample_rate);
+	RSS_INFO("created rings: %s%sjpeg0 jpeg1 audio(codec=%d rate=%d) speaker",
+		 skip_video ? "" : "main sub ", skip_video ? "" : "", audio_codec, sample_rate);
 
 	/* Publish initial JPEG frames so RHD has data immediately */
 	if (jpeg0)
@@ -211,30 +221,32 @@ int main(int argc, char **argv)
 	/* Audio frame buffer */
 	uint8_t audio_frame[4096];
 
-	int64_t vts = 0; /* video timestamp (µs) */
-	int64_t ats = 0; /* audio timestamp (µs) */
+	int64_t vts = 0; /* video timestamp (us) */
+	int64_t ats = 0; /* audio timestamp (us) */
 	uint32_t frame_num = 0;
 
-	RSS_INFO("publishing fake H.264+audio at 25fps (audio codec=%d)...", audio_codec);
+	RSS_INFO("publishing%s at 25fps (audio codec=%d)...",
+		 skip_video ? " auxiliary rings" : " fake H.264+audio", audio_codec);
 
 	while (g_running) {
 		bool is_key = (frame_num % 50 == 0);
-		const uint8_t *data = is_key ? idr_frame : p_frame;
-		uint32_t len = is_key ? (uint32_t)sizeof(idr_frame) : (uint32_t)sizeof(p_frame);
-		uint16_t nal = is_key ? 0x13 : 0x14;
 
-		/* Publish to main ring */
-		rss_iov_t viov = {.data = data, .length = len};
-		if (main_ring)
-			rss_ring_publish_iov(main_ring, &viov, 1, vts, nal, is_key ? 1 : 0);
+		if (!skip_video) {
+			const uint8_t *data = is_key ? idr_frame : p_frame;
+			uint32_t len = is_key ? (uint32_t)sizeof(idr_frame)
+					      : (uint32_t)sizeof(p_frame);
+			uint16_t nal = is_key ? 0x13 : 0x14;
 
-		/* Publish to sub ring (same data, different ring) */
-		if (sub_ring)
-			rss_ring_publish_iov(sub_ring, &viov, 1, vts, nal, is_key ? 1 : 0);
+			rss_iov_t viov = {.data = data, .length = len};
+			if (main_ring)
+				rss_ring_publish_iov(main_ring, &viov, 1, vts, nal,
+						     is_key ? 1 : 0);
+			if (sub_ring)
+				rss_ring_publish_iov(sub_ring, &viov, 1, vts, nal,
+						     is_key ? 1 : 0);
+		}
 
-		/* Publish JPEG snapshot at 5fps (every 5th video frame).
-		 * Higher rate than production so snap requests always find
-		 * a fresh frame after EOVERFLOW resync on ring open. */
+		/* Publish JPEG snapshot at 5fps (every 5th video frame) */
 		if (frame_num % 5 == 0) {
 			rss_iov_t jiov = {.data = fake_jpeg, .length = sizeof(fake_jpeg)};
 			if (jpeg0)
@@ -243,7 +255,7 @@ int main(int argc, char **argv)
 				rss_ring_publish_iov(jpeg1, &jiov, 1, vts, 0x30, 1);
 		}
 
-		/* 2 audio frames per video frame (20ms audio × 2 = 40ms = 1 video frame) */
+		/* 2 audio frames per video frame (20ms audio x 2 = 40ms = 1 video frame) */
 		for (int a = 0; a < 2; a++) {
 			int alen = make_audio_frame(audio_frame, sizeof(audio_frame), audio_codec,
 						    frame_num * 2 + a);
@@ -251,7 +263,7 @@ int main(int argc, char **argv)
 				rss_iov_t aiov = {.data = audio_frame, .length = (uint32_t)alen};
 				rss_ring_publish_iov(audio, &aiov, 1, ats, audio_codec, 0);
 			}
-			ats += 20000; /* 20ms in µs */
+			ats += 20000; /* 20ms in us */
 		}
 
 		vts += 40000; /* 40ms = 25fps */

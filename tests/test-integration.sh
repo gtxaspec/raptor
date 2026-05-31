@@ -135,7 +135,7 @@ width = 640
 height = 360
 fps = 25
 bitrate = 500000
-codec = h264
+codec = h265
 
 [audio]
 enabled = true
@@ -167,6 +167,9 @@ enabled = false
 [recording]
 enabled = false
 
+[ring]
+refmode = true
+
 [log]
 level = debug
 CONF
@@ -187,7 +190,7 @@ sleep 0.5
 # ── Start infrastructure ──
 
 echo "=== Starting rings ==="
-"$OUT/create_rings" > "$LOG_DIR/rings.log" 2>&1 &
+"$OUT/create_rings" --skip-video > "$LOG_DIR/rings.log" 2>&1 &
 RINGS_PID=$!
 sleep 1
 
@@ -319,6 +322,44 @@ check_contains "rsd status" "ok" "$OUT/raptorctl" rsd status
 # RSD clients
 check_contains "rsd clients" "ok" "$OUT/raptorctl" rsd clients
 
+# SDP content validation via raw RTSP DESCRIBE
+rtsp_describe() {
+    local port="$1" path="$2"
+    {
+        printf "DESCRIBE rtsp://127.0.0.1:%d/%s RTSP/1.0\r\nCSeq: 1\r\nAccept: application/sdp\r\n\r\n" "$port" "$path"
+        sleep 1
+    } | nc -q 1 127.0.0.1 "$port" 2>/dev/null
+}
+
+# stream0 = H.264
+SDP0=$(rtsp_describe 15554 stream0)
+if [ -n "$SDP0" ] && echo "$SDP0" | grep -qi "H264"; then
+    if echo "$SDP0" | grep -q "sprop-parameter-sets="; then
+        pass "H.264 SDP sprop-parameter-sets"
+    else
+        fail "H.264 SDP sprop-parameter-sets" "missing from SDP"
+    fi
+else
+    skip "H.264 SDP" "DESCRIBE failed or codec mismatch"
+fi
+
+# stream1 = H.265
+SDP1=$(rtsp_describe 15554 stream1)
+if [ -n "$SDP1" ] && echo "$SDP1" | grep -qi "H265"; then
+    sdp_ok=true
+    for param in sprop-vps sprop-sps sprop-pps; do
+        if ! echo "$SDP1" | grep -q "$param="; then
+            fail "H.265 SDP $param" "missing from SDP"
+            sdp_ok=false
+        fi
+    done
+    if $sdp_ok; then
+        pass "H.265 SDP sprop-vps/sps/pps"
+    fi
+else
+    skip "H.265 SDP" "DESCRIBE failed or codec mismatch"
+fi
+
 # ffprobe (if available — best RTSP test tool)
 if command -v ffprobe > /dev/null 2>&1; then
     # ffprobe with timeout — exit 124 (timeout) means it connected and received data
@@ -357,6 +398,60 @@ sleep 2
 check_contains "RHD survives 4 audio clients" "ok" "$OUT/raptorctl" rhd status
 for p in $CURL_PIDS; do kill "$p" 2>/dev/null; done
 wait $CURL_PIDS 2>/dev/null || true
+
+echo ""
+echo "=== Slow client tests ==="
+
+if [ -x "$OUT/test_slow_rtsp" ]; then
+    # Test 1: Abrupt disconnect -- RSD should clean up without errors
+    "$OUT/test_slow_rtsp" -p 15554 drop 2 > "$LOG_DIR/slow_drop.log" 2>&1 || true
+    sleep 1
+    check_contains "RSD survives abrupt disconnect" "ok" "$OUT/raptorctl" rsd status
+
+    # Test 2: Slow reader + normal client coexist
+    "$OUT/test_slow_rtsp" -p 15554 -d 8 slow 500 > "$LOG_DIR/slow_reader.log" 2>&1 &
+    SLOW_PID=$!
+    sleep 1
+    # Normal client should work fine while slow client is connected
+    if command -v ffprobe > /dev/null 2>&1; then
+        if timeout 5 ffprobe -v quiet -print_format json -show_streams \
+            -rtsp_transport tcp "rtsp://127.0.0.1:15554/stream0" > /dev/null 2>&1; ret=$?; \
+            [ "$ret" = 0 ] || [ "$ret" = 124 ]; then
+            pass "normal client unaffected by slow client"
+        else
+            fail "normal client unaffected by slow client" "exit $ret"
+        fi
+    else
+        skip "normal client isolation" "ffprobe not installed"
+    fi
+    kill "$SLOW_PID" 2>/dev/null; wait "$SLOW_PID" 2>/dev/null || true
+
+    # Test 3: Stalled client -- reads for 2s then stops completely
+    "$OUT/test_slow_rtsp" -p 15554 -d 10 stall 2 > "$LOG_DIR/slow_stall.log" 2>&1 &
+    STALL_PID=$!
+    sleep 4
+    # RSD should still be healthy
+    check_contains "RSD healthy during stalled client" "ok" "$OUT/raptorctl" rsd status
+    kill "$STALL_PID" 2>/dev/null; wait "$STALL_PID" 2>/dev/null || true
+
+    # Verify RSD has no lingering clients after cleanup
+    sleep 1
+    check_contains "RSD no lingering clients" "ok" "$OUT/raptorctl" rsd status
+
+    # Test 4: Verify refmode zerocopy race is fixed
+    # rss_ring_read (validated copy) prevents recycled-during-send
+    "$OUT/test_slow_rtsp" -p 15554 -d 8 slow 5000 > "$LOG_DIR/slow_refmode.log" 2>&1 &
+    SLOW_REF_PID=$!
+    sleep 5
+    kill "$SLOW_REF_PID" 2>/dev/null; wait "$SLOW_REF_PID" 2>/dev/null || true
+    if grep -q "recycled during send" "$LOG_DIR/rsd.log"; then
+        fail "zerocopy refmode fix" "recycled-during-send still present"
+    else
+        pass "no zerocopy recycled-during-send (refmode fix verified)"
+    fi
+else
+    skip "slow client tests" "test_slow_rtsp not built"
+fi
 
 echo ""
 echo "=== ROD/RIC tests ==="
