@@ -376,14 +376,44 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 				(COMPY_SDP_ATTR, "framerate:%u", rctx->last_fps_num));
 		} else if (rctx->last_codec == 1) {
 			/* H.265 / HEVC (RFC 7798) */
-			COMPY_SDP_DESCRIBE(ret, sdp_w,
-					   (COMPY_SDP_MEDIA, "video 0 RTP/AVP %d", RSD_VIDEO_PT),
-					   (COMPY_SDP_CONNECTION, "IN IP4 0.0.0.0"),
-					   (COMPY_SDP_BANDWIDTH, "AS:2000"),
-					   (COMPY_SDP_ATTR, "rtpmap:%d H265/%d", RSD_VIDEO_PT,
-					    RSD_VIDEO_CLOCK),
-					   (COMPY_SDP_ATTR, "control:video"),
-					   (COMPY_SDP_ATTR, "framerate:%u", rctx->last_fps_num));
+			uint16_t vps_l = atomic_load_explicit(&rctx->vps_len, memory_order_acquire);
+			uint16_t sps_l = atomic_load_explicit(&rctx->sps_len, memory_order_acquire);
+			uint16_t pps_l = atomic_load_explicit(&rctx->pps_len, memory_order_acquire);
+
+			char fmtp[1024];
+			int foff = snprintf(fmtp, sizeof(fmtp), "fmtp:%d", RSD_VIDEO_PT);
+			if (vps_l > 0 && sps_l > 0 && pps_l > 0) {
+				char vps_b64[256], sps_b64[512], pps_b64[128];
+				b64_encode(rctx->vps, vps_l, vps_b64, sizeof(vps_b64));
+				b64_encode(rctx->sps, sps_l, sps_b64, sizeof(sps_b64));
+				b64_encode(rctx->pps, pps_l, pps_b64, sizeof(pps_b64));
+				snprintf(fmtp + foff, sizeof(fmtp) - foff,
+					 " sprop-vps=%s;sprop-sps=%s;sprop-pps=%s",
+					 vps_b64, sps_b64, pps_b64);
+			}
+
+			if (vps_l > 0) {
+				COMPY_SDP_DESCRIBE(
+					ret, sdp_w,
+					(COMPY_SDP_MEDIA, "video 0 RTP/AVP %d", RSD_VIDEO_PT),
+					(COMPY_SDP_CONNECTION, "IN IP4 0.0.0.0"),
+					(COMPY_SDP_BANDWIDTH, "AS:2000"),
+					(COMPY_SDP_ATTR, "rtpmap:%d H265/%d", RSD_VIDEO_PT,
+					 RSD_VIDEO_CLOCK),
+					(COMPY_SDP_ATTR, "%s", fmtp),
+					(COMPY_SDP_ATTR, "control:video"),
+					(COMPY_SDP_ATTR, "framerate:%u", rctx->last_fps_num));
+			} else {
+				COMPY_SDP_DESCRIBE(
+					ret, sdp_w,
+					(COMPY_SDP_MEDIA, "video 0 RTP/AVP %d", RSD_VIDEO_PT),
+					(COMPY_SDP_CONNECTION, "IN IP4 0.0.0.0"),
+					(COMPY_SDP_BANDWIDTH, "AS:2000"),
+					(COMPY_SDP_ATTR, "rtpmap:%d H265/%d", RSD_VIDEO_PT,
+					 RSD_VIDEO_CLOCK),
+					(COMPY_SDP_ATTR, "control:video"),
+					(COMPY_SDP_ATTR, "framerate:%u", rctx->last_fps_num));
+			}
 		} else {
 			/* H.264 / AVC (RFC 6184) */
 			uint16_t sps_l = atomic_load_explicit(&rctx->sps_len, memory_order_acquire);

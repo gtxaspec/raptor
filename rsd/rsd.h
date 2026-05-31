@@ -175,12 +175,16 @@ typedef struct {
 	_Atomic uint8_t last_profile;
 	_Atomic uint8_t last_level;
 
-	/* Cached SPS/PPS for SDP sprop-parameter-sets.
+	/* Cached parameter sets for SDP.
+	 * H.264: SPS + PPS (sprop-parameter-sets, RFC 6184)
+	 * H.265: VPS + SPS + PPS (sprop-vps/sps/pps, RFC 7798)
 	 * Written by the reader thread (release), read by session thread
 	 * during DESCRIBE (acquire). Lengths are atomic to prevent torn
 	 * reads of the buffer data. */
+	uint8_t vps[128];
 	uint8_t sps[256];
 	uint8_t pps[64];
+	_Atomic uint16_t vps_len;
 	_Atomic uint16_t sps_len;
 	_Atomic uint16_t pps_len;
 } rsd_ring_ctx_t;
