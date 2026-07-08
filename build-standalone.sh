@@ -880,7 +880,7 @@ clone_repo media-server https://github.com/ireader/media-server      HEAD
 # live555 — download tarball (not a git repo)
 if [ ! -d "$DEPS_DIR/live" ]; then
     echo "Downloading live555..."
-    curl -sL https://download.live555.com/live.2026.04.22.tar.gz | tar xz -C "$DEPS_DIR"
+    curl -sL https://github.com/gtxaspec/live555-release-mirror/releases/download/v2026.04.22/live.2026.04.22.tar.gz | tar xz -C "$DEPS_DIR"
 fi
 
 [ "$OPT_TLS" = 1 ] && clone_repo mbedtls https://github.com/Mbed-TLS/mbedtls "$MBEDTLS_VERSION" submodules
