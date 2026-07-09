@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <errno.h>
 
@@ -61,6 +62,13 @@ typedef struct {
 	_Atomic int flush;
 	_Atomic int rate_pending;
 	_Atomic int sample_rate;
+	/* ao-drain handshake: the ctrl handler requests, the AO thread
+	 * executes (AO channel calls must come from the owning thread) */
+	_Atomic int drain_requested;
+	_Atomic uint64_t drain_target_seq;
+	bool drain_done; /* guarded by drain_mtx */
+	pthread_mutex_t drain_mtx;
+	pthread_cond_t drain_cv;
 } ao_thread_ctx_t;
 
 static void *ao_playback_thread(void *arg);
@@ -436,6 +444,43 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
 	}
 
+	if (strcmp(cmd, "ao-drain") == 0) {
+		if (!ctx->ao_enabled)
+			return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+
+		/* Snapshot how far the producer has published; the AO thread
+		 * drains once it has consumed (and played) up to that point. */
+		uint64_t target = 0;
+		rss_ring_t *speaker = rss_ring_open("speaker");
+		if (speaker) {
+			const rss_ring_header_t *shdr = rss_ring_get_header(speaker);
+			target = atomic_load(&shdr->write_seq);
+			rss_ring_close(speaker);
+		}
+
+		ao_thread_ctx_t *ao = ctx->ao_ctx;
+		pthread_mutex_lock(&ao->drain_mtx);
+		ao->drain_done = false;
+		atomic_store(&ao->drain_target_seq, target);
+		atomic_store(&ao->drain_requested, 1);
+
+		/* Hard 3s cap keeps this under the 5s default ctrl timeout */
+		struct timespec deadline;
+		clock_gettime(CLOCK_REALTIME, &deadline);
+		deadline.tv_sec += 3;
+		int rc = 0;
+		while (!ao->drain_done && rc != ETIMEDOUT)
+			rc = pthread_cond_timedwait(&ao->drain_cv, &ao->drain_mtx, &deadline);
+		bool done = ao->drain_done;
+		if (!done)
+			atomic_store(&ao->drain_requested, 0);
+		pthread_mutex_unlock(&ao->drain_mtx);
+
+		if (!done)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "drain timeout");
+		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+	}
+
 	if (strcmp(cmd, "ao-set-sample-rate") == 0) {
 		if (!ctx->ao_enabled)
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "ao disabled");
@@ -500,6 +545,7 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		atomic_store(&ctx->ao_ctx->flush, 0);
 		atomic_store(&ctx->ao_ctx->rate_pending, 0);
 		atomic_store(&ctx->ao_ctx->sample_rate, ao_rate);
+		atomic_store(&ctx->ao_ctx->drain_requested, 0);
 
 		if (pthread_create(ctx->ao_tid, NULL, ao_playback_thread, ctx->ao_ctx) != 0) {
 			RSS_HAL_CALL(ctx->ops, ao_deinit, ctx->hal_ctx);
@@ -841,6 +887,27 @@ static void ao_apply_rate_change(ao_thread_ctx_t *ctx)
 	}
 }
 
+/* Complete a pending ao-drain once the ring is consumed up to the target.
+ * ao_flush_buf blocks until the hardware has played everything queued, so
+ * it must run here, in the thread that owns the AO channel. */
+static void ao_check_drain(ao_thread_ctx_t *ctx, bool ring_attached, uint64_t read_seq)
+{
+	if (!atomic_load(&ctx->drain_requested))
+		return;
+	if (ring_attached && read_seq < atomic_load(&ctx->drain_target_seq))
+		return;
+
+	int ret = RSS_HAL_CALL(ctx->ops, ao_flush_buf, ctx->hal_ctx);
+	if (ret != 0)
+		RSS_DEBUG("ao_flush_buf: %d", ret);
+
+	pthread_mutex_lock(&ctx->drain_mtx);
+	if (atomic_exchange(&ctx->drain_requested, 0))
+		ctx->drain_done = true;
+	pthread_cond_broadcast(&ctx->drain_cv);
+	pthread_mutex_unlock(&ctx->drain_mtx);
+}
+
 static void *ao_playback_thread(void *arg)
 {
 	ao_thread_ctx_t *ctx = arg;
@@ -859,6 +926,7 @@ static void *ao_playback_thread(void *arg)
 				RSS_HAL_CALL(ctx->ops, ao_clear_buf, ctx->hal_ctx);
 				RSS_DEBUG("ao: flushed hardware buffer");
 			}
+			ao_check_drain(ctx, false, 0);
 			ring = rss_ring_open("speaker");
 			if (ring) {
 				rss_ring_check_version(ring, "speaker");
@@ -896,6 +964,7 @@ static void *ao_playback_thread(void *arg)
 				RSS_DEBUG("ao: flush requested, dropping ring");
 				break;
 			}
+			ao_check_drain(ctx, true, read_seq);
 
 			uint32_t length = 0;
 			rss_ring_slot_t meta;
@@ -1012,6 +1081,9 @@ int main(int argc, char **argv)
 	 * until audio_init has succeeded; ao_enabled defaults to false. */
 	rad_ctrl_ctx_t ctrl_ctx = {.ai_disabled = true};
 
+	pthread_mutex_init(&ao_ctx.drain_mtx, NULL);
+	pthread_cond_init(&ao_ctx.drain_cv, NULL);
+
 	rss_hal_ctx_t *hal_ctx = rss_hal_create();
 	if (!hal_ctx) {
 		RSS_FATAL("rss_hal_create failed");
@@ -1119,11 +1191,9 @@ int main(int argc, char **argv)
 #endif
 
 	/* ── Audio output (speaker) ── */
-	ao_ctx = (ao_thread_ctx_t){
-		.ops = ops,
-		.hal_ctx = hal_ctx,
-		.running = dctx.running,
-	};
+	ao_ctx.ops = ops;
+	ao_ctx.hal_ctx = hal_ctx;
+	ao_ctx.running = dctx.running;
 	ao_enabled = rss_config_get_bool(dctx.cfg, "audio", "ao_enabled", false);
 
 	if (ao_enabled) {
@@ -1353,6 +1423,8 @@ cleanup:
 	}
 	if (ctrl)
 		rss_ctrl_destroy(ctrl);
+	pthread_mutex_destroy(&ao_ctx.drain_mtx);
+	pthread_cond_destroy(&ao_ctx.drain_cv);
 	free(encode_buf);
 	if (codec_ops && codec_ops->deinit)
 		codec_ops->deinit(&codec_ctx);

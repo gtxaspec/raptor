@@ -861,6 +861,7 @@ static const rss_hal_ops_t mock_ops = {
 	.ao_pause = (void *)mock_ok,
 	.ao_resume = (void *)mock_ok,
 	.ao_clear_buf = (void *)mock_ok,
+	.ao_flush_buf = (void *)mock_ok,
 
 	/* Audio encoding */
 	.aenc_create_channel = (void *)mock_ok,

@@ -110,6 +110,7 @@ const struct help_entry help_entries[] = {
 	{"rad", "ao-set-volume <val>                 Speaker volume"},
 	{"rad", "ao-set-gain <val>                   Speaker gain"},
 	{"rad", "ao-set-sample-rate <Hz>             Speaker sample rate"},
+	{"rad", "ao-drain                            Wait until queued speaker audio has played"},
 	{"rad", "ao-mute                             Mute speaker (soft fade)"},
 	{"rad", "ao-unmute                           Unmute speaker (soft fade)"},
 	{"rad", "ao-disable                          Disable audio output pipeline"},
