@@ -122,9 +122,10 @@ static int resample_linear(const int16_t *in, int in_samples, int in_rate, int16
 	return out_samples;
 }
 
-/* Resample (if needed), chunk into 20ms frames, publish to ring */
-static void publish_pcm(rss_ring_t *ring, rac_pacer_t *pacer, const int16_t *pcm, int samples,
-			int src_rate, int dst_rate)
+/* Resample (if needed), chunk into 20ms frames, publish to ring.
+ * Returns the number of samples published at dst_rate. */
+static int publish_pcm(rss_ring_t *ring, rac_pacer_t *pacer, const int16_t *pcm, int samples,
+		       int src_rate, int dst_rate)
 {
 	int16_t resamp_buf[8192];
 	const int16_t *data = pcm;
@@ -148,6 +149,7 @@ static void publish_pcm(rss_ring_t *ring, rac_pacer_t *pacer, const int16_t *pcm
 		off += n;
 		pacer_advance(pacer, n);
 	}
+	return count;
 }
 #endif
 
@@ -211,7 +213,6 @@ int cmd_play(const char *src, int sample_rate)
 	}
 
 	int ret = 0;
-	int64_t start_time = rss_timestamp_us();
 	uint64_t total_samples = 0;
 	rac_pacer_t pacer;
 	pacer_init(&pacer, sample_rate);
@@ -335,8 +336,8 @@ int cmd_play(const char *src, int sample_rate)
 				for (int i = 0; i < samples; i++)
 					pcm_buf[i] = (pcm_buf[i * 2] + pcm_buf[i * 2 + 1]) / 2;
 			}
-			publish_pcm(ring, &pacer, pcm_buf, samples, info.samprate, sample_rate);
-			total_samples += samples;
+			total_samples += publish_pcm(ring, &pacer, pcm_buf, samples, info.samprate,
+						     sample_rate);
 		}
 		free(buf);
 		MP3FreeDecoder(mp3);
@@ -419,8 +420,8 @@ int cmd_play(const char *src, int sample_rate)
 				for (int i = 0; i < samples; i++)
 					pcm_buf[i] = (pcm_buf[i * 2] + pcm_buf[i * 2 + 1]) / 2;
 			}
-			publish_pcm(ring, &pacer, pcm_buf, samples, info.sampRateOut, sample_rate);
-			total_samples += samples;
+			total_samples += publish_pcm(ring, &pacer, pcm_buf, samples,
+						     info.sampRateOut, sample_rate);
 		}
 		free(buf);
 		AACFreeDecoder(aac);
@@ -527,12 +528,11 @@ int cmd_play(const char *src, int sample_rate)
 							int decoded =
 								opus_decode(opus_dec, pkt, pkt_len,
 									    pcm_buf, 5760, 0);
-							if (decoded > 0) {
-								publish_pcm(ring, &pacer, pcm_buf,
-									    decoded, opus_rate,
-									    sample_rate);
-								total_samples += decoded;
-							}
+							if (decoded > 0)
+								total_samples += publish_pcm(
+									ring, &pacer, pcm_buf,
+									decoded, opus_rate,
+									sample_rate);
 						}
 						pkt += pkt_len;
 						pkt_len = 0;
@@ -544,11 +544,10 @@ int cmd_play(const char *src, int sample_rate)
 				if (pkt_len > 0) {
 					int decoded = opus_decode(opus_dec, pkt, pkt_len, pcm_buf,
 								  5760, 0);
-					if (decoded > 0) {
-						publish_pcm(ring, &pacer, pcm_buf, decoded,
-							    opus_rate, sample_rate);
-						total_samples += decoded;
-					}
+					if (decoded > 0)
+						total_samples +=
+							publish_pcm(ring, &pacer, pcm_buf, decoded,
+								    opus_rate, sample_rate);
 				}
 			}
 
@@ -572,7 +571,7 @@ done:
 	rss_ring_destroy(ring);
 	if (!is_stdin)
 		fclose(in);
-	double duration = (double)(rss_timestamp_us() - start_time) / 1000000.0;
+	double duration = (double)total_samples / sample_rate;
 	fprintf(stderr, "rac: played %.1fs, %llu samples\n", duration,
 		(unsigned long long)total_samples);
 	return ret;
