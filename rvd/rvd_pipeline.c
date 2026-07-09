@@ -177,17 +177,35 @@ static int read_procfs_int(const char *path, int base, int def)
 	return val;
 }
 
-/* Load sensor config from an INI section, with procfs fallback for sensor 0 */
-static void load_sensor_from_section(rss_config_t *cfg, const char *section,
-				     rss_sensor_config_t *sensor, bool use_procfs)
+/* The sensor registry publishes per-index dirs: /proc/jz/sensor/sensorN/<key> */
+static void sensor_proc_path(char *buf, size_t len, int idx, const char *key)
 {
+	snprintf(buf, len, "/proc/jz/sensor/sensor%d/%s", idx, key);
+}
+
+static int read_sensor_proc_int(int idx, const char *key, int base, int def)
+{
+	char path[64];
+	sensor_proc_path(path, sizeof(path), idx, key);
+	return read_procfs_int(path, base, def);
+}
+
+/* Load sensor config from an INI section, with a per-index procfs
+ * fallback (proc_idx < 0 disables it) */
+static void load_sensor_from_section(rss_config_t *cfg, const char *section,
+				     rss_sensor_config_t *sensor, int proc_idx)
+{
+	bool use_procfs = proc_idx >= 0;
+
 	memset(sensor, 0, sizeof(*sensor));
 
 	const char *cfg_name = rss_config_get_str(cfg, section, "name", "");
 	if (cfg_name[0]) {
 		rss_strlcpy(sensor->name, cfg_name, sizeof(sensor->name));
 	} else if (use_procfs) {
-		char *s = rss_read_file("/proc/jz/sensor/name", NULL);
+		char path[64];
+		sensor_proc_path(path, sizeof(path), proc_idx, "name");
+		char *s = rss_read_file(path, NULL);
 		if (s) {
 			char *nl = strchr(s, '\n');
 			if (nl)
@@ -199,44 +217,44 @@ static void load_sensor_from_section(rss_config_t *cfg, const char *section,
 
 	sensor->i2c_addr = rss_config_get_int(cfg, section, "i2c_addr", 0);
 	if (sensor->i2c_addr == 0 && use_procfs)
-		sensor->i2c_addr = (uint16_t)read_procfs_int("/proc/jz/sensor/i2c_addr", 0, 0);
+		sensor->i2c_addr = (uint16_t)read_sensor_proc_int(proc_idx, "i2c_addr", 0, 0);
 
 	sensor->i2c_adapter = rss_config_get_int(cfg, section, "i2c_adapter", -1);
-	if (sensor->i2c_adapter < 0 && use_procfs) {
-		int val = read_procfs_int("/proc/jz/sensor/i2c_adapter", 10, -1);
-		if (val < 0)
-			val = read_procfs_int("/proc/jz/sensor/i2c_bus", 10, 0);
-		sensor->i2c_adapter = val;
-	}
+	if (sensor->i2c_adapter < 0 && use_procfs)
+		sensor->i2c_adapter = read_sensor_proc_int(proc_idx, "i2c_adapter", 10, -1);
 	if (sensor->i2c_adapter < 0)
 		sensor->i2c_adapter = 0;
 
 	sensor->sensor_id = rss_config_get_int(cfg, section, "sensor_id", 0);
 	sensor->pwdn_gpio = rss_config_get_int(cfg, section, "pwdn_gpio", -1);
 	if (sensor->pwdn_gpio == -1 && use_procfs)
-		sensor->pwdn_gpio = read_procfs_int("/proc/jz/sensor/pwdn_gpio", 10, -1);
+		sensor->pwdn_gpio = read_sensor_proc_int(proc_idx, "pwdn_gpio", 10, -1);
 	sensor->power_gpio = rss_config_get_int(cfg, section, "power_gpio", -1);
 	sensor->rst_gpio = rss_config_get_int(cfg, section, "rst_gpio", -1);
 	if (sensor->rst_gpio == -1 && use_procfs)
-		sensor->rst_gpio = read_procfs_int("/proc/jz/sensor/rst_gpio", 10, -1);
+		sensor->rst_gpio = read_sensor_proc_int(proc_idx, "rst_gpio", 10, -1);
 
 	sensor->default_boot = rss_config_get_int(cfg, section, "boot", -1);
 	if (sensor->default_boot < 0 && use_procfs)
-		sensor->default_boot = read_procfs_int("/proc/jz/sensor/boot", 10, 0);
+		sensor->default_boot = read_sensor_proc_int(proc_idx, "boot", 10, 0);
 	if (sensor->default_boot < 0)
 		sensor->default_boot = 0;
 
-	sensor->mclk = rss_config_get_int(cfg, section, "mclk", -1);
-	if (sensor->mclk < 0 && use_procfs)
-		sensor->mclk = read_procfs_int("/proc/jz/sensor/mclk", 10, 0);
-	if (sensor->mclk < 0)
-		sensor->mclk = 1;
+	/* vin_type/mclk are enum-typed (unsigned on MIPS): resolve in a
+	 * signed local so the <0 "unset" checks actually work */
+	int mclk = rss_config_get_int(cfg, section, "mclk", -1);
+	if (mclk < 0 && use_procfs)
+		mclk = read_sensor_proc_int(proc_idx, "mclk", 10, -1);
+	if (mclk < 0)
+		mclk = 1;
+	sensor->mclk = (rss_sensor_mclk_t)mclk;
 
-	sensor->vin_type = rss_config_get_int(cfg, section, "video_interface", -1);
-	if (sensor->vin_type < 0 && use_procfs)
-		sensor->vin_type = read_procfs_int("/proc/jz/sensor/video_interface", 10, 0);
-	if (sensor->vin_type < 0)
-		sensor->vin_type = 0;
+	int vin = rss_config_get_int(cfg, section, "video_interface", -1);
+	if (vin < 0 && use_procfs)
+		vin = read_sensor_proc_int(proc_idx, "video_interface", 10, -1);
+	if (vin < 0)
+		vin = 0;
+	sensor->vin_type = (rss_sensor_vin_t)vin;
 }
 
 /* FS channel base for a given sensor index (hardware mapping) */
@@ -340,15 +358,15 @@ int rvd_pipeline_init(rvd_state_t *st)
 	/* Detect multi-sensor: if [sensor1] has a name, use [sensor0]+[sensor1]+... */
 	bool multi = (rss_config_get_str(cfg, "sensor1", "name", "")[0] != '\0');
 	if (multi) {
-		load_sensor_from_section(cfg, "sensor0", &multi_cfg.sensors[0], true);
-		load_sensor_from_section(cfg, "sensor1", &multi_cfg.sensors[1], false);
+		load_sensor_from_section(cfg, "sensor0", &multi_cfg.sensors[0], 0);
+		load_sensor_from_section(cfg, "sensor1", &multi_cfg.sensors[1], 1);
 		multi_cfg.sensor_count = 2;
 		/* Set sensor_id for secondary sensor */
 		if (multi_cfg.sensors[1].sensor_id == 0)
 			multi_cfg.sensors[1].sensor_id = 1;
 
 		if (rss_config_get_str(cfg, "sensor2", "name", "")[0] != '\0') {
-			load_sensor_from_section(cfg, "sensor2", &multi_cfg.sensors[2], false);
+			load_sensor_from_section(cfg, "sensor2", &multi_cfg.sensors[2], 2);
 			if (multi_cfg.sensors[2].sensor_id == 0)
 				multi_cfg.sensors[2].sensor_id = 2;
 			multi_cfg.sensor_count = 3;
@@ -370,7 +388,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 		RSS_INFO("multi-sensor mode: %d sensors", multi_cfg.sensor_count);
 	} else {
 		/* Legacy single-sensor: load from [sensor] section */
-		load_sensor_from_section(cfg, "sensor", &multi_cfg.sensors[0], true);
+		load_sensor_from_section(cfg, "sensor", &multi_cfg.sensors[0], 0);
 		multi_cfg.sensor_count = 1;
 		if (rss_config_get_str(cfg, "sensor2", "name", "")[0] != '\0')
 			RSS_WARN("[sensor2] defined but [sensor1] missing — "
@@ -387,23 +405,25 @@ int rvd_pipeline_init(rvd_state_t *st)
 
 	/* Validate primary sensor */
 	if (!multi_cfg.sensors[0].name[0]) {
-		RSS_FATAL("sensor name not in config and not in /proc/jz/sensor/name");
+		RSS_FATAL("sensor name not in config and not in /proc/jz/sensor/sensor0/name");
 		rss_hal_destroy(st->hal_ctx);
 		st->hal_ctx = NULL;
 		return RSS_ERR;
 	}
 
 	if (multi_cfg.sensors[0].i2c_addr == 0) {
-		RSS_FATAL("i2c_addr not in config and not in /proc/jz/sensor/i2c_addr");
+		RSS_FATAL("i2c_addr not in config and not in /proc/jz/sensor/sensor0/i2c_addr");
 		rss_hal_destroy(st->hal_ctx);
 		st->hal_ctx = NULL;
 		return RSS_ERR;
 	}
 
 	for (int s = 0; s < multi_cfg.sensor_count; s++) {
-		RSS_DEBUG("sensor%d: %s i2c=0x%02x bus=%d id=%d", s, multi_cfg.sensors[s].name,
-			  multi_cfg.sensors[s].i2c_addr, multi_cfg.sensors[s].i2c_adapter,
-			  multi_cfg.sensors[s].sensor_id);
+		RSS_DEBUG("sensor%d: %s i2c=0x%02x bus=%d id=%d mclk=%d vin=%d boot=%d", s,
+			  multi_cfg.sensors[s].name, multi_cfg.sensors[s].i2c_addr,
+			  multi_cfg.sensors[s].i2c_adapter, multi_cfg.sensors[s].sensor_id,
+			  multi_cfg.sensors[s].mclk, multi_cfg.sensors[s].vin_type,
+			  multi_cfg.sensors[s].default_boot);
 	}
 
 	/* ── 3. OSD pool sizing — must be set before HAL init (SDK requirement).
@@ -470,15 +490,13 @@ int rvd_pipeline_init(rvd_state_t *st)
 	{
 		const char *fps_section = multi ? "sensor0" : "sensor";
 		sensor_fps = rss_config_get_int(cfg, fps_section, "fps", 0);
-		if (sensor_fps <= 0) {
-			char *s = rss_read_file("/proc/jz/sensor/max_fps", NULL);
-			if (s) {
-				sensor_fps = (int)strtol(s, NULL, 10);
-				free(s);
-			}
-			if (sensor_fps <= 0)
-				sensor_fps = 25;
-		}
+		if (sensor_fps <= 0)
+			sensor_fps = read_sensor_proc_int(0, "max_fps", 10, 0);
+		if (sensor_fps <= 0)
+			/* families without max_fps report the live default-mode rate */
+			sensor_fps = read_sensor_proc_int(0, "fps", 10, 0);
+		if (sensor_fps <= 0)
+			sensor_fps = 25;
 		/* Sensor 0 FPS via legacy ops */
 		ret = RSS_HAL_CALL(st->ops, isp_set_sensor_fps, st->hal_ctx, sensor_fps, 1);
 		if (ret != RSS_OK)
@@ -598,17 +616,8 @@ int rvd_pipeline_init(rvd_state_t *st)
 	/* ── 3d. Read actual sensor resolution from /proc ── */
 	int sensor_w = 0, sensor_h = 0;
 	{
-		char *s;
-		s = rss_read_file("/proc/jz/sensor/width", NULL);
-		if (s) {
-			sensor_w = (int)strtol(s, NULL, 10);
-			free(s);
-		}
-		s = rss_read_file("/proc/jz/sensor/height", NULL);
-		if (s) {
-			sensor_h = (int)strtol(s, NULL, 10);
-			free(s);
-		}
+		sensor_w = read_sensor_proc_int(0, "width", 10, 0);
+		sensor_h = read_sensor_proc_int(0, "height", 10, 0);
 	}
 	if (sensor_w > 0 && sensor_h > 0) {
 		RSS_INFO("sensor resolution: %dx%d", sensor_w, sensor_h);
