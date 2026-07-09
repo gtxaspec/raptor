@@ -180,6 +180,7 @@ codec = h264
 enabled = true
 sample_rate = 16000
 codec = l16
+ao_enabled = true
 
 [rtsp]
 port = $RTSP_PORT
@@ -366,6 +367,19 @@ for codec in opus aac pcmu pcma l16; do
         "rtsp://127.0.0.1:$RTSP_PORT/stream0" > /dev/null 2>&1 || true
     echo "  $codec done"
 done
+sleep 1
+
+# ── Phase 1c: RAC playback + ao-drain ──
+# Exercises speaker ring create/publish, RAD's AO thread consume path,
+# and the ao-drain handshake (ctrl handler + AO thread flush + condvar).
+
+echo ""
+echo "=== Phase 1c: RAC playback + ao-drain ==="
+
+dd if=/dev/zero of="$LOG_DIR/rac-test.pcm" bs=32000 count=1 2>/dev/null
+timeout 10 "$OUT/rac" play "$LOG_DIR/rac-test.pcm" > /dev/null 2>&1 || true
+"$OUT/raptorctl" rad ao-drain > /dev/null 2>&1 || true
+echo "  rac playback done"
 sleep 1
 
 # ── Phase 2: Rapid connect/disconnect (amplify per-client leaks) ──
