@@ -566,8 +566,17 @@ int cmd_play(const char *src, int sample_rate)
 	}
 
 done:
-	/* Let AO thread drain remaining frames, then destroy so it reconnects next time */
-	usleep(100000);
+	/* Ask RAD to drain: it consumes the ring tail and blocks until the
+	 * hardware has played the last sample (IMP_AO_FlushChnBuf), which is
+	 * what prevents end-of-playback cutoff. Fall back to a fixed sleep
+	 * when RAD is unreachable, then destroy so it reconnects next time. */
+	{
+		char resp[128];
+		int r = rss_ctrl_send_command(RSS_RUN_DIR "/rad.sock", "{\"cmd\":\"ao-drain\"}",
+					      resp, sizeof(resp), 4000);
+		if (r <= 0 || !strstr(resp, "\"status\":\"ok\""))
+			usleep(100000);
+	}
 	rss_ring_destroy(ring);
 	if (!is_stdin)
 		fclose(in);
