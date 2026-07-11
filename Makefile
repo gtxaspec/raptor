@@ -30,8 +30,7 @@ STRIP  := $(CROSS_COMPILE)strip
 EXTRA_CFLAGS ?=
 CFLAGS := -Wall -Wextra -Werror
 CFLAGS += -std=gnu11 -D_GNU_SOURCE
-CFLAGS += -ffunction-sections -fdata-sections -flto
-CFLAGS += -fno-asynchronous-unwind-tables -fmerge-all-constants -fno-ident
+CFLAGS += -ffunction-sections -fdata-sections
 CFLAGS += -DPLATFORM_$(PLATFORM)
 CFLAGS += -I$(CURDIR)/$(HAL_DIR)/include
 CFLAGS += -I$(CURDIR)/$(IPC_DIR)/include
@@ -62,7 +61,10 @@ RSS_BUILD_LIBS := $(RSS_BUILD_OBJ)
 ifeq ($(DEBUG),1)
 CFLAGS += -O0 -g
 else
-CFLAGS += -Os
+# LTO does the whole-program dead-code elimination that lets daemons drop unused
+# library code (e.g. libmov write-side funcs in rfs). At -O0 it doesn't, so debug
+# builds omit -flto and rely on -ffunction-sections + -Wl,--gc-sections instead.
+CFLAGS += -Os -flto -fno-asynchronous-unwind-tables -fmerge-all-constants -fno-ident
 endif
 
 ifeq ($(AUDIO_EFFECTS),1)
@@ -176,8 +178,8 @@ LDFLAGS     := $(LDFLAGS_SYSROOT) -lpthread -lrt -latomic
 
 # MIPS page size: Ingenic SoCs use 4KB pages but the toolchain defaults to
 # 64KB max-page-size. Mismatched alignment causes SIGBUS on musl/uclibc.
-LDFLAGS_HAL += -Wl,-z,max-page-size=0x1000 -Wl,--gc-sections -Wl,--as-needed -Wl,-rpath,/usr/lib -flto
-LDFLAGS     += -Wl,-z,max-page-size=0x1000 -Wl,--gc-sections -Wl,--as-needed -Wl,-rpath,/usr/lib -flto
+LDFLAGS_HAL += -Wl,-z,max-page-size=0x1000 -Wl,--gc-sections -Wl,--as-needed -Wl,-rpath,/usr/lib $(if $(DEBUG),,-flto)
+LDFLAGS     += -Wl,-z,max-page-size=0x1000 -Wl,--gc-sections -Wl,--as-needed -Wl,-rpath,/usr/lib $(if $(DEBUG),,-flto)
 # rpath-link for local builds (finding .so at link time)
 LDFLAGS_HAL += -Wl,-rpath-link,$(CURDIR)/$(IPC_DIR) -Wl,-rpath-link,$(CURDIR)/$(COMMON_DIR)
 LDFLAGS     += -Wl,-rpath-link,$(CURDIR)/$(IPC_DIR) -Wl,-rpath-link,$(CURDIR)/$(COMMON_DIR)

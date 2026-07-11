@@ -16,10 +16,12 @@
 #   --no-mp3       Disable MP3 codec
 #   --no-audio-effects  Disable audio effects (NS/HPF/AGC)
 #   --no-srt       Disable SRT (no RSR daemon)
+#   --no-rsd-555   Disable rsd-555 (live555 RTSP server; skips live555 build)
 #   --static-vendor-libs  Statically link vendor libs (libimp, libalog; requires --static)
 #   --static-stdcxx       Statically link libstdc++ (no libstdc++.so needed on device)
 #   --ivs          Enable IVS detection (persondet + JZDL)
 #   --release      Optimize for size and strip binaries
+#   --debug        Build unoptimized with -O0 -g debug symbols (DEBUG=1)
 #   --clean        Clean all build artifacts
 #   --deps-only    Only build dependencies, not raptor
 #   --libc=TYPE    uclibc (default), musl, or glibc
@@ -125,6 +127,7 @@ OPT_OPUS=1
 OPT_MP3=1
 OPT_AUDIO_EFFECTS=1
 OPT_SRT=1
+OPT_RSD555=1
 OPT_CLEAN=0
 OPT_CLEAN_ALL=0
 OPT_DEPS_ONLY=0
@@ -132,6 +135,7 @@ OPT_STATIC=0
 OPT_STATIC_VENDOR=0
 OPT_STATIC_STDCXX=0
 OPT_RELEASE=0
+OPT_DEBUG=0
 OPT_IVS=0
 OPT_LOCAL=0
 JOBS="${JOBS:-$(nproc)}"
@@ -148,11 +152,13 @@ usage() {
     echo "  --no-mp3       Disable MP3 codec"
     echo "  --no-audio-effects  Disable audio effects (NS/HPF/AGC)"
     echo "  --no-srt       Disable SRT (no RSR daemon)"
+    echo "  --no-rsd-555   Disable rsd-555 (live555 RTSP server; skips live555 build)"
     echo "  --static       Statically link optional deps (fewer .so files needed)"
     echo "  --static-vendor-libs  Also statically link vendor libs (libimp, libalog; requires --static)"
     echo "  --static-stdcxx       Statically link libstdc++ (no libstdc++.so needed on device)"
     echo "  --ivs          Enable IVS detection (persondet + JZDL)"
     echo "  --release      Optimize for size and strip binaries"
+    echo "  --debug        Build unoptimized with -O0 -g debug symbols (DEBUG=1)"
     echo "  --clean        Clean build artifacts (keep downloaded deps)"
     echo "  --clean-all    Remove everything (.deps/ + build/)"
     echo "  --deps-only    Only build dependencies"
@@ -171,10 +177,12 @@ for arg in "$@"; do
         --no-mp3)    OPT_MP3= ;;
         --no-audio-effects) OPT_AUDIO_EFFECTS= ;;
         --no-srt)    OPT_SRT= ;;
+        --no-rsd-555) OPT_RSD555= ;;
         --static)    OPT_STATIC=1 ;;
         --static-vendor-libs) OPT_STATIC_VENDOR=1 ;;
         --static-stdcxx) OPT_STATIC_STDCXX=1 ;;
         --release)   OPT_RELEASE=1 ;;
+        --debug)     OPT_DEBUG=1 ;;
         --ivs)       OPT_IVS=1 ;;
         --local)     OPT_LOCAL=1 ;;
         --clean)     OPT_CLEAN=1 ;;
@@ -198,6 +206,11 @@ fi
 
 if [ "$OPT_STATIC_VENDOR" = 1 ] && [ "$OPT_STATIC" != 1 ]; then
     echo "ERROR: --static-vendor-libs requires --static"
+    exit 1
+fi
+
+if [ "$OPT_DEBUG" = 1 ] && [ "$OPT_RELEASE" = 1 ]; then
+    echo "ERROR: --debug and --release are mutually exclusive"
     exit 1
 fi
 
@@ -786,7 +799,7 @@ build_raptor_common() {
     local src="$DEPS_DIR/raptor-common"
     echo "Building raptor-common..."
     make -C "$src" clean 2>/dev/null || true
-    run raptor-common make -C "$src" CC="${CROSS_COMPILE}gcc" AR="${CROSS_COMPILE}ar" -j"$JOBS"
+    run raptor-common make -C "$src" CC="${CROSS_COMPILE}gcc" AR="${CROSS_COMPILE}ar" $([ "$OPT_DEBUG" = 1 ] && echo "DEBUG=1") -j"$JOBS"
     cp -f "$src/librss_common.a" "$SYSROOT_DIR/usr/lib/"
     [ -f "$src/librss_common.so" ] && cp -f "$src/librss_common.so" "$SYSROOT_DIR/usr/lib/"
     cp -f "$src/include/rss_common.h" "$SYSROOT_DIR/usr/include/"
@@ -797,7 +810,7 @@ build_raptor_ipc() {
     local src="$DEPS_DIR/raptor-ipc"
     echo "Building raptor-ipc..."
     make -C "$src" clean 2>/dev/null || true
-    run raptor-ipc make -C "$src" CC="${CROSS_COMPILE}gcc" AR="${CROSS_COMPILE}ar" -j"$JOBS"
+    run raptor-ipc make -C "$src" CC="${CROSS_COMPILE}gcc" AR="${CROSS_COMPILE}ar" $([ "$OPT_DEBUG" = 1 ] && echo "DEBUG=1") -j"$JOBS"
     cp -f "$src/librss_ipc.a" "$SYSROOT_DIR/usr/lib/"
     [ -f "$src/librss_ipc.so" ] && cp -f "$src/librss_ipc.so" "$SYSROOT_DIR/usr/lib/"
     cp -f "$src/include/rss_ipc.h" "$SYSROOT_DIR/usr/include/"
@@ -811,6 +824,7 @@ build_raptor_hal() {
         PLATFORM="$PLATFORM_UPPER" \
         CROSS_COMPILE="$CROSS_COMPILE" \
         INGENIC_HEADERS="$src/ingenic-headers" \
+        $([ "$OPT_DEBUG" = 1 ] && echo "DEBUG=1") \
         $([ "$OPT_IVS" = 1 ] && echo "CXX=${CROSS_COMPILE}g++ JZDL_INCLUDE=$src/ingenic-headers/Txx/jzdl PERSONDET=1") \
         -j"$JOBS"
     cp -f "$src/libraptor_hal_video.a" "$SYSROOT_DIR/usr/lib/"
@@ -834,7 +848,7 @@ build_compy() {
         -DCMAKE_SYSTEM_NAME=Linux \
         -DCOMPY_SHARED=OFF \
         -DCOMPY_TLS_MBEDTLS="$tls_opt" \
-        -DCMAKE_C_FLAGS="-Oz -I$SYSROOT_DIR/usr/include" \
+        -DCMAKE_C_FLAGS="$([ "$OPT_DEBUG" = 1 ] && echo "-O0 -g" || echo "-Oz") -I$SYSROOT_DIR/usr/include" \
         -DCMAKE_PREFIX_PATH="$SYSROOT_DIR/usr"
     run compy-build make -j"$JOBS"
 
@@ -858,7 +872,7 @@ build_compy() {
 
 echo "=== Raptor standalone build ==="
 echo "Platform:  $PLATFORM_UPPER (SDK $SDK_VERSION)"
-echo "Features:  TLS=$OPT_TLS ALT=$OPT_ALT AAC=$OPT_AAC OPUS=$OPT_OPUS MP3=$OPT_MP3 EFFECTS=$OPT_AUDIO_EFFECTS SRT=$OPT_SRT IVS=$OPT_IVS STATIC=$OPT_STATIC STATIC_STDCXX=$OPT_STATIC_STDCXX RELEASE=$OPT_RELEASE LOCAL=$OPT_LOCAL"
+echo "Features:  TLS=$OPT_TLS ALT=$OPT_ALT AAC=$OPT_AAC OPUS=$OPT_OPUS MP3=$OPT_MP3 EFFECTS=$OPT_AUDIO_EFFECTS SRT=$OPT_SRT RSD555=$OPT_RSD555 IVS=$OPT_IVS STATIC=$OPT_STATIC STATIC_STDCXX=$OPT_STATIC_STDCXX RELEASE=$OPT_RELEASE DEBUG=$OPT_DEBUG LOCAL=$OPT_LOCAL"
 echo "Deps dir:  $DEPS_DIR"
 echo ""
 
@@ -877,8 +891,8 @@ clone_repo compy        https://github.com/gtxaspec/compy            "$COMPY_VER
 clone_repo libschrift   https://github.com/tomolt/libschrift         "$SCHRIFT_VERSION"
 clone_repo media-server https://github.com/ireader/media-server      HEAD
 
-# live555 — download tarball (not a git repo)
-if [ ! -d "$DEPS_DIR/live" ]; then
+# live555 — download tarball (not a git repo); only needed for rsd-555
+if [ "$OPT_RSD555" = 1 ] && [ ! -d "$DEPS_DIR/live" ]; then
     echo "Downloading live555..."
     curl -sL https://github.com/gtxaspec/live555-release-mirror/releases/download/v2026.04.22/live.2026.04.22.tar.gz | tar xz -C "$DEPS_DIR"
 fi
@@ -901,7 +915,7 @@ build_libc_shim
 [ "$OPT_AAC" = 1 ]  && build_helix_aac
 [ "$OPT_MP3" = 1 ]  && build_helix_mp3
 build_schrift
-build_live555
+[ "$OPT_RSD555" = 1 ] && build_live555
 [ "$OPT_SRT" = 1 ] && build_libsrt
 build_raptor_common
 build_raptor_ipc
@@ -932,10 +946,11 @@ if [ "$PLATFORM" = "a1" ]; then
     # A1 has no ISP/encoder — skip HAL daemons (rvd, rad), use RFS as producer
     TARGETS="rfs rsd rhd rmr rmd raptorctl ringdump"
 else
-    TARGETS="rvd rsd rad rhd rod ric rmr rmd rfs rwc rsd-555 raptorctl ringdump rac"
+    TARGETS="rvd rsd rad rhd rod ric rmr rmd rfs rwc raptorctl ringdump rac"
 fi
 [ "$OPT_TLS" = 1 ] && TARGETS="$TARGETS rwd rsp"
 [ "$OPT_SRT" = 1 ] && TARGETS="$TARGETS rsr"
+[ "$OPT_RSD555" = 1 ] && TARGETS="$TARGETS rsd-555"
 
 HAL_VIDEO="$SYSROOT_DIR/usr/lib/libraptor_hal_video.a"
 HAL_AUDIO="$SYSROOT_DIR/usr/lib/libraptor_hal_audio.a"
@@ -955,6 +970,7 @@ else
     LINK_COMPY="-lcompy"
     LINK_LIVE555="-lliveMedia -lgroupsock -lBasicUsageEnvironment -lUsageEnvironment"
 fi
+[ "$OPT_RSD555" = 1 ] || LINK_LIVE555=""
 
 make -j"$JOBS" \
     PLATFORM="$PLATFORM_UPPER" \
@@ -976,6 +992,7 @@ make -j"$JOBS" \
     LIVE555_SYSROOT="$SYSROOT_DIR" \
     ${LINK_LIVE555:+LIVE555_LIBS="$LINK_LIVE555"} \
     EXTRA_CFLAGS="-I$SYSROOT_DIR/usr/include $([ "$OPT_RELEASE" = 1 ] && echo "-Oz -DNDEBUG")" \
+    $([ "$OPT_DEBUG" = 1 ] && echo "DEBUG=1") \
     ${OPT_STATIC_VENDOR:+EXTRA_LDFLAGS="-no-pie"} \
     $([ "$OPT_STATIC_STDCXX" = 1 ] && echo "STATIC_STDCXX=1") \
     ${OPT_TLS:+TLS=1 WEBTORRENT=1} \
