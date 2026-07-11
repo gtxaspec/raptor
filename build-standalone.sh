@@ -214,11 +214,6 @@ if [ "$OPT_DEBUG" = 1 ] && [ "$OPT_RELEASE" = 1 ]; then
     exit 1
 fi
 
-# rwd (built when TLS=1) hard-requires libopus for WebRTC audio; --no-opus
-# only drops the optional RAPTOR_OPUS paths in rad/rsp.
-NEED_OPUS=$OPT_OPUS
-[ "$OPT_TLS" = 1 ] && NEED_OPUS=1
-
 PLATFORM_UPPER=$(echo "$PLATFORM" | tr a-z A-Z)
 
 # ── Clean ──
@@ -904,7 +899,7 @@ fi
 
 [ "$OPT_TLS" = 1 ] && clone_repo mbedtls https://github.com/Mbed-TLS/mbedtls "$MBEDTLS_VERSION" submodules
 [ "$OPT_TLS" = 1 ] && [ "$OPT_ALT" = 1 ] && clone_repo jz-crypto https://github.com/gtxaspec/jz-crypto "$JZ_CRYPTO_VERSION"
-[ "$NEED_OPUS" = 1 ] && clone_repo opus https://github.com/xiph/opus "v$OPUS_VERSION"
+[ "$OPT_OPUS" = 1 ] && clone_repo opus https://github.com/xiph/opus "v$OPUS_VERSION"
 [ "$OPT_AAC" = 1 ] && clone_repo faac https://github.com/knik0/faac "$FAAC_VERSION"
 if [ "$OPT_AAC" = 1 ] || [ "$OPT_MP3" = 1 ]; then
     clone_repo ESP8266Audio https://github.com/earlephilhower/ESP8266Audio "$HELIX_VERSION"
@@ -915,7 +910,7 @@ fi
 build_ingenic_lib
 build_libc_shim
 [ "$OPT_TLS" = 1 ]  && build_mbedtls
-[ "$NEED_OPUS" = 1 ] && build_opus
+[ "$OPT_OPUS" = 1 ] && build_opus
 [ "$OPT_AAC" = 1 ]  && build_faac
 [ "$OPT_AAC" = 1 ]  && build_helix_aac
 [ "$OPT_MP3" = 1 ]  && build_helix_mp3

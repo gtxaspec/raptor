@@ -681,6 +681,12 @@ int main(int argc, char **argv)
 		srv.audio_mode = RWD_AUDIO_MODE_PCMU;
 	else
 		srv.audio_mode = RWD_AUDIO_MODE_OPUS;
+#ifndef RAPTOR_OPUS
+	if (srv.audio_mode == RWD_AUDIO_MODE_OPUS) {
+		RSS_WARN("built without Opus: audio_mode forced to pcmu");
+		srv.audio_mode = RWD_AUDIO_MODE_PCMU;
+	}
+#endif
 	srv.opus_complexity = rss_config_get_int(dctx.cfg, "webrtc", "opus_complexity", 2);
 	if (srv.opus_complexity < 0)
 		srv.opus_complexity = 0;
@@ -688,9 +694,15 @@ int main(int argc, char **argv)
 		srv.opus_complexity = 10;
 	srv.opus_bitrate = rss_config_get_int(dctx.cfg, "webrtc", "opus_bitrate", 64000);
 	/* Defaults until audio reader detects ring codec */
+#ifdef RAPTOR_OPUS
 	srv.wire_codec = RWD_CODEC_OPUS;
 	srv.wire_pt = RWD_AUDIO_PT;
 	srv.wire_clock = RWD_AUDIO_CLOCK;
+#else
+	srv.wire_codec = RWD_CODEC_PCMU;
+	srv.wire_pt = 0;
+	srv.wire_clock = 8000;
+#endif
 	pthread_mutex_init(&srv.clients_lock, NULL);
 	pthread_cond_init(&srv.clients_cond, NULL);
 

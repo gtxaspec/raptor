@@ -213,7 +213,8 @@ int rwd_sdp_parse_offer(const char *sdp, rwd_sdp_offer_t *offer)
 		/* ICE candidates: parse for NAT hole punching */
 		if (strncmp(line, "a=candidate:", 12) == 0 &&
 		    offer->candidate_count >= RWD_MAX_CANDIDATES) {
-			RSS_WARN("SDP: candidate limit reached (%d), discarding", RWD_MAX_CANDIDATES);
+			RSS_WARN("SDP: candidate limit reached (%d), discarding",
+				 RWD_MAX_CANDIDATES);
 			continue;
 		}
 		if (strncmp(line, "a=candidate:", 12) == 0) {
@@ -312,7 +313,8 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 	APPEND("a=candidate:1 1 UDP 2130706431 %s %d typ host", srv->local_ip, srv->udp_port);
 	if (srv->has_srflx)
 		APPEND("a=candidate:2 1 UDP %u %s %u typ srflx raddr %s rport %d",
-		       ICE_PRIORITY_SRFLX, srv->srflx_ip, srv->srflx_port, srv->local_ip, srv->udp_port);
+		       ICE_PRIORITY_SRFLX, srv->srflx_ip, srv->srflx_port, srv->local_ip,
+		       srv->udp_port);
 
 	/* Audio m-line — use wire_codec, but only if the browser offered it.
 	 * Fall back to Opus (always offered by WebRTC clients) if not. */
@@ -326,10 +328,15 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 		 * here means this client gets no audio. */
 		if ((wc == RWD_CODEC_PCMU && !c->offer.has_pcmu) ||
 		    (wc == RWD_CODEC_PCMA && !c->offer.has_pcma)) {
+#ifdef RAPTOR_OPUS
 			RSS_WARN("sdp: browser didn't offer %s, falling back to Opus",
 				 wc == RWD_CODEC_PCMU ? "PCMU" : "PCMA");
 			wc = RWD_CODEC_OPUS;
 			wpt = c->offer.audio_pt;
+#else
+			RSS_WARN("sdp: browser didn't offer %s and this build has no Opus",
+				 wc == RWD_CODEC_PCMU ? "PCMU" : "PCMA");
+#endif
 		}
 		APPEND("m=audio %d UDP/TLS/RTP/SAVPF %d", srv->udp_port, wpt);
 		APPEND("c=IN %s %s", ip_ver, srv->local_ip);
@@ -354,7 +361,8 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 		       srv->udp_port);
 		if (srv->has_srflx)
 			APPEND("a=candidate:2 1 UDP %u %s %u typ srflx raddr %s rport %d",
-			       ICE_PRIORITY_SRFLX, srv->srflx_ip, srv->srflx_port, srv->local_ip, srv->udp_port);
+			       ICE_PRIORITY_SRFLX, srv->srflx_ip, srv->srflx_port, srv->local_ip,
+			       srv->udp_port);
 	}
 
 #undef APPEND

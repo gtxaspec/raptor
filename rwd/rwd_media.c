@@ -14,7 +14,9 @@
 #include <inttypes.h>
 #include <pthread.h>
 #include <sys/socket.h>
+#ifdef RAPTOR_OPUS
 #include <opus/opus.h>
+#endif
 #ifdef RAPTOR_AAC
 #include <aacdec.h>
 #endif
@@ -84,7 +86,9 @@ Compy_Transport rwd_transport_sendto(int fd, const struct sockaddr_storage *addr
 
 typedef struct {
 	rss_ring_t **speaker_ring_ptr;
+#ifdef RAPTOR_OPUS
 	OpusDecoder *opus_dec;
+#endif
 } rwd_bc_recv_t;
 
 static int16_t ulaw_decode(uint8_t ulaw)
@@ -132,9 +136,6 @@ static void rwd_bc_recv_t_on_audio(VSelf, uint8_t payload_type, uint32_t timesta
 		RSS_DEBUG("backchannel: speaker ring ready");
 	}
 
-	int16_t pcm48[960]; /* 20ms at 48kHz */
-	int16_t pcm16[320]; /* 20ms at 16kHz */
-
 	if (payload_type == 0) {
 		/* PCMU/8000 → PCM16, upsample 8kHz→16kHz (duplicate samples) */
 		int16_t pcm_up[1920];
@@ -148,8 +149,12 @@ static void rwd_bc_recv_t_on_audio(VSelf, uint8_t payload_type, uint32_t timesta
 		}
 		rss_ring_publish(*ring_ptr, (const uint8_t *)pcm_up, n * 4, rss_timestamp_us(), 0,
 				 0);
-	} else if (self->opus_dec && payload.len > 0) {
+	}
+#ifdef RAPTOR_OPUS
+	else if (self->opus_dec && payload.len > 0) {
 		/* Opus → PCM16 at 48kHz, downsample 3:1 to 16kHz */
+		int16_t pcm48[960]; /* 20ms at 48kHz */
+		int16_t pcm16[320]; /* 20ms at 16kHz */
 		int samples = opus_decode(self->opus_dec, payload.ptr, (opus_int32)payload.len,
 					  pcm48, 960, 0);
 		if (samples > 0) {
@@ -160,13 +165,18 @@ static void rwd_bc_recv_t_on_audio(VSelf, uint8_t payload_type, uint32_t timesta
 					 rss_timestamp_us(), 0, 0);
 		}
 	}
+#endif
 }
 
 static void rwd_bc_recv_t_drop(VSelf)
 {
 	VSELF(rwd_bc_recv_t);
+#ifdef RAPTOR_OPUS
 	if (self->opus_dec)
 		opus_decoder_destroy(self->opus_dec);
+#else
+	(void)self;
+#endif
 }
 
 impl(Compy_AudioReceiver, rwd_bc_recv_t);
@@ -251,12 +261,14 @@ int rwd_media_setup(rwd_client_t *c)
 	if (bc) {
 		bc->speaker_ring_ptr = &c->speaker_ring;
 
+#ifdef RAPTOR_OPUS
 		int err;
 		bc->opus_dec = opus_decoder_create(48000, 1, &err);
 		if (err != OPUS_OK) {
 			RSS_WARN("media: opus decoder init failed: %d", err);
 			bc->opus_dec = NULL;
 		}
+#endif
 		c->bc_recv = bc;
 
 		int bc_pt = c->offer.audio_pt > 0 ? c->offer.audio_pt : RWD_AUDIO_PT;
@@ -269,8 +281,12 @@ int rwd_media_setup(rwd_client_t *c)
 
 		c->srtp_recv = compy_srtp_recv_new(suite, &recv_key);
 		if (c->srtp_recv)
+#ifdef RAPTOR_OPUS
 			RSS_DEBUG("media: backchannel ready (pt=%d, opus decoder %s)", bc_pt,
 				  bc->opus_dec ? "ok" : "failed");
+#else
+			RSS_DEBUG("media: backchannel ready (pt=%d, pcmu only)", bc_pt);
+#endif
 	}
 
 	c->media_ready = true;
@@ -325,8 +341,10 @@ void rwd_media_teardown(rwd_client_t *c)
 	}
 	if (c->bc_recv) {
 		rwd_bc_recv_t *bc = c->bc_recv;
+#ifdef RAPTOR_OPUS
 		if (bc->opus_dec)
 			opus_decoder_destroy(bc->opus_dec);
+#endif
 		free(bc);
 		c->bc_recv = NULL;
 	}
@@ -877,18 +895,22 @@ void *rwd_audio_reader_thread(void *arg)
 	int idle_count = 0;
 	bool need_transcode = false;
 
-	/* PCM accumulation buffer for Opus transcoding (handles non-aligned
+	/* PCM decode/accumulation buffer for transcoding (handles non-aligned
 	 * frame sizes like AAC's 1024 samples vs Opus's 320/960) */
 	int16_t pcm_accum[2048];
 	int pcm_accum_fill = 0;
+#ifdef RAPTOR_OPUS
 	int opus_frame_size = 0;  /* valid Opus frame size for current sample rate */
 	uint32_t opus_rtp_ts = 0; /* running RTP timestamp for Opus output */
 	bool opus_rtp_ts_init = false;
+#endif
 	uint32_t pcmu_rtp_ts = 0; /* running RTP timestamp for PCMU output */
 	bool pcmu_rtp_ts_init = false;
 
 	/* Transcoding state (created when needed) */
+#ifdef RAPTOR_OPUS
 	OpusEncoder *opus_enc = NULL;
+#endif
 #ifdef RAPTOR_AAC
 	HAACDecoder aac_dec = NULL;
 #endif
@@ -909,16 +931,20 @@ void *rwd_audio_reader_thread(void *arg)
 			last_write_seq = 0;
 			idle_count = 0;
 			pcm_accum_fill = 0;
+#ifdef RAPTOR_OPUS
 			opus_rtp_ts = 0;
 			opus_rtp_ts_init = false;
+#endif
 			pcmu_rtp_ts = 0;
 			pcmu_rtp_ts_init = false;
 
 			/* Tear down old transcoder if codec changed */
+#ifdef RAPTOR_OPUS
 			if (opus_enc) {
 				opus_encoder_destroy(opus_enc);
 				opus_enc = NULL;
 			}
+#endif
 #ifdef RAPTOR_AAC
 			if (aac_dec) {
 				AACFreeDecoder(aac_dec);
@@ -953,10 +979,18 @@ void *rwd_audio_reader_thread(void *arg)
 					need_transcode = true;
 					break;
 				default:
+#ifdef RAPTOR_OPUS
 					/* AAC and others → transcode to Opus */
 					srv->wire_codec = RWD_CODEC_OPUS;
 					srv->wire_pt = RWD_AUDIO_PT;
 					srv->wire_clock = 48000;
+#else
+					/* AAC and others → transcode to PCMU
+					 * (built without Opus) */
+					srv->wire_codec = RWD_CODEC_PCMU;
+					srv->wire_pt = 0;
+					srv->wire_clock = 8000;
+#endif
 					need_transcode = true;
 					break;
 				}
@@ -966,13 +1000,23 @@ void *rwd_audio_reader_thread(void *arg)
 				srv->wire_clock = 8000;
 				need_transcode = (audio_codec != RWD_CODEC_PCMU);
 			} else {
+#ifdef RAPTOR_OPUS
 				/* opus mode: always transcode to Opus */
 				srv->wire_codec = RWD_CODEC_OPUS;
 				srv->wire_pt = RWD_AUDIO_PT;
 				srv->wire_clock = 48000;
 				need_transcode = (audio_codec != RWD_CODEC_OPUS);
+#else
+				/* opus mode unavailable in this build → PCMU
+				 * (rwd_main already forces audio_mode) */
+				srv->wire_codec = RWD_CODEC_PCMU;
+				srv->wire_pt = 0;
+				srv->wire_clock = 8000;
+				need_transcode = (audio_codec != RWD_CODEC_PCMU);
+#endif
 			}
 
+#ifdef RAPTOR_OPUS
 			if (need_transcode && srv->wire_codec == RWD_CODEC_OPUS) {
 				int err;
 				opus_enc = opus_encoder_create(sample_rate, 1,
@@ -988,6 +1032,7 @@ void *rwd_audio_reader_thread(void *arg)
 					opus_frame_size = sample_rate / 50; /* 20ms */
 				}
 			}
+#endif
 #ifdef RAPTOR_AAC
 			if (need_transcode && audio_codec == RWD_CODEC_AAC) {
 				aac_dec = AACInitDecoder();
@@ -1082,7 +1127,9 @@ void *rwd_audio_reader_thread(void *arg)
 			if (srv->client_count == 0) {
 				if (pcm_accum_fill > 0) {
 					pcm_accum_fill = 0;
+#ifdef RAPTOR_OPUS
 					opus_rtp_ts_init = false;
+#endif
 				}
 				pcmu_rtp_ts_init = false;
 				continue;
@@ -1158,7 +1205,9 @@ void *rwd_audio_reader_thread(void *arg)
 					pthread_mutex_unlock(&srv->clients_lock);
 					pcmu_rtp_ts += (uint32_t)enc_len;
 				}
-			} else if (opus_enc && opus_frame_size > 0) {
+			}
+#ifdef RAPTOR_OPUS
+			else if (opus_enc && opus_frame_size > 0) {
 				/* Decode → accumulate → encode Opus in 20ms frames.
 				 * Each Opus frame advances RTP ts by 960 (48kHz × 20ms).
 				 * Decode directly into pcm_accum to avoid a 4KB temp buffer.
@@ -1210,11 +1259,14 @@ void *rwd_audio_reader_thread(void *arg)
 					opus_rtp_ts += 960;
 				}
 			}
+#endif /* RAPTOR_OPUS */
 		}
 	}
 
+#ifdef RAPTOR_OPUS
 	if (opus_enc)
 		opus_encoder_destroy(opus_enc);
+#endif
 #ifdef RAPTOR_AAC
 	if (aac_dec)
 		AACFreeDecoder(aac_dec);
