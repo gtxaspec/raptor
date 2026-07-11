@@ -1,28 +1,26 @@
 /*
  * rad_codec_aac.c -- AAC-LC encoder via faac
  *
- * faac requires a fixed number of input samples per frame (typically
- * 1024), but the HAL delivers smaller chunks (e.g., 320 samples).
- * This codec accumulates PCM in an internal buffer and encodes when
- * full, publishing directly to the ring to avoid returning partial
- * frames to the caller.
+ * faac batches input internally and emits one AAC frame per 1024
+ * samples, so HAL chunks (e.g., 320 samples) are fed straight to the
+ * encoder. Only a fill counter is kept, to know which chunk started
+ * each encoder frame for timestamping. Frames are published directly
+ * to the ring to avoid returning partial frames to the caller.
  */
 
 #ifdef RAPTOR_AAC
 
 #include "rad.h"
 #include <stdlib.h>
-#include <string.h>
 #include <faac.h>
 #include <rss_ipc.h>
 
 typedef struct {
-	faacEncHandle handle;
-	int16_t *pcm_buf;	  /* accumulation buffer */
-	int pcm_fill;		  /* samples accumulated */
-	int frame_samples;	  /* samples needed per AAC frame */
-	unsigned long max_output; /* max encoded bytes per frame */
-	int64_t frame_ts;	  /* timestamp of first chunk in current frame */
+	faac_encoder *handle;
+	int frame_fill;	     /* samples fed into the current encoder frame */
+	int frame_samples;   /* samples per AAC frame */
+	uint32_t max_output; /* max encoded bytes per frame */
+	int64_t frame_ts;    /* timestamp of first chunk in current frame */
 } aac_state_t;
 
 static int aac_init(rad_codec_ctx_t *ctx, rss_config_t *cfg, int sample_rate)
@@ -31,44 +29,50 @@ static int aac_init(rad_codec_ctx_t *ctx, rss_config_t *cfg, int sample_rate)
 	if (!st)
 		return -1;
 
-	unsigned long input_samples = 0;
-	st->handle = faacEncOpen(sample_rate, 1, &input_samples, &st->max_output);
-	if (!st->handle) {
-		free(st);
-		return -1;
-	}
-
-	faacEncConfigurationPtr aac_cfg = faacEncGetCurrentConfiguration(st->handle);
-	aac_cfg->aacObjectType = LOW;
-	aac_cfg->mpegVersion = MPEG4;
-	aac_cfg->inputFormat = FAAC_INPUT_16BIT;
-	aac_cfg->outputFormat = RAW_STREAM;
-	aac_cfg->bandWidth = sample_rate;
 	int bitrate = rss_config_get_int(cfg, "audio", "bitrate", 128000);
 	if (bitrate > 256000)
 		bitrate = 256000;
-	aac_cfg->bitRate = bitrate;
-	aac_cfg->allowMidside = 0;
-	aac_cfg->useTns = 0;
-	if (!faacEncSetConfiguration(st->handle, aac_cfg)) {
-		faacEncClose(st->handle);
+
+	faac_params params;
+	faac_status status = faac_params_init(&params);
+	if (status != FAAC_OK) {
+		free(st);
+		return -1;
+	}
+	params.sample_rate = (uint32_t)sample_rate;
+	params.num_channels = 1;
+	params.mpeg_version = FAAC_MPEG4;
+	params.object_type = FAAC_OBJ_LOW;
+	params.joint_mode = FAAC_JOINT_NONE;
+	params.use_tns = false;
+	params.bit_rate = (uint32_t)bitrate; /* per channel; mono */
+	params.bandwidth = 0;		     /* derive cutoff from bit_rate */
+	params.output_format = FAAC_STREAM_RAW;
+	params.input_format = FAAC_INPUT_16BIT;
+
+	status = faac_encoder_open(&params, &st->handle);
+	if (status != FAAC_OK) {
+		RSS_ERROR("aac encoder open failed: %s", faac_strerror(status));
 		free(st);
 		return -1;
 	}
 
-	st->frame_samples = (int)input_samples;
-	st->pcm_buf = malloc(st->frame_samples * sizeof(int16_t));
-	if (!st->pcm_buf) {
-		faacEncClose(st->handle);
+	faac_encoder_info info = {.struct_size = sizeof(info)};
+	status = faac_encoder_get_info(st->handle, &info);
+	if (status != FAAC_OK) {
+		RSS_ERROR("aac encoder info failed: %s", faac_strerror(status));
+		faac_encoder_close(&st->handle);
 		free(st);
 		return -1;
 	}
-	st->pcm_fill = 0;
+
+	st->frame_samples = (int)info.frame_samples; /* mono: total == per channel */
+	st->max_output = info.max_output_bytes;
 
 	ctx->priv = st;
 	ctx->encode_buf_size = (int)st->max_output;
 
-	RSS_DEBUG("aac encoder: %d samples/frame, max %lu bytes output", st->frame_samples,
+	RSS_DEBUG("aac encoder: %d samples/frame, max %u bytes output", st->frame_samples,
 		  st->max_output);
 	return 0;
 }
@@ -81,24 +85,34 @@ static int aac_encode(rad_codec_ctx_t *ctx, const int16_t *pcm, int samples, uin
 	int remaining = samples;
 
 	while (remaining > 0) {
-		if (st->pcm_fill == 0)
+		if (st->frame_fill == 0)
 			st->frame_ts = timestamp;
-		int copy = remaining;
-		if (st->pcm_fill + copy > st->frame_samples)
-			copy = st->frame_samples - st->pcm_fill;
-		memcpy(st->pcm_buf + st->pcm_fill, src, copy * sizeof(int16_t));
-		st->pcm_fill += copy;
-		src += copy;
-		remaining -= copy;
+		int chunk = remaining;
+		if (chunk > st->frame_samples)
+			chunk = st->frame_samples;
 
-		if (st->pcm_fill >= st->frame_samples) {
-			int len = faacEncEncode(st->handle, (int32_t *)st->pcm_buf,
-						st->frame_samples, out, out_size);
-			st->pcm_fill = 0;
-			if (len > 0 && ctx->ring)
-				rss_ring_publish(ctx->ring, out, len, st->frame_ts, ctx->codec_id,
-						 0);
+		uint32_t len = 0;
+		faac_status status = faac_encoder_encode(st->handle, src, (uint32_t)chunk, out,
+							 (uint32_t)out_size, &len);
+		if (status != FAAC_OK) {
+			RSS_WARN("aac encode failed: %s", faac_strerror(status));
+			return 0;
 		}
+
+		int64_t ts = st->frame_ts;
+		st->frame_fill += chunk;
+		if (st->frame_fill >= st->frame_samples) {
+			st->frame_fill -= st->frame_samples;
+			/* tail of this chunk started the next encoder frame */
+			if (st->frame_fill > 0)
+				st->frame_ts = timestamp;
+		}
+
+		if (len > 0 && ctx->ring)
+			rss_ring_publish(ctx->ring, out, len, ts, ctx->codec_id, 0);
+
+		src += chunk;
+		remaining -= chunk;
 	}
 
 	/* AAC publishes internally — return 0 so caller doesn't double-publish */
@@ -110,9 +124,7 @@ static void aac_deinit(rad_codec_ctx_t *ctx)
 	aac_state_t *st = ctx->priv;
 	if (!st)
 		return;
-	if (st->handle)
-		faacEncClose(st->handle);
-	free(st->pcm_buf);
+	faac_encoder_close(&st->handle);
 	free(st);
 	ctx->priv = NULL;
 }

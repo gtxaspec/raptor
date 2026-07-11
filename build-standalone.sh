@@ -109,7 +109,7 @@ RAPTOR_COMMON_VERSION=HEAD
 MBEDTLS_VERSION=v3.6.6
 JZ_CRYPTO_VERSION=HEAD
 OPUS_VERSION=1.6.1
-FAAC_VERSION=6d9b02edd268bd2f3377a388ed77dde4f34556c8
+FAAC_VERSION=b92b7f81e53b1027107c900b11609abf32a1fb1a
 HELIX_VERSION=05f2fb0045cc294b4e0d1a1a9747b89c22c1fea4
 SCHRIFT_VERSION=24737d2922b23df4a5692014f5ba03da0c296112
 MUSL_SHIM_VERSION=HEAD
@@ -587,7 +587,7 @@ MESON
     rm -rf build-cross
     run faac-setup meson setup build-cross --cross-file "$crossfile" \
         --prefix="$SYSROOT_DIR/usr" \
-        -Dfloating-point=single -Dmax-channels=2 \
+        -Dfrontend=false -Dmax-channels=2 \
         -Ddefault_library="$libtype"
     run faac-build ninja -C build-cross -j"$JOBS"
     run faac-install ninja -C build-cross install

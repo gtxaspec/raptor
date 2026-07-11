@@ -2,8 +2,10 @@
  * rsp_audio.c -- Audio transcode for RTMP push
  *
  * Decodes G.711 µ-law/A-law, L16, Opus, or AAC from the ring to
- * PCM, then encodes to AAC-LC via faac. The faac encoder requires
- * 1024 input samples per frame, so PCM is accumulated internally.
+ * PCM, then encodes to AAC-LC via faac. PCM is accumulated into full
+ * 1024-sample frames here rather than fed to faac's internal FIFO so
+ * rsp_audio_reset() can drop partial frames on reconnect (faac has no
+ * way to discard buffered input).
  *
  * Requires RAPTOR_AAC_ENC (faac). Optional: RAPTOR_OPUS (libopus
  * decode), RAPTOR_AAC (helix-aac decode for AAC re-encode).
@@ -109,9 +111,9 @@ struct rsp_audio_enc {
 	uint32_t output_rate;
 
 	/* faac encoder (always at output_rate) */
-	faacEncHandle faac;
+	faac_encoder *faac;
 	int frame_samples; /* samples per AAC frame (1024 at output_rate) */
-	unsigned long max_output;
+	uint32_t max_output;
 
 	/* PCM accumulation buffer (at output_rate) */
 	int16_t *pcm_buf;
@@ -150,35 +152,46 @@ rsp_audio_enc_t *rsp_audio_init(uint32_t input_codec, uint32_t sample_rate)
 	g711_init_tables();
 
 	/* Init faac encoder at output rate (48kHz for RTMP compatibility) */
-	unsigned long input_samples = 0;
-	enc->faac = faacEncOpen(enc->output_rate, 1, &input_samples, &enc->max_output);
-	if (!enc->faac) {
-		RSS_ERROR("rsp_audio: faac open failed");
+	faac_params params;
+	faac_status status = faac_params_init(&params);
+	if (status != FAAC_OK) {
+		RSS_ERROR("rsp_audio: faac params init failed: %s", faac_strerror(status));
+		free(enc);
+		return NULL;
+	}
+	params.sample_rate = enc->output_rate;
+	params.num_channels = 1;
+	params.mpeg_version = FAAC_MPEG4;
+	params.object_type = FAAC_OBJ_LOW;
+	params.joint_mode = FAAC_JOINT_NONE;
+	params.use_tns = false;
+	params.bit_rate = 128000; /* per channel; mono */
+	params.bandwidth = 0;	  /* derive cutoff from bit_rate */
+	params.output_format = FAAC_STREAM_RAW;
+	params.input_format = FAAC_INPUT_16BIT;
+
+	status = faac_encoder_open(&params, &enc->faac);
+	if (status != FAAC_OK) {
+		RSS_ERROR("rsp_audio: faac open failed: %s", faac_strerror(status));
 		free(enc);
 		return NULL;
 	}
 
-	faacEncConfigurationPtr cfg = faacEncGetCurrentConfiguration(enc->faac);
-	cfg->aacObjectType = LOW;
-	cfg->mpegVersion = MPEG4;
-	cfg->inputFormat = FAAC_INPUT_16BIT;
-	cfg->outputFormat = RAW_STREAM;
-	cfg->bandWidth = enc->output_rate / 2;
-	cfg->bitRate = 128000;
-	cfg->allowMidside = 0;
-	cfg->useTns = 0;
-	if (!faacEncSetConfiguration(enc->faac, cfg)) {
-		RSS_ERROR("rsp_audio: faac config failed");
-		faacEncClose(enc->faac);
+	faac_encoder_info info = {.struct_size = sizeof(info)};
+	status = faac_encoder_get_info(enc->faac, &info);
+	if (status != FAAC_OK) {
+		RSS_ERROR("rsp_audio: faac info failed: %s", faac_strerror(status));
+		faac_encoder_close(&enc->faac);
 		free(enc);
 		return NULL;
 	}
 
-	enc->frame_samples = (int)input_samples;
+	enc->frame_samples = (int)info.frame_samples;
+	enc->max_output = info.max_output_bytes;
 	enc->pcm_buf = malloc((size_t)enc->frame_samples * sizeof(int16_t));
 	enc->aac_buf = malloc(enc->max_output);
 	if (!enc->pcm_buf || !enc->aac_buf) {
-		faacEncClose(enc->faac);
+		faac_encoder_close(&enc->faac);
 		free(enc->pcm_buf);
 		free(enc->aac_buf);
 		free(enc);
@@ -395,15 +408,18 @@ int rsp_audio_transcode(rsp_audio_enc_t *enc, const uint8_t *data, uint32_t len,
 		remaining -= copy;
 
 		if (enc->pcm_fill >= enc->frame_samples) {
-			int aac_len = faacEncEncode(enc->faac, (int32_t *)enc->pcm_buf,
-						    enc->frame_samples, enc->aac_buf,
-						    (unsigned int)enc->max_output);
+			uint32_t aac_len = 0;
+			faac_status status = faac_encoder_encode(
+				enc->faac, enc->pcm_buf, (uint32_t)enc->frame_samples, enc->aac_buf,
+				enc->max_output, &aac_len);
 			enc->pcm_fill = 0;
-			if (aac_len > 0) {
-				RSS_TRACE("rsp_audio: enc %d bytes ts=%u", aac_len,
+			if (status != FAAC_OK) {
+				RSS_WARN("rsp_audio: faac encode failed: %s",
+					 faac_strerror(status));
+			} else if (aac_len > 0) {
+				RSS_TRACE("rsp_audio: enc %u bytes ts=%u", aac_len,
 					  enc->next_out_ts);
-				if (cb(enc->aac_buf, (uint32_t)aac_len, enc->next_out_ts,
-				       userdata) < 0)
+				if (cb(enc->aac_buf, aac_len, enc->next_out_ts, userdata) < 0)
 					return -1;
 				enc->next_out_ts += frame_dur;
 				/* Correct toward ring timestamp to prevent drift.
@@ -444,8 +460,7 @@ void rsp_audio_free(rsp_audio_enc_t *enc)
 {
 	if (!enc)
 		return;
-	if (enc->faac)
-		faacEncClose(enc->faac);
+	faac_encoder_close(&enc->faac);
 #ifdef RAPTOR_OPUS
 	if (enc->opus_dec)
 		opus_decoder_destroy(enc->opus_dec);
