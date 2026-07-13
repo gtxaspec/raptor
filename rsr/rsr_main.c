@@ -457,7 +457,7 @@ static void serve_loop(rsr_state_t *st)
 				uint8_t adts_buf[7 + 8192];
 
 				if (st->audio_ts_type == RSS_TS_STREAM_AAC &&
-				    alen <= sizeof(audio_buf)) {
+				    alen <= sizeof(adts_buf) - 7) {
 					build_adts_header(adts_buf, st->audio_sample_rate,
 							  (int)alen);
 					memcpy(adts_buf + 7, audio_buf, alen);
@@ -573,9 +573,9 @@ int main(int argc, char **argv)
 		st.default_stream_idx = 0;
 
 	/* Allocate initial buffers */
-	st.frame_buf_size = 256 * 1024;
+	st.frame_buf_size = 262144; /* 256 * 1024 */
 	st.frame_buf = malloc(st.frame_buf_size);
-	st.ts_buf_size = ((st.frame_buf_size / 184) + 4) * 188;
+	st.ts_buf_size = 268464; /* ((262144 / 184) + 4) * 188 */
 	st.ts_buf = malloc(st.ts_buf_size);
 
 	if (!st.frame_buf || !st.ts_buf) {
