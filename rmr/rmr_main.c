@@ -423,6 +423,31 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		cJSON_AddNumberToObject(r, "frames", (double)st->frames_written);
 		cJSON_AddNumberToObject(r, "dropped", (double)st->frames_dropped);
 		cJSON_AddNumberToObject(r, "bytes", (double)st->bytes_written);
+		cJSON_AddBoolToObject(r, "sign", st->sign_enabled);
+		cJSON_AddBoolToObject(r, "sei_timecode", st->sei_timecode);
+		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
+	}
+
+	if (strcmp(cmd, "sign-status") == 0) {
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddBoolToObject(r, "enabled", st->sign_enabled);
+		if (st->sign_enabled) {
+			char fp[17];
+			for (int i = 0; i < 8; i++)
+				snprintf(fp + i * 2, 3, "%02x", st->sign_key.fingerprint[i]);
+			cJSON_AddStringToObject(r, "fingerprint", fp);
+		}
+		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
+	}
+
+	if (strcmp(cmd, "export-pubkey") == 0) {
+		if (!st->sign_enabled)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "signing disabled");
+		char hex[65];
+		for (int i = 0; i < 32; i++)
+			snprintf(hex + i * 2, 3, "%02x", st->sign_key.public[i]);
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddStringToObject(r, "pubkey", hex);
 		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 	}
 
