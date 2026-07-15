@@ -8,6 +8,7 @@
 #include <compy.h>
 #include <rss_ipc.h>
 #include <rss_common.h>
+#include <rss_sei.h>
 
 #include <pthread.h>
 #include <stdatomic.h>
@@ -218,6 +219,7 @@ typedef struct rsd_server {
 	int tcp_sndbuf;	     /* TCP send buffer size (bytes) */
 	bool rtcp_sr;	     /* send RTCP Sender Reports (default false) */
 	bool jpeg_enabled;   /* expose JPEG streams (default false) */
+	bool sei_timecode;   /* per-frame ST 0604 UTC SEI (default true) */
 
 	/* Digest auth (NULL = no auth required) */
 	Compy_Auth *auth;
