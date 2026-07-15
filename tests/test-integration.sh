@@ -165,7 +165,15 @@ enabled = false
 enabled = false
 
 [recording]
-enabled = false
+enabled = true
+mode = continuous
+stream = 0
+audio = false
+storage_path = __LOG_DIR__/rec
+segment_minutes = 5
+sei_timecode = true
+sign = true
+sign_key = __LOG_DIR__/sign.key
 
 [ring]
 refmode = true
@@ -173,6 +181,9 @@ refmode = true
 [log]
 level = debug
 CONF
+
+sed -i "s|__LOG_DIR__|$LOG_DIR|g" "$LOG_DIR/test.conf"
+mkdir -p "$LOG_DIR/rec"
 
 CONFIG="$LOG_DIR/test.conf"
 
@@ -472,6 +483,55 @@ echo ""
 echo "=== Config round-trip ==="
 
 check_contains "config save" "ok" "$OUT/raptorctl" config save
+
+echo ""
+echo "=== SEI timecode + signed recording ==="
+
+# ST 0604 SEI must reach RTSP clients and survive an ffmpeg copy
+if command -v ffmpeg > /dev/null 2>&1; then
+    timeout 10 ffmpeg -nostdin -loglevel quiet -rtsp_transport tcp \
+        -i "rtsp://127.0.0.1:15554/stream0" -c copy -frames:v 30 \
+        -f h264 -y "$LOG_DIR/sei_capture.h264" 2>/dev/null || true
+    sei_n=$(grep -c 'MISPmicrosectime' "$LOG_DIR/sei_capture.h264" 2>/dev/null || echo 0)
+    if [ "$sei_n" -ge 10 ]; then
+        pass "RTSP carries ST 0604 SEI ($sei_n frames)"
+    else
+        fail "RTSP carries ST 0604 SEI" "only $sei_n SEIs in capture"
+    fi
+else
+    skip "RTSP SEI capture" "ffmpeg not installed"
+fi
+
+check_contains "rmr sign-status" "fingerprint" "$OUT/raptorctl" rmr sign-status
+check_contains "rmr export-pubkey" "pubkey" "$OUT/raptorctl" rmr export-pubkey
+
+# Cleanly close the current segment, then verify its chain
+"$OUT/raptorctl" rmr disable > /dev/null 2>&1
+sleep 1
+REC_FILE=$(find "$LOG_DIR/rec" -name '*.mp4' | head -1)
+if [ -n "$REC_FILE" ] && [ -x "$OUT/rverify" ]; then
+    if "$OUT/rverify" -k "$LOG_DIR/sign.key.pub" "$REC_FILE" \
+        > "$LOG_DIR/rverify.log" 2>&1; then
+        pass "signed recording verifies"
+    else
+        fail "signed recording verifies" "see rverify.log"
+    fi
+    grep -c 'MISPmicrosectime' "$REC_FILE" > /dev/null 2>&1 &&
+        pass "recording carries ST 0604 SEI" ||
+        fail "recording carries ST 0604 SEI" "none found"
+    # One flipped byte inside the first fragment must break the chain
+    cp "$REC_FILE" "$LOG_DIR/tampered.mp4"
+    printf '\xff' | dd of="$LOG_DIR/tampered.mp4" bs=1 seek=2000 conv=notrunc 2>/dev/null
+    if "$OUT/rverify" -k "$LOG_DIR/sign.key.pub" "$LOG_DIR/tampered.mp4" \
+        > "$LOG_DIR/rverify-tamper.log" 2>&1; then
+        fail "tampered recording rejected" "rverify passed a tampered file"
+    else
+        pass "tampered recording rejected"
+    fi
+else
+    skip "signed recording verification" "no recording or rverify missing"
+fi
+"$OUT/raptorctl" rmr enable > /dev/null 2>&1
 
 if [ "$KEEP" = "1" ]; then
     echo ""
