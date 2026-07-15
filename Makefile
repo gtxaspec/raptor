@@ -35,6 +35,7 @@ CFLAGS += -DPLATFORM_$(PLATFORM)
 CFLAGS += -I$(CURDIR)/$(HAL_DIR)/include
 CFLAGS += -I$(CURDIR)/$(IPC_DIR)/include
 CFLAGS += -I$(CURDIR)/$(COMMON_DIR)/include
+CFLAGS += -I$(CURDIR)/$(COMMON_DIR)/third_party/monocypher
 
 # xburst2 (T40/T41/A1) toolchain uses -mfp64 ABI by default.
 # Ensure largefile support matches buildroot target flags.
@@ -200,7 +201,7 @@ LIVE555_LIBS ?= $(LIVE555_SYSROOT)/usr/lib/libliveMedia.a \
 
 # Targets
 DAEMONS := rvd rsd rad rhd rod ric rmr rmd rwd rwc rfs rsp rsr rsd-555
-TOOLS   := raptorctl ringdump rac rlatency
+TOOLS   := raptorctl ringdump rac rlatency rverify
 
 .PHONY: all clean libs $(DAEMONS) $(TOOLS) install
 
@@ -357,6 +358,11 @@ rlatency:
 	@echo "  BUILD   rlatency"
 	$(Q)$(MAKE) -C rlatency CC="$(CC)" CFLAGS="$(CFLAGS)" \
 		LDFLAGS="$(LDFLAGS)" Q="$(Q)"
+
+rverify: $(LIB_COMMON_FILE)
+	@echo "  BUILD   rverify"
+	$(Q)$(MAKE) -C rverify CC="$(CC)" CFLAGS="$(CFLAGS)" \
+		LIBS="$(LIB_COMMON)" LDFLAGS="$(LDFLAGS)" Q="$(Q)"
 
 # -- Collect binaries --
 

@@ -195,7 +195,7 @@ COMPY_CFLAGS="$COMPY_CFLAGS -I$COMPY_BUILD/_deps/metalang99-src/include"
 
 CC=gcc
 CFLAGS="-Wall -Wextra -Werror -std=gnu11 -D_GNU_SOURCE -DPLATFORM_T31 -O1 -g $SANITIZE"
-CFLAGS="$CFLAGS -I$IPC_DIR/include -I$COMMON_DIR/include $MBEDTLS_CFLAGS"
+CFLAGS="$CFLAGS -I$IPC_DIR/include -I$COMMON_DIR/include -I$COMMON_DIR/third_party/monocypher $MBEDTLS_CFLAGS"
 LDFLAGS="$SANITIZE -lpthread -lrt -lm"
 
 HAL_CFLAGS="-I$HAL_DIR/include"
@@ -212,6 +212,8 @@ $CC $CFLAGS -c "$COMMON_DIR/src/rss_ctrl_cmds.c" -o "$OUT/rss_ctrl_common.o"
 $CC $CFLAGS -c "$COMMON_DIR/src/rss_http.c" -o "$OUT/rss_http.o"
 $CC $CFLAGS -c "$COMMON_DIR/src/rss_ts.c" -o "$OUT/rss_ts.o"
 $CC $CFLAGS -c "$COMMON_DIR/src/rss_sei.c" -o "$OUT/rss_sei.o"
+$CC $CFLAGS -c "$COMMON_DIR/third_party/monocypher/monocypher.c" -o "$OUT/monocypher.o"
+$CC $CFLAGS -c "$COMMON_DIR/third_party/monocypher/monocypher-ed25519.c" -o "$OUT/monocypher-ed25519.o"
 $CC $CFLAGS -c "$COMMON_DIR/src/cJSON.c" -o "$OUT/cJSON.o"
 cat > "$OUT/rss_build_info.c" << 'BUILDEOF'
 const char *rss_build_hash = "asan";
@@ -219,7 +221,7 @@ const char *rss_build_time = "asan-build";
 const char *rss_build_platform = "x86_64";
 BUILDEOF
 $CC $CFLAGS -c "$OUT/rss_build_info.c" -o "$OUT/rss_build_info.o"
-ar rcs "$OUT/librss_common.a" "$OUT"/rss_log.o "$OUT"/rss_config.o "$OUT"/rss_daemon.o "$OUT"/rss_util.o "$OUT"/rss_ctrl_common.o "$OUT"/rss_http.o "$OUT"/rss_ts.o "$OUT"/rss_sei.o "$OUT"/cJSON.o
+ar rcs "$OUT/librss_common.a" "$OUT"/rss_log.o "$OUT"/rss_config.o "$OUT"/rss_daemon.o "$OUT"/rss_util.o "$OUT"/rss_ctrl_common.o "$OUT"/rss_http.o "$OUT"/rss_ts.o "$OUT"/rss_sei.o "$OUT"/monocypher.o "$OUT"/monocypher-ed25519.o "$OUT"/cJSON.o
 
 echo "=== raptor-ipc ==="
 $CC $CFLAGS -c "$IPC_DIR/src/rss_ring.c" -o "$OUT/rss_ring.o"
@@ -300,8 +302,9 @@ $CC $CFLAGS -c "$RAPTOR_DIR/rmr/rmr_main.c" -o "$OUT/rmr_main.o"
 $CC $CFLAGS -c "$RAPTOR_DIR/rmr/rmr_mux.c" -o "$OUT/rmr_mux.o"
 $CC $CFLAGS -c "$RAPTOR_DIR/rmr/rmr_nal.c" -o "$OUT/rmr_nal.o"
 $CC $CFLAGS -c "$RAPTOR_DIR/rmr/rmr_prebuf.c" -o "$OUT/rmr_prebuf.o"
+$CC $CFLAGS -c "$RAPTOR_DIR/rmr/rmr_sign.c" -o "$OUT/rmr_sign.o"
 $CC $CFLAGS -c "$RAPTOR_DIR/rmr/rmr_storage.c" -o "$OUT/rmr_storage.o"
-$CC -o "$OUT/rmr" "$OUT"/rmr_main.o "$OUT"/rmr_mux.o "$OUT"/rmr_nal.o "$OUT"/rmr_prebuf.o "$OUT"/rmr_storage.o $LIBS $LDFLAGS
+$CC -o "$OUT/rmr" "$OUT"/rmr_main.o "$OUT"/rmr_mux.o "$OUT"/rmr_nal.o "$OUT"/rmr_prebuf.o "$OUT"/rmr_sign.o "$OUT"/rmr_storage.o $LIBS $LDFLAGS
 echo "  -> rmr"
 
 echo "=== RSP ==="
@@ -330,6 +333,11 @@ echo "=== ringdump ==="
 $CC $CFLAGS -c "$RAPTOR_DIR/ringdump/ringdump.c" -o "$OUT/ringdump.o"
 $CC -o "$OUT/ringdump" "$OUT/ringdump.o" $LIBS $LDFLAGS
 echo "  -> ringdump"
+
+echo "=== rverify ==="
+$CC $CFLAGS -c "$RAPTOR_DIR/rverify/rverify.c" -o "$OUT/rverify.o"
+$CC -o "$OUT/rverify" "$OUT/rverify.o" "$OUT/librss_common.a" $LDFLAGS
+echo "  -> rverify"
 
 # ── HAL daemons (mock) ──
 
