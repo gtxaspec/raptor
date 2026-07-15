@@ -792,7 +792,7 @@ static void record_loop(rmr_state_t *st)
 						 : atomic_load(&st->recording);
 
 			/* Start clip with pre-buffer */
-			if (clip_want && !st->clip_mux) {
+			if (clip_want && !st->clip_mux && rmr_storage_available(st->clip_storage)) {
 				if (open_clip_with_prebuffer(st, audio_samples_per_frame,
 							     audio_bps) == 0) {
 					RSS_INFO("motion clip active");

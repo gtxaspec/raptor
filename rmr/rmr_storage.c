@@ -23,6 +23,8 @@ struct rmr_storage {
 	char base_path[256];
 	int segment_minutes;
 	int max_storage_mb;
+	bool refuse_logged;	   /* rootfs auto-create refusal logged once */
+	int64_t last_wait_warn_us; /* rate-limit for the waiting log       */
 };
 
 rmr_storage_t *rmr_storage_create(const rmr_storage_config_t *cfg)
@@ -88,11 +90,72 @@ bool rmr_storage_should_rotate(rmr_storage_t *st, int64_t segment_start_us)
 	return elapsed >= (int64_t)st->segment_minutes * 60 * 1000000LL;
 }
 
+/*
+ * Auto-create base_path, but only when it lands on a different
+ * filesystem than "/". The default path lives under an SD mountpoint;
+ * with the card absent the mountpoint directory sits on the root
+ * (overlay) filesystem and a blind mkdir -p would silently record
+ * onto flash. Comparing the deepest existing ancestor's st_dev
+ * against "/" allows mounted media (SD, NFS, tmpfs) and refuses the
+ * bare rootfs.
+ */
+static bool storage_try_create(rmr_storage_t *st)
+{
+	char anc[sizeof(st->base_path)];
+	snprintf(anc, sizeof(anc), "%s", st->base_path);
+
+	struct stat s;
+	while (stat(anc, &s) != 0) {
+		char *slash = strrchr(anc, '/');
+		if (!slash)
+			return false;
+		if (slash == anc) {
+			anc[1] = '\0'; /* reached "/" */
+			break;
+		}
+		*slash = '\0';
+	}
+	if (stat(anc, &s) != 0)
+		return false;
+
+	struct stat root;
+	if (stat("/", &root) != 0)
+		return false;
+
+	if (s.st_dev == root.st_dev) {
+		if (!st->refuse_logged) {
+			RSS_WARN("storage %s is on the root filesystem — not auto-creating "
+				 "(mount media or create the directory manually)",
+				 st->base_path);
+			st->refuse_logged = true;
+		}
+		return false;
+	}
+
+	rss_mkdir_p(st->base_path);
+	if (access(st->base_path, W_OK) != 0)
+		return false;
+
+	RSS_INFO("created storage directory: %s", st->base_path);
+	st->refuse_logged = false;
+	return true;
+}
+
 bool rmr_storage_available(rmr_storage_t *st)
 {
 	if (!st)
 		return false;
-	return access(st->base_path, W_OK) == 0;
+	if (access(st->base_path, W_OK) == 0)
+		return true;
+	if (storage_try_create(st))
+		return true;
+
+	int64_t now = rss_timestamp_us();
+	if (now - st->last_wait_warn_us >= 60000000LL) {
+		RSS_WARN("waiting for storage: %s", st->base_path);
+		st->last_wait_warn_us = now;
+	}
+	return false;
 }
 
 /* ── Storage cleanup ── */
