@@ -944,9 +944,9 @@ COMPY_CFLAGS="-I$SYSROOT_DIR/usr/include"
 
 if [ "$PLATFORM" = "a1" ]; then
     # A1 has no ISP/encoder — skip HAL daemons (rvd, rad), use RFS as producer
-    TARGETS="rfs rsd rhd rmr rmd raptorctl ringdump"
+    TARGETS="rfs rsd rhd rmr rmd raptorctl ringdump rverify"
 else
-    TARGETS="rvd rsd rad rhd rod ric rmr rmd rfs rwc raptorctl ringdump rac"
+    TARGETS="rvd rsd rad rhd rod ric rmr rmd rfs rwc raptorctl ringdump rac rverify"
 fi
 [ "$OPT_TLS" = 1 ] && TARGETS="$TARGETS rwd rsp"
 [ "$OPT_SRT" = 1 ] && TARGETS="$TARGETS rsr"
@@ -1005,7 +1005,7 @@ make -j"$JOBS" \
 
 # Collect binaries
 mkdir -p "$SCRIPT_DIR/build"
-for d in rvd rsd rad rhd rod ric rmr rmd rfs rwc rwd rsp rsr rsd-555 raptorctl ringdump rac; do
+for d in rvd rsd rad rhd rod ric rmr rmd rfs rwc rwd rsp rsr rsd-555 raptorctl ringdump rac rverify; do
     [ -f "$SCRIPT_DIR/$d/$d" ] && cp -f "$SCRIPT_DIR/$d/$d" "$SCRIPT_DIR/build/"
 done
 

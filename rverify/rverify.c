@@ -29,7 +29,8 @@
 #include "../rmr/rmr_sign.h"
 
 static const uint8_t sign_uuid[16] = RMR_SIGN_UUID;
-static const uint8_t misp_uuid_h264[16] = "MISPmicrosectime";
+static const uint8_t misp_uuid_h264[16] = {'M', 'I', 'S', 'P', 'm', 'i', 'c', 'r',
+					   'o', 's', 'e', 'c', 't', 'i', 'm', 'e'};
 static const uint8_t misp_uuid_h265[16] = {0xa8, 0x68, 0x7d, 0xd4, 0xd7, 0x59, 0x37, 0x58,
 					   0xa5, 0xce, 0xf0, 0x33, 0x8b, 0x65, 0x45, 0xf1};
 
