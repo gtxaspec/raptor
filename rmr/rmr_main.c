@@ -480,7 +480,7 @@ static void record_loop(rmr_state_t *st)
 				uint32_t mfs = rss_ring_max_frame_size(st->video_ring);
 				if (mfs > st->frame_buf_size) {
 					uint8_t *new_frame = malloc(mfs);
-					uint8_t *new_avcc = malloc(mfs);
+					uint8_t *new_avcc = malloc(mfs + RSS_SEI_TS_MAX);
 					if (!new_frame || !new_avcc) {
 						free(new_frame);
 						free(new_avcc);
@@ -493,7 +493,7 @@ static void record_loop(rmr_state_t *st)
 					st->frame_buf = new_frame;
 					st->avcc_buf = new_avcc;
 					st->frame_buf_size = mfs;
-					st->avcc_buf_size = mfs;
+					st->avcc_buf_size = mfs + RSS_SEI_TS_MAX;
 				}
 				st->video_codec = vhdr->codec;
 				st->video_read_seq = 0;
@@ -559,16 +559,32 @@ static void record_loop(rmr_state_t *st)
 			if (!st->params.ready)
 				continue;
 
-			int avcc_len = rmr_annexb_to_avcc(st->frame_buf, length, st->avcc_buf,
-							  st->avcc_buf_size, st->video_codec);
+			/* ST 0604 timecode SEI leads the sample; capture UTC
+			 * comes from the producer's ring clock mapping. */
+			uint32_t sei_len = 0;
+			int64_t utc_off;
+			uint8_t utc_st;
+			if (st->sei_timecode &&
+			    rss_ring_get_utc(st->video_ring, &utc_off, &utc_st) == 0) {
+				int n = rss_sei_build_timestamp(
+					st->avcc_buf, st->avcc_buf_size, (int)st->video_codec,
+					RSS_SEI_PREFIX_AVCC, (uint64_t)(meta.timestamp + utc_off),
+					utc_st);
+				if (n > 0)
+					sei_len = (uint32_t)n;
+			}
+
+			int avcc_len =
+				rmr_annexb_to_avcc(st->frame_buf, length, st->avcc_buf + sei_len,
+						   st->avcc_buf_size - sei_len, st->video_codec);
 			if (avcc_len <= 0)
 				continue;
 
 			if (avcc_len >= 5) {
-				uint32_t nal_len = ((uint32_t)st->avcc_buf[0] << 24) |
-						   ((uint32_t)st->avcc_buf[1] << 16) |
-						   ((uint32_t)st->avcc_buf[2] << 8) |
-						   (uint32_t)st->avcc_buf[3];
+				const uint8_t *fb = st->avcc_buf + sei_len;
+				uint32_t nal_len = ((uint32_t)fb[0] << 24) |
+						   ((uint32_t)fb[1] << 16) |
+						   ((uint32_t)fb[2] << 8) | (uint32_t)fb[3];
 				if (nal_len > (uint32_t)avcc_len - 4) {
 					RSS_WARN("AVCC corrupt: nal_len=%u avcc_len=%d", nal_len,
 						 avcc_len);
@@ -576,7 +592,7 @@ static void record_loop(rmr_state_t *st)
 				}
 			}
 			mux_data = st->avcc_buf;
-			mux_len = (uint32_t)avcc_len;
+			mux_len = sei_len + (uint32_t)avcc_len;
 		}
 
 		/* Push to video pre-buffer (always, for motion clips) */
@@ -810,6 +826,7 @@ int main(int argc, char **argv)
 	st.clip_fd = -1;
 	st.stream_idx = rss_config_get_int(dctx.cfg, "recording", "stream", 0);
 	st.audio_enabled = rss_config_get_bool(dctx.cfg, "recording", "audio", true);
+	st.sei_timecode = rss_config_get_bool(dctx.cfg, "recording", "sei_timecode", true);
 
 	/* Parse recording mode */
 	const char *mode_str = rss_config_get_str(dctx.cfg, "recording", "mode", "continuous");
@@ -863,10 +880,10 @@ int main(int argc, char **argv)
 							: "H.264";
 	RSS_INFO("video: %s %ux%u @ %u fps", vcodec_name, st.width, st.height, st.fps_num);
 
-	/* Allocate buffers */
+	/* Allocate buffers (AVCC gets headroom for the leading SEI NAL) */
 	st.frame_buf_size = rss_ring_max_frame_size(st.video_ring);
 	st.frame_buf = malloc(st.frame_buf_size);
-	st.avcc_buf_size = st.frame_buf_size;
+	st.avcc_buf_size = st.frame_buf_size + RSS_SEI_TS_MAX;
 	st.avcc_buf = malloc(st.avcc_buf_size);
 	if (!st.frame_buf || !st.avcc_buf) {
 		RSS_FATAL("buffer allocation failed (%u bytes)", st.frame_buf_size);

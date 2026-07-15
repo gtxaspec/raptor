@@ -7,6 +7,7 @@
 
 #include <rss_ipc.h>
 #include <rss_common.h>
+#include <rss_sei.h>
 
 #include <pthread.h>
 #include <stdbool.h>
@@ -29,7 +30,8 @@ typedef struct {
 	const char *config_path;
 	int stream_idx;
 	bool audio_enabled;
-	int mode; /* RMR_MODE_* */
+	int mode;	   /* RMR_MODE_* */
+	bool sei_timecode; /* embed ST 0604 UTC SEI per frame */
 
 	/* Rings */
 	rss_ring_t *video_ring;
