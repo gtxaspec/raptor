@@ -52,6 +52,8 @@ static int direct_write(const void *buf, uint32_t len, void *ctx)
 			return -1;
 		}
 	}
+	if (st->sign_enabled)
+		rmr_sign_stream_update(&st->sign_seg, buf, len);
 	return 0;
 }
 
@@ -80,6 +82,8 @@ static int clip_write(const void *buf, uint32_t len, void *ctx)
 			return -1;
 		}
 	}
+	if (st->sign_enabled)
+		rmr_sign_stream_update(&st->sign_clip, buf, len);
 	return 0;
 }
 
@@ -145,7 +149,11 @@ static int start_segment(rmr_state_t *st)
 
 	setup_mux_tracks(st->mux, st);
 	st->segment_fd = fd;
+	if (st->sign_enabled)
+		rmr_sign_stream_begin(&st->sign_seg, &st->sign_key);
 	rmr_mux_start(st->mux);
+	if (st->sign_enabled)
+		rmr_sign_stream_emit(&st->sign_seg, false, direct_write, st);
 	st->segment_start_us = rss_timestamp_us();
 
 	RSS_INFO("recording segment: %s", st->segment_path);
@@ -156,6 +164,8 @@ static void close_segment(rmr_state_t *st)
 {
 	if (st->mux) {
 		rmr_mux_finalize(st->mux);
+		if (st->sign_enabled)
+			rmr_sign_stream_emit(&st->sign_seg, true, direct_write, st);
 		rmr_mux_destroy(st->mux);
 		st->mux = NULL;
 	}
@@ -194,7 +204,11 @@ static int open_clip(rmr_state_t *st)
 	st->clip_bytes = 0;
 
 	setup_mux_tracks(st->clip_mux, st);
+	if (st->sign_enabled)
+		rmr_sign_stream_begin(&st->sign_clip, &st->sign_key);
 	rmr_mux_start(st->clip_mux);
+	if (st->sign_enabled)
+		rmr_sign_stream_emit(&st->sign_clip, false, clip_write, st);
 
 	RSS_INFO("motion clip started: %s", st->clip_path);
 	return 0;
@@ -204,6 +218,8 @@ static void close_clip(rmr_state_t *st)
 {
 	if (st->clip_mux) {
 		rmr_mux_finalize(st->clip_mux);
+		if (st->sign_enabled)
+			rmr_sign_stream_emit(&st->sign_clip, true, clip_write, st);
 		rmr_mux_destroy(st->clip_mux);
 		st->clip_mux = NULL;
 	}
@@ -234,8 +250,11 @@ static void clip_write_video(rmr_state_t *st, const uint8_t *avcc, uint32_t avcc
 		.is_key = is_key,
 	};
 
-	if (is_key)
+	if (is_key) {
 		rmr_mux_flush_fragment(st->clip_mux);
+		if (st->sign_enabled)
+			rmr_sign_stream_emit(&st->sign_clip, false, clip_write, st);
+	}
 	rmr_mux_write_video(st->clip_mux, &vs);
 }
 
@@ -677,6 +696,9 @@ static void record_loop(rmr_state_t *st)
 				st->frames_since_flush++;
 				if (meta.is_key) {
 					rmr_mux_flush_fragment(st->mux);
+					if (st->sign_enabled)
+						rmr_sign_stream_emit(&st->sign_seg, false,
+								     direct_write, st);
 					st->frames_since_flush = 0;
 					if (rmr_storage_should_rotate(st->storage,
 								      st->segment_start_us)) {
@@ -685,6 +707,9 @@ static void record_loop(rmr_state_t *st)
 					}
 				} else if (st->frames_since_flush >= 10) {
 					rmr_mux_flush_fragment(st->mux);
+					if (st->sign_enabled)
+						rmr_sign_stream_emit(&st->sign_seg, false,
+								     direct_write, st);
 					st->frames_since_flush = 0;
 				}
 			}
@@ -827,6 +852,15 @@ int main(int argc, char **argv)
 	st.stream_idx = rss_config_get_int(dctx.cfg, "recording", "stream", 0);
 	st.audio_enabled = rss_config_get_bool(dctx.cfg, "recording", "audio", true);
 	st.sei_timecode = rss_config_get_bool(dctx.cfg, "recording", "sei_timecode", true);
+	st.sign_enabled = rss_config_get_bool(dctx.cfg, "recording", "sign", true);
+	if (st.sign_enabled) {
+		const char *key_path = rss_config_get_str(dctx.cfg, "recording", "sign_key",
+							  "/etc/raptor/sign_ed25519.key");
+		if (rmr_sign_key_load(&st.sign_key, key_path) < 0) {
+			RSS_ERROR("signing disabled: key unavailable");
+			st.sign_enabled = false;
+		}
+	}
 
 	/* Parse recording mode */
 	const char *mode_str = rss_config_get_str(dctx.cfg, "recording", "mode", "continuous");

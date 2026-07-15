@@ -17,6 +17,7 @@
 #include "rmr_mux.h"
 #include "rmr_nal.h"
 #include "rmr_prebuf.h"
+#include "rmr_sign.h"
 #include "rmr_storage.h"
 
 /* Recording mode */
@@ -32,6 +33,12 @@ typedef struct {
 	bool audio_enabled;
 	int mode;	   /* RMR_MODE_* */
 	bool sei_timecode; /* embed ST 0604 UTC SEI per frame */
+
+	/* Provenance signing */
+	bool sign_enabled;
+	rmr_sign_key_t sign_key;
+	rmr_sign_stream_t sign_seg;  /* continuous segment chain */
+	rmr_sign_stream_t sign_clip; /* motion clip chain */
 
 	/* Rings */
 	rss_ring_t *video_ring;
