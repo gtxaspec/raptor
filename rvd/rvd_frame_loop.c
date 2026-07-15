@@ -19,6 +19,28 @@
 
 #define RVD_STATS_INTERVAL_US 30000000 /* 30s */
 #define RVD_REAP_INTERVAL_US  10000000 /* 10s */
+#define RVD_UTC_INTERVAL_US   5000000  /* 5s — UTC mapping refresh */
+
+/*
+ * Publish the media-clock→UTC mapping so consumers can stamp frames
+ * with absolute capture time (SEI timecodes). Re-samples the media
+ * clock to reject preemption between the two clock reads.
+ */
+static void publish_utc_mapping(rvd_state_t *st, rss_ring_t *ring)
+{
+	int64_t media_a = 0, media_b = 0;
+
+	if (RSS_HAL_CALL(st->ops, sys_get_timestamp, st->hal_ctx, &media_a) != RSS_OK)
+		return;
+	int64_t wall = rss_wallclock_us();
+	if (RSS_HAL_CALL(st->ops, sys_get_timestamp, st->hal_ctx, &media_b) != RSS_OK)
+		return;
+	if (media_b - media_a > 1000)
+		return; /* preempted mid-sample, retry next interval */
+
+	uint8_t status = rss_ntp_synced() ? RSS_UTC_STATUS_LOCKED : RSS_UTC_STATUS_UNLOCKED;
+	rss_ring_set_utc(ring, wall - (media_a + media_b) / 2, status);
+}
 
 /*
  * Determine the primary NAL type for ring metadata.
@@ -50,6 +72,7 @@ void *rvd_encoder_thread(void *arg)
 	int poll_errors = 0;
 	int64_t last_stats = rss_timestamp_us();
 	int64_t last_reap = last_stats;
+	int64_t last_utc = 0; /* 0 = publish on first frame */
 
 	while (rss_running(st->running) && atomic_load(&st->stream_active[idx])) {
 		/* JPEG on-demand: start/stop encoder based on ring consumers */
@@ -83,7 +106,7 @@ void *rvd_encoder_thread(void *arg)
 				RSS_HAL_CALL(st->ops, enc_start, st->hal_ctx, s->chn);
 				s->enabled = true;
 				RSS_DEBUG("jpeg chn %d: started (%u consumers)", s->chn,
-					 rss_ring_reader_count(s->ring));
+					  rss_ring_reader_count(s->ring));
 			}
 		}
 
@@ -123,8 +146,8 @@ void *rvd_encoder_thread(void *arg)
 			bool contiguous = true;
 			for (uint32_t n = 0; n < frame.nal_count; n++) {
 				if (n > 0 && (uintptr_t)frame.nals[n].data !=
-						      (uintptr_t)frame.nals[n - 1].data +
-							      frame.nals[n - 1].length)
+						     (uintptr_t)frame.nals[n - 1].data +
+							     frame.nals[n - 1].length)
 					contiguous = false;
 				total_len64 += frame.nals[n].length;
 			}
@@ -152,8 +175,7 @@ void *rvd_encoder_thread(void *arg)
 				if (frame_count == 0)
 					RSS_WARN("stream%d: vaddr 0x%lx outside ref region "
 						 "[0x%lx..0x%lx], embedded fallback",
-						 idx, (unsigned long)vaddr,
-						 (unsigned long)ref_base,
+						 idx, (unsigned long)vaddr, (unsigned long)ref_base,
 						 (unsigned long)(ref_base + ref_size));
 				goto embedded_publish;
 			}
@@ -183,19 +205,18 @@ void *rvd_encoder_thread(void *arg)
 					 idx);
 				goto embedded_publish;
 			}
-found_buf:
+		found_buf:
 
-			rss_ring_publish_ref(s->ring, rmem_off, (uint32_t)total_len64, frame.timestamp,
-					     primary_nal_type(&frame), frame.is_key ? 1 : 0,
-					     buf_idx);
+			rss_ring_publish_ref(s->ring, rmem_off, (uint32_t)total_len64,
+					     frame.timestamp, primary_nal_type(&frame),
+					     frame.is_key ? 1 : 0, buf_idx);
 		} else {
-embedded_publish:
+		embedded_publish:
 			/* Embedded mode: copy NALs into ring via scatter-gather */
 			rss_iov_t iov[16];
 			uint32_t cnt = frame.nal_count;
 			if (cnt > 16) {
-				RSS_WARN("stream%d: frame has %u NALs, truncating to 16",
-					 idx, cnt);
+				RSS_WARN("stream%d: frame has %u NALs, truncating to 16", idx, cnt);
 				cnt = 16;
 			}
 			for (uint32_t n = 0; n < cnt; n++) {
@@ -211,6 +232,10 @@ embedded_publish:
 		frame_count++;
 
 		int64_t now = rss_timestamp_us();
+		if (now - last_utc >= RVD_UTC_INTERVAL_US) {
+			publish_utc_mapping(st, s->ring);
+			last_utc = now;
+		}
 		if (now - last_stats >= RVD_STATS_INTERVAL_US) {
 			RSS_TRACE("stream%d: %llu frames", idx, (unsigned long long)frame_count);
 			last_stats = now;

@@ -44,19 +44,18 @@ void rss_hal_set_log_func(rss_hal_log_func_t func)
 /* ── Per-channel encoder state ── */
 
 #define MOCK_MAX_CHANNELS 8
-#define MOCK_NAL_MAX      4
-#define MOCK_FRAME_BUF    8192
+#define MOCK_NAL_MAX	  4
+#define MOCK_FRAME_BUF	  8192
 
 /* H.264 NAL start codes */
 static const uint8_t h264_sps[] = {
-	0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0xC0,
-	0x1E, 0xD9, 0x00, 0xA0, 0x47, 0xFE, 0xC8,
+	0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0xC0, 0x1E, 0xD9, 0x00, 0xA0, 0x47, 0xFE, 0xC8,
 };
 static const uint8_t h264_pps[] = {
 	0x00, 0x00, 0x00, 0x01, 0x68, 0xCE, 0x38, 0x80,
 };
 static const uint8_t h264_idr_sc[] = {0x00, 0x00, 0x00, 0x01, 0x65};
-static const uint8_t h264_p_sc[]   = {0x00, 0x00, 0x00, 0x01, 0x41};
+static const uint8_t h264_p_sc[] = {0x00, 0x00, 0x00, 0x01, 0x41};
 
 /* H.265 NAL start codes (2-byte header: type<<1 | 0, tid=1) */
 static const uint8_t h265_vps[] = {
@@ -71,7 +70,7 @@ static const uint8_t h265_pps[] = {
 	0x00, 0x00, 0x00, 0x01, 0x44, 0x01, 0xC1, 0x72,
 };
 static const uint8_t h265_idr_sc[] = {0x00, 0x00, 0x00, 0x01, 0x26, 0x01};
-static const uint8_t h265_p_sc[]   = {0x00, 0x00, 0x00, 0x01, 0x02, 0x01};
+static const uint8_t h265_p_sc[] = {0x00, 0x00, 0x00, 0x01, 0x02, 0x01};
 
 typedef struct {
 	bool active;
@@ -97,10 +96,31 @@ struct rss_hal_ctx {
 
 /* ── Stub implementations ── */
 
+static int64_t mock_epoch_us;
+
+static int64_t mock_mono_us(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
+}
+
 static int mock_init(void *ctx, const rss_multi_sensor_config_t *cfg)
 {
 	(void)ctx;
 	(void)cfg;
+	mock_epoch_us = mock_mono_us();
+	return RSS_OK;
+}
+
+/* Media clock: µs since mock_init, same epoch the synthetic frame
+ * timestamps approximate (40ms per frame, delivered in real time). */
+static int mock_sys_get_timestamp(void *ctx, int64_t *ts)
+{
+	(void)ctx;
+	if (!ts)
+		return RSS_ERR_INVAL;
+	*ts = mock_mono_us() - mock_epoch_us;
 	return RSS_OK;
 }
 
@@ -208,9 +228,8 @@ static int mock_enc_get_frame(void *ctx, int chn, rss_frame_t *frame)
 
 	if (is_jpeg) {
 		static const uint8_t fake_jpeg[] = {
-			0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46,
-			0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01,
-			0x00, 0x01, 0x00, 0x00, 0xFF, 0xD9,
+			0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00,
+			0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xD9,
 		};
 		if (sizeof(fake_jpeg) > dest_cap)
 			return -ENOSPC;
@@ -618,6 +637,7 @@ static const rss_hal_ops_t mock_ops = {
 	.get_caps = mock_get_caps,
 	.bind = (void *)mock_ok,
 	.unbind = (void *)mock_ok,
+	.sys_get_timestamp = mock_sys_get_timestamp,
 
 	/* Framesource */
 	.fs_create_channel = (void *)mock_fs_create_channel,
@@ -890,5 +910,9 @@ void rss_hal_check_platform(const char *name)
 	(void)name;
 }
 
-__attribute__((weak)) void rss_daemon_request_shutdown(void) {}
-__attribute__((weak)) void rss_daemon_request_restart(void) {}
+__attribute__((weak)) void rss_daemon_request_shutdown(void)
+{
+}
+__attribute__((weak)) void rss_daemon_request_restart(void)
+{
+}
