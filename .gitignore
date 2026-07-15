@@ -26,6 +26,7 @@ rsp/rsp
 rsr/rsr
 rsd-555/rsd-555
 rlatency/rlatency
+rverify/rverify
 rss_build_info.*
 tests/tests
 tests/sdp_parse.c
