@@ -11,6 +11,9 @@
  * tool still checks hash consistency and reports the key fingerprint
  * needed. -t additionally dumps embedded ST 0604 timecodes.
  *
+ * JPEG input (RHD signed snapshots) verifies the trailing APP15
+ * signature segment and reports the EXIF capture time instead.
+ *
  * Exit codes: 0 verified clean, 1 verification failure, 2 usage or
  * file has no signatures.
  */
@@ -25,6 +28,7 @@
 #include <time.h>
 
 #include <monocypher-ed25519.h>
+#include <rss_jpeg.h>
 
 #include "../rmr/rmr_sign.h"
 
@@ -145,6 +149,37 @@ static void dump_timecodes(const uint8_t *data, size_t len, bool verbose)
 	       backwards ? " (WARNING: non-monotonic)" : "");
 }
 
+/* Signed JPEG snapshot (RHD): EXIF capture time + APP15 signature */
+static int verify_jpeg(const uint8_t *data, size_t len, const uint8_t *pub)
+{
+	uint64_t utc;
+	if (rss_jpeg_get_exif_time(data, len, &utc) == 0) {
+		char ts[40];
+		fmt_utc(utc, ts, sizeof(ts));
+		printf("capture time: %s (EXIF)\n", ts);
+	}
+
+	uint8_t fp[8];
+	int rc = rss_jpeg_verify(data, len, pub, fp);
+	if (rc == -ENOENT) {
+		printf("no raptor signature segment found\n");
+		return 2;
+	}
+	if (rc == 0 || rc == 1)
+		printf("key fingerprint: %02x%02x%02x%02x%02x%02x%02x%02x\n", fp[0], fp[1], fp[2],
+		       fp[3], fp[4], fp[5], fp[6], fp[7]);
+	if (rc == 1) {
+		printf("RESULT: SIGNED (supply -k to verify)\n");
+		return 0;
+	}
+	if (rc == 0) {
+		printf("RESULT: VERIFIED\n");
+		return 0;
+	}
+	printf("RESULT: TAMPERED\n");
+	return 1;
+}
+
 int main(int argc, char **argv)
 {
 	const char *key_arg = NULL;
@@ -166,10 +201,12 @@ int main(int argc, char **argv)
 	}
 	if (!path) {
 	usage:
-		fprintf(stderr, "usage: rverify [-k pubkey_hex|pubkey_file] [-t|-T] file.mp4\n"
+		fprintf(stderr, "usage: rverify [-k pubkey_hex|pubkey_file] [-t|-T] file.{mp4,jpg}\n"
 				"  -k  verify signatures against this Ed25519 public key\n"
-				"  -t  summarize embedded ST 0604 timecodes\n"
-				"  -T  dump every timecode\n");
+				"  -t  summarize embedded ST 0604 timecodes (mp4)\n"
+				"  -T  dump every timecode (mp4)\n"
+				"JPEG input: verifies the RHD snapshot signature and\n"
+				"reports the EXIF capture time.\n");
 		return 2;
 	}
 
@@ -203,6 +240,13 @@ int main(int argc, char **argv)
 	}
 	fclose(f);
 	size_t len = (size_t)fsize;
+
+	/* JPEG snapshot? Verify the APP15 signature instead of a box walk */
+	if (len >= 4 && data[0] == 0xff && data[1] == 0xd8) {
+		int rc = verify_jpeg(data, len, have_key ? pub : NULL);
+		free(data);
+		return rc;
+	}
 
 	/* Walk top-level boxes, verifying each signed span */
 	uint8_t prev_sig[64] = {0};
