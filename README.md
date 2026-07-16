@@ -48,7 +48,7 @@ buffers at runtime, gracefully skipping any that don't exist.
 | RSD-555 | `rsd-555` | Alternative RTSP server using live555 instead of compy. Statically linked — no live555 shared libraries needed on device. Supports H.264/H.265 video, all five audio codecs (PCMU, PCMA, L16, AAC, Opus), Digest auth, per-client refcounted frame queues with fan-out. Reads the same `[rtsp]` config section as RSD (with `[rtsp-555] port` override). Can run alongside or instead of RSD on a different port. |
 | RAD  | `rad`  | Raw Audio Daemon. Captures PCM from the ISP audio input, encodes via pluggable codec (G.711 mu-law/A-law, L16, AAC, Opus), and publishes to the `audio` ring. Also handles speaker output via a `speaker` ring. Supports noise suppression, HPF, and AGC when libaudioProcess is available. Codec plugins are modular — adding a new codec requires one source file. |
 | ROD  | `rod`  | OSD Rendering Daemon. Renders timestamp, uptime, user text, and logo bitmaps into BGRA SHM double-buffers using libschrift. No HAL dependency -- RVD handles the hardware OSD regions. |
-| RHD  | `rhd`  | HTTP Streaming Daemon. Serves JPEG snapshots (`/snap`), MJPEG streams (`/mjpeg`), and audio streams (`/audio`) from SHM rings. Audio is served with proper container framing: WAV for PCM/G.711, ADTS for AAC, Ogg for Opus. Dual-stack IPv4/IPv6, Basic auth. Optional HTTPS via mbedTLS (`[http] https = true`). |
+| RHD  | `rhd`  | HTTP Streaming Daemon. Serves JPEG snapshots (`/snap`), MJPEG streams (`/mjpeg`), and audio streams (`/audio`) from SHM rings. Audio is served with proper container framing: WAV for PCM/G.711, ADTS for AAC, Ogg for Opus. Dual-stack IPv4/IPv6, Basic auth. Optional HTTPS via mbedTLS (`[http] https = true`). Optional EXIF capture times in snapshots/MJPEG frames and Ed25519-signed snapshots (verify with `rverify`). |
 | RIC  | `ric`  | IR-Cut Controller. Hybrid luma+gain day/night detection: ae_luma for day→night (sensor-independent), gain-ratio for night→day (auto-calibrating, prevents IR flip-flop). Auto-discovers GPIOs from `/etc/thingino.json`. Supports single and dual-GPIO IR-cut filters. |
 | RMR  | `rmr`  | Recording/Muxing Daemon. Reads H.264/H.265/MJPEG + audio from rings and writes crash-safe fragmented MP4 segments to SD card. Own fMP4 muxer with zero external dependencies. Optional per-frame MISB ST 0604 UTC timecodes and Ed25519 hash-chain provenance signing (verify with `rverify`). |
 | RMD  | `rmd`  | Motion Detection Daemon. Queries RVD for IVS results (hardware motion grid, JZDL YOLOv5 person/object inference on NNA), manages idle/active/cooldown state machine, triggers recording via RMR and GPIO output on detection events. Supports configurable ROI, per-class filtering, and external detection engine push via control socket. |
@@ -66,7 +66,7 @@ buffers at runtime, gracefully skipping any that don't exist.
 | ringdump   | `ringdump`   | Ring buffer debugger. Print ring header, follow per-frame metadata, dump raw Annex B to stdout, or measure pipeline latency (`-l`). |
 | rac        | `rac`        | Audio client. Record mic input to file/stdout (PCM16 LE) or play back audio (PCM, MP3, AAC, Opus) to the speaker ring. |
 | rlatency   | `rlatency`   | RTSP end-to-end latency measurement. Uses RTCP Sender Report NTP/RTP correlation (RFC 3550) to compute per-frame latency with percentile stats. Runs on host, not camera. |
-| rverify    | `rverify`    | Signed-recording verifier. Checks the Ed25519 hash chain in RMR recordings against a device public key (`-k`), reports tamper location, clean close, and power-loss prefixes; `-t`/`-T` summarize or dump the embedded MISB ST 0604 UTC timecodes. Builds for host and camera. |
+| rverify    | `rverify`    | Signed-recording verifier. Checks the Ed25519 hash chain in RMR recordings against a device public key (`-k`), reports tamper location, clean close, and power-loss prefixes; `-t`/`-T` summarize or dump the embedded MISB ST 0604 UTC timecodes. Also verifies RHD-signed JPEG snapshots and reports their EXIF capture time. Builds for host and camera. |
 
 ## Related Repositories
 
@@ -195,7 +195,7 @@ code changes required. JPEG snapshots stay embedded (not affected by refmode).
 
 ## Stream Timecodes and Signed Recordings
 
-Two optional provenance features (both ship disabled in the sample config):
+Optional provenance features (all ship disabled in the sample config):
 
 - **Per-frame UTC timecodes** — every H.264/H.265 frame carries a MISB
   ST 0604 Precision Time Stamp SEI: absolute capture time in microseconds
@@ -215,6 +215,13 @@ Two optional provenance features (both ship disabled in the sample config):
   `raptorctl rmr export-pubkey` and verify clips anywhere with
   `rverify -k <pubkey> file.mp4` — offline, no cloud. This is signing,
   not encryption: recordings stay ordinary playable MP4s.
+
+- **JPEG capture times and signed snapshots** — the same two ideas for
+  stills. `[http] exif_timestamp = true` embeds the frame capture time
+  (UTC, microsecond precision) as standard EXIF in `/snap.jpg` and every
+  MJPEG stream frame. `[http] sign_snapshots = true` appends an Ed25519
+  signature to `/snap.jpg` using the same device key as RMR; verify with
+  `rverify snapshot.jpg -k <pubkey>`. Snapshots stay ordinary JPEGs.
 
 Timecodes cost no measurable CPU; signing costs roughly 2% CPU per Mbps
 recorded on the slowest supported SoC. Details: `20-rss-architecture.md`
