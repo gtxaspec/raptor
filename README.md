@@ -44,7 +44,7 @@ buffers at runtime, gracefully skipping any that don't exist.
 | Name | Binary | Description |
 |------|--------|-------------|
 | RVD  | `rvd`  | Raw Video Daemon. Initializes HAL, configures sensor and encoder channels, creates SHM ring buffers (`main`, `sub`, `jpeg0`, `jpeg1`), and runs the frame acquisition loop. Exposes ISP controls and encoder tuning via its control socket. |
-| RSD  | `rsd`  | RTSP Streaming Daemon. Reads video/audio rings and serves RTSP/RTP streams using the compy library. Supports video+audio, video-only, or audio-only sessions. Supports Digest authentication and RTSPS (TLS via mbedTLS, compile with `TLS=1`). Audio interleaving during IDR delivery prevents large keyframes from starving audio. |
+| RSD  | `rsd`  | RTSP Streaming Daemon. Reads video/audio rings and serves RTSP/RTP streams using the compy library. Supports video+audio, video-only, or audio-only sessions. Supports Digest authentication and RTSPS (TLS via mbedTLS, compile with `TLS=1`). Audio interleaving during IDR delivery prevents large keyframes from starving audio. Optional per-frame MISB ST 0604 UTC timecode SEI (`[rtsp] sei_timecode`) — survives client-side copy recording (NVRs, ffmpeg). |
 | RSD-555 | `rsd-555` | Alternative RTSP server using live555 instead of compy. Statically linked — no live555 shared libraries needed on device. Supports H.264/H.265 video, all five audio codecs (PCMU, PCMA, L16, AAC, Opus), Digest auth, per-client refcounted frame queues with fan-out. Reads the same `[rtsp]` config section as RSD (with `[rtsp-555] port` override). Can run alongside or instead of RSD on a different port. |
 | RAD  | `rad`  | Raw Audio Daemon. Captures PCM from the ISP audio input, encodes via pluggable codec (G.711 mu-law/A-law, L16, AAC, Opus), and publishes to the `audio` ring. Also handles speaker output via a `speaker` ring. Supports noise suppression, HPF, and AGC when libaudioProcess is available. Codec plugins are modular — adding a new codec requires one source file. |
 | ROD  | `rod`  | OSD Rendering Daemon. Renders timestamp, uptime, user text, and logo bitmaps into BGRA SHM double-buffers using libschrift. No HAL dependency -- RVD handles the hardware OSD regions. |
@@ -192,6 +192,33 @@ refmode = true
 
 Consumers detect refmode transparently via ring header flags — no consumer
 code changes required. JPEG snapshots stay embedded (not affected by refmode).
+
+## Stream Timecodes and Signed Recordings
+
+Two optional provenance features (both ship disabled in the sample config):
+
+- **Per-frame UTC timecodes** — every H.264/H.265 frame carries a MISB
+  ST 0604 Precision Time Stamp SEI: absolute capture time in microseconds
+  plus an NTP-lock status byte. Enable with `[rtsp] sei_timecode = true`
+  (live streams; survives NVR-side copy recording) and/or
+  `[recording] sei_timecode = true` (RMR files, including pre-buffered
+  motion footage with its true capture time). ~36 bytes/frame; standard
+  players skip it, forensic tools parse it.
+
+- **Signed recordings** — `[recording] sign = true` makes RMR sign every
+  fMP4 with a per-device Ed25519 key: a hash chain of `uuid` boxes covering
+  the init segment, every fragment, and a final clean-close marker. Any
+  edit, removed frame, splice, or appended footage breaks the chain;
+  power-cut files verify up to the last complete fragment. The key is
+  generated on first use (`[recording] sign_key`, default
+  `/etc/raptor/sign_ed25519.key`); export the public key with
+  `raptorctl rmr export-pubkey` and verify clips anywhere with
+  `rverify -k <pubkey> file.mp4` — offline, no cloud. This is signing,
+  not encryption: recordings stay ordinary playable MP4s.
+
+Timecodes cost no measurable CPU; signing costs roughly 2% CPU per Mbps
+recorded on the slowest supported SoC. Details: `20-rss-architecture.md`
+and `23-rss-config.md` in raptor-docs.
 
 ## Init Script
 
