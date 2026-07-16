@@ -881,7 +881,7 @@ int main(int argc, char **argv)
 	if (st.sign_enabled) {
 		const char *key_path = rss_config_get_str(dctx.cfg, "recording", "sign_key",
 							  "/etc/raptor/sign_ed25519.key");
-		if (rmr_sign_key_load(&st.sign_key, key_path) < 0) {
+		if (rss_sign_key_load(&st.sign_key, key_path) < 0) {
 			RSS_ERROR("signing disabled: key unavailable");
 			st.sign_enabled = false;
 		}

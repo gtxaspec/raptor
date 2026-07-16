@@ -33,7 +33,7 @@ static int make_key(rmr_sign_key_t *key)
 	close(fd);
 	unlink(tmpl); /* force the generation path */
 	snprintf(key_path, sizeof(key_path), "%s", tmpl);
-	return rmr_sign_key_load(key, key_path);
+	return rss_sign_key_load(key, key_path);
 }
 
 TEST sign_key_generate_and_reload(void)
@@ -42,7 +42,7 @@ TEST sign_key_generate_and_reload(void)
 	ASSERT_EQ(0, make_key(&k1));
 
 	/* Reload from the persisted seed — identical key material */
-	ASSERT_EQ(0, rmr_sign_key_load(&k2, key_path));
+	ASSERT_EQ(0, rss_sign_key_load(&k2, key_path));
 	ASSERT_MEM_EQ(k1.public, k2.public, 32);
 	ASSERT_MEM_EQ(k1.fingerprint, k2.fingerprint, 8);
 
