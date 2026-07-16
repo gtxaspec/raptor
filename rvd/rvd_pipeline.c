@@ -1026,8 +1026,11 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 			return ret;
 		}
 
-		/* Pre-CreateChn tuning via config fields */
-		if (st->refmode && !s->is_jpeg) {
+		/* Pre-CreateChn tuning via config fields. JPEG-codec streams
+		 * stay embedded like the paired JPEG channels — refmode's
+		 * buffer generations recycle faster than consumers can copy
+		 * a full JPEG frame. */
+		if (st->refmode && !s->is_jpeg && s->enc_cfg.codec != RSS_CODEC_JPEG) {
 			if (st->refmode_shm) {
 				/* Ingenic VPU: 5 buffers, per-buffer sized from resolution.
 				 * Must set buf_size — SDK defaults are huge on T20 (~1.8MB)
@@ -1251,6 +1254,18 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 			uint32_t data;
 			if (mb_cfg > 0) {
 				data = (uint32_t)mb_cfg * 1024 * 1024;
+			} else if (s->enc_cfg.codec == RSS_CODEC_JPEG) {
+				/* Bitrate heuristics undersize MJPEG wildly —
+				 * size from resolution like the JPEG rings,
+				 * with continuous-stream headroom. */
+				uint32_t jpeg_max = s->enc_cfg.width * s->enc_cfg.height / 6;
+				if (jpeg_max < 65536)
+					jpeg_max = 65536;
+				data = jpeg_max * 12;
+				if (data < min_data)
+					data = min_data;
+				if (data > max_data)
+					data = max_data;
 			} else {
 				uint32_t bps = s->enc_cfg.bitrate;
 				uint32_t fps = s->enc_cfg.fps_num;
@@ -1272,8 +1287,9 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 			}
 
 			/* Refmode: data region unused, minimal placeholder.
-			 * JPEG stays embedded — needs full data region. */
-			if (!s->is_jpeg && st->refmode &&
+			 * JPEG (paired channels and JPEG-codec streams) stays
+			 * embedded — needs full data region. */
+			if (!s->is_jpeg && s->enc_cfg.codec != RSS_CODEC_JPEG && st->refmode &&
 			    ((st->refmode_shm && st->enc_shm_size[idx] > 0) ||
 			     (!st->refmode_shm && st->rmem_size > 0)))
 				data = 4096;
@@ -1286,13 +1302,16 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 					rvd_profile_idc(s->enc_cfg.profile),
 					rvd_level_idc(s->enc_cfg.width, s->enc_cfg.height));
 
-				if (st->refmode && st->refmode_shm && st->enc_shm_size[idx] > 0) {
+				bool jpeg_codec = (s->enc_cfg.codec == RSS_CODEC_JPEG);
+				if (!jpeg_codec && st->refmode && st->refmode_shm &&
+				    st->enc_shm_size[idx] > 0) {
 					uint8_t cnt = s->enc_cfg.max_stream_cnt;
 					if (!cnt)
 						cnt = 2;
 					rss_ring_enable_refmode(s->ring, st->enc_shm_size[idx], 0,
 								cnt, st->enc_shm_size[idx] / cnt);
-				} else if (st->refmode && !st->refmode_shm && st->rmem_size > 0) {
+				} else if (!jpeg_codec && st->refmode && !st->refmode_shm &&
+					   st->rmem_size > 0) {
 					uint32_t actual_stride = 0;
 					uint8_t actual_cnt = s->enc_cfg.max_stream_cnt;
 					RSS_HAL_CALL(st->ops, enc_get_stream_buf_size, st->hal_ctx,
