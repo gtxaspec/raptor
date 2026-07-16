@@ -129,6 +129,8 @@ void *rvd_encoder_thread(void *arg)
 
 		rss_frame_t frame;
 		ret = RSS_HAL_CALL(st->ops, enc_get_frame, st->hal_ctx, s->chn, &frame);
+		if (ret == -EAGAIN)
+			continue; /* no frame this time (empty stream / JPEG fps divider) */
 		if (ret != RSS_OK) {
 			RSS_WARN("stream%d: enc_get_frame failed (chn %d, ret=%d)", idx, s->chn,
 				 ret);
