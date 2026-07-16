@@ -201,12 +201,13 @@ int main(int argc, char **argv)
 	}
 	if (!path) {
 	usage:
-		fprintf(stderr, "usage: rverify [-k pubkey_hex|pubkey_file] [-t|-T] file.{mp4,jpg}\n"
-				"  -k  verify signatures against this Ed25519 public key\n"
-				"  -t  summarize embedded ST 0604 timecodes (mp4)\n"
-				"  -T  dump every timecode (mp4)\n"
-				"JPEG input: verifies the RHD snapshot signature and\n"
-				"reports the EXIF capture time.\n");
+		fprintf(stderr,
+			"usage: rverify [-k pubkey_hex|pubkey_file] [-t|-T] file.{mp4,jpg}\n"
+			"  -k  verify signatures against this Ed25519 public key\n"
+			"  -t  summarize embedded ST 0604 timecodes (mp4)\n"
+			"  -T  dump every timecode (mp4)\n"
+			"JPEG input: verifies the RHD snapshot signature and\n"
+			"reports the EXIF capture time.\n");
 		return 2;
 	}
 
