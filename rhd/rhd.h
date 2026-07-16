@@ -16,6 +16,7 @@
 #include <rss_common.h>
 #include <rss_net.h>
 #include <rss_http.h>
+#include <rss_jpeg.h>
 #ifdef RSS_HAS_TLS
 #include <rss_tls.h>
 #endif
@@ -117,6 +118,11 @@ typedef struct {
 	/* Snapshot read buffer (shared, single-threaded) */
 	uint8_t *snap_buf;
 	uint32_t snap_buf_size;
+
+	/* JPEG capture-time EXIF + snapshot signing */
+	bool exif_timestamp;
+	bool sign_ok; /* sign_snapshots enabled and key loaded */
+	rss_sign_key_t sign_key;
 
 	volatile sig_atomic_t *running;
 	rss_ctrl_t *ctrl;

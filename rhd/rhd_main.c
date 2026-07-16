@@ -35,8 +35,23 @@ static int index_html_len;
 
 /* ── Snapshot handler — serve latest JPEG from ring ── */
 
-static bool handle_snapshot(rhd_client_t *c, int epoll_fd, rss_ring_t *ring, uint8_t *buf,
-			    uint32_t buf_size)
+/*
+ * Capture time of a JPEG frame: producer UTC mapping when published
+ * (ring v4), wall clock otherwise — a snapshot is "now" anyway.
+ */
+static uint64_t jpeg_frame_utc(rss_ring_t *ring, const rss_ring_slot_t *meta)
+{
+	int64_t off;
+	uint8_t status;
+	if (rss_ring_get_utc(ring, &off, &status) == 0)
+		return (uint64_t)(meta->timestamp + off);
+	struct timespec ts;
+	clock_gettime(CLOCK_REALTIME, &ts);
+	return (uint64_t)ts.tv_sec * 1000000ULL + (uint64_t)ts.tv_nsec / 1000;
+}
+
+static bool handle_snapshot(rhd_server_t *srv, rhd_client_t *c, int epoll_fd, rss_ring_t *ring,
+			    uint8_t *buf, uint32_t buf_size)
 {
 	if (!ring || !buf) {
 		http_error(c, "503 Service Unavailable", "JPEG ring not available");
@@ -67,6 +82,17 @@ static bool handle_snapshot(rhd_client_t *c, int epoll_fd, rss_ring_t *ring, uin
 	if (ret != 0 || length < 2 || buf[0] != 0xFF || buf[1] != 0xD8) {
 		http_error(c, "503 Service Unavailable", "No snapshot available yet");
 		return false;
+	}
+
+	if (srv->exif_timestamp) {
+		int n = rss_jpeg_insert_exif(buf, buf_size, length, jpeg_frame_utc(ring, &meta));
+		if (n > 0)
+			length = (uint32_t)n;
+	}
+	if (srv->sign_ok) {
+		int n = rss_jpeg_sign(buf, buf_size, length, &srv->sign_key);
+		if (n > 0)
+			length = (uint32_t)n;
 	}
 
 	/* Queue for non-blocking send via epoll */
@@ -301,8 +327,8 @@ static void handle_request(rhd_server_t *srv, rhd_client_t *c)
 	if (strncmp(path, "/snap", 5) == 0) {
 		int si = parse_stream_param(path);
 		if (si < srv->jpeg_ring_count && srv->jpeg_rings[si]) {
-			if (handle_snapshot(c, srv->epoll_fd, srv->jpeg_rings[si], srv->snap_buf,
-					    srv->snap_buf_size))
+			if (handle_snapshot(srv, c, srv->epoll_fd, srv->jpeg_rings[si],
+					    srv->snap_buf, srv->snap_buf_size))
 				return; /* keep alive — async send in progress */
 		} else {
 			http_error(c, "404 Not Found", "Stream not available");
@@ -425,6 +451,8 @@ static int rhd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	cJSON_AddNumberToObject(r, "audio", audio);
 	cJSON_AddNumberToObject(r, "port", srv->port);
 	cJSON_AddNumberToObject(r, "jpeg_rings", srv->jpeg_ring_count);
+	cJSON_AddBoolToObject(r, "exif_timestamp", srv->exif_timestamp);
+	cJSON_AddBoolToObject(r, "sign_snapshots", srv->sign_ok);
 #ifdef RSS_HAS_TLS
 	cJSON_AddBoolToObject(r, "tls", srv->tls != NULL);
 #else
@@ -478,6 +506,7 @@ static void server_run(rhd_server_t *srv)
 	uint8_t audio_buf[4096];
 	uint8_t *frame_buf = NULL;
 	uint32_t frame_buf_size = 0;
+	uint32_t frame_buf_cap = 0;
 
 	/* JPEG ring names: sensor 0 = jpeg0/jpeg1, sensor N = sN_jpeg0/sN_jpeg1 */
 	static const char *jpeg_ring_names[RHD_MAX_JPEG] = {"jpeg0",	"jpeg1",    "s1_jpeg0",
@@ -513,12 +542,14 @@ static void server_run(rhd_server_t *srv)
 		RSS_INFO("no rings available at startup, waiting for producers...");
 
 	if (frame_buf_size > 0) {
-		frame_buf = malloc(frame_buf_size);
+		/* Headroom for in-place EXIF insertion and signing */
+		frame_buf_cap = frame_buf_size + RSS_JPEG_EXIF_MAX + RSS_JPEG_SIG_SEGMENT;
+		frame_buf = malloc(frame_buf_cap);
 		if (!frame_buf) {
-			RSS_FATAL("failed to allocate frame buffer (%u bytes)", frame_buf_size);
+			RSS_FATAL("failed to allocate frame buffer (%u bytes)", frame_buf_cap);
 			return;
 		}
-		srv->snap_buf_size = frame_buf_size;
+		srv->snap_buf_size = frame_buf_cap;
 		srv->snap_buf = malloc(srv->snap_buf_size);
 		if (!srv->snap_buf) {
 			RSS_FATAL("failed to allocate snapshot buffer (%u bytes)",
@@ -569,8 +600,16 @@ static void server_run(rhd_server_t *srv)
 							    frame_buf, frame_buf_size, &len, &meta);
 				}
 				if (ret == 0 && len >= 2 && frame_buf[0] == 0xFF &&
-				    frame_buf[1] == 0xD8)
+				    frame_buf[1] == 0xD8) {
+					if (srv->exif_timestamp) {
+						int n = rss_jpeg_insert_exif(
+							frame_buf, frame_buf_cap, len,
+							jpeg_frame_utc(srv->jpeg_rings[j], &meta));
+						if (n > 0)
+							len = (uint32_t)n;
+					}
 					stream_mjpeg_frame(srv, j, frame_buf, len);
+				}
 			}
 		}
 
@@ -879,6 +918,17 @@ int main(int argc, char **argv)
 		srv.max_clients = 1;
 	if (srv.max_clients > RHD_MAX_CLIENTS)
 		srv.max_clients = RHD_MAX_CLIENTS;
+
+	/* JPEG capture-time EXIF + snapshot signing (device key shared with RMR) */
+	srv.exif_timestamp = rss_config_get_bool(ctx.cfg, "http", "exif_timestamp", true);
+	if (rss_config_get_bool(ctx.cfg, "http", "sign_snapshots", true)) {
+		const char *key_path = rss_config_get_str(ctx.cfg, "recording", "sign_key",
+							  "/etc/raptor/sign_ed25519.key");
+		if (rss_sign_key_load(&srv.sign_key, key_path) < 0)
+			RSS_ERROR("snapshot signing disabled: key unavailable");
+		else
+			srv.sign_ok = true;
+	}
 
 	/* Basic auth — enabled when both username and password are set */
 	const char *http_user = rss_config_get_str(ctx.cfg, "http", "username", "");
