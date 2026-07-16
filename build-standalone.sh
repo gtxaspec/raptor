@@ -328,6 +328,13 @@ clone_repo() {
         fi
     fi
 
+    # A symlinked dep is a local working checkout (--local, possibly from a
+    # previous run): never fetch/reset it — that destroys local commits and
+    # uncommitted work in the linked repo.
+    if [ -L "$dir" ]; then
+        return
+    fi
+
     if [ ! -d "$dir/.git" ]; then
         echo "Cloning $name..."
         if [ "$version" = "HEAD" ]; then
