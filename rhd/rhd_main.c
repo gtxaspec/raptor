@@ -828,16 +828,21 @@ static void server_run(rhd_server_t *srv)
 						jpeg_read_seqs[j] = 0;
 						uint32_t mfs =
 							rss_ring_max_frame_size(srv->jpeg_rings[j]);
-						if (mfs > frame_buf_size) {
+						uint32_t cap = mfs + RSS_JPEG_EXIF_MAX +
+							       RSS_JPEG_SIG_SEGMENT;
+						if (mfs > frame_buf_size || !frame_buf) {
 							free(frame_buf);
 							frame_buf_size = mfs;
-							frame_buf = malloc(frame_buf_size);
-							if (!frame_buf)
+							frame_buf_cap = cap;
+							frame_buf = malloc(frame_buf_cap);
+							if (!frame_buf) {
 								frame_buf_size = 0;
+								frame_buf_cap = 0;
+							}
 						}
-						if (mfs > srv->snap_buf_size) {
+						if (cap > srv->snap_buf_size) {
 							free(srv->snap_buf);
-							srv->snap_buf_size = mfs;
+							srv->snap_buf_size = cap;
 							srv->snap_buf = malloc(srv->snap_buf_size);
 							if (!srv->snap_buf)
 								srv->snap_buf_size = 0;
