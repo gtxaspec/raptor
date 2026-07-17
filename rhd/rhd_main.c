@@ -562,33 +562,38 @@ static void server_run(rhd_server_t *srv)
 	struct epoll_event events[16];
 	int ctrl_fd = srv->ctrl ? rss_ctrl_get_fd(srv->ctrl) : -1;
 
-	bool was_streaming = false;
+	bool ring_acquired[RHD_MAX_JPEG] = {false};
 
 	while (rss_running(srv->running)) {
-		/* Check for new JPEG frames for MJPEG streaming */
+		/* Per-ring demand: acquire only the rings that streaming
+		 * clients actually watch — each held ring runs a JPEG
+		 * encoder, which costs H.264 throughput on old SoCs. */
+		bool ring_wanted[RHD_MAX_JPEG] = {false};
 		bool has_mjpeg_clients = false;
-		for (int i = 0; i < srv->client_count; i++)
-			if (srv->clients[i]->is_mjpeg) {
+		for (int i = 0; i < srv->client_count; i++) {
+			rhd_client_t *mc = srv->clients[i];
+			if (mc->is_mjpeg && mc->mjpeg_stream >= 0 &&
+			    mc->mjpeg_stream < RHD_MAX_JPEG) {
+				ring_wanted[mc->mjpeg_stream] = true;
 				has_mjpeg_clients = true;
-				break;
 			}
+		}
 
-		/* Signal demand to producer (JPEG encoder starts/stops based on this) */
-		if (has_mjpeg_clients && !was_streaming) {
-			for (int j = 0; j < RHD_MAX_JPEG; j++)
-				if (srv->jpeg_rings[j])
-					rss_ring_acquire(srv->jpeg_rings[j]);
-			was_streaming = true;
-		} else if (!has_mjpeg_clients && was_streaming) {
-			for (int j = 0; j < RHD_MAX_JPEG; j++)
-				if (srv->jpeg_rings[j])
-					rss_ring_release(srv->jpeg_rings[j]);
-			was_streaming = false;
+		for (int j = 0; j < RHD_MAX_JPEG; j++) {
+			if (!srv->jpeg_rings[j])
+				continue;
+			if (ring_wanted[j] && !ring_acquired[j]) {
+				rss_ring_acquire(srv->jpeg_rings[j]);
+				ring_acquired[j] = true;
+			} else if (!ring_wanted[j] && ring_acquired[j]) {
+				rss_ring_release(srv->jpeg_rings[j]);
+				ring_acquired[j] = false;
+			}
 		}
 
 		if (has_mjpeg_clients && frame_buf) {
 			for (int j = 0; j < RHD_MAX_JPEG; j++) {
-				if (!srv->jpeg_rings[j])
+				if (!srv->jpeg_rings[j] || !ring_wanted[j])
 					continue;
 				uint32_t len;
 				rss_ring_slot_t meta;
@@ -823,8 +828,10 @@ static void server_run(rhd_server_t *srv)
 					if (srv->jpeg_rings[j]) {
 						rss_ring_check_version(srv->jpeg_rings[j],
 								       jpeg_ring_names[j]);
-						if (was_streaming)
+						if (ring_wanted[j]) {
 							rss_ring_acquire(srv->jpeg_rings[j]);
+							ring_acquired[j] = true;
+						}
 						jpeg_read_seqs[j] = 0;
 						uint32_t mfs =
 							rss_ring_max_frame_size(srv->jpeg_rings[j]);
@@ -865,8 +872,10 @@ static void server_run(rhd_server_t *srv)
 				if (jpeg_idle[j] >= 10) { /* ~20s (10 ticks * 2s/tick) */
 					RSS_DEBUG("jpeg ring idle, closing (%s)",
 						  jpeg_ring_names[j]);
-					if (was_streaming)
+					if (ring_acquired[j]) {
 						rss_ring_release(srv->jpeg_rings[j]);
+						ring_acquired[j] = false;
+					}
 					rss_ring_close(srv->jpeg_rings[j]);
 					srv->jpeg_rings[j] = NULL;
 					jpeg_idle[j] = 0;
@@ -883,7 +892,7 @@ static void server_run(rhd_server_t *srv)
 	free(srv->snap_buf);
 	for (int j = 0; j < RHD_MAX_JPEG; j++) {
 		if (srv->jpeg_rings[j]) {
-			if (was_streaming)
+			if (ring_acquired[j])
 				rss_ring_release(srv->jpeg_rings[j]);
 			rss_ring_close(srv->jpeg_rings[j]);
 		}
