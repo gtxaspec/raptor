@@ -74,6 +74,28 @@ void *rvd_encoder_thread(void *arg)
 	int64_t last_reap = last_stats;
 	int64_t last_utc = 0; /* 0 = publish on first frame */
 
+	/*
+	 * Old-SDK JPEG duty-cycling: a continuously receiving JPEG
+	 * channel costs the H.264 streams ~25% encoder throughput
+	 * (helix has no JPEG rate control), so receive only around
+	 * each configured frame. Skipped at near-continuous rates
+	 * where start/stop churn would exceed the savings.
+	 */
+	const rss_hal_caps_t *caps = st->ops->get_caps ? st->ops->get_caps(st->hal_ctx) : NULL;
+	int64_t pulse_interval_us = 0;
+	bool pulse =
+		s->is_jpeg && s->jpeg_idle && caps && caps->jpeg_pulse && s->enc_cfg.fps_num > 0;
+	if (pulse) {
+		uint32_t den = (s->enc_cfg.fps_den > 0) ? s->enc_cfg.fps_den : 1;
+		pulse_interval_us = 1000000LL * den / s->enc_cfg.fps_num;
+		if (pulse_interval_us < 200000)
+			pulse = false;
+	}
+	if (pulse)
+		RSS_DEBUG("jpeg chn %d: pulsed receive every %lld ms", s->chn,
+			  (long long)(pulse_interval_us / 1000));
+	bool had_readers = false; /* pulse pacing applies to held demand only */
+
 	while (rss_running(st->running) && atomic_load(&st->stream_active[idx])) {
 		/* JPEG on-demand: start/stop encoder based on ring consumers */
 		if (s->is_jpeg && s->jpeg_idle && s->ring) {
@@ -99,10 +121,24 @@ void *rvd_encoder_thread(void *arg)
 					s->enabled = false;
 					RSS_DEBUG("jpeg chn %d: stopped (no consumers)", s->chn);
 				}
+				had_readers = false;
 				usleep(100000);
 				continue;
 			}
 			if (!s->enabled) {
+				if (pulse) {
+					/* Fresh demand (snapshot acquire) gets its frame
+					 * immediately; the interval paces held consumers. */
+					if (!had_readers)
+						s->pulse_next_us = 0;
+					int64_t now = rss_timestamp_us();
+					if (now < s->pulse_next_us) {
+						int64_t wait = s->pulse_next_us - now;
+						usleep(wait > 100000 ? 100000 : (useconds_t)wait);
+						continue;
+					}
+				}
+				had_readers = true;
 				RSS_HAL_CALL(st->ops, enc_start, st->hal_ctx, s->chn);
 				s->enabled = true;
 				RSS_DEBUG("jpeg chn %d: started (%u consumers)", s->chn,
@@ -234,6 +270,12 @@ void *rvd_encoder_thread(void *arg)
 		frame_count++;
 
 		int64_t now = rss_timestamp_us();
+		if (pulse && s->enabled) {
+			/* Frame delivered — stop receiving until the next one is due */
+			RSS_HAL_CALL(st->ops, enc_stop, st->hal_ctx, s->chn);
+			s->enabled = false;
+			s->pulse_next_us = now + pulse_interval_us;
+		}
 		if (now - last_utc >= RVD_UTC_INTERVAL_US) {
 			publish_utc_mapping(st, s->ring);
 			last_utc = now;

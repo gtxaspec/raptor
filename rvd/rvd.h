@@ -11,13 +11,13 @@
 #include <rss_common.h>
 #include <stdatomic.h>
 
-#define RVD_MAX_SENSORS	       3
-#define RVD_MAX_STREAMS	       (RVD_MAX_SENSORS * 4) /* main+sub+jpeg0+jpeg1 per sensor */
-#define RVD_MAX_JPEG	       (RVD_MAX_SENSORS * 2)
+#define RVD_MAX_SENSORS		3
+#define RVD_MAX_STREAMS		(RVD_MAX_SENSORS * 4) /* main+sub+jpeg0+jpeg1 per sensor */
+#define RVD_MAX_JPEG		(RVD_MAX_SENSORS * 2)
 #define RVD_JPEG_STREAM_ID_BASE 0x20 /* JPEG ring stream_id namespace (video=idx, audio=0x10) */
-#define RVD_OSD_MAX_REGIONS    16
-#define RVD_OSD_RETRY_INTERVAL 50 /* check ticks (~5s at 10Hz) */
-#define RVD_OSD_NAME_LEN       32
+#define RVD_OSD_MAX_REGIONS	16
+#define RVD_OSD_RETRY_INTERVAL	50 /* check ticks (~5s at 10Hz) */
+#define RVD_OSD_NAME_LEN	32
 
 /*
  * Thread safety: enc_cfg/fs_cfg are written only by the ctrl handler
@@ -36,6 +36,7 @@ typedef struct {
 	bool enabled;
 	bool is_jpeg;		    /* true for snapshot channel */
 	bool jpeg_idle;		    /* true = stop encoder when no consumers */
+	int64_t pulse_next_us;	    /* jpeg_pulse: earliest next RecvPic start */
 	uintptr_t enc_buf_addrs[8]; /* refmode: unique virAddr bases seen */
 	uint8_t enc_buf_count;	    /* refmode: number of unique buffers discovered */
 } rvd_stream_t;
@@ -135,7 +136,7 @@ struct rvd_state {
 	void *ivs_algo_handle;
 	int ivs_grp;
 	int ivs_chn;
-	int ivs_fs_chn; /* framesource channel IVS is bound to */
+	int ivs_fs_chn;	    /* framesource channel IVS is bound to */
 	bool ivs_persondet; /* true = persondet/jzdl algo */
 	bool ivs_base_move; /* true = base_move algo (vs move) */
 	bool ivs_jzdl;	    /* true = standalone JZDL inference */
