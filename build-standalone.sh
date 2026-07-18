@@ -17,6 +17,7 @@
 #   --no-audio-effects  Disable audio effects (NS/HPF/AGC)
 #   --no-srt       Disable SRT (no RSR daemon)
 #   --no-rsd-555   Disable rsd-555 (live555 RTSP server; skips live555 build)
+#   --no-rfs       Disable RFS (file source daemon; skips media-server clone)
 #   --static-vendor-libs  Statically link vendor libs (libimp, libalog; requires --static)
 #   --static-stdcxx       Statically link libstdc++ (no libstdc++.so needed on device)
 #   --ivs          Enable IVS detection (persondet + JZDL)
@@ -128,6 +129,7 @@ OPT_MP3=1
 OPT_AUDIO_EFFECTS=1
 OPT_SRT=1
 OPT_RSD555=1
+OPT_RFS=1
 OPT_CLEAN=0
 OPT_CLEAN_ALL=0
 OPT_DEPS_ONLY=0
@@ -153,6 +155,7 @@ usage() {
     echo "  --no-audio-effects  Disable audio effects (NS/HPF/AGC)"
     echo "  --no-srt       Disable SRT (no RSR daemon)"
     echo "  --no-rsd-555   Disable rsd-555 (live555 RTSP server; skips live555 build)"
+    echo "  --no-rfs       Disable RFS (file source daemon; skips media-server clone)"
     echo "  --static       Statically link optional deps (fewer .so files needed)"
     echo "  --static-vendor-libs  Also statically link vendor libs (libimp, libalog; requires --static)"
     echo "  --static-stdcxx       Statically link libstdc++ (no libstdc++.so needed on device)"
@@ -178,6 +181,7 @@ for arg in "$@"; do
         --no-audio-effects) OPT_AUDIO_EFFECTS= ;;
         --no-srt)    OPT_SRT= ;;
         --no-rsd-555) OPT_RSD555= ;;
+        --no-rfs)    OPT_RFS= ;;
         --static)    OPT_STATIC=1 ;;
         --static-vendor-libs) OPT_STATIC_VENDOR=1 ;;
         --static-stdcxx) OPT_STATIC_STDCXX=1 ;;
@@ -879,7 +883,7 @@ build_compy() {
 
 echo "=== Raptor standalone build ==="
 echo "Platform:  $PLATFORM_UPPER (SDK $SDK_VERSION)"
-echo "Features:  TLS=$OPT_TLS ALT=$OPT_ALT AAC=$OPT_AAC OPUS=$OPT_OPUS MP3=$OPT_MP3 EFFECTS=$OPT_AUDIO_EFFECTS SRT=$OPT_SRT RSD555=$OPT_RSD555 IVS=$OPT_IVS STATIC=$OPT_STATIC STATIC_STDCXX=$OPT_STATIC_STDCXX RELEASE=$OPT_RELEASE DEBUG=$OPT_DEBUG LOCAL=$OPT_LOCAL"
+echo "Features:  TLS=$OPT_TLS ALT=$OPT_ALT AAC=$OPT_AAC OPUS=$OPT_OPUS MP3=$OPT_MP3 EFFECTS=$OPT_AUDIO_EFFECTS SRT=$OPT_SRT RSD555=$OPT_RSD555 RFS=$OPT_RFS IVS=$OPT_IVS STATIC=$OPT_STATIC STATIC_STDCXX=$OPT_STATIC_STDCXX RELEASE=$OPT_RELEASE DEBUG=$OPT_DEBUG LOCAL=$OPT_LOCAL"
 echo "Deps dir:  $DEPS_DIR"
 echo ""
 
@@ -896,7 +900,7 @@ clone_repo raptor-ipc   https://github.com/gtxaspec/raptor-ipc       "$RAPTOR_IP
 clone_repo raptor-common https://github.com/gtxaspec/raptor-common   "$RAPTOR_COMMON_VERSION"
 clone_repo compy        https://github.com/gtxaspec/compy            "$COMPY_VERSION"
 clone_repo libschrift   https://github.com/tomolt/libschrift         "$SCHRIFT_VERSION"
-clone_repo media-server https://github.com/ireader/media-server      HEAD
+[ "$OPT_RFS" = 1 ] && clone_repo media-server https://github.com/ireader/media-server      HEAD
 
 # live555 — download tarball (not a git repo); only needed for rsd-555
 if [ "$OPT_RSD555" = 1 ] && [ ! -d "$DEPS_DIR/live" ]; then
@@ -951,10 +955,14 @@ COMPY_CFLAGS="-I$SYSROOT_DIR/usr/include"
 
 if [ "$PLATFORM" = "a1" ]; then
     # A1 has no ISP/encoder — skip HAL daemons (rvd, rad), use RFS as producer
-    TARGETS="rfs rsd rhd rmr rmd raptorctl ringdump rverify"
+    TARGETS="rsd rhd rmr rmd raptorctl ringdump rverify"
+    if [ "$OPT_RFS" != 1 ]; then
+        echo "WARNING: --no-rfs on A1 leaves no video producer (RFS is A1's source)"
+    fi
 else
-    TARGETS="rvd rsd rad rhd rod ric rmr rmd rfs rwc raptorctl ringdump rac rverify"
+    TARGETS="rvd rsd rad rhd rod ric rmr rmd rwc raptorctl ringdump rac rverify"
 fi
+[ "$OPT_RFS" = 1 ] && TARGETS="$TARGETS rfs"
 [ "$OPT_TLS" = 1 ] && TARGETS="$TARGETS rwd rsp"
 [ "$OPT_SRT" = 1 ] && TARGETS="$TARGETS rsr"
 [ "$OPT_RSD555" = 1 ] && TARGETS="$TARGETS rsd-555"
