@@ -503,10 +503,18 @@ static void record_loop(rmr_state_t *st)
 	uint32_t audio_bps =
 		(st->audio_codec == RMR_AUDIO_PCMU || st->audio_codec == RMR_AUDIO_PCMA) ? 1 : 2;
 	uint32_t audio_samples_per_frame = 0;
-	if (st->audio_codec == RMR_AUDIO_AAC)
+	if (st->audio_codec == RMR_AUDIO_AAC) {
+		/* HE-AAC frames carry 2048 samples; the producer declares
+		 * the size in the ring header. */
 		audio_samples_per_frame = 1024;
-	else if (st->audio_codec == RMR_AUDIO_OPUS)
+		if (st->audio_ring) {
+			const rss_ring_header_t *ahdr = rss_ring_get_header(st->audio_ring);
+			if (ahdr->width)
+				audio_samples_per_frame = ahdr->width;
+		}
+	} else if (st->audio_codec == RMR_AUDIO_OPUS) {
 		audio_samples_per_frame = st->audio_sample_rate / 50;
+	}
 	int64_t a_dts_counter = 0;
 	int64_t a_ts_base = -1; /* ring ts mapping base for a_dts_counter steering */
 	bool was_recording = false;
@@ -1007,7 +1015,9 @@ int main(int argc, char **argv)
 			const rss_ring_header_t *ahdr = rss_ring_get_header(st.audio_ring);
 			st.audio_codec = ahdr->codec;
 			st.audio_sample_rate = ahdr->fps_num;
-			RSS_DEBUG("audio: codec=%u rate=%u", st.audio_codec, st.audio_sample_rate);
+			st.audio_aot = ahdr->profile;
+			RSS_DEBUG("audio: codec=%u rate=%u aot=%u", st.audio_codec,
+				  st.audio_sample_rate, st.audio_aot);
 		} else {
 			RSS_WARN("audio ring not available (recording video only)");
 		}
