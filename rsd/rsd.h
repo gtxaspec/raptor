@@ -230,6 +230,7 @@ typedef struct rsd_server {
 	bool rtcp_sr;	     /* send RTCP Sender Reports (default true) */
 	bool jpeg_enabled;   /* expose JPEG streams (default false) */
 	bool sei_timecode;   /* per-frame ST 0604 UTC SEI (default true) */
+	bool idr_on_join;    /* force an IDR when a client joins (default true) */
 
 	/* Digest auth (NULL = no auth required) */
 	Compy_Auth *auth;

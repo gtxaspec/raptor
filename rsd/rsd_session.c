@@ -1045,7 +1045,11 @@ void rsd_handle_rtsp_data(rsd_client_t *client, const char *data, size_t len)
 			}
 			pthread_mutex_unlock(&client->srv->clients_lock);
 
-			if (client->video.nal) {
+			if (client->video.nal && client->srv->idr_on_join) {
+				/* Fast join: force a keyframe. The out-of-schedule
+				 * IDR is a small burst to every connected viewer;
+				 * idr_on_join=false trades join latency (up to one
+				 * GOP) for undisturbed existing clients. */
 				char resp[128];
 				rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock",
 						      "{\"cmd\":\"request-idr\"}", resp,
