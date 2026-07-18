@@ -27,6 +27,20 @@
 
 #include "rad.h"
 
+/*
+ * Synthetic audio clock slew (AI loop). The clock advances by sample
+ * count, so ADC crystal error and samples lost inside the SDK (FIFO
+ * overrun during stalls) otherwise accumulate as unbounded A/V drift
+ * in every consumer. Each chunk, compare against CLOCK_MONOTONIC:
+ * beyond RESYNC (real loss or long stall) re-anchor hard and warn;
+ * beyond the NUDGE band (chunk-scheduling jitter floor) correct by
+ * 1ms. Authority is 1ms per 20ms chunk — far above any crystal error,
+ * gentle enough to stay inaudible in timestamp terms.
+ */
+#define RAD_SYNTH_RESYNC_US	150000
+#define RAD_SYNTH_NUDGE_BAND_US 20000
+#define RAD_SYNTH_NUDGE_US	1000
+
 /* ── AO thread context (needed by ctrl handler for ao-enable/ao-disable) ── */
 
 typedef struct {
@@ -1262,6 +1276,18 @@ int main(int argc, char **argv)
 		 * timestamps share the encoder's clock source. */
 		int64_t ts = synth_audio_ts;
 		synth_audio_ts += (int64_t)samples * 1000000 / ctrl_ctx.sample_rate;
+
+		/* Slew toward CLOCK_MONOTONIC (see RAD_SYNTH_* above). */
+		int64_t clk_err = rss_timestamp_us() - synth_audio_ts;
+		if (clk_err > RAD_SYNTH_RESYNC_US || clk_err < -RAD_SYNTH_RESYNC_US) {
+			RSS_WARN("audio clock resync %+lldms (lost samples or stall)",
+				 (long long)(clk_err / 1000));
+			synth_audio_ts += clk_err;
+		} else if (clk_err > RAD_SYNTH_NUDGE_BAND_US) {
+			synth_audio_ts += RAD_SYNTH_NUDGE_US;
+		} else if (clk_err < -RAD_SYNTH_NUDGE_BAND_US) {
+			synth_audio_ts -= RAD_SYNTH_NUDGE_US;
+		}
 
 		const int16_t *pcm = frame.data;
 		int out_len = 0;
