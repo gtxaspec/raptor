@@ -818,8 +818,7 @@ static void record_loop(rmr_state_t *st)
 			/* Write audio to continuous mux */
 			for (int i = 0; i < audio_count; i++) {
 				a_dts_counter = steer_audio_dts(a_dts_counter, audio_frames[i].ts,
-								&a_ts_base,
-								audio_frames[i].samples,
+								&a_ts_base, audio_frames[i].samples,
 								st->audio_sample_rate);
 				rmr_audio_sample_t as = {
 					.data = audio_frames[i].data,
@@ -852,10 +851,9 @@ static void record_loop(rmr_state_t *st)
 						 meta.is_key);
 
 				for (int i = 0; i < audio_count; i++)
-					clip_write_audio(st, audio_frames[i].data,
-							 audio_frames[i].len,
-							 audio_frames[i].samples,
-							 audio_frames[i].ts);
+					clip_write_audio(
+						st, audio_frames[i].data, audio_frames[i].len,
+						audio_frames[i].samples, audio_frames[i].ts);
 
 				/* Check clip length cap */
 				if (st->clip_length_sec > 0) {

@@ -388,8 +388,8 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 				b64_encode(rctx->sps, sps_l, sps_b64, sizeof(sps_b64));
 				b64_encode(rctx->pps, pps_l, pps_b64, sizeof(pps_b64));
 				snprintf(fmtp + foff, sizeof(fmtp) - foff,
-					 " sprop-vps=%s;sprop-sps=%s;sprop-pps=%s",
-					 vps_b64, sps_b64, pps_b64);
+					 " sprop-vps=%s;sprop-sps=%s;sprop-pps=%s", vps_b64,
+					 sps_b64, pps_b64);
 			}
 
 			if (vps_l > 0) {
@@ -1000,8 +1000,8 @@ void rsd_handle_rtsp_data(rsd_client_t *client, const char *data, size_t len)
 			pthread_mutex_lock(&client->srv->clients_lock);
 			/* Backdate last_rtcp so the first SR fires
 			 * RSD_SR_FIRST_US after PLAY, not a full interval. */
-			int64_t sr_base = rss_timestamp_us() -
-					  (RSD_SR_INTERVAL_US - RSD_SR_FIRST_US);
+			int64_t sr_base =
+				rss_timestamp_us() - (RSD_SR_INTERVAL_US - RSD_SR_FIRST_US);
 			if (client->video.nal || client->video.jpeg) {
 				client->waiting_keyframe = (client->video.jpeg == NULL);
 				client->video_ts_base_set = false;

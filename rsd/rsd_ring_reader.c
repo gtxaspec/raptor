@@ -854,9 +854,8 @@ void *rsd_audio_reader_thread(void *arg)
 			 * time), nudge 1ms inside the band. */
 			if (audio_ts_epoch == 0)
 				audio_ts_epoch = (int64_t)meta.timestamp;
-			uint32_t ring_rtp =
-				(uint32_t)((uint64_t)(meta.timestamp - audio_ts_epoch) *
-					   rtp_clock / 1000000);
+			uint32_t ring_rtp = (uint32_t)((uint64_t)(meta.timestamp - audio_ts_epoch) *
+						       rtp_clock / 1000000);
 			uint32_t rtp_ts;
 			if (!has_last_audio_rtp_ts) {
 				rtp_ts = ring_rtp;
@@ -869,9 +868,8 @@ void *rsd_audio_reader_thread(void *arg)
 				} else if (err > (int32_t)frame_samples * 4) {
 					rtp_ts = ring_rtp;
 				} else if (err < -(int32_t)frame_samples * 4) {
-					audio_ts_epoch =
-						(int64_t)meta.timestamp -
-						(int64_t)rtp_ts * 1000000 / rtp_clock;
+					audio_ts_epoch = (int64_t)meta.timestamp -
+							 (int64_t)rtp_ts * 1000000 / rtp_clock;
 				} else if (err > nudge) {
 					rtp_ts += nudge;
 				} else if (err < -nudge) {
