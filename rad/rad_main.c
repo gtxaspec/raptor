@@ -1294,7 +1294,10 @@ int main(int argc, char **argv)
 		 * burst or scheduler batch) and a long-gap return is the
 		 * oldest buffered chunk right after a stall — old audio on
 		 * the old continuous timeline, where wall comparison
-		 * misfires. At the first live-paced read after a stall the
+		 * misfires. Drain chunks can trickle as slowly as ~15ms on a
+ * loaded SoC, so live means close to the 20ms chunk cadence,
+ * not merely non-instant. At the first live-paced read after
+ * a stall the
 		 * residual error is exactly the audio the SDK really lost,
 		 * so the resync inserts a gap of the right size. Nudges are
 		 * NOT gated: during drains they are bounded zero-mean noise,
@@ -1304,7 +1307,7 @@ int main(int argc, char **argv)
 		int64_t now_us = rss_timestamp_us();
 		int64_t read_gap = now_us - last_read_us;
 		last_read_us = now_us;
-		bool live_paced = read_gap >= 5000 && read_gap <= 150000;
+		bool live_paced = read_gap >= 15000 && read_gap <= 150000;
 		int64_t clk_err = now_us - synth_audio_ts;
 		if (clk_err > RAD_SYNTH_RESYNC_BEHIND_US ||
 		    clk_err < -RAD_SYNTH_RESYNC_AHEAD_US) {
