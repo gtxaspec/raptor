@@ -1204,6 +1204,7 @@ int main(int argc, char **argv)
 		  codec_str);
 
 	int64_t synth_audio_ts = rss_timestamp_us();
+	int64_t last_read_us = 0; /* pacing detector for the clock slew */
 
 	ctrl_ctx = (rad_ctrl_ctx_t){
 		.cfg = dctx.cfg,
@@ -1287,10 +1288,24 @@ int main(int argc, char **argv)
 		int64_t ts = synth_audio_ts;
 		synth_audio_ts += (int64_t)samples * 1000000 / ctrl_ctx.sample_rate;
 
-		/* Slew toward CLOCK_MONOTONIC (see RAD_SYNTH_* above). */
-		int64_t clk_err = rss_timestamp_us() - synth_audio_ts;
-		if (clk_err > RAD_SYNTH_RESYNC_BEHIND_US ||
-		    clk_err < -RAD_SYNTH_RESYNC_AHEAD_US) {
+		/* Slew toward CLOCK_MONOTONIC (see RAD_SYNTH_* above), but
+		 * only on live-paced reads. An instant return served a chunk
+		 * the SDK had already buffered (drain burst or scheduler
+		 * batch) and a long-gap return is the oldest buffered chunk
+		 * right after a stall — in both cases the chunk is old audio
+		 * that belongs on the old continuous timeline, and wall
+		 * comparison is meaningless. At the first live-paced read
+		 * after a stall the residual error is exactly the audio the
+		 * SDK really lost, so the resync inserts a gap of the right
+		 * size. */
+		int64_t now_us = rss_timestamp_us();
+		int64_t read_gap = now_us - last_read_us;
+		last_read_us = now_us;
+		int64_t clk_err = now_us - synth_audio_ts;
+		if (read_gap < 5000 || read_gap > 150000) {
+			/* burst or stall-head read — skip */
+		} else if (clk_err > RAD_SYNTH_RESYNC_BEHIND_US ||
+			   clk_err < -RAD_SYNTH_RESYNC_AHEAD_US) {
 			RSS_WARN("audio clock resync %+lldms (lost samples or stall)",
 				 (long long)(clk_err / 1000));
 			synth_audio_ts += clk_err;
