@@ -286,6 +286,10 @@ setup_toolchain() {
 
     if [ ! -d "$TOOLCHAIN_DIR" ] || [ ! -f "$TOOLCHAIN_DIR/.version_${TOOLCHAIN_NAME}" ]; then
         echo "Downloading toolchain: $TOOLCHAIN_NAME"
+        # Wipe any previous toolchain: extracting over another family's
+        # tree leaves its .version marker behind, and a later switch
+        # back would silently reuse the wrong-arch binaries.
+        rm -rf "$TOOLCHAIN_DIR"
         mkdir -p "$TOOLCHAIN_DIR"
         curl -fSL "$TOOLCHAIN_URL" | tar xz -C "$TOOLCHAIN_DIR" --strip-components=1
         touch "$TOOLCHAIN_DIR/.version_${TOOLCHAIN_NAME}"
