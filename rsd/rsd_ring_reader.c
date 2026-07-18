@@ -373,7 +373,7 @@ static void rsd_send_video_interleaved(rsd_client_t *c, const uint8_t *data, uin
 
 	if (c->srv->rtcp_sr) {
 		int64_t now = rss_timestamp_us();
-		if (c->video.rtcp && now - c->video.last_rtcp > 30000000) {
+		if (c->video.rtcp && now - c->video.last_rtcp > RSD_SR_INTERVAL_US) {
 			pthread_mutex_lock(&c->write_lock);
 			(void)!Compy_Rtcp_send_sr(c->video.rtcp);
 			pthread_mutex_unlock(&c->write_lock);
@@ -676,7 +676,7 @@ static void rsd_send_jpeg_frame(rsd_client_t *c, const uint8_t *data, uint32_t l
 
 	if (c->srv->rtcp_sr) {
 		int64_t now = rss_timestamp_us();
-		if (c->video.rtcp && now - c->video.last_rtcp > 30000000) {
+		if (c->video.rtcp && now - c->video.last_rtcp > RSD_SR_INTERVAL_US) {
 			pthread_mutex_lock(&c->write_lock);
 			(void)!Compy_Rtcp_send_sr(c->video.rtcp);
 			pthread_mutex_unlock(&c->write_lock);
@@ -721,7 +721,7 @@ static void rsd_send_audio_frame(rsd_client_t *c, uint32_t codec, const uint8_t 
 
 	if (c->srv->rtcp_sr) {
 		int64_t now = rss_timestamp_us();
-		if (c->audio.rtcp && now - c->audio.last_rtcp > 30000000) {
+		if (c->audio.rtcp && now - c->audio.last_rtcp > RSD_SR_INTERVAL_US) {
 			(void)!Compy_Rtcp_send_sr(c->audio.rtcp);
 			c->audio.last_rtcp = now;
 		}

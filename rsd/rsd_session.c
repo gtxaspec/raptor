@@ -998,17 +998,21 @@ void rsd_handle_rtsp_data(rsd_client_t *client, const char *data, size_t len)
 		if (client->play_pending) {
 			client->play_pending = false;
 			pthread_mutex_lock(&client->srv->clients_lock);
+			/* Backdate last_rtcp so the first SR fires
+			 * RSD_SR_FIRST_US after PLAY, not a full interval. */
+			int64_t sr_base = rss_timestamp_us() -
+					  (RSD_SR_INTERVAL_US - RSD_SR_FIRST_US);
 			if (client->video.nal || client->video.jpeg) {
 				client->waiting_keyframe = (client->video.jpeg == NULL);
 				client->video_ts_base_set = false;
 				client->audio_ts_base_set = false;
 				atomic_store(&client->video.playing, true);
-				client->video.last_rtcp = rss_timestamp_us();
+				client->video.last_rtcp = sr_base;
 				client->video_read_seq = 0;
 			}
 			if (client->audio.rtp) {
 				atomic_store(&client->audio.playing, true);
-				client->audio.last_rtcp = rss_timestamp_us();
+				client->audio.last_rtcp = sr_base;
 			}
 			pthread_mutex_unlock(&client->srv->clients_lock);
 

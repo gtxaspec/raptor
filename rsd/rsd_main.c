@@ -85,7 +85,7 @@ int main(int argc, char **argv)
 	if (srv.session_timeout < 10)
 		srv.session_timeout = 10;
 	srv.tcp_sndbuf = rss_config_get_int(dctx.cfg, "rtsp", "tcp_sndbuf", 64 * 1024);
-	srv.rtcp_sr = rss_config_get_bool(dctx.cfg, "rtsp", "rtcp_sr", false);
+	srv.rtcp_sr = rss_config_get_bool(dctx.cfg, "rtsp", "rtcp_sr", true);
 	srv.jpeg_enabled = rss_config_get_bool(dctx.cfg, "rtsp", "jpeg", false);
 	srv.sei_timecode = rss_config_get_bool(dctx.cfg, "rtsp", "sei_timecode", true);
 	rsd_endpoints_load(&srv, dctx.cfg);

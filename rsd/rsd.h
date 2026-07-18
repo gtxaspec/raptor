@@ -23,6 +23,13 @@
 #define RSD_BUF_SIZE	     4096
 #define RSD_IDLE_TIMEOUT_SEC 60 /* disconnect idle clients (slowloris protection) */
 
+/* RTCP Sender Report cadence (RFC 3550 recommends ~5 s).  The first SR
+ * goes out ~1 s after PLAY so NVRs (ffmpeg/Frigate/go2rtc) get their
+ * NTP<->RTP anchor inside their probe window; afterwards the periodic
+ * SRs let them re-anchor A/V sync against clock drift. */
+#define RSD_SR_INTERVAL_US 5000000
+#define RSD_SR_FIRST_US	   1000000
+
 /* Audio codec IDs (matches RAD ring codec field) */
 #define RSD_CODEC_PCMU 0
 #define RSD_CODEC_PCMA 8
@@ -217,7 +224,7 @@ typedef struct rsd_server {
 	int max_clients;     /* runtime limit (≤ RSD_MAX_CLIENTS) */
 	int session_timeout; /* RTSP session timeout in seconds */
 	int tcp_sndbuf;	     /* TCP send buffer size (bytes) */
-	bool rtcp_sr;	     /* send RTCP Sender Reports (default false) */
+	bool rtcp_sr;	     /* send RTCP Sender Reports (default true) */
 	bool jpeg_enabled;   /* expose JPEG streams (default false) */
 	bool sei_timecode;   /* per-frame ST 0604 UTC SEI (default true) */
 
