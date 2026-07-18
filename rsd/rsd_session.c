@@ -628,55 +628,59 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 			return;
 		}
 
-		/* A re-SETUP (or a second track's SETUP) replaces the UDP
-		 * sockets: close the previous pair first, deregistering the
-		 * RTCP fd from epoll. A leaked connected UDP socket whose
-		 * peer has vanished sits in permanent EPOLLERR and spins
-		 * the epoll loop at wakeup rate. */
-		if (self->udp_rtcp_fd >= 0) {
-			if (self->rtcp_in_epoll) {
-				epoll_ctl(self->srv->epoll_fd, EPOLL_CTL_DEL, self->udp_rtcp_fd,
-					  NULL);
-				self->rtcp_in_epoll = false;
+		/* Each track owns its UDP pair. A re-SETUP of the same
+		 * track replaces the sockets: close the previous pair
+		 * first, deregistering the RTCP fd from epoll. A leaked
+		 * connected UDP socket whose peer has vanished sits in
+		 * permanent EPOLLERR and spins the epoll loop; closing a
+		 * pair the other track still uses cross-wires the streams
+		 * once the fd numbers get reused. */
+		int *rtp_fd = is_audio ? &self->audio_udp_rtp_fd : &self->udp_rtp_fd;
+		int *rtcp_fd = is_audio ? &self->audio_udp_rtcp_fd : &self->udp_rtcp_fd;
+		bool *rtcp_reg = is_audio ? &self->audio_rtcp_in_epoll : &self->rtcp_in_epoll;
+		if (*rtcp_fd >= 0) {
+			if (*rtcp_reg) {
+				epoll_ctl(self->srv->epoll_fd, EPOLL_CTL_DEL, *rtcp_fd, NULL);
+				*rtcp_reg = false;
 			}
-			close(self->udp_rtcp_fd);
-			self->udp_rtcp_fd = -1;
+			close(*rtcp_fd);
+			*rtcp_fd = -1;
 		}
-		if (self->udp_rtp_fd >= 0) {
-			close(self->udp_rtp_fd);
-			self->udp_rtp_fd = -1;
+		if (*rtp_fd >= 0) {
+			close(*rtp_fd);
+			*rtp_fd = -1;
 		}
 
-		self->udp_rtp_fd = compy_dgram_socket(sa->sa_family, client_ip, cli_rtp);
-		if (self->udp_rtp_fd < 0) {
+		*rtp_fd = compy_dgram_socket(sa->sa_family, client_ip, cli_rtp);
+		if (*rtp_fd < 0) {
 			compy_respond_internal_error(ctx);
 			return;
 		}
 
-		self->udp_rtcp_fd = compy_dgram_socket(sa->sa_family, client_ip, cli_rtcp);
-		if (self->udp_rtcp_fd < 0) {
-			close(self->udp_rtp_fd);
-			self->udp_rtp_fd = -1;
+		*rtcp_fd = compy_dgram_socket(sa->sa_family, client_ip, cli_rtcp);
+		if (*rtcp_fd < 0) {
+			close(*rtp_fd);
+			*rtp_fd = -1;
 			compy_respond_internal_error(ctx);
 			return;
 		}
 
-		rtp_t = compy_transport_udp(self->udp_rtp_fd);
-		rtcp_t = compy_transport_udp(self->udp_rtcp_fd);
+		rtp_t = compy_transport_udp(*rtp_fd);
+		rtcp_t = compy_transport_udp(*rtcp_fd);
 		self->is_tcp = false;
 
 		/* Get server-side ports */
 		struct sockaddr_storage local;
 		socklen_t llen = sizeof(local);
 		uint16_t srv_rtp = 0, srv_rtcp = 0;
-		if (getsockname(self->udp_rtp_fd, (struct sockaddr *)&local, &llen) == 0) {
+		if (getsockname(*rtp_fd, (struct sockaddr *)&local, &llen) == 0) {
 			if (local.ss_family == AF_INET6)
 				srv_rtp = ntohs(((struct sockaddr_in6 *)&local)->sin6_port);
 			else
 				srv_rtp = ntohs(((struct sockaddr_in *)&local)->sin_port);
 		}
 		llen = sizeof(local);
-		if (getsockname(self->udp_rtcp_fd, (struct sockaddr *)&local, &llen) == 0) {
+		if (getsockname(*rtcp_fd, (struct sockaddr *)&local, &llen) == 0) {
 			if (local.ss_family == AF_INET6)
 				srv_rtcp = ntohs(((struct sockaddr_in6 *)&local)->sin6_port);
 			else
@@ -688,8 +692,8 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 			     ";server_port=%" PRIu16 "-%" PRIu16,
 			     cli_rtp, cli_rtcp, srv_rtp, srv_rtcp);
 
-		RSS_DEBUG("client SETUP: video UDP client=%u-%u server=%u-%u", cli_rtp, cli_rtcp,
-			  srv_rtp, srv_rtcp);
+		RSS_DEBUG("client SETUP: %s UDP client=%u-%u server=%u-%u",
+			  is_audio ? "audio" : "video", cli_rtp, cli_rtcp, srv_rtp, srv_rtcp);
 	}
 
 	if (is_backchannel) {

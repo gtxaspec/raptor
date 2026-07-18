@@ -129,9 +129,12 @@ typedef struct rsd_client {
 	uint8_t audio_rtcp_ch; /* RTCP channel for audio (default 3) */
 
 	/* UDP socket fds (for cleanup) */
-	int udp_rtp_fd;
+	int udp_rtp_fd; /* video track UDP pair */
 	int udp_rtcp_fd;
-	bool rtcp_in_epoll; /* true once udp_rtcp_fd is added to epoll */
+	bool rtcp_in_epoll;   /* true once udp_rtcp_fd is added to epoll */
+	int audio_udp_rtp_fd; /* audio track UDP pair (UDP transport only) */
+	int audio_udp_rtcp_fd;
+	bool audio_rtcp_in_epoll;
 
 	/* Deferred PLAY — set inside compy callback, applied after
 	 * write_lock is released to avoid lock-order inversion with

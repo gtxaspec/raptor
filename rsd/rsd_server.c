@@ -35,8 +35,9 @@ static rsd_client_t *find_client_by_fd(rsd_server_t *srv, int fd)
 static rsd_client_t *find_client_by_rtcp_fd(rsd_server_t *srv, int fd)
 {
 	for (int i = 0; i < srv->client_count; i++) {
-		if (srv->clients[i] && srv->clients[i]->udp_rtcp_fd == fd)
-			return srv->clients[i];
+		rsd_client_t *c = srv->clients[i];
+		if (c && (c->udp_rtcp_fd == fd || c->audio_udp_rtcp_fd == fd))
+			return c;
 	}
 	return NULL;
 }
@@ -139,6 +140,13 @@ static void remove_client(rsd_server_t *srv, rsd_client_t *client)
 			epoll_ctl(srv->epoll_fd, EPOLL_CTL_DEL, client->udp_rtcp_fd, NULL);
 		close(client->udp_rtcp_fd);
 	}
+	if (client->audio_udp_rtp_fd >= 0)
+		close(client->audio_udp_rtp_fd);
+	if (client->audio_udp_rtcp_fd >= 0) {
+		if (client->audio_rtcp_in_epoll)
+			epoll_ctl(srv->epoll_fd, EPOLL_CTL_DEL, client->audio_udp_rtcp_fd, NULL);
+		close(client->audio_udp_rtcp_fd);
+	}
 
 	/* TLS shutdown and cleanup */
 #ifdef COMPY_HAS_TLS
@@ -183,6 +191,8 @@ static void accept_client(rsd_server_t *srv)
 	client->srv = srv;
 	client->udp_rtp_fd = -1;
 	client->udp_rtcp_fd = -1;
+	client->audio_udp_rtp_fd = -1;
+	client->audio_udp_rtcp_fd = -1;
 	client->video_rtcp_ch = 0xFF; /* invalid until SETUP sets it */
 	client->audio_rtcp_ch = 0xFF;
 
@@ -608,9 +618,11 @@ void rsd_server_run(rsd_server_t *srv)
 				if (rc) {
 					uint8_t rtcp_buf[512];
 					ssize_t rn = recv(fd, rtcp_buf, sizeof(rtcp_buf), 0);
-					if (rn > 0 && rc->video.rtcp)
-						Compy_Rtcp_handle_incoming(rc->video.rtcp, rtcp_buf,
-									   rn);
+					Compy_Rtcp *dest = (fd == rc->audio_udp_rtcp_fd)
+								   ? rc->audio.rtcp
+								   : rc->video.rtcp;
+					if (rn > 0 && dest)
+						Compy_Rtcp_handle_incoming(dest, rtcp_buf, rn);
 				} else if (find_client_by_fd(srv, fd)) {
 					handle_client_data(srv, fd);
 				} else {
@@ -633,6 +645,15 @@ void rsd_server_run(rsd_server_t *srv)
 				if (epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, c->udp_rtcp_fd,
 					      &rtcp_ev) == 0)
 					c->rtcp_in_epoll = true;
+			}
+			if (c && c->audio_udp_rtcp_fd >= 0 && !c->audio_rtcp_in_epoll) {
+				fcntl(c->audio_udp_rtcp_fd, F_SETFL,
+				      fcntl(c->audio_udp_rtcp_fd, F_GETFL) | O_NONBLOCK);
+				struct epoll_event rtcp_ev = {.events = EPOLLIN,
+							      .data.fd = c->audio_udp_rtcp_fd};
+				if (epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, c->audio_udp_rtcp_fd,
+					      &rtcp_ev) == 0)
+					c->audio_rtcp_in_epoll = true;
 			}
 		}
 
