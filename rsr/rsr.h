@@ -72,6 +72,7 @@ typedef struct {
 	int audio_idle;
 	uint32_t audio_codec;
 	uint32_t audio_sample_rate;
+	uint32_t audio_adts_rate; /* rate declared in ADTS (core rate for HE-AAC) */
 	uint8_t audio_ts_type;
 
 	uint8_t *frame_buf;

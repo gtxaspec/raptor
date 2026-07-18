@@ -114,6 +114,7 @@ typedef struct {
 	rss_ring_t *audio_ring;
 	int audio_codec;       /* codec ID from ring header */
 	int audio_sample_rate; /* sample rate from ring header */
+	int audio_adts_rate;   /* rate declared in ADTS (core rate for HE-AAC) */
 
 	/* Snapshot read buffer (shared, single-threaded) */
 	uint8_t *snap_buf;

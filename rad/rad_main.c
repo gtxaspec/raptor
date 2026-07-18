@@ -381,8 +381,9 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			RSS_HAL_CALL(ctx->ops, audio_deinit, ctx->hal_ctx);
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "ring create failed");
 		}
-		rss_ring_set_stream_info(*ctx->ring, 0x10, ctx->codec_id, 0, 0, ctx->sample_rate, 1,
-					 0, 0);
+		rss_ring_set_stream_info(*ctx->ring, 0x10, ctx->codec_id,
+					 (uint32_t)ctx->codec_ctx->frame_samples, 0,
+					 ctx->sample_rate, 1, ctx->codec_ctx->aot, 0);
 		ctx->codec_ctx->ring = *ctx->ring;
 
 		ctx->ai_disabled = false;
@@ -730,8 +731,9 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			RSS_FATAL("audio-restart: ring create failed");
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "ring create failed");
 		}
-		rss_ring_set_stream_info(*ctx->ring, 0x10, new_codec_id, 0, 0, new_sample_rate, 1,
-					 0, 0);
+		rss_ring_set_stream_info(*ctx->ring, 0x10, new_codec_id,
+					 (uint32_t)ctx->codec_ctx->frame_samples, 0,
+					 new_sample_rate, 1, ctx->codec_ctx->aot, 0);
 		ctx->codec_ctx->ring = *ctx->ring;
 
 		/* 7. Resize encode buffer if needed */
@@ -1179,7 +1181,8 @@ int main(int argc, char **argv)
 		RSS_FATAL("failed to create audio ring");
 		goto cleanup;
 	}
-	rss_ring_set_stream_info(ring, 0x10, codec_id, 0, 0, sample_rate, 1, 0, 0);
+	rss_ring_set_stream_info(ring, 0x10, codec_id, (uint32_t)codec_ctx.frame_samples, 0,
+				 sample_rate, 1, codec_ctx.aot, 0);
 
 	/* Encode buffer — sized by codec plugin */
 	int encode_buf_size = codec_ctx.encode_buf_size;

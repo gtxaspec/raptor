@@ -285,6 +285,12 @@ static void serve_loop(rsr_state_t *st)
 				const rss_ring_header_t *ahdr = rss_ring_get_header(st->audio_ring);
 				st->audio_codec = ahdr->codec;
 				st->audio_sample_rate = ahdr->fps_num;
+				/* HE-AAC over ADTS uses implicit SBR signaling:
+				 * the header declares the core rate and the
+				 * decoder doubles it on SBR detection. */
+				st->audio_adts_rate = (ahdr->profile == 5)
+							      ? st->audio_sample_rate / 2
+							      : st->audio_sample_rate;
 				st->audio_ts_type = audio_codec_to_ts(ahdr->codec);
 				st->audio_read_seq = ahdr->write_seq;
 				rss_ring_acquire(st->audio_ring);
@@ -458,8 +464,7 @@ static void serve_loop(rsr_state_t *st)
 
 				if (st->audio_ts_type == RSS_TS_STREAM_AAC &&
 				    alen <= sizeof(audio_buf)) {
-					build_adts_header(adts_buf, st->audio_sample_rate,
-							  (int)alen);
+					build_adts_header(adts_buf, st->audio_adts_rate, (int)alen);
 					memcpy(adts_buf + 7, audio_buf, alen);
 					adata = adts_buf;
 					adatalen = alen + 7;

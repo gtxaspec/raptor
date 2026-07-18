@@ -12,6 +12,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <rss_net.h>
+#include <rss_aac.h>
 
 #include "rsd.h"
 
@@ -472,18 +473,21 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 					   (COMPY_SDP_BANDWIDTH, "AS:64"),
 					   (COMPY_SDP_ATTR, "control:audio"));
 		} else if (codec == RSD_CODEC_AAC) {
-			/* AAC-LC (RFC 3640, AAC-hbr mode) */
-			static const int sr_table[] = {96000, 88200, 64000, 48000, 44100,
-						       32000, 24000, 22050, 16000, 12000,
-						       11025, 8000,  7350};
-			int sr_idx = 4;
-			for (int i = 0; i < 13; i++) {
-				if (sr_table[i] == aclk) {
-					sr_idx = i;
-					break;
-				}
+			/* AAC-LC or HE-AAC v1 (RFC 3640, AAC-hbr mode). The
+			 * producer declares the object type in the ring
+			 * header; the RTP clock is the full (extension)
+			 * rate either way. */
+			int aot = (ahdr->profile == 5) ? RSS_AAC_AOT_SBR : RSS_AAC_AOT_LC;
+			uint8_t asc[RSS_AAC_ASC_MAX];
+			int asc_len = rss_aac_asc(aot, aclk, 1, asc);
+			if (asc_len < 0) {
+				RSS_WARN("no ASC for aot %d rate %d, signaling LC 44.1k", aot,
+					 aclk);
+				asc_len = rss_aac_asc(RSS_AAC_AOT_LC, 44100, 1, asc);
 			}
-			uint16_t asc = (uint16_t)((2 << 11) | (sr_idx << 7) | (1 << 3));
+			char asc_hex[RSS_AAC_ASC_MAX * 2 + 1];
+			for (int i = 0; i < asc_len; i++)
+				snprintf(asc_hex + i * 2, 3, "%02X", asc[i]);
 
 			COMPY_SDP_DESCRIBE(
 				ret, sdp_w,
@@ -494,8 +498,8 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 				 aclk),
 				(COMPY_SDP_ATTR,
 				 "fmtp:%d streamtype=5;profile-level-id=1;mode=AAC-hbr;"
-				 "sizelength=13;indexlength=3;indexdeltalength=3;config=%04X",
-				 RSD_AUDIO_PT_AAC, asc),
+				 "sizelength=13;indexlength=3;indexdeltalength=3;config=%s",
+				 RSD_AUDIO_PT_AAC, asc_hex),
 				(COMPY_SDP_ATTR, "control:audio"));
 		} else if (codec == RSD_CODEC_OPUS) {
 			COMPY_SDP_DESCRIBE(

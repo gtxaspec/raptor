@@ -162,6 +162,9 @@ rsp_audio_enc_t *rsp_audio_init(uint32_t input_codec, uint32_t sample_rate)
 	params.sample_rate = enc->output_rate;
 	params.num_channels = 1;
 	params.mpeg_version = FAAC_MPEG4;
+	/* RTMP push stays AAC-LC: the FLV sequence header emitted here
+	 * carries no HE signaling, and the fixed 128k bitrate would never
+	 * select HE anyway. */
 	params.object_type = FAAC_OBJ_LOW;
 	params.joint_mode = FAAC_JOINT_NONE;
 	params.use_tns = false;

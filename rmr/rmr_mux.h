@@ -50,6 +50,7 @@ typedef struct {
 	uint32_t sample_rate;	 /* 8000 or 16000 */
 	uint8_t channels;	 /* 1 */
 	uint8_t bits_per_sample; /* 8 for G.711, 16 for L16 */
+	uint8_t aot;		 /* AAC object type (2=LC, 5=HE v1), 0 otherwise */
 } rmr_audio_params_t;
 
 typedef struct {

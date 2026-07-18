@@ -352,12 +352,17 @@ static void handle_request(rhd_server_t *srv, rhd_client_t *c)
 					rss_ring_get_header(srv->audio_ring);
 				srv->audio_codec = ahdr->codec;
 				srv->audio_sample_rate = ahdr->fps_num;
+				srv->audio_adts_rate = (ahdr->profile == 5) ? (int)ahdr->fps_num / 2
+									    : (int)ahdr->fps_num;
 			}
 		}
 		if (!srv->audio_ring) {
 			http_error(c, "404 Not Found", "Audio not available");
 		} else {
-			if (rhd_audio_send_header(c, srv->audio_codec, srv->audio_sample_rate) < 0)
+			if (rhd_audio_send_header(c, srv->audio_codec,
+						  srv->audio_codec == RHD_CODEC_AAC
+							  ? srv->audio_adts_rate
+							  : srv->audio_sample_rate) < 0)
 				return;
 			c->is_audio = true;
 			rhd_start_send_thread(c);
@@ -534,6 +539,8 @@ static void server_run(rhd_server_t *srv)
 		const rss_ring_header_t *ahdr = rss_ring_get_header(srv->audio_ring);
 		srv->audio_codec = ahdr->codec;
 		srv->audio_sample_rate = ahdr->fps_num;
+		srv->audio_adts_rate =
+			(ahdr->profile == 5) ? (int)ahdr->fps_num / 2 : (int)ahdr->fps_num;
 		RSS_INFO("audio ring available (codec=%d rate=%d)", srv->audio_codec,
 			 srv->audio_sample_rate);
 	}
@@ -634,6 +641,8 @@ static void server_run(rhd_server_t *srv)
 					rss_ring_get_header(srv->audio_ring);
 				srv->audio_codec = ahdr->codec;
 				srv->audio_sample_rate = ahdr->fps_num;
+				srv->audio_adts_rate = (ahdr->profile == 5) ? (int)ahdr->fps_num / 2
+									    : (int)ahdr->fps_num;
 				audio_read_seq = ahdr->write_seq;
 				audio_last_write_seq = 0;
 				audio_idle_count = 0;
@@ -679,7 +688,9 @@ static void server_run(rhd_server_t *srv)
 					if (!ac->send_thread_running ||
 					    rhd_sendq_push(&ac->sendq, RHD_FRAME_AUDIO, audio_buf,
 							   alen, srv->audio_codec,
-							   srv->audio_sample_rate) < 0)
+							   srv->audio_codec == RHD_CODEC_AAC
+								   ? srv->audio_adts_rate
+								   : srv->audio_sample_rate) < 0)
 						remove_client(srv, i);
 				}
 			}

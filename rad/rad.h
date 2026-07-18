@@ -33,6 +33,8 @@ typedef struct rad_codec_ctx {
 	rss_ring_t *ring;    /* ring for direct publish (AAC accumulation) */
 	int codec_id;	     /* RAD_CODEC_* */
 	int encode_buf_size; /* minimum encode output buffer size */
+	int frame_samples;   /* samples per published frame (0 = sample-oriented) */
+	uint8_t aot;	     /* AAC object type in effect (2=LC, 5=HE v1), 0 otherwise */
 } rad_codec_ctx_t;
 
 typedef struct {

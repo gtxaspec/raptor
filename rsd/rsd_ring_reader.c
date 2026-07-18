@@ -735,6 +735,7 @@ void *rsd_audio_reader_thread(void *arg)
 	RSS_DEBUG("audio reader thread started");
 
 	uint32_t audio_codec = 0, rtp_clock = 0;
+	uint32_t ring_frame_samples = 0;
 	uint8_t audio_buf[4096];
 	int64_t audio_ts_epoch = 0;
 	uint32_t last_audio_rtp_ts = 0;
@@ -750,9 +751,10 @@ void *rsd_audio_reader_thread(void *arg)
 		audio_codec = ahdr->codec;
 		uint32_t audio_clock = ahdr->fps_num;
 		rtp_clock = (audio_codec == RSD_CODEC_OPUS) ? 48000 : audio_clock;
+		ring_frame_samples = ahdr->width; /* producer-declared samples/frame */
 		srv->audio_read_seq = ahdr->write_seq;
-		RSS_DEBUG("audio codec=%u clock=%u rtp_clock=%u", audio_codec, audio_clock,
-			  rtp_clock);
+		RSS_DEBUG("audio codec=%u clock=%u rtp_clock=%u frame_samples=%u", audio_codec,
+			  audio_clock, rtp_clock, ring_frame_samples);
 	}
 
 	while (rss_running(srv->running)) {
@@ -768,6 +770,7 @@ void *rsd_audio_reader_thread(void *arg)
 			audio_codec = ahdr->codec;
 			uint32_t audio_clock = ahdr->fps_num;
 			rtp_clock = (audio_codec == RSD_CODEC_OPUS) ? 48000 : audio_clock;
+			ring_frame_samples = ahdr->width;
 			srv->audio_read_seq = ahdr->write_seq;
 			audio_ts_epoch = 0;
 			last_audio_rtp_ts = 0;
@@ -827,7 +830,9 @@ void *rsd_audio_reader_thread(void *arg)
 			uint32_t frame_samples;
 			switch (audio_codec) {
 			case RSD_CODEC_AAC:
-				frame_samples = 1024;
+				/* HE-AAC frames carry 2048 samples; the producer
+				 * declares the size in the ring header. */
+				frame_samples = ring_frame_samples ? ring_frame_samples : 1024;
 				break;
 			case RSD_CODEC_OPUS:
 				frame_samples = 960;

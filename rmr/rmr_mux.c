@@ -13,6 +13,7 @@
  */
 
 #include "rmr_mux.h"
+#include <rss_aac.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -477,35 +478,26 @@ static void write_stsd_jpeg(rmr_mux_t *m)
 	bb_box_end(m, stsd_off);
 }
 
-/* AAC AudioSpecificConfig — compute from sample rate + AAC-LC + mono */
-static uint16_t aac_audio_specific_config(uint32_t sample_rate)
-{
-	static const int sr_table[] = {96000, 88200, 64000, 48000, 44100, 32000, 24000,
-				       22050, 16000, 12000, 11025, 8000,  7350};
-	int sr_idx = 4; /* default 44100 */
-	for (int i = 0; i < 13; i++) {
-		if (sr_table[i] == (int)sample_rate) {
-			sr_idx = i;
-			break;
-		}
-	}
-	return (uint16_t)((2 << 11) | (sr_idx << 7) | (1 << 3)); /* AAC-LC, mono */
-}
-
-/* esds box for AAC in MP4 */
-static void write_esds(rmr_mux_t *m, uint16_t asc)
+/* esds box for AAC in MP4. The ASC comes from rss_aac_asc so LC and
+ * HE-AAC signal identically to the SDP side; descriptor lengths are
+ * derived (the old hardcoded ones under-counted the nested
+ * DecSpecificInfo header by 2 — tolerated by parsers, wrong). */
+static void write_esds(rmr_mux_t *m, const uint8_t *asc, int asc_len)
 {
 	uint32_t esds_off = bb_fullbox_begin(m, "esds", 0, 0);
+	uint8_t dsi_total = (uint8_t)(2 + asc_len);
+	uint8_t dcd_len = (uint8_t)(13 + dsi_total);
+	uint8_t es_len = (uint8_t)(3 + 2 + dcd_len + 3);
 
 	/* ES_Descriptor */
 	bb_w8(m, 0x03); /* tag: ES_DescrTag */
-	bb_w8(m, 23);	/* length */
-	bb_w16(m, 1);	/* ES_ID */
-	bb_w8(m, 0);	/* stream priority */
+	bb_w8(m, es_len);
+	bb_w16(m, 1); /* ES_ID */
+	bb_w8(m, 0);  /* stream priority */
 
 	/* DecoderConfigDescriptor */
 	bb_w8(m, 0x04); /* tag: DecoderConfigDescrTag */
-	bb_w8(m, 15);	/* length */
+	bb_w8(m, dcd_len);
 	bb_w8(m, 0x40); /* objectTypeIndication: Audio ISO/IEC 14496-3 */
 	bb_w8(m, 0x15); /* streamType: audio (5<<2 | 1) */
 	bb_w8(m, 0);
@@ -515,9 +507,9 @@ static void write_esds(rmr_mux_t *m, uint16_t asc)
 
 	/* DecoderSpecificInfo (AudioSpecificConfig) */
 	bb_w8(m, 0x05); /* tag: DecSpecificInfoTag */
-	bb_w8(m, 2);	/* length */
-	bb_w8(m, (uint8_t)(asc >> 8));
-	bb_w8(m, (uint8_t)(asc & 0xFF));
+	bb_w8(m, (uint8_t)asc_len);
+	for (int i = 0; i < asc_len; i++)
+		bb_w8(m, asc[i]);
 
 	/* SLConfigDescriptor */
 	bb_w8(m, 0x06); /* tag: SLConfigDescrTag */
@@ -557,7 +549,14 @@ static void write_stsd_audio(rmr_mux_t *m)
 		bb_w16(m, 0);			       /* compression_id */
 		bb_w16(m, 0);			       /* packet_size */
 		bb_w32(m, m->audio.sample_rate << 16); /* sample_rate 16.16 */
-		write_esds(m, aac_audio_specific_config(m->audio.sample_rate));
+		{
+			uint8_t asc[RSS_AAC_ASC_MAX];
+			int aot = (m->audio.aot == 5) ? RSS_AAC_AOT_SBR : RSS_AAC_AOT_LC;
+			int alen = rss_aac_asc(aot, (int)m->audio.sample_rate, 1, asc);
+			if (alen < 0)
+				alen = rss_aac_asc(RSS_AAC_AOT_LC, 44100, 1, asc);
+			write_esds(m, asc, alen);
+		}
 		bb_box_end(m, entry_off);
 	} else if (m->audio.codec == RMR_AUDIO_OPUS) {
 		/* Opus + dOps */

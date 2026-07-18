@@ -1,17 +1,26 @@
 /*
- * rad_codec_aac.c -- AAC-LC encoder via faac
+ * rad_codec_aac.c -- AAC encoder via faac (AAC-LC or HE-AAC v1)
  *
- * faac batches input internally and emits one AAC frame per 1024
- * samples, so HAL chunks (e.g., 320 samples) are fed straight to the
- * encoder. Only a fill counter is kept, to know which chunk started
- * each encoder frame for timestamping. Frames are published directly
- * to the ring to avoid returning partial frames to the caller.
+ * faac batches input internally and emits one AAC frame per
+ * frame_samples (1024 LC, 2048 HE-AAC; resolved via
+ * faac_encoder_get_info()), so HAL chunks (e.g., 320 samples) are fed
+ * straight to the encoder. Only a fill counter is kept, to know which
+ * chunk started each encoder frame for timestamping. Frames are
+ * published directly to the ring to avoid returning partial frames to
+ * the caller.
+ *
+ * [audio] aac_profile selects the object type: lc (default), he, or
+ * auto (faac picks by rate/bitrate). The resolved frame size and
+ * object type are exported through ctx so RAD can publish them in the
+ * ring stream info for consumers (RSD cadence + SDP config, RMR esds,
+ * ADTS emitters).
  */
 
 #ifdef RAPTOR_AAC
 
 #include "rad.h"
 #include <stdlib.h>
+#include <string.h>
 #include <faac.h>
 #include <rss_ipc.h>
 
@@ -33,6 +42,23 @@ static int aac_init(rad_codec_ctx_t *ctx, rss_config_t *cfg, int sample_rate)
 	if (bitrate > 256000)
 		bitrate = 256000;
 
+	/* HE-AAC needs Fs >= 32kHz (the Fs/2 SBR core collapses below);
+	 * clamp an explicit request rather than failing encoder open. */
+	const char *profile = rss_config_get_str(cfg, "audio", "aac_profile", "lc");
+	enum faac_object_type object = FAAC_OBJ_LOW;
+	if (strcmp(profile, "he") == 0) {
+		if (sample_rate >= 32000) {
+			object = FAAC_OBJ_HE_AAC_V1;
+		} else {
+			RSS_WARN("aac_profile=he needs sample_rate >= 32000 (have %d), using lc",
+				 sample_rate);
+		}
+	} else if (strcmp(profile, "auto") == 0) {
+		object = FAAC_OBJ_AUTO;
+	} else if (strcmp(profile, "lc") != 0) {
+		RSS_WARN("unknown aac_profile \"%s\" (lc|he|auto), using lc", profile);
+	}
+
 	faac_params params;
 	faac_status status = faac_params_init(&params);
 	if (status != FAAC_OK) {
@@ -42,7 +68,7 @@ static int aac_init(rad_codec_ctx_t *ctx, rss_config_t *cfg, int sample_rate)
 	params.sample_rate = (uint32_t)sample_rate;
 	params.num_channels = 1;
 	params.mpeg_version = FAAC_MPEG4;
-	params.object_type = FAAC_OBJ_LOW;
+	params.object_type = object;
 	params.joint_mode = FAAC_JOINT_NONE;
 	params.use_tns = false;
 	params.bit_rate = (uint32_t)bitrate; /* per channel; mono */
@@ -71,9 +97,16 @@ static int aac_init(rad_codec_ctx_t *ctx, rss_config_t *cfg, int sample_rate)
 
 	ctx->priv = st;
 	ctx->encode_buf_size = (int)st->max_output;
+	ctx->frame_samples = st->frame_samples;
+	ctx->aot = (info.object_type == FAAC_OBJ_HE_AAC_V1) ? 5 : 2;
 
-	RSS_DEBUG("aac encoder: %d samples/frame, max %u bytes output", st->frame_samples,
-		  st->max_output);
+	const uint8_t *asc = NULL;
+	uint32_t asc_len = 0;
+	(void)!faac_encoder_asc(st->handle, &asc, &asc_len);
+	RSS_INFO("aac encoder: %s, %d samples/frame, asc %02X%02X%02X%02X (%u bytes)",
+		 ctx->aot == 5 ? "HE-AAC v1" : "AAC-LC", st->frame_samples,
+		 asc_len > 0 ? asc[0] : 0, asc_len > 1 ? asc[1] : 0, asc_len > 2 ? asc[2] : 0,
+		 asc_len > 3 ? asc[3] : 0, asc_len);
 	return 0;
 }
 

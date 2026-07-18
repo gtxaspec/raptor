@@ -108,7 +108,8 @@ static void setup_mux_tracks(rmr_mux_t *mux, rmr_state_t *st)
 				  st->params.vps_len);
 
 	if (st->audio_ring) {
-		rmr_audio_params_t ap = {.sample_rate = st->audio_sample_rate, .channels = 1};
+		rmr_audio_params_t ap = {
+			.sample_rate = st->audio_sample_rate, .channels = 1, .aot = st->audio_aot};
 		switch (st->audio_codec) {
 		case RMR_AUDIO_PCMU:
 			ap.codec = RMR_AUDIO_PCMU;
@@ -544,13 +545,16 @@ static void record_loop(rmr_state_t *st)
 					     st->audio_codec == RMR_AUDIO_PCMA)
 						    ? 1
 						    : 2;
+				st->audio_aot = ahdr->profile;
 				audio_samples_per_frame = 0;
 				if (st->audio_codec == RMR_AUDIO_AAC)
-					audio_samples_per_frame = 1024;
+					audio_samples_per_frame = ahdr->width ? ahdr->width : 1024;
 				else if (st->audio_codec == RMR_AUDIO_OPUS)
 					audio_samples_per_frame = st->audio_sample_rate / 50;
-				RSS_DEBUG("audio ring attached (late): codec=%u rate=%u",
-					  st->audio_codec, st->audio_sample_rate);
+				RSS_DEBUG("audio ring attached (late): codec=%u rate=%u "
+					  "frame_samples=%u aot=%u",
+					  st->audio_codec, st->audio_sample_rate,
+					  audio_samples_per_frame, st->audio_aot);
 			}
 		}
 
