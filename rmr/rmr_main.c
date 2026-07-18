@@ -200,6 +200,7 @@ static int open_clip(rmr_state_t *st)
 	st->clip_fd = fd;
 	st->clip_v_ts_base = -1;
 	st->clip_a_dts = 0;
+	st->clip_a_ts_base = -1;
 	st->clip_start_us = rss_timestamp_us();
 	st->clip_bytes = 0;
 
@@ -258,12 +259,49 @@ static void clip_write_video(rmr_state_t *st, const uint8_t *avcc, uint32_t avcc
 	rmr_mux_write_video(st->clip_mux, &vs);
 }
 
+/*
+ * Steer a smooth audio DTS counter (sample units) toward the ring
+ * capture time so recordings inherit rad's wall-slewed clock instead
+ * of free-running on frame count, which drifts with the source clock
+ * and turns ring-overflow gaps into a permanent A/V offset. rsp
+ * pattern: snap forward on real gaps (>4 frames, the file gets an
+ * honest gap), re-base the mapping if ring time regresses (rad
+ * restart — DTS must stay monotonic), nudge 1ms inside the band.
+ * *ts_base anchors the ring-time-to-DTS mapping; < 0 = unset.
+ */
+static int64_t steer_audio_dts(int64_t dts, int64_t ring_ts, int64_t *ts_base, uint32_t samples,
+			       uint32_t sample_rate)
+{
+	if (sample_rate == 0)
+		return dts;
+	if (*ts_base < 0)
+		*ts_base = ring_ts - dts * 1000000 / sample_rate;
+	int64_t target = (ring_ts - *ts_base) * sample_rate / 1000000;
+	int64_t err = target - dts;
+	int64_t nudge = sample_rate / 1000; /* 1ms */
+
+	if (err > (int64_t)samples * 4)
+		return target;
+	if (err < -(int64_t)samples * 4) {
+		*ts_base = ring_ts - dts * 1000000 / sample_rate;
+		return dts;
+	}
+	if (err > nudge)
+		return dts + nudge;
+	if (err < -nudge)
+		return dts - nudge;
+	return dts;
+}
+
 /* Write an audio frame to the clip mux with independent DTS. */
-static void clip_write_audio(rmr_state_t *st, const uint8_t *data, uint32_t len, uint32_t samples)
+static void clip_write_audio(rmr_state_t *st, const uint8_t *data, uint32_t len, uint32_t samples,
+			     int64_t ring_ts)
 {
 	if (!st->clip_mux)
 		return;
 
+	st->clip_a_dts = steer_audio_dts(st->clip_a_dts, ring_ts, &st->clip_a_ts_base, samples,
+					 st->audio_sample_rate);
 	rmr_audio_sample_t as = {
 		.data = data,
 		.size = len,
@@ -298,7 +336,7 @@ static int replay_audio_frame(const rmr_prebuf_slot_t *slot, const uint8_t *data
 		return 1; /* stop iteration */
 	uint32_t samples = rc->audio_samples_per_frame ? rc->audio_samples_per_frame
 						       : slot->data_length / rc->audio_bps;
-	clip_write_audio(rc->st, data, slot->data_length, samples);
+	clip_write_audio(rc->st, data, slot->data_length, samples, slot->timestamp);
 	rc->count++;
 	return 0;
 }
@@ -469,6 +507,7 @@ static void record_loop(rmr_state_t *st)
 	else if (st->audio_codec == RMR_AUDIO_OPUS)
 		audio_samples_per_frame = st->audio_sample_rate / 50;
 	int64_t a_dts_counter = 0;
+	int64_t a_ts_base = -1; /* ring ts mapping base for a_dts_counter steering */
 	bool was_recording = false;
 
 	int ctrl_fd = st->ctrl ? rss_ctrl_get_fd(st->ctrl) : -1;
@@ -650,6 +689,7 @@ static void record_loop(rmr_state_t *st)
 			uint8_t data[8192];
 			uint32_t len;
 			uint32_t samples;
+			int64_t ts; /* ring capture time (us) */
 		} audio_frames[4];
 		int audio_count = 0;
 
@@ -676,6 +716,7 @@ static void record_loop(rmr_state_t *st)
 					audio_frames[audio_count].samples =
 						audio_samples_per_frame ? audio_samples_per_frame
 									: alen / audio_bps;
+					audio_frames[audio_count].ts = ameta.timestamp;
 					audio_count++;
 				}
 			}
@@ -705,6 +746,7 @@ static void record_loop(rmr_state_t *st)
 			was_recording = false;
 			v_ts_base = -1;
 			a_dts_counter = 0;
+			a_ts_base = -1;
 			RSS_INFO("recording stopped");
 		}
 
@@ -746,6 +788,7 @@ static void record_loop(rmr_state_t *st)
 						goto clip_handling;
 					v_ts_base = -1;
 					a_dts_counter = 0;
+					a_ts_base = -1;
 					st->frames_written = 0;
 					st->bytes_written = 0;
 					was_recording = true;
@@ -774,6 +817,10 @@ static void record_loop(rmr_state_t *st)
 
 			/* Write audio to continuous mux */
 			for (int i = 0; i < audio_count; i++) {
+				a_dts_counter = steer_audio_dts(a_dts_counter, audio_frames[i].ts,
+								&a_ts_base,
+								audio_frames[i].samples,
+								st->audio_sample_rate);
 				rmr_audio_sample_t as = {
 					.data = audio_frames[i].data,
 					.size = audio_frames[i].len,
@@ -807,7 +854,8 @@ static void record_loop(rmr_state_t *st)
 				for (int i = 0; i < audio_count; i++)
 					clip_write_audio(st, audio_frames[i].data,
 							 audio_frames[i].len,
-							 audio_frames[i].samples);
+							 audio_frames[i].samples,
+							 audio_frames[i].ts);
 
 				/* Check clip length cap */
 				if (st->clip_length_sec > 0) {

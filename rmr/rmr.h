@@ -77,6 +77,7 @@ typedef struct {
 	char clip_path[256];
 	int64_t clip_v_ts_base; /* first video timestamp in clip */
 	int64_t clip_a_dts;	/* audio DTS counter for clip */
+	int64_t clip_a_ts_base; /* ring ts mapping base for clip_a_dts steering */
 	int64_t clip_start_us;	/* wall clock when clip opened */
 	uint64_t clip_bytes;
 
