@@ -487,6 +487,7 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 				asc_len = rss_aac_asc(RSS_AAC_AOT_LC, 44100, 1, asc);
 			}
 			char asc_hex[RSS_AAC_ASC_MAX * 2 + 1];
+			asc_hex[0] = '\0';
 			for (int i = 0; i < asc_len; i++)
 				snprintf(asc_hex + i * 2, 3, "%02X", asc[i]);
 

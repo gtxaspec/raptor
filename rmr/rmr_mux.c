@@ -555,6 +555,8 @@ static void write_stsd_audio(rmr_mux_t *m)
 			int alen = rss_aac_asc(aot, (int)m->audio.sample_rate, 1, asc);
 			if (alen < 0)
 				alen = rss_aac_asc(RSS_AAC_AOT_LC, 44100, 1, asc);
+			if (alen < 0)
+				alen = 0;
 			write_esds(m, asc, alen);
 		}
 		bb_box_end(m, entry_off);
