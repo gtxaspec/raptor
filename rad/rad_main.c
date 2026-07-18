@@ -32,14 +32,24 @@
  * count, so ADC crystal error and samples lost inside the SDK (FIFO
  * overrun during stalls) otherwise accumulate as unbounded A/V drift
  * in every consumer. Each chunk, compare against CLOCK_MONOTONIC:
- * beyond RESYNC (real loss or long stall) re-anchor hard and warn;
- * beyond the NUDGE band (chunk-scheduling jitter floor) correct by
- * 1ms. Authority is 1ms per 20ms chunk — far above any crystal error,
- * gentle enough to stay inaudible in timestamp terms.
+ * beyond a resync threshold re-anchor hard and warn; beyond the NUDGE
+ * band (chunk-scheduling jitter floor) correct by 1ms. Authority is
+ * 1ms per 20ms chunk — far above any crystal error, gentle enough to
+ * stay inaudible in timestamp terms.
+ *
+ * The thresholds are asymmetric. Clock BEHIND wall = samples lost or
+ * a stall; it never self-heals, so resync at 150ms. Clock AHEAD of
+ * wall happens legitimately while draining the SDK's buffered chunks
+ * after a stall or at startup (frame_depth ~400ms read back-to-back
+ * outruns wall) — a symmetric threshold fires repeated backward
+ * resyncs mid-drain, rewinding the published timeline. Tolerate up to
+ * 600ms ahead (buffer depth + margin, decays via nudge in seconds);
+ * beyond that something is truly wrong.
  */
-#define RAD_SYNTH_RESYNC_US	150000
-#define RAD_SYNTH_NUDGE_BAND_US 20000
-#define RAD_SYNTH_NUDGE_US	1000
+#define RAD_SYNTH_RESYNC_BEHIND_US 150000
+#define RAD_SYNTH_RESYNC_AHEAD_US  600000
+#define RAD_SYNTH_NUDGE_BAND_US	   20000
+#define RAD_SYNTH_NUDGE_US	   1000
 
 /* ── AO thread context (needed by ctrl handler for ao-enable/ao-disable) ── */
 
@@ -1279,7 +1289,8 @@ int main(int argc, char **argv)
 
 		/* Slew toward CLOCK_MONOTONIC (see RAD_SYNTH_* above). */
 		int64_t clk_err = rss_timestamp_us() - synth_audio_ts;
-		if (clk_err > RAD_SYNTH_RESYNC_US || clk_err < -RAD_SYNTH_RESYNC_US) {
+		if (clk_err > RAD_SYNTH_RESYNC_BEHIND_US ||
+		    clk_err < -RAD_SYNTH_RESYNC_AHEAD_US) {
 			RSS_WARN("audio clock resync %+lldms (lost samples or stall)",
 				 (long long)(clk_err / 1000));
 			synth_audio_ts += clk_err;
