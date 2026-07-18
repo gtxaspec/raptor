@@ -824,12 +824,6 @@ void *rsd_audio_reader_thread(void *arg)
 
 			srv->audio_read_seq = read_seq;
 
-			/* Synthetic audio timestamps at exact frame cadence,
-			 * anchored to CLOCK_MONOTONIC — the unified timebase
-			 * shared by video RTP and RTCP NTP. */
-			int64_t now_us = rss_timestamp_us();
-			if (audio_ts_epoch == 0)
-				audio_ts_epoch = now_us;
 			uint32_t frame_samples;
 			switch (audio_codec) {
 			case RSD_CODEC_AAC:
@@ -845,12 +839,44 @@ void *rsd_audio_reader_thread(void *arg)
 				frame_samples = length;
 				break;
 			}
+
+			/* Audio RTP timestamps: smooth frame cadence steered
+			 * toward the ring capture time (rad's wall-slewed
+			 * clock). A free-running counter drifts with the
+			 * source clock and silently absorbs ring-overflow
+			 * gaps into a permanent A/V offset; raw ring times
+			 * carry 20ms chunk quantization that clients read as
+			 * an unstable rate. Steering keeps exact spacing on
+			 * the wire while the ring clock governs the long-run
+			 * rate: snap forward on real gaps (>4 frames, clients
+			 * render a gap), re-anchor the mapping if ring time
+			 * regresses (rad restart — never send backward RTP
+			 * time), nudge 1ms inside the band. */
+			if (audio_ts_epoch == 0)
+				audio_ts_epoch = (int64_t)meta.timestamp;
+			uint32_t ring_rtp =
+				(uint32_t)((uint64_t)(meta.timestamp - audio_ts_epoch) *
+					   rtp_clock / 1000000);
 			uint32_t rtp_ts;
 			if (!has_last_audio_rtp_ts) {
-				rtp_ts = (uint32_t)((uint64_t)(now_us - audio_ts_epoch) *
-						    rtp_clock / 1000000);
+				rtp_ts = ring_rtp;
 			} else {
 				rtp_ts = last_audio_rtp_ts + frame_samples;
+				int32_t err = (int32_t)(ring_rtp - rtp_ts);
+				int32_t nudge = (int32_t)(rtp_clock / 1000); /* 1ms */
+				if (rtp_clock == 0) {
+					/* degenerate ring header: plain cadence */
+				} else if (err > (int32_t)frame_samples * 4) {
+					rtp_ts = ring_rtp;
+				} else if (err < -(int32_t)frame_samples * 4) {
+					audio_ts_epoch =
+						(int64_t)meta.timestamp -
+						(int64_t)rtp_ts * 1000000 / rtp_clock;
+				} else if (err > nudge) {
+					rtp_ts += nudge;
+				} else if (err < -nudge) {
+					rtp_ts -= nudge;
+				}
 			}
 			last_audio_rtp_ts = rtp_ts;
 			has_last_audio_rtp_ts = true;
