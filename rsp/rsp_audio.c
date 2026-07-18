@@ -112,7 +112,7 @@ struct rsp_audio_enc {
 
 	/* faac encoder (always at output_rate) */
 	faac_encoder *faac;
-	int frame_samples; /* samples per AAC frame (1024 at output_rate) */
+	int frame_samples; /* samples per AAC frame (1024 LC / 2048 HE-AAC) */
 	uint32_t max_output;
 
 	/* PCM accumulation buffer (at output_rate) */
@@ -162,7 +162,7 @@ rsp_audio_enc_t *rsp_audio_init(uint32_t input_codec, uint32_t sample_rate)
 	params.sample_rate = enc->output_rate;
 	params.num_channels = 1;
 	params.mpeg_version = FAAC_MPEG4;
-	params.object_type = FAAC_OBJ_LOW;
+	params.object_type = FAAC_OBJ_AUTO;
 	params.joint_mode = FAAC_JOINT_NONE;
 	params.use_tns = false;
 	params.bit_rate = 128000; /* per channel; mono */

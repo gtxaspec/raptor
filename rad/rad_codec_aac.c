@@ -1,11 +1,13 @@
 /*
- * rad_codec_aac.c -- AAC-LC encoder via faac
+ * rad_codec_aac.c -- AAC encoder via faac (AAC-LC or HE-AAC, auto-selected)
  *
- * faac batches input internally and emits one AAC frame per 1024
- * samples, so HAL chunks (e.g., 320 samples) are fed straight to the
- * encoder. Only a fill counter is kept, to know which chunk started
- * each encoder frame for timestamping. Frames are published directly
- * to the ring to avoid returning partial frames to the caller.
+ * faac batches input internally and emits one AAC frame per
+ * frame_samples (1024 for AAC-LC, 2048 for HE-AAC, resolved via
+ * faac_encoder_get_info()), so HAL chunks (e.g., 320 samples) are fed
+ * straight to the encoder. Only a fill counter is kept, to know which
+ * chunk started each encoder frame for timestamping. Frames are
+ * published directly to the ring to avoid returning partial frames to
+ * the caller.
  */
 
 #ifdef RAPTOR_AAC
@@ -42,7 +44,7 @@ static int aac_init(rad_codec_ctx_t *ctx, rss_config_t *cfg, int sample_rate)
 	params.sample_rate = (uint32_t)sample_rate;
 	params.num_channels = 1;
 	params.mpeg_version = FAAC_MPEG4;
-	params.object_type = FAAC_OBJ_LOW;
+	params.object_type = FAAC_OBJ_AUTO;
 	params.joint_mode = FAAC_JOINT_NONE;
 	params.use_tns = false;
 	params.bit_rate = (uint32_t)bitrate; /* per channel; mono */
