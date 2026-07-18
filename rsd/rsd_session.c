@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/epoll.h>
 #include <rss_net.h>
 #include <rss_aac.h>
 
@@ -624,6 +625,25 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 		if (!client_ip) {
 			compy_respond(ctx, COMPY_STATUS_BAD_REQUEST, "Cannot determine client IP");
 			return;
+		}
+
+		/* A re-SETUP (or a second track's SETUP) replaces the UDP
+		 * sockets: close the previous pair first, deregistering the
+		 * RTCP fd from epoll. A leaked connected UDP socket whose
+		 * peer has vanished sits in permanent EPOLLERR and spins
+		 * the epoll loop at wakeup rate. */
+		if (self->udp_rtcp_fd >= 0) {
+			if (self->rtcp_in_epoll) {
+				epoll_ctl(self->srv->epoll_fd, EPOLL_CTL_DEL, self->udp_rtcp_fd,
+					  NULL);
+				self->rtcp_in_epoll = false;
+			}
+			close(self->udp_rtcp_fd);
+			self->udp_rtcp_fd = -1;
+		}
+		if (self->udp_rtp_fd >= 0) {
+			close(self->udp_rtp_fd);
+			self->udp_rtp_fd = -1;
 		}
 
 		self->udp_rtp_fd = compy_dgram_socket(sa->sa_family, client_ip, cli_rtp);

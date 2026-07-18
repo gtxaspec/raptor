@@ -611,8 +611,13 @@ void rsd_server_run(rsd_server_t *srv)
 					if (rn > 0 && rc->video.rtcp)
 						Compy_Rtcp_handle_incoming(rc->video.rtcp, rtcp_buf,
 									   rn);
-				} else {
+				} else if (find_client_by_fd(srv, fd)) {
 					handle_client_data(srv, fd);
+				} else {
+					/* Stray fd no client owns (leak guard):
+					 * deregister so it cannot spin the loop. */
+					RSS_WARN("epoll event on orphaned fd %d, removing", fd);
+					epoll_ctl(srv->epoll_fd, EPOLL_CTL_DEL, fd, NULL);
 				}
 			}
 		}
