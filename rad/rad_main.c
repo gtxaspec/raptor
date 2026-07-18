@@ -1288,27 +1288,31 @@ int main(int argc, char **argv)
 		int64_t ts = synth_audio_ts;
 		synth_audio_ts += (int64_t)samples * 1000000 / ctrl_ctx.sample_rate;
 
-		/* Slew toward CLOCK_MONOTONIC (see RAD_SYNTH_* above), but
-		 * only on live-paced reads. An instant return served a chunk
-		 * the SDK had already buffered (drain burst or scheduler
-		 * batch) and a long-gap return is the oldest buffered chunk
-		 * right after a stall — in both cases the chunk is old audio
-		 * that belongs on the old continuous timeline, and wall
-		 * comparison is meaningless. At the first live-paced read
-		 * after a stall the residual error is exactly the audio the
-		 * SDK really lost, so the resync inserts a gap of the right
-		 * size. */
+		/* Slew toward CLOCK_MONOTONIC (see RAD_SYNTH_* above).
+		 * Hard resyncs are gated to live-paced reads: an instant
+		 * return served a chunk the SDK had already buffered (drain
+		 * burst or scheduler batch) and a long-gap return is the
+		 * oldest buffered chunk right after a stall — old audio on
+		 * the old continuous timeline, where wall comparison
+		 * misfires. At the first live-paced read after a stall the
+		 * residual error is exactly the audio the SDK really lost,
+		 * so the resync inserts a gap of the right size. Nudges are
+		 * NOT gated: during drains they are bounded zero-mean noise,
+		 * but gating them biases which chunks get evaluated and
+		 * skews the long-run rate (measured -1000ppm under a
+		 * +5000ppm test clock; ungated tracks true rate). */
 		int64_t now_us = rss_timestamp_us();
 		int64_t read_gap = now_us - last_read_us;
 		last_read_us = now_us;
+		bool live_paced = read_gap >= 5000 && read_gap <= 150000;
 		int64_t clk_err = now_us - synth_audio_ts;
-		if (read_gap < 5000 || read_gap > 150000) {
-			/* burst or stall-head read — skip */
-		} else if (clk_err > RAD_SYNTH_RESYNC_BEHIND_US ||
-			   clk_err < -RAD_SYNTH_RESYNC_AHEAD_US) {
-			RSS_WARN("audio clock resync %+lldms (lost samples or stall)",
-				 (long long)(clk_err / 1000));
-			synth_audio_ts += clk_err;
+		if (clk_err > RAD_SYNTH_RESYNC_BEHIND_US ||
+		    clk_err < -RAD_SYNTH_RESYNC_AHEAD_US) {
+			if (live_paced) {
+				RSS_WARN("audio clock resync %+lldms (lost samples or stall)",
+					 (long long)(clk_err / 1000));
+				synth_audio_ts += clk_err;
+			}
 		} else if (clk_err > RAD_SYNTH_NUDGE_BAND_US) {
 			synth_audio_ts += RAD_SYNTH_NUDGE_US;
 		} else if (clk_err < -RAD_SYNTH_NUDGE_BAND_US) {
