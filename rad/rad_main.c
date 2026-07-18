@@ -43,11 +43,11 @@
  * after a stall or at startup (frame_depth ~400ms read back-to-back
  * outruns wall) — a symmetric threshold fires repeated backward
  * resyncs mid-drain, rewinding the published timeline. Tolerate up to
- * 600ms ahead (buffer depth + margin, decays via nudge in seconds);
- * beyond that something is truly wrong.
+ * 1s ahead (T23 measured ~760ms of real salvage; decays via nudge in
+ * seconds); beyond that something is truly wrong.
  */
 #define RAD_SYNTH_RESYNC_BEHIND_US 150000
-#define RAD_SYNTH_RESYNC_AHEAD_US  600000
+#define RAD_SYNTH_RESYNC_AHEAD_US  1000000
 #define RAD_SYNTH_NUDGE_BAND_US	   20000
 #define RAD_SYNTH_NUDGE_US	   1000
 
@@ -1296,10 +1296,9 @@ int main(int argc, char **argv)
 		 * the old continuous timeline, where wall comparison
 		 * misfires. Drain chunks can trickle as slowly as ~15ms on a
 		 * loaded SoC, so live means close to the 20ms chunk cadence,
-		 * not merely non-instant. At the first live-paced read after
-		 * a stall the
-		 * residual error is exactly the audio the SDK really lost,
-		 * so the resync inserts a gap of the right size. Nudges are
+		 * not merely non-instant. At the first live-paced read after a
+		 * stall the residual error is exactly the audio the SDK really
+		 * lost, so the resync inserts a gap of the right size. Nudges are
 		 * NOT gated: during drains they are bounded zero-mean noise,
 		 * but gating them biases which chunks get evaluated and
 		 * skews the long-run rate (measured -1000ppm under a
