@@ -856,7 +856,11 @@ void *rsd_audio_reader_thread(void *arg)
 			 * rate: snap forward on real gaps (>4 frames, clients
 			 * render a gap), re-anchor the mapping if ring time
 			 * regresses (rad restart — never send backward RTP
-			 * time), nudge 1ms inside the band. */
+			 * time), nudge 1ms once drift exceeds a frame. Ring
+			 * times carry per-frame arrival quantization, so the
+			 * nudge deadband must be at least one frame wide or
+			 * the cadence bang-bangs ±1ms on every frame (seen
+			 * at 16kHz: 64ms quantization vs 16-unit nudge). */
 			if (audio_ts_epoch == 0)
 				audio_ts_epoch = (int64_t)meta.timestamp;
 			uint32_t ring_rtp = (uint32_t)((uint64_t)(meta.timestamp - audio_ts_epoch) *
@@ -868,6 +872,9 @@ void *rsd_audio_reader_thread(void *arg)
 				rtp_ts = last_audio_rtp_ts + frame_samples;
 				int32_t err = (int32_t)(ring_rtp - rtp_ts);
 				int32_t nudge = (int32_t)(rtp_clock / 1000); /* 1ms */
+				int32_t band = (int32_t)frame_samples;
+				if (band < nudge)
+					band = nudge;
 				if (rtp_clock == 0) {
 					/* degenerate ring header: plain cadence */
 				} else if (err > (int32_t)frame_samples * 4) {
@@ -875,9 +882,9 @@ void *rsd_audio_reader_thread(void *arg)
 				} else if (err < -(int32_t)frame_samples * 4) {
 					audio_ts_epoch = (int64_t)meta.timestamp -
 							 (int64_t)rtp_ts * 1000000 / rtp_clock;
-				} else if (err > nudge) {
+				} else if (err > band) {
 					rtp_ts += nudge;
-				} else if (err < -nudge) {
+				} else if (err < -band) {
 					rtp_ts -= nudge;
 				}
 			}
