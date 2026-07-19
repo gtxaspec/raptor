@@ -497,7 +497,8 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 
 static void record_loop(rmr_state_t *st)
 {
-	int64_t v_ts_base = -1; /* continuous segment video timestamp base */
+	int64_t v_ts_base = -1;	 /* continuous segment video timestamp base */
+	bool v_wait_key = false; /* drop video until a keyframe after ring overflow */
 
 	/* Audio DTS increment per ring frame. */
 	uint32_t audio_bps =
@@ -610,8 +611,12 @@ static void record_loop(rmr_state_t *st)
 					st->frame_buf_size, &length, &meta);
 
 		if (ret == RSS_EOVERFLOW) {
+			/* Frames were lost: anything until the next keyframe
+			 * references pictures we never read, and writing it
+			 * puts undecodable GOP fragments in the recording. */
 			rss_ring_request_idr(st->video_ring);
 			st->frames_dropped++;
+			v_wait_key = true;
 			continue;
 		}
 		if (ret == -EAGAIN) {
@@ -636,6 +641,14 @@ static void record_loop(rmr_state_t *st)
 		if (ret != 0)
 			continue;
 		video_idle = 0;
+
+		if (v_wait_key) {
+			if (!meta.is_key) {
+				st->frames_dropped++;
+				continue;
+			}
+			v_wait_key = false;
+		}
 
 		/* Prepare frame data for muxer */
 		const uint8_t *mux_data;
