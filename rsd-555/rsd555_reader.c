@@ -69,8 +69,7 @@ void rsd555_audio_remove_source(rsd555_audio_ctx_t *ctx, rsd555_frame_queue_t *q
 
 /* ── Fan-out: snapshot sources, push shared frame refs ── */
 
-static void fan_out_shared(pthread_mutex_t *lock,
-			   rsd555_frame_queue_t **sources, int *source_count,
+static void fan_out_shared(pthread_mutex_t *lock, rsd555_frame_queue_t **sources, int *source_count,
 			   rsd555_shared_frame_t *sf)
 {
 	rsd555_frame_queue_t *snap[RSD555_MAX_SOURCES];
@@ -227,8 +226,8 @@ void *rsd555_video_reader_thread(void *arg)
 			ctx->level = hdr->level;
 
 			rss_ring_request_idr(ctx->ring);
-			RSS_INFO("video reader[%d] connected (%s %ux%u)", ctx->idx,
-				 ctx->ring_name, ctx->width, ctx->height);
+			RSS_INFO("video reader[%d] connected (%s %ux%u)", ctx->idx, ctx->ring_name,
+				 ctx->width, ctx->height);
 		}
 
 		int ret = rss_ring_wait(ctx->ring, 100);
@@ -271,8 +270,7 @@ void *rsd555_video_reader_thread(void *arg)
 
 			ctx->read_seq = read_seq;
 
-			if (meta.is_key &&
-			    __atomic_load_n(&ctx->sps_len, __ATOMIC_RELAXED) == 0) {
+			if (meta.is_key && __atomic_load_n(&ctx->sps_len, __ATOMIC_RELAXED) == 0) {
 				if (ctx->codec == 1)
 					cache_sps_pps_h265(ctx, ctx->frame_buf, length);
 				else
@@ -284,8 +282,8 @@ void *rsd555_video_reader_thread(void *arg)
 			int sc = __atomic_load_n(&ctx->source_count, __ATOMIC_RELAXED);
 			if (sc > 0) {
 				rsd555_shared_frame_t *sf = rsd555_shared_frame_new(
-					ctx->frame_buf, length, meta.timestamp,
-					meta.nal_type, meta.is_key);
+					ctx->frame_buf, length, meta.timestamp, meta.nal_type,
+					meta.is_key);
 				if (sf) {
 					fan_out_shared(&ctx->sources_lock, ctx->sources,
 						       &ctx->source_count, sf);
@@ -328,11 +326,12 @@ void *rsd555_audio_reader_thread(void *arg)
 			const rss_ring_header_t *hdr = rss_ring_get_header(ctx->ring);
 			ctx->codec = hdr->codec;
 			ctx->sample_rate = hdr->fps_num;
+			ctx->profile = hdr->profile;
 			ctx->read_seq = __atomic_load_n(&hdr->write_seq, __ATOMIC_RELAXED);
 			last_write_seq = 0;
 			idle_count = 0;
-			RSS_INFO("audio ring connected (codec=%u rate=%u)",
-				 ctx->codec, ctx->sample_rate);
+			RSS_INFO("audio ring connected (codec=%u rate=%u)", ctx->codec,
+				 ctx->sample_rate);
 		}
 
 		int ret = rss_ring_wait(ctx->ring, 100);
@@ -360,8 +359,8 @@ void *rsd555_audio_reader_thread(void *arg)
 			rss_ring_slot_t meta;
 			uint64_t read_seq = ctx->read_seq;
 
-			ret = rss_ring_read(ctx->ring, &read_seq, audio_buf,
-					    sizeof(audio_buf), &length, &meta);
+			ret = rss_ring_read(ctx->ring, &read_seq, audio_buf, sizeof(audio_buf),
+					    &length, &meta);
 			if (ret == RSS_EOVERFLOW) {
 				ctx->read_seq = read_seq;
 				break;
@@ -374,8 +373,7 @@ void *rsd555_audio_reader_thread(void *arg)
 			int sc = __atomic_load_n(&ctx->source_count, __ATOMIC_RELAXED);
 			if (sc > 0) {
 				rsd555_shared_frame_t *sf = rsd555_shared_frame_new(
-					audio_buf, length, meta.timestamp,
-					meta.nal_type, 0);
+					audio_buf, length, meta.timestamp, meta.nal_type, 0);
 				if (sf) {
 					fan_out_shared(&ctx->sources_lock, ctx->sources,
 						       &ctx->source_count, sf);

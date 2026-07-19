@@ -15,24 +15,27 @@
 #include <MPEG4GenericRTPSink.hh>
 #include <SimpleRTPSink.hh>
 
+#include <rss_aac.h>
+
 /* ================================================================
  * H.264 video
  * ================================================================ */
 
-RingH264Subsession *RingH264Subsession::createNew(UsageEnvironment &env,
-						   rsd555_video_ctx_t *ctx,
-						   Boolean reuseSource)
+RingH264Subsession *RingH264Subsession::createNew(UsageEnvironment &env, rsd555_video_ctx_t *ctx,
+						  Boolean reuseSource)
 {
 	return new RingH264Subsession(env, ctx, reuseSource);
 }
 
 RingH264Subsession::RingH264Subsession(UsageEnvironment &env, rsd555_video_ctx_t *ctx,
-					Boolean reuseSource)
-	: OnDemandServerMediaSubsession(env, reuseSource), fCtx(ctx)
+				       Boolean reuseSource)
+    : OnDemandServerMediaSubsession(env, reuseSource), fCtx(ctx)
 {
 }
 
-RingH264Subsession::~RingH264Subsession() {}
+RingH264Subsession::~RingH264Subsession()
+{
+}
 
 FramedSource *RingH264Subsession::createNewStreamSource(unsigned /*clientSessionId*/,
 							unsigned &estBitrate)
@@ -45,8 +48,8 @@ FramedSource *RingH264Subsession::createNewStreamSource(unsigned /*clientSession
 }
 
 RTPSink *RingH264Subsession::createNewRTPSink(Groupsock *rtpGroupsock,
-					       unsigned char rtpPayloadTypeIfDynamic,
-					       FramedSource * /*inputSource*/)
+					      unsigned char rtpPayloadTypeIfDynamic,
+					      FramedSource * /*inputSource*/)
 {
 	/* Provide SPS/PPS for the SDP sprop-parameter-sets if available */
 	uint16_t sps_len = __atomic_load_n(&fCtx->sps_len, __ATOMIC_ACQUIRE);
@@ -61,20 +64,21 @@ RTPSink *RingH264Subsession::createNewRTPSink(Groupsock *rtpGroupsock,
  * H.265 video
  * ================================================================ */
 
-RingH265Subsession *RingH265Subsession::createNew(UsageEnvironment &env,
-						   rsd555_video_ctx_t *ctx,
-						   Boolean reuseSource)
+RingH265Subsession *RingH265Subsession::createNew(UsageEnvironment &env, rsd555_video_ctx_t *ctx,
+						  Boolean reuseSource)
 {
 	return new RingH265Subsession(env, ctx, reuseSource);
 }
 
 RingH265Subsession::RingH265Subsession(UsageEnvironment &env, rsd555_video_ctx_t *ctx,
-					Boolean reuseSource)
-	: OnDemandServerMediaSubsession(env, reuseSource), fCtx(ctx)
+				       Boolean reuseSource)
+    : OnDemandServerMediaSubsession(env, reuseSource), fCtx(ctx)
 {
 }
 
-RingH265Subsession::~RingH265Subsession() {}
+RingH265Subsession::~RingH265Subsession()
+{
+}
 
 FramedSource *RingH265Subsession::createNewStreamSource(unsigned /*clientSessionId*/,
 							unsigned &estBitrate)
@@ -87,8 +91,8 @@ FramedSource *RingH265Subsession::createNewStreamSource(unsigned /*clientSession
 }
 
 RTPSink *RingH265Subsession::createNewRTPSink(Groupsock *rtpGroupsock,
-					       unsigned char rtpPayloadTypeIfDynamic,
-					       FramedSource * /*inputSource*/)
+					      unsigned char rtpPayloadTypeIfDynamic,
+					      FramedSource * /*inputSource*/)
 {
 	uint16_t vps_len = __atomic_load_n(&fCtx->vps_len, __ATOMIC_ACQUIRE);
 	uint16_t sps_len = __atomic_load_n(&fCtx->sps_len, __ATOMIC_ACQUIRE);
@@ -105,18 +109,20 @@ RTPSink *RingH265Subsession::createNewRTPSink(Groupsock *rtpGroupsock,
  * ================================================================ */
 
 RingAACSubsession *RingAACSubsession::createNew(UsageEnvironment &env, rsd555_audio_ctx_t *ctx,
-						 Boolean reuseSource)
+						Boolean reuseSource)
 {
 	return new RingAACSubsession(env, ctx, reuseSource);
 }
 
 RingAACSubsession::RingAACSubsession(UsageEnvironment &env, rsd555_audio_ctx_t *ctx,
-				      Boolean reuseSource)
-	: OnDemandServerMediaSubsession(env, reuseSource), fCtx(ctx)
+				     Boolean reuseSource)
+    : OnDemandServerMediaSubsession(env, reuseSource), fCtx(ctx)
 {
 }
 
-RingAACSubsession::~RingAACSubsession() {}
+RingAACSubsession::~RingAACSubsession()
+{
+}
 
 FramedSource *RingAACSubsession::createNewStreamSource(unsigned /*clientSessionId*/,
 						       unsigned &estBitrate)
@@ -126,37 +132,31 @@ FramedSource *RingAACSubsession::createNewStreamSource(unsigned /*clientSessionI
 }
 
 RTPSink *RingAACSubsession::createNewRTPSink(Groupsock *rtpGroupsock,
-					      unsigned char rtpPayloadTypeIfDynamic,
-					      FramedSource * /*inputSource*/)
+					     unsigned char rtpPayloadTypeIfDynamic,
+					     FramedSource * /*inputSource*/)
 {
-	/* AudioSpecificConfig for AAC-LC mono:
-	 * audioObjectType=2 (AAC-LC), channelConfig=1 */
-	static const int sr_table[] = {96000, 88200, 64000, 48000, 44100,
-				       32000, 24000, 22050, 16000, 12000,
-				       11025, 8000,  7350};
-	int sr_idx = -1;
-	for (int i = 0; i < 13; i++) {
-		if (sr_table[i] == (int)fCtx->sample_rate) {
-			sr_idx = i;
-			break;
-		}
-	}
-	if (sr_idx < 0) {
-		envir() << "RingAACSubsession: sample rate " << fCtx->sample_rate
-			<< " not in MPEG-4 table, defaulting to 44100\n";
-		sr_idx = 4;
+	/* AudioSpecificConfig from the ring's object type: HE-AAC (profile
+	 * 5) needs the backward-compatible SBR form (LC core at half rate +
+	 * SBR extension), not a plain 2-byte LC config — otherwise clients
+	 * decode the HE stream as LC and fail. rss_aac_asc() builds both. */
+	int aot = (fCtx->profile == RSS_AAC_AOT_SBR) ? RSS_AAC_AOT_SBR : RSS_AAC_AOT_LC;
+	uint8_t asc[RSS_AAC_ASC_MAX];
+	int asc_len = rss_aac_asc(aot, (int)fCtx->sample_rate, 1 /* mono */, asc);
+	if (asc_len < 0) {
+		envir() << "RingAACSubsession: no ASC for rate " << fCtx->sample_rate
+			<< ", falling back to LC 44100\n";
+		asc_len = rss_aac_asc(RSS_AAC_AOT_LC, 44100, 1, asc);
 	}
 
-	unsigned char asc[2];
-	asc[0] = (unsigned char)((2 << 3) | (sr_idx >> 1));
-	asc[1] = (unsigned char)(((sr_idx & 1) << 7) | (1 << 3));
+	char configStr[2 * RSS_AAC_ASC_MAX + 1];
+	for (int i = 0; i < asc_len; i++)
+		snprintf(configStr + i * 2, 3, "%02X", asc[i]);
 
-	char configStr[5];
-	snprintf(configStr, sizeof(configStr), "%02X%02X", asc[0], asc[1]);
-
+	/* The RTP clock is the output (SBR) rate for HE, the coded rate for
+	 * LC — both equal fCtx->sample_rate here. */
 	return MPEG4GenericRTPSink::createNew(envir(), rtpGroupsock, rtpPayloadTypeIfDynamic,
-					      fCtx->sample_rate, "audio", "AAC-hbr",
-					      configStr, 1 /* numChannels */);
+					      fCtx->sample_rate, "audio", "AAC-hbr", configStr,
+					      1 /* numChannels */);
 }
 
 /* ================================================================
@@ -171,11 +171,13 @@ RingG711Subsession *RingG711Subsession::createNew(UsageEnvironment &env, rsd555_
 
 RingG711Subsession::RingG711Subsession(UsageEnvironment &env, rsd555_audio_ctx_t *ctx,
 				       Boolean reuseSource, Boolean isAlaw)
-	: OnDemandServerMediaSubsession(env, reuseSource), fCtx(ctx), fIsAlaw(isAlaw)
+    : OnDemandServerMediaSubsession(env, reuseSource), fCtx(ctx), fIsAlaw(isAlaw)
 {
 }
 
-RingG711Subsession::~RingG711Subsession() {}
+RingG711Subsession::~RingG711Subsession()
+{
+}
 
 FramedSource *RingG711Subsession::createNewStreamSource(unsigned /*clientSessionId*/,
 							unsigned &estBitrate)
@@ -189,10 +191,9 @@ RTPSink *RingG711Subsession::createNewRTPSink(Groupsock *rtpGroupsock,
 					      FramedSource * /*inputSource*/)
 {
 	if (fIsAlaw)
-		return SimpleRTPSink::createNew(envir(), rtpGroupsock, 8, 8000,
-						"audio", "PCMA", 1, False);
-	return SimpleRTPSink::createNew(envir(), rtpGroupsock, 0, 8000,
-					"audio", "PCMU", 1, False);
+		return SimpleRTPSink::createNew(envir(), rtpGroupsock, 8, 8000, "audio", "PCMA", 1,
+						False);
+	return SimpleRTPSink::createNew(envir(), rtpGroupsock, 0, 8000, "audio", "PCMU", 1, False);
 }
 
 /* ================================================================
@@ -207,11 +208,13 @@ RingL16Subsession *RingL16Subsession::createNew(UsageEnvironment &env, rsd555_au
 
 RingL16Subsession::RingL16Subsession(UsageEnvironment &env, rsd555_audio_ctx_t *ctx,
 				     Boolean reuseSource)
-	: OnDemandServerMediaSubsession(env, reuseSource), fCtx(ctx)
+    : OnDemandServerMediaSubsession(env, reuseSource), fCtx(ctx)
 {
 }
 
-RingL16Subsession::~RingL16Subsession() {}
+RingL16Subsession::~RingL16Subsession()
+{
+}
 
 FramedSource *RingL16Subsession::createNewStreamSource(unsigned /*clientSessionId*/,
 						       unsigned &estBitrate)
@@ -233,18 +236,20 @@ RTPSink *RingL16Subsession::createNewRTPSink(Groupsock *rtpGroupsock,
  * ================================================================ */
 
 RingOpusSubsession *RingOpusSubsession::createNew(UsageEnvironment &env, rsd555_audio_ctx_t *ctx,
-						   Boolean reuseSource)
+						  Boolean reuseSource)
 {
 	return new RingOpusSubsession(env, ctx, reuseSource);
 }
 
 RingOpusSubsession::RingOpusSubsession(UsageEnvironment &env, rsd555_audio_ctx_t *ctx,
 				       Boolean reuseSource)
-	: OnDemandServerMediaSubsession(env, reuseSource), fCtx(ctx)
+    : OnDemandServerMediaSubsession(env, reuseSource), fCtx(ctx)
 {
 }
 
-RingOpusSubsession::~RingOpusSubsession() {}
+RingOpusSubsession::~RingOpusSubsession()
+{
+}
 
 FramedSource *RingOpusSubsession::createNewStreamSource(unsigned /*clientSessionId*/,
 							unsigned &estBitrate)
@@ -261,6 +266,6 @@ RTPSink *RingOpusSubsession::createNewRTPSink(Groupsock *rtpGroupsock,
 	 * SimpleRTPSink is correct for Opus: each RTP packet contains one
 	 * self-delimiting Opus frame (RFC 7587 Section 4.2). Marker bit is
 	 * set per-packet which is fine for continuous camera audio. */
-	return SimpleRTPSink::createNew(envir(), rtpGroupsock, rtpPayloadTypeIfDynamic,
-					48000, "audio", "opus", 2, False);
+	return SimpleRTPSink::createNew(envir(), rtpGroupsock, rtpPayloadTypeIfDynamic, 48000,
+					"audio", "opus", 2, False);
 }

@@ -36,15 +36,15 @@ typedef struct {
 rss_ring_t *rss_ring_create(const char *name, uint32_t slot_count, uint32_t data_size);
 void rss_ring_destroy(rss_ring_t *ring);
 int rss_ring_publish(rss_ring_t *ring, const uint8_t *data, uint32_t length, int64_t timestamp,
-                     uint16_t nal_type, uint8_t is_key);
+		     uint16_t nal_type, uint8_t is_key);
 void rss_ring_set_stream_info(rss_ring_t *ring, uint32_t stream_id, uint32_t codec, uint32_t width,
-                              uint32_t height, uint32_t fps_num, uint32_t fps_den, uint8_t profile,
-                              uint8_t level);
+			      uint32_t height, uint32_t fps_num, uint32_t fps_den, uint8_t profile,
+			      uint8_t level);
 rss_ring_t *rss_ring_open(const char *name);
 void rss_ring_close(rss_ring_t *ring);
 int rss_ring_wait(rss_ring_t *ring, uint32_t timeout_ms);
 int rss_ring_read(rss_ring_t *ring, uint64_t *read_seq, uint8_t *dest, uint32_t dest_size,
-                  uint32_t *length, void *meta);
+		  uint32_t *length, void *meta);
 const rss_ring_header_t *rss_ring_get_header(rss_ring_t *ring);
 uint32_t rss_ring_max_frame_size(rss_ring_t *ring);
 void rss_ring_request_idr(rss_ring_t *ring);
@@ -56,9 +56,9 @@ rss_ctrl_t *rss_ctrl_listen(const char *sock_path);
 void rss_ctrl_destroy(rss_ctrl_t *ctrl);
 int rss_ctrl_get_fd(rss_ctrl_t *ctrl);
 int rss_ctrl_accept_and_handle(rss_ctrl_t *ctrl,
-                               int (*handler)(const char *cmd_json, char *resp_buf,
-                                              int resp_buf_size, void *userdata),
-                               void *userdata);
+			       int (*handler)(const char *cmd_json, char *resp_buf,
+					      int resp_buf_size, void *userdata),
+			       void *userdata);
 } /* extern "C" */
 #endif
 
@@ -176,6 +176,7 @@ typedef struct {
 
 	uint32_t codec;
 	uint32_t sample_rate;
+	uint8_t profile; /* AAC AOT: 2=LC, 5=HE-AAC v1 (SBR) */
 
 	rsd555_frame_queue_t *sources[RSD555_MAX_SOURCES];
 	int source_count;
