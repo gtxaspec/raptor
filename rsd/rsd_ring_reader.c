@@ -615,16 +615,23 @@ void *rsd_video_reader_thread(void *arg)
 				if (c->stream_idx != stream_idx)
 					continue;
 
-				/* Set timestamp base on first frame (any type).
-				 * Pre-IDR P-frames establish the PTS chain even
-				 * though the decoder can't display them. */
+				/* Hold new/recovering clients until a keyframe.
+				 * Orphan P-frames reference pictures the client
+				 * never got: live decoders conceal them, but a
+				 * recorder (Frigate, ffmpeg -c copy) writes them
+				 * into a file that then decodes with missing
+				 * refs on every playback. JPEG clients have no
+				 * inter refs and never wait. */
+				if (c->waiting_keyframe) {
+					if (!meta.is_key)
+						continue;
+					c->waiting_keyframe = false;
+					RSS_DEBUG("client[%d] got keyframe", stream_idx);
+				}
+				/* Timestamp base = first frame actually sent */
 				if (!c->video_ts_base_set) {
 					c->video_ts_offset = rtp_ts;
 					c->video_ts_base_set = true;
-				}
-				if (c->waiting_keyframe && meta.is_key) {
-					c->waiting_keyframe = false;
-					RSS_DEBUG("client[%d] got keyframe", stream_idx);
 				}
 
 				uint32_t client_ts = rtp_ts - c->video_ts_offset + c->video_ts_rand;
