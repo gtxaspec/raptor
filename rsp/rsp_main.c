@@ -19,6 +19,7 @@
 #include <sys/select.h>
 
 #include "rsp.h"
+#include <rss_aac.h>
 #include "rmr_nal.h"
 
 static void rsp_disconnect(rsp_state_t *st);
@@ -145,8 +146,11 @@ static int rsp_send_headers(rsp_state_t *st)
 		return -1;
 
 	if (st->audio_ring) {
+		/* The transcoder always emits LC; passthrough keeps the
+		 * ring's object type */
 		uint32_t aac_rate = st->audio_enc ? 48000 : st->audio_sample_rate;
-		if (rsp_rtmp_send_audio_header(&st->rtmp, aac_rate, 1) < 0)
+		uint8_t aac_aot = st->audio_enc ? RSS_AAC_AOT_LC : st->audio_profile;
+		if (rsp_rtmp_send_audio_header(&st->rtmp, aac_rate, 1, aac_aot) < 0)
 			return -1;
 	}
 
@@ -234,6 +238,7 @@ static void push_loop(rsp_state_t *st)
 				const rss_ring_header_t *ahdr = rss_ring_get_header(st->audio_ring);
 				st->audio_codec = ahdr->codec;
 				st->audio_sample_rate = ahdr->fps_num;
+				st->audio_profile = ahdr->profile;
 				st->audio_read_seq = atomic_load(&ahdr->write_seq);
 				RSS_DEBUG("audio ring attached: codec=%u rate=%u", st->audio_codec,
 					  st->audio_sample_rate);
@@ -250,7 +255,9 @@ static void push_loop(rsp_state_t *st)
 				if (st->header_sent) {
 					uint32_t rate =
 						st->audio_enc ? 48000 : st->audio_sample_rate;
-					rsp_rtmp_send_audio_header(&st->rtmp, rate, 1);
+					uint8_t aot =
+						st->audio_enc ? RSS_AAC_AOT_LC : st->audio_profile;
+					rsp_rtmp_send_audio_header(&st->rtmp, rate, 1, aot);
 				}
 			}
 		}
@@ -566,6 +573,7 @@ int main(int argc, char **argv)
 			const rss_ring_header_t *ahdr = rss_ring_get_header(st.audio_ring);
 			st.audio_codec = ahdr->codec;
 			st.audio_sample_rate = ahdr->fps_num;
+			st.audio_profile = ahdr->profile;
 			RSS_INFO("audio: codec=%u rate=%u", st.audio_codec, st.audio_sample_rate);
 			if (rsp_audio_needs_transcode(st.audio_codec, st.audio_sample_rate)) {
 				st.audio_enc = rsp_audio_init(st.audio_codec, st.audio_sample_rate);

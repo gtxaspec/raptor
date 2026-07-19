@@ -15,6 +15,8 @@
 
 #include "rsp_rtmp.h"
 
+#include <rss_aac.h>
+
 #include <rss_common.h>
 #include <rss_net.h>
 
@@ -298,7 +300,8 @@ static int rtmp_handshake(rsp_rtmp_t *ctx)
 			ssize_t n = read(urand, c0c1 + 9, RTMP_HANDSHAKE_SIZE - 8);
 			close(urand);
 			if (n < (ssize_t)(RTMP_HANDSHAKE_SIZE - 8))
-				memset(c0c1 + 9 + (n > 0 ? n : 0), 0x42, RTMP_HANDSHAKE_SIZE - 8 - (n > 0 ? n : 0));
+				memset(c0c1 + 9 + (n > 0 ? n : 0), 0x42,
+				       RTMP_HANDSHAKE_SIZE - 8 - (n > 0 ? n : 0));
 		} else {
 			memset(c0c1 + 9, 0x42, RTMP_HANDSHAKE_SIZE - 8);
 		}
@@ -1025,32 +1028,29 @@ int rsp_rtmp_send_video(rsp_rtmp_t *ctx, const uint8_t *avcc, uint32_t len, uint
 	return 0;
 }
 
-int rsp_rtmp_send_audio_header(rsp_rtmp_t *ctx, uint32_t sample_rate, uint8_t channels)
+int rsp_rtmp_send_audio_header(rsp_rtmp_t *ctx, uint32_t sample_rate, uint8_t channels, uint8_t aot)
 {
 	if (ctx->state != RSP_STATE_PUBLISHING)
 		return -1;
 
-	/* AudioSpecificConfig: AAC-LC */
-	static const int sr_table[] = {96000, 88200, 64000, 48000, 44100, 32000, 24000,
-				       22050, 16000, 12000, 11025, 8000,  7350};
-	int sr_idx = 4;
-	for (int i = 0; i < 13; i++) {
-		if (sr_table[i] == (int)sample_rate) {
-			sr_idx = i;
-			break;
-		}
-	}
+	/* AudioSpecificConfig from the real object type: HE-AAC passed
+	 * through untranscoded needs the backward-compatible SBR form,
+	 * or players read 24k-core frames with LC tables and get
+	 * nothing ("scalefactor bands exceeds limit"). */
+	uint8_t asc[RSS_AAC_ASC_MAX];
+	int asc_len = rss_aac_asc((aot == RSS_AAC_AOT_SBR) ? RSS_AAC_AOT_SBR : RSS_AAC_AOT_LC,
+				  (int)sample_rate, channels, asc);
+	if (asc_len < 0)
+		asc_len = rss_aac_asc(RSS_AAC_AOT_LC, 44100, channels, asc);
 
-	uint16_t asc = (uint16_t)((2 << 11) | (sr_idx << 7) | (channels << 3));
-
-	uint8_t buf[4];
+	uint8_t buf[2 + RSS_AAC_ASC_MAX];
 	/* FLV audio tag: AAC, 44kHz, 16-bit, stereo (flags for AAC are fixed) */
 	buf[0] = FLV_AUDIO_AAC | FLV_AUDIO_44KHZ | FLV_AUDIO_16BIT | FLV_AUDIO_STEREO;
 	buf[1] = FLV_AAC_SEQUENCE_HDR;
-	buf[2] = (uint8_t)(asc >> 8);
-	buf[3] = (uint8_t)asc;
+	memcpy(buf + 2, asc, (size_t)asc_len);
 
-	return rtmp_send_message(ctx, RTMP_CSID_AUDIO, RTMP_MSG_AUDIO, ctx->stream_id, 0, buf, 4);
+	return rtmp_send_message(ctx, RTMP_CSID_AUDIO, RTMP_MSG_AUDIO, ctx->stream_id, 0, buf,
+				 (uint32_t)(2 + asc_len));
 }
 
 int rsp_rtmp_send_audio(rsp_rtmp_t *ctx, const uint8_t *data, uint32_t len, uint32_t timestamp_ms)

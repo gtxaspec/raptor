@@ -40,6 +40,7 @@ typedef struct {
 	uint32_t fps_num;
 	uint32_t audio_codec;
 	uint32_t audio_sample_rate;
+	uint8_t audio_profile; /* AAC AOT: 2=LC, 5=HE-AAC v1 */
 
 	/* Codec params */
 	rmr_codec_params_t params;

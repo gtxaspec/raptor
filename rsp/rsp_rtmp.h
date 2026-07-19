@@ -107,7 +107,8 @@ int rsp_rtmp_send_video(rsp_rtmp_t *ctx, const uint8_t *avcc, uint32_t len, uint
  * Send AAC audio sequence header (AudioSpecificConfig).
  * Must be sent before any audio data.
  */
-int rsp_rtmp_send_audio_header(rsp_rtmp_t *ctx, uint32_t sample_rate, uint8_t channels);
+int rsp_rtmp_send_audio_header(rsp_rtmp_t *ctx, uint32_t sample_rate, uint8_t channels,
+			       uint8_t aot);
 
 /*
  * Send an AAC audio frame (raw AU, no ADTS).
