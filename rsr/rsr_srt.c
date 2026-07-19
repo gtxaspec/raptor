@@ -207,7 +207,8 @@ static void accept_client(rsr_state_t *st)
 	/* Init per-client TS mux */
 	uint8_t vtype = stream->codec == 1 ? RSS_TS_STREAM_H265 : RSS_TS_STREAM_H264;
 
-	rss_ts_init(&c->ts, vtype, st->audio_ts_type, 0);
+	/* Platform audio is mono (single mic); Opus is encoded 1-channel. */
+	rss_ts_init(&c->ts, vtype, st->audio_ts_type, 1, 0);
 
 	st->client_count++;
 
