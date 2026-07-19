@@ -7,6 +7,8 @@
 
 #include "rsd555_source.h"
 
+#include <rss_aac.h>
+
 #include <string.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -26,7 +28,7 @@ RingVideoSource *RingVideoSource::createNew(UsageEnvironment &env, rsd555_video_
 }
 
 RingVideoSource::RingVideoSource(UsageEnvironment &env, rsd555_video_ctx_t *ctx)
-	: FramedSource(env), fCtx(ctx), fValid(false), fPendingFrame(NULL), fPendingOffset(0)
+    : FramedSource(env), fCtx(ctx), fValid(false), fPendingFrame(NULL), fPendingOffset(0)
 {
 	if (rsd555_queue_init(&fQueue, 16) != 0) {
 		envir() << "RingVideoSource: queue init failed\n";
@@ -37,17 +39,16 @@ RingVideoSource::RingVideoSource(UsageEnvironment &env, rsd555_video_ctx_t *ctx)
 		rsd555_queue_destroy(&fQueue);
 		return;
 	}
-	if (fCtx->state &&
-	    __atomic_load_n(&fCtx->state->active_clients, __ATOMIC_RELAXED) >=
-	    fCtx->state->max_clients) {
+	if (fCtx->state && __atomic_load_n(&fCtx->state->active_clients, __ATOMIC_RELAXED) >=
+				   fCtx->state->max_clients) {
 		envir() << "RingVideoSource: max clients reached\n";
 		rsd555_video_remove_source(fCtx, &fQueue);
 		rsd555_queue_destroy(&fQueue);
 		return;
 	}
 
-	envir().taskScheduler().turnOnBackgroundReadHandling(
-		fQueue.event_fd, onDataAvailable, this);
+	envir().taskScheduler().turnOnBackgroundReadHandling(fQueue.event_fd, onDataAvailable,
+							     this);
 	if (fCtx->state)
 		__atomic_add_fetch(&fCtx->state->active_clients, 1, __ATOMIC_RELAXED);
 	if (fCtx->ring)
@@ -165,7 +166,7 @@ RingAudioSource *RingAudioSource::createNew(UsageEnvironment &env, rsd555_audio_
 }
 
 RingAudioSource::RingAudioSource(UsageEnvironment &env, rsd555_audio_ctx_t *ctx)
-	: FramedSource(env), fCtx(ctx), fValid(false), fPTSInitialized(false)
+    : FramedSource(env), fCtx(ctx), fValid(false), fPTSInitialized(false)
 {
 	if (rsd555_queue_init(&fQueue, 32) != 0) {
 		envir() << "RingAudioSource: queue init failed\n";
@@ -176,8 +177,8 @@ RingAudioSource::RingAudioSource(UsageEnvironment &env, rsd555_audio_ctx_t *ctx)
 		rsd555_queue_destroy(&fQueue);
 		return;
 	}
-	envir().taskScheduler().turnOnBackgroundReadHandling(
-		fQueue.event_fd, onDataAvailable, this);
+	envir().taskScheduler().turnOnBackgroundReadHandling(fQueue.event_fd, onDataAvailable,
+							     this);
 	fValid = true;
 }
 
@@ -220,16 +221,24 @@ void RingAudioSource::deliverFrame()
 
 	rsd555_shared_frame_t *sf = f->shared;
 
-	/* Synthetic timestamps: advance by exactly one frame duration
-	 * per audio frame. All raptor audio codecs use 20ms frames
-	 * (320 samples at 16kHz). Wall-clock init, pure accumulation. */
+	/* Synthetic timestamps: advance by one frame's real duration.
+	 * PCM/G.711/Opus emit 20ms frames, but an AAC access unit is
+	 * 1024 samples (LC) or 2048 (HE-AAC) — far longer than 20ms at
+	 * these rates. Using 20ms there runs the audio clock ~3x fast
+	 * (1024/320 at 16kHz) and desyncs playback badly. Wall-clock
+	 * init, pure accumulation. */
+	uint32_t frame_us = 20000;
+	if (fCtx->codec == RSD555_CODEC_AAC && fCtx->sample_rate) {
+		uint32_t spf = (fCtx->profile == RSS_AAC_AOT_SBR) ? 2048 : 1024;
+		frame_us = (uint32_t)((uint64_t)spf * 1000000 / fCtx->sample_rate);
+	}
 	if (!fPTSInitialized) {
 		gettimeofday(&fNextPTS, NULL);
 		fPTSInitialized = true;
 	}
 	fPresentationTime = fNextPTS;
-	fNextPTS.tv_usec += 20000;
-	if (fNextPTS.tv_usec >= 1000000) {
+	fNextPTS.tv_usec += frame_us;
+	while (fNextPTS.tv_usec >= 1000000) {
 		fNextPTS.tv_sec++;
 		fNextPTS.tv_usec -= 1000000;
 	}
