@@ -623,6 +623,9 @@ void rsd_server_run(rsd_server_t *srv)
 								   : rc->video.rtcp;
 					if (rn > 0 && dest)
 						Compy_Rtcp_handle_incoming(dest, rtcp_buf, rn);
+					/* Receiver reports prove the peer is alive */
+					if (rn > 0)
+						rc->last_activity = rss_timestamp_us();
 				} else if (find_client_by_fd(srv, fd)) {
 					handle_client_data(srv, fd);
 				} else {
@@ -657,13 +660,22 @@ void rsd_server_run(rsd_server_t *srv)
 			}
 		}
 
-		/* Idle timeout sweep — disconnect clients with no activity */
+		/* Idle timeout sweep — disconnect clients with no activity.
+		 * TCP-interleaved playback proves liveness through the
+		 * socket itself (a dead peer surfaces as a send error),
+		 * but a vanished UDP client never errors: sendto keeps
+		 * succeeding into the void, so a playing UDP session
+		 * must show liveness via RTSP keepalives or RTCP RRs or
+		 * it leaks a client slot until the daemon restarts. */
 		int64_t now = rss_timestamp_us();
 		int64_t timeout_us = (int64_t)srv->session_timeout * 1000000;
 		for (int i = srv->client_count - 1; i >= 0; i--) {
 			rsd_client_t *c = srv->clients[i];
-			if (c && !c->video.playing && !c->audio.playing &&
-			    (now - c->last_activity) > timeout_us) {
+			if (!c)
+				continue;
+			bool playing = c->video.playing || c->audio.playing;
+			bool udp_media = c->udp_rtp_fd >= 0 || c->audio_udp_rtp_fd >= 0;
+			if ((!playing || udp_media) && (now - c->last_activity) > timeout_us) {
 				char addr[INET6_ADDRSTRLEN];
 				RSS_WARN("idle timeout: %s:%u (%ds)",
 					 client_addr_str(&c->addr, addr, sizeof(addr)),
