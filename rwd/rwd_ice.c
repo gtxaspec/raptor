@@ -420,6 +420,38 @@ int rwd_ice_process(rwd_server_t *srv, const uint8_t *buf, size_t len,
 		RSS_INFO("ICE: client %s address updated", client->session_id);
 	}
 
+	/* Remember every integrity-verified source: the client's data
+	 * (DTLS/media) may come from a different local candidate than
+	 * the STUN check that last pinned addr, and the dispatch path
+	 * accepts + latches onto any of these. */
+	{
+		bool known = false;
+		for (int j = 0; j < client->n_verified && j < RWD_MAX_VERIFIED_ADDRS; j++) {
+			if (client->verified_lens[j] == from_len &&
+			    rwd_sockaddr_equal(&client->verified_addrs[j],
+					       (const struct sockaddr_storage *)from)) {
+				known = true;
+				break;
+			}
+		}
+		if (!known) {
+			if (client->n_verified == RWD_MAX_VERIFIED_ADDRS) {
+				/* full: evict oldest */
+				memmove(&client->verified_addrs[0], &client->verified_addrs[1],
+					sizeof(client->verified_addrs[0]) *
+						(RWD_MAX_VERIFIED_ADDRS - 1));
+				memmove(&client->verified_lens[0], &client->verified_lens[1],
+					sizeof(client->verified_lens[0]) *
+						(RWD_MAX_VERIFIED_ADDRS - 1));
+				client->n_verified--;
+			}
+			int slot = client->n_verified;
+			memcpy(&client->verified_addrs[slot], from, from_len);
+			client->verified_lens[slot] = from_len;
+			client->n_verified++;
+		}
+	}
+
 	/* Track consent freshness (RFC 7675) */
 	client->last_stun_at = rss_timestamp_us();
 

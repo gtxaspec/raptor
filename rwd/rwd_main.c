@@ -241,7 +241,7 @@ static int create_http_socket(int port)
 
 /* Compare sockaddr by family-specific fields only (not padding bytes).
  * memcmp on sockaddr_storage can fail on uninitialized padding. */
-static bool sockaddr_equal(const struct sockaddr_storage *a, const struct sockaddr_storage *b)
+bool rwd_sockaddr_equal(const struct sockaddr_storage *a, const struct sockaddr_storage *b)
 {
 	if (a->ss_family != b->ss_family)
 		return false;
@@ -262,13 +262,32 @@ static bool sockaddr_equal(const struct sockaddr_storage *a, const struct sockad
 static rwd_client_t *find_client_by_addr(rwd_server_t *srv, const struct sockaddr_storage *addr,
 					 socklen_t addr_len)
 {
-	(void)addr_len;
 	for (int i = 0; i < RWD_MAX_CLIENTS; i++) {
 		rwd_client_t *c = srv->clients[i];
 		if (!c || !c->ice_verified)
 			continue;
-		if (sockaddr_equal(&c->addr, addr))
+		if (rwd_sockaddr_equal(&c->addr, addr))
 			return c;
+	}
+	/* Not the pinned address: accept any source this client has
+	 * proven via STUN integrity, and latch the media path there.
+	 * The client DTLS/media source is the nominated pair; the
+	 * pinned addr may have been re-set by a racing check from
+	 * another local candidate (seen as multi-second DTLS stalls
+	 * on jittery links when the ClientHello was dropped here). */
+	for (int i = 0; i < RWD_MAX_CLIENTS; i++) {
+		rwd_client_t *c = srv->clients[i];
+		if (!c || !c->ice_verified)
+			continue;
+		for (int j = 0; j < c->n_verified && j < RWD_MAX_VERIFIED_ADDRS; j++) {
+			if (rwd_sockaddr_equal(&c->verified_addrs[j], addr)) {
+				memcpy(&c->addr, addr, sizeof(*addr));
+				c->addr_len = addr_len;
+				RSS_INFO("ICE: client %s media path latched to verified source",
+					 c->session_id);
+				return c;
+			}
+		}
 	}
 	return NULL;
 }

@@ -128,9 +128,19 @@ typedef struct rwd_client rwd_client_t;
 
 typedef struct rwd_server rwd_server_t;
 
+/* Sources that have passed STUN MESSAGE-INTEGRITY for a client. The
+ * client may send DTLS/media from a different candidate than the one
+ * whose STUN check happened to arrive last, so the data path accepts
+ * any verified source and latches addr to where data actually comes
+ * from (see find_client_by_addr). */
+#define RWD_MAX_VERIFIED_ADDRS 4
+
 struct rwd_client {
 	struct sockaddr_storage addr;
 	socklen_t addr_len;
+	struct sockaddr_storage verified_addrs[RWD_MAX_VERIFIED_ADDRS];
+	socklen_t verified_lens[RWD_MAX_VERIFIED_ADDRS];
+	int n_verified; /* ring; oldest evicted */
 	bool active;
 
 	/* ICE */
@@ -301,6 +311,7 @@ rwd_client_t *rwd_client_from_offer(rwd_server_t *srv, const char *sdp, int stre
 
 /* ── rwd_media.c ── */
 
+bool rwd_sockaddr_equal(const struct sockaddr_storage *a, const struct sockaddr_storage *b);
 Compy_Transport rwd_transport_sendto(int fd, const struct sockaddr_storage *addr,
 				     socklen_t addr_len);
 int rwd_media_setup(rwd_client_t *c);
