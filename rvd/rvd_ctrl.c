@@ -1523,14 +1523,71 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		rss_json_get_int(cmd_json, "channel", &jpeg_ch);
 		if (!format[0] || !file[0])
 			return rss_ctrl_resp_error(resp, resp_size, "need format and file");
-		/* Format is the extension point: raw (IMP framesource) and
-		 * transcoded outputs can slot in beside jpeg later. */
-		if (strcmp(format, "jpeg") != 0)
+		bool want_raw = (strcmp(format, "raw") == 0);
+		if (strcmp(format, "jpeg") != 0 && !want_raw)
 			return rss_ctrl_resp_error(resp, resp_size,
-						   "unsupported format (supported: jpeg)");
+						   "unsupported format (supported: jpeg, raw)");
 		if (file[0] != '/')
 			return rss_ctrl_resp_error(resp, resp_size,
 						   "file must be an absolute path");
+
+		if (want_raw) {
+			/* raw = NV12 from the framesource. SnapFrame is unreliable on
+			 * a live encoder-bound channel (blocks or ENOTTY, SDK-
+			 * dependent); use the vendor-proven transient-depth pattern:
+			 * SetFrameDepth(1) -> GetFrame -> write -> release -> depth 0.
+			 * channel = video stream index. */
+			if (jpeg_ch < 0 || jpeg_ch >= st->stream_count)
+				return rss_ctrl_resp_error(resp, resp_size, "bad video channel");
+			int fs_chn = st->streams[jpeg_ch].fs_chn;
+			int ret = RSS_HAL_CALL(st->ops, fs_set_frame_depth, st->hal_ctx, fs_chn, 1);
+			if (ret == RSS_ERR_NOTSUP)
+				return rss_ctrl_resp_error(resp, resp_size,
+							   "raw snap not supported on this SoC");
+			if (ret != 0)
+				return rss_ctrl_resp_error(resp, resp_size,
+							   "frame depth alloc failed (rmem?)");
+
+			rss_frame_info_t info = {0};
+			void *frame = NULL;
+			ret = RSS_HAL_CALL(st->ops, fs_get_frame, st->hal_ctx, fs_chn, &frame,
+					   &info);
+			if (ret != 0 || !frame || !info.virt_addr || info.size == 0) {
+				RSS_HAL_CALL(st->ops, fs_set_frame_depth, st->hal_ctx, fs_chn, 0);
+				return rss_ctrl_resp_error(resp, resp_size,
+							   "raw frame grab failed");
+			}
+
+			char tmp[272];
+			snprintf(tmp, sizeof(tmp), "%s.tmp", file);
+			int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+			ssize_t wr = -1;
+			if (fd >= 0) {
+				wr = write(fd, info.virt_addr, info.size);
+				close(fd);
+			}
+			RSS_HAL_CALL(st->ops, fs_release_frame, st->hal_ctx, fs_chn, frame);
+			RSS_HAL_CALL(st->ops, fs_set_frame_depth, st->hal_ctx, fs_chn, 0);
+			if (fd < 0 || wr != (ssize_t)info.size || rename(tmp, file) != 0) {
+				unlink(tmp);
+				return rss_ctrl_resp_error(resp, resp_size, strerror(errno));
+			}
+
+			RSS_INFO("save: %s (%u bytes, raw %ux%u)", file, info.size, info.width,
+				 info.height);
+			cJSON *r = cJSON_CreateObject();
+			if (!r)
+				return rss_ctrl_resp_error(resp, resp_size, "out of memory");
+			cJSON_AddStringToObject(r, "status", "ok");
+			cJSON_AddStringToObject(r, "file", file);
+			cJSON_AddStringToObject(r, "format", "raw");
+			cJSON_AddStringToObject(r, "pixfmt", "nv12");
+			cJSON_AddNumberToObject(r, "width", info.width);
+			cJSON_AddNumberToObject(r, "height", info.height);
+			cJSON_AddNumberToObject(r, "bytes", (double)info.size);
+			return rss_ctrl_resp_json(resp, resp_size, r);
+		}
+
 		if (jpeg_ch < 0 || jpeg_ch >= RVD_MAX_JPEG)
 			return rss_ctrl_resp_error(resp, resp_size, "bad jpeg channel");
 

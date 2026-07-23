@@ -195,6 +195,28 @@ static int mock_enc_poll(void *ctx, int chn, uint32_t timeout_ms)
 	return RSS_OK;
 }
 
+static int mock_fs_snap_frame(void *ctx, int chn, void **frame_data, rss_frame_info_t *info)
+{
+	(void)ctx;
+	(void)chn;
+	if (!frame_data || !info || info->width == 0 || info->height == 0)
+		return -EINVAL;
+	uint32_t size = (uint32_t)info->width * info->height * 3 / 2;
+	uint8_t *buf = malloc(size);
+	if (!buf)
+		return -ENOMEM;
+	/* luma gradient + neutral chroma — decodable, visually obvious */
+	uint32_t luma = (uint32_t)info->width * info->height;
+	for (uint32_t i = 0; i < luma; i++)
+		buf[i] = (uint8_t)(i % 251);
+	memset(buf + luma, 128, size - luma);
+	info->pixfmt = RSS_PIXFMT_NV12;
+	info->size = size;
+	info->timestamp = 0;
+	*frame_data = buf;
+	return RSS_OK;
+}
+
 static int mock_enc_get_frame(void *ctx, int chn, rss_frame_t *frame)
 {
 	rss_hal_ctx_t *hal = ctx;
@@ -645,6 +667,7 @@ static const rss_hal_ops_t mock_ops = {
 	.fs_enable_channel = (void *)mock_ok,
 	.fs_disable_channel = (void *)mock_ok,
 	.fs_set_fifo = (void *)mock_ok,
+	.fs_snap_frame = mock_fs_snap_frame,
 	.fs_set_frame_depth = (void *)mock_ok,
 
 	/* Encoder */
