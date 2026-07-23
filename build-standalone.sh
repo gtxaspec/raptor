@@ -206,22 +206,6 @@ if [ "$OPT_CLEAN_ALL" = 1 ]; then
     exit 0
 fi
 
-[ -z "$PLATFORM" ] && usage
-
-if [ "$OPT_STATIC_VENDOR" = 1 ] && [ "$OPT_STATIC" != 1 ]; then
-    echo "ERROR: --static-vendor-libs requires --static"
-    exit 1
-fi
-
-if [ "$OPT_DEBUG" = 1 ] && [ "$OPT_RELEASE" = 1 ]; then
-    echo "ERROR: --debug and --release are mutually exclusive"
-    exit 1
-fi
-
-PLATFORM_UPPER=$(echo "$PLATFORM" | tr a-z A-Z)
-
-# ── Clean ──
-
 if [ "$OPT_CLEAN" = 1 ]; then
     make clean 2>/dev/null || true
     echo "Cleaning build artifacts (keeping downloaded deps)..."
@@ -238,6 +222,21 @@ if [ "$OPT_CLEAN" = 1 ]; then
     echo "Done."
     exit 0
 fi
+
+[ -z "$PLATFORM" ] && usage
+
+if [ "$OPT_STATIC_VENDOR" = 1 ] && [ "$OPT_STATIC" != 1 ]; then
+    echo "ERROR: --static-vendor-libs requires --static"
+    exit 1
+fi
+
+if [ "$OPT_DEBUG" = 1 ] && [ "$OPT_RELEASE" = 1 ]; then
+    echo "ERROR: --debug and --release are mutually exclusive"
+    exit 1
+fi
+
+PLATFORM_UPPER=$(echo "$PLATFORM" | tr a-z A-Z)
+
 
 # ── SDK version map ──
 
