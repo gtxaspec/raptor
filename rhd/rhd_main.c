@@ -980,6 +980,8 @@ int main(int argc, char **argv)
 			RSS_WARN("HTTPS init failed, falling back to HTTP");
 	}
 #else
+	if (rss_config_get_bool(ctx.cfg, "http", "https", false))
+		RSS_WARN("config requests https but rhd was built without TLS; serving plain HTTP");
 	if (http_user[0])
 		RSS_WARN("HTTP Basic auth without TLS -- credentials sent in plaintext");
 #endif

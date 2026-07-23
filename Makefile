@@ -127,13 +127,21 @@ LIB_COMPY  ?= $(LIB_COMPY_FILE)
 
 # TLS helper (compiled separately, only linked by daemons that need it).
 # Source is in raptor-common (standalone) or sysroot (buildroot).
+# Gated on TLS=1: without mbedtls in the sysroot the compile fails,
+# and rhd builds HTTP-only (its sources guard on RSS_HAS_TLS).
+ifeq ($(TLS),1)
 RSS_TLS_SRC := $(firstword $(wildcard $(CURDIR)/$(COMMON_DIR)/src/rss_tls.c) \
                            $(wildcard $(SYSROOT)/usr/share/raptor-common/rss_tls.c))
 RSS_TLS_OBJ := $(CURDIR)/rss_tls.o
+RSS_TLS_CFLAGS := -DRSS_HAS_TLS
 ifneq ($(RSS_TLS_SRC),)
 $(RSS_TLS_OBJ): $(RSS_TLS_SRC)
 	@echo "  CC      rss_tls.c"
 	$(Q)$(CC) $(CFLAGS) -c $< -o $@
+endif
+else
+RSS_TLS_OBJ :=
+RSS_TLS_CFLAGS :=
 endif
 
 # Sysroot for finding shared libs (set by Buildroot or manually)
@@ -257,7 +265,7 @@ rad: $(LIB_HAL_AUDIO_FILE) $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_BUILD_OBJ)
 
 rhd: $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_TLS_OBJ) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   rhd"
-	$(Q)$(MAKE) -C rhd CC="$(CC)" CFLAGS="$(CFLAGS) -DRSS_HAS_TLS" \
+	$(Q)$(MAKE) -C rhd CC="$(CC)" CFLAGS="$(CFLAGS) $(RSS_TLS_CFLAGS)" \
 		LIBS="$(LIB_IPC) $(LIB_COMMON) $(RSS_TLS_OBJ) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS) $(LDFLAGS_TLS)" Q="$(Q)"
 
