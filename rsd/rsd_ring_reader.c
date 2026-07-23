@@ -561,6 +561,18 @@ void *rsd_video_reader_thread(void *arg)
 			frame_data = rctx->frame_buf;
 			if (ret == RSS_EOVERFLOW) {
 				uint64_t skipped = read_seq - pre_seq;
+				if (skipped == 0) {
+					/* Zero-progress overflow = the producer
+					 * recreated the ring (new incarnation, e.g.
+					 * rvd re-exec after a raw capture). Reopen
+					 * instead of spinning on the stale mapping. */
+					RSS_WARN("video[%d] ring incarnation changed, "
+						 "reopening (%s)",
+						 stream_idx, rctx->ring_name);
+					rss_ring_close(rctx->ring);
+					rctx->ring = NULL;
+					break;
+				}
 				total_overflow += skipped;
 				RSS_WARN("video[%d] EOVERFLOW: seq %llu -> %llu (skipped %llu)",
 					 stream_idx, (unsigned long long)pre_seq,
@@ -823,9 +835,17 @@ void *rsd_audio_reader_thread(void *arg)
 			rss_ring_slot_t meta;
 			uint64_t read_seq = srv->audio_read_seq;
 
+			uint64_t audio_pre_seq = read_seq;
 			ret = rss_ring_read(srv->ring_audio, &read_seq, audio_buf,
 					    sizeof(audio_buf), &length, &meta);
 			if (ret == RSS_EOVERFLOW) {
+				if (read_seq == audio_pre_seq) {
+					/* Producer recreated the ring: reopen. */
+					RSS_WARN("audio ring incarnation changed, reopening");
+					rss_ring_close(srv->ring_audio);
+					srv->ring_audio = NULL;
+					break;
+				}
 				srv->audio_read_seq = read_seq;
 				break;
 			}
