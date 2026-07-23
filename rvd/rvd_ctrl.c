@@ -1297,10 +1297,10 @@ static int do_stream_restart(rvd_state_t *st, int chn, char *resp, int resp_size
 
 #if !defined(PLATFORM_T20)
 /* Kernel road: the tx-isp VIC debug node dumps one pre-ISP sensor
- * frame and writes /tmp/snap*.raw. Needs a streaming pipeline; on
- * 3.10 SoCs it also needs the ispmem= bootarg reserve (gen3 blobs
- * allocate internally — HW-verified on stock T41 bootargs). Arg
- * differs by generation: gen3 takes the VI number, 3.10 a count. */
+ * frame and writes /tmp/snap*.raw. Needs a streaming pipeline (VIC
+ * active). Only T30 needs the ispmem= bootarg reserve; see the
+ * per-platform cmd_str notes below. Arg differs by generation:
+ * gen3 takes the VI number, 3.10 a count. */
 static int bayer_snapraw_grab(char *found, size_t found_sz)
 {
 	glob_t g;
