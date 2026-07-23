@@ -349,6 +349,26 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running)
 			for (int i = 0; i < n; i++) {
 				if (events[i].data.fd == ctrl_fd)
 					rss_ctrl_accept_and_handle(st->ctrl, rvd_ctrl_handler, st);
+				if (atomic_load(&st->pending_pipeline_reinit)) {
+					atomic_store(&st->pending_pipeline_reinit, false);
+					/* In-process reinit is unsafe on the old SDK
+					 * (System_Exit wedges with bound channels);
+					 * re-exec instead — process replacement
+					 * releases IMP exactly like the proven
+					 * kill-and-restart. */
+					RSS_WARN("re-exec for clean pipeline "
+						 "(post raw capture)");
+					char exe[256];
+					ssize_t rl =
+						readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+					if (rl > 0) {
+						exe[rl] = '\0';
+						char *av[] = {exe, "-c", (char *)st->config_path,
+							      NULL};
+						execv(exe, av);
+					}
+					RSS_ERROR("re-exec failed: %s", strerror(errno));
+				}
 			}
 		} else {
 			usleep(100000);

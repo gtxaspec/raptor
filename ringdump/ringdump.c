@@ -286,9 +286,10 @@ int main(int argc, char **argv)
 			 * The data region recycles ahead of the slot ring when
 			 * frames are large relative to it, and the slot-seq
 			 * recheck cannot see that (rhd guards the same way). */
+			/* SOI only: torn frames lose their head, and gen3
+			 * encoders emit no trailing EOI at all. */
 			if (ring_codec == 2 /* rss_codec_t JPEG */ &&
-			    (length < 4 || frame_buf[0] != 0xFF || frame_buf[1] != 0xD8 ||
-			     frame_buf[length - 2] != 0xFF || frame_buf[length - 1] != 0xD9)) {
+			    (length < 4 || frame_buf[0] != 0xFF || frame_buf[1] != 0xD8)) {
 				fprintf(stderr,
 					"[TORN] skipped invalid JPEG frame (seq=%" PRIu64 ")\n",
 					meta.seq);

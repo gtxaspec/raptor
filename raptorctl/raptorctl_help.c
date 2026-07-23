@@ -65,7 +65,8 @@ const struct help_entry help_entries[] = {
 	{"rvd", "set-codec <ch> <h264|h265>          Change codec (requires restart)"},
 	{"rvd", "set-resolution <ch> <w> <h>         Change resolution (requires restart)"},
 	{"rvd", "set-jpeg-quality <jpeg_ch> <1-100>    Change JPEG quality (restarts channel)"},
-	{"rvd", "save <format> <file> [ch]            Save a snapshot (jpeg: jpeg ring; raw: NV12 "
+	{"rvd", "save <format> <file> [ch]            Save a snapshot (jpeg | raw = NV12 | bayer = "
+		"sensor RAW)"
 		"from video ch)"},
 	{"rvd", "request-pskip <ch>                  Request P-skip"},
 	{"rvd", "request-gdr <ch> <frames>           Request GDR"},

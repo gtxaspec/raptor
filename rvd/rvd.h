@@ -74,6 +74,11 @@ struct rvd_state {
 	rvd_stream_t streams[RVD_MAX_STREAMS];
 	int stream_count;
 
+	/* Deferred full pipeline reinit (T20 save bayer: the old-SDK VBM
+	 * pool does not survive a RAW flip in place; respond first, then
+	 * the frame loop rebuilds everything) */
+	_Atomic bool pending_pipeline_reinit;
+
 	/* Low latency mode */
 	bool low_latency;
 

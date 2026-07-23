@@ -15,6 +15,8 @@
 #include <stdatomic.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <glob.h>
+#include <sys/stat.h>
 
 #include "rvd.h"
 
@@ -1291,6 +1293,121 @@ static int do_stream_restart(rvd_state_t *st, int chn, char *resp, int resp_size
 }
 
 /* Returns 0 if valid, or positive response length (error already written) */
+/* ── save bayer helpers ── */
+
+#if !defined(PLATFORM_T20)
+/* Kernel road: the tx-isp VIC debug node dumps one pre-ISP sensor
+ * frame and writes /tmp/snap*.raw. Needs a streaming pipeline; on
+ * 3.10 SoCs it also needs the ispmem= bootarg reserve (gen3 blobs
+ * allocate internally — HW-verified on stock T41 bootargs). Arg
+ * differs by generation: gen3 takes the VI number, 3.10 a count. */
+static int bayer_snapraw_grab(char *found, size_t found_sz)
+{
+	glob_t g;
+	if (glob("/tmp/snap*.raw", 0, NULL, &g) == 0) {
+		for (size_t i = 0; i < g.gl_pathc; i++)
+			unlink(g.gl_pathv[i]);
+		globfree(&g);
+	}
+
+	int fd = open("/proc/jz/isp/isp-w02", O_WRONLY);
+	if (fd < 0)
+		return -ENOENT;
+#if defined(PLATFORM_T40) || defined(PLATFORM_T41)
+	static const char cmd_str[] = "snapraw 0";
+#elif defined(PLATFORM_T30)
+	/* T30's VIC only implements snapraw, and its buffer comes from
+	 * the ispmem= private region (tx-isp-videobuf.c): the one SoC
+	 * that needs the carve (sensor w*h*2 bytes, e.g. 6M for 4MP). */
+	static const char cmd_str[] = "snapraw 1";
+#else
+	/* saveraw self-buffers, so no ispmem= reserve is needed (snapraw
+	 * on these blobs DMAs into ispmem and silently does nothing
+	 * without it). */
+	static const char cmd_str[] = "saveraw 1";
+#endif
+	ssize_t wr = write(fd, cmd_str, sizeof(cmd_str) - 1);
+	close(fd);
+	if (wr < 0)
+		return -EPERM;
+
+	long last = -1;
+	for (int ms = 0; ms < 3000; ms += 200) {
+		usleep(200 * 1000);
+		if (glob("/tmp/snap*.raw", 0, NULL, &g) != 0)
+			continue;
+		struct stat sb;
+		int ok = (stat(g.gl_pathv[0], &sb) == 0 && sb.st_size > 0);
+		if (ok && sb.st_size == last) {
+			rss_strlcpy(found, g.gl_pathv[0], found_sz);
+			globfree(&g);
+			return 0;
+		}
+		last = ok ? sb.st_size : -1;
+		globfree(&g);
+	}
+	return -ETIMEDOUT;
+}
+
+/* Sensor native dims from the ISP debug node (bayer frames are
+ * sensor-sized, not stream-sized). Best effort. */
+static void bayer_sensor_dims(int *w, int *h)
+{
+	*w = 0;
+	*h = 0;
+	FILE *f = fopen("/proc/jz/isp/isp-m0", "r");
+	if (!f)
+		return;
+	char line[160];
+	while (fgets(line, sizeof(line), f)) {
+		int v;
+		if (sscanf(line, " SENSOR OUTPUT WIDTH : %d", &v) == 1)
+			*w = v;
+		else if (sscanf(line, " SENSOR OUTPUT HEIGHT : %d", &v) == 1)
+			*h = v;
+	}
+	fclose(f);
+}
+#endif
+
+#if !defined(PLATFORM_T20)
+/* Move a produced file to the requested path; rename first, copy on
+ * cross-device (targets on SD/NFS). */
+static int bayer_move(const char *src, const char *dst)
+{
+	if (rename(src, dst) == 0)
+		return 0;
+	if (errno != EXDEV)
+		return -1;
+	int in = open(src, O_RDONLY);
+	if (in < 0)
+		return -1;
+	int out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	if (out < 0) {
+		close(in);
+		return -1;
+	}
+	char buf[65536];
+	ssize_t n;
+	int ret = 0;
+	while ((n = read(in, buf, sizeof(buf))) > 0) {
+		if (write(out, buf, n) != n) {
+			ret = -1;
+			break;
+		}
+	}
+	if (n < 0)
+		ret = -1;
+	close(in);
+	close(out);
+	if (ret == 0)
+		unlink(src);
+	else
+		unlink(dst);
+	return ret;
+}
+#endif
+
 static int validate_video_channel(rvd_state_t *st, const char *cmd_json, int *out_chn, char *resp,
 				  int resp_size)
 {
@@ -1524,12 +1641,147 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		if (!format[0] || !file[0])
 			return rss_ctrl_resp_error(resp, resp_size, "need format and file");
 		bool want_raw = (strcmp(format, "raw") == 0);
-		if (strcmp(format, "jpeg") != 0 && !want_raw)
-			return rss_ctrl_resp_error(resp, resp_size,
-						   "unsupported format (supported: jpeg, raw)");
+		bool want_bayer = (strcmp(format, "bayer") == 0);
+		if (strcmp(format, "jpeg") != 0 && !want_raw && !want_bayer)
+			return rss_ctrl_resp_error(
+				resp, resp_size,
+				"unsupported format (supported: jpeg, raw, bayer)");
 		if (file[0] != '/')
 			return rss_ctrl_resp_error(resp, resp_size,
 						   "file must be an absolute path");
+
+		if (want_bayer) {
+#if defined(PLATFORM_T20)
+			/* T20 has no kernel raw dump; its old-SDK libimp honors
+			 * PIX_FMT_RAW on fs channel 0 only, so flip the main
+			 * stream's framesource to RAW around one grab. Brief
+			 * main-stream interruption, set-resolution pattern. */
+			int chn = 0;
+			if (chn >= st->stream_count || !atomic_load(&st->stream_active[chn]))
+				return rss_ctrl_resp_error(resp, resp_size,
+							   "main stream not active");
+			int jpeg = find_jpeg_for_video_ctrl(st, chn);
+			bool has_ivs = (st->streams[chn].fs_chn == st->ivs_fs_chn &&
+					atomic_load(&st->ivs_active));
+			if (has_ivs)
+				ivs_thread_stop(st);
+			if (jpeg >= 0)
+				rvd_stream_stop(st, jpeg);
+			rvd_stream_stop(st, chn);
+			if (jpeg >= 0)
+				rvd_stream_deinit(st, jpeg);
+			rvd_stream_deinit(st, chn);
+
+			/* Full destroy/recreate on both sides of the pixfmt
+			 * flip: reconfiguring a created channel between NV12
+			 * and RAW leaves the old-SDK buffer pool sized for the
+			 * wrong format and corrupts the restored stream. */
+			rss_pixfmt_t old_fmt = st->streams[chn].fs_cfg.pixfmt;
+			RSS_HAL_CALL(st->ops, fs_destroy_channel, st->hal_ctx,
+				     st->streams[chn].fs_chn);
+			st->streams[chn].fs_cfg.pixfmt = RSS_PIXFMT_RAW;
+			RSS_HAL_CALL(st->ops, fs_create_channel, st->hal_ctx,
+				     st->streams[chn].fs_chn, &st->streams[chn].fs_cfg);
+			RSS_HAL_CALL(st->ops, fs_enable_channel, st->hal_ctx,
+				     st->streams[chn].fs_chn);
+			RSS_HAL_CALL(st->ops, fs_set_frame_depth, st->hal_ctx,
+				     st->streams[chn].fs_chn, 1);
+
+			rss_frame_info_t info = {0};
+			void *frame = NULL;
+			int gret = RSS_HAL_CALL(st->ops, fs_get_frame, st->hal_ctx,
+						st->streams[chn].fs_chn, &frame, &info);
+			int wret = -1;
+			if (gret == 0 && frame && info.virt_addr && info.size) {
+				char tmp[272];
+				snprintf(tmp, sizeof(tmp), "%s.tmp", file);
+				int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+				if (fd >= 0) {
+					if (write(fd, info.virt_addr, info.size) ==
+					    (ssize_t)info.size)
+						wret = 0;
+					close(fd);
+				}
+				if (wret == 0 && rename(tmp, file) != 0)
+					wret = -1;
+				if (wret != 0)
+					unlink(tmp);
+				RSS_HAL_CALL(st->ops, fs_release_frame, st->hal_ctx,
+					     st->streams[chn].fs_chn, frame);
+			}
+
+			RSS_HAL_CALL(st->ops, fs_set_frame_depth, st->hal_ctx,
+				     st->streams[chn].fs_chn, 0);
+			RSS_HAL_CALL(st->ops, fs_disable_channel, st->hal_ctx,
+				     st->streams[chn].fs_chn);
+			st->streams[chn].fs_cfg.pixfmt = old_fmt;
+
+			/* The old-SDK VBM pool does not survive an in-place
+			 * RAW cycle: any surgical restore leaves the encoder
+			 * emitting truncated NALs. Schedule a full pipeline
+			 * reinit; the frame loop runs it after this response
+			 * is flushed (a few seconds of stream outage). */
+			atomic_store(&st->pending_pipeline_reinit, true);
+
+			if (gret != 0 || wret != 0)
+				return rss_ctrl_resp_error(resp, resp_size,
+							   gret != 0 ? "raw grab failed"
+								     : strerror(errno));
+
+			RSS_INFO("save: %s (%u bytes, bayer %ux%u)", file, info.size, info.width,
+				 info.height);
+			cJSON *r = cJSON_CreateObject();
+			if (!r)
+				return rss_ctrl_resp_error(resp, resp_size, "out of memory");
+			cJSON_AddStringToObject(r, "status", "ok");
+			cJSON_AddStringToObject(r, "file", file);
+			cJSON_AddStringToObject(r, "format", "bayer");
+			cJSON_AddStringToObject(r, "pixfmt", "bayer-bg12-16le");
+			cJSON_AddNumberToObject(r, "width", info.width);
+			cJSON_AddNumberToObject(r, "height", info.height);
+			cJSON_AddNumberToObject(r, "bytes", (double)info.size);
+			cJSON_AddBoolToObject(r, "stream_restart", 1);
+			return rss_ctrl_resp_json(resp, resp_size, r);
+#else
+			/* Kernel road: tx-isp VIC snapraw into the ispmem
+			 * reserve. Pipeline must be streaming. */
+			char found[280];
+			int gret = bayer_snapraw_grab(found, sizeof(found));
+			if (gret == -ENOENT)
+				return rss_ctrl_resp_error(
+					resp, resp_size,
+					"no kernel raw-dump node on this platform");
+			if (gret == -EPERM)
+				return rss_ctrl_resp_error(
+					resp, resp_size,
+					"snapraw rejected (pipeline not streaming?)");
+			if (gret != 0)
+				return rss_ctrl_resp_error(
+					resp, resp_size,
+					"no raw produced within 3s (ispmem= bootarg "
+					"reserved?)");
+			if (bayer_move(found, file) != 0)
+				return rss_ctrl_resp_error(resp, resp_size, strerror(errno));
+			struct stat sb;
+			long bytes = (stat(file, &sb) == 0) ? (long)sb.st_size : 0;
+			int sw = 0, sh = 0;
+			bayer_sensor_dims(&sw, &sh);
+			RSS_INFO("save: %s (%ld bytes, bayer %dx%d)", file, bytes, sw, sh);
+			cJSON *r = cJSON_CreateObject();
+			if (!r)
+				return rss_ctrl_resp_error(resp, resp_size, "out of memory");
+			cJSON_AddStringToObject(r, "status", "ok");
+			cJSON_AddStringToObject(r, "file", file);
+			cJSON_AddStringToObject(r, "format", "bayer");
+			cJSON_AddStringToObject(r, "pixfmt", "bayer16");
+			if (sw && sh) {
+				cJSON_AddNumberToObject(r, "width", sw);
+				cJSON_AddNumberToObject(r, "height", sh);
+			}
+			cJSON_AddNumberToObject(r, "bytes", (double)bytes);
+			return rss_ctrl_resp_json(resp, resp_size, r);
+#endif
+		}
 
 		if (want_raw) {
 			/* raw = NV12 from the framesource. SnapFrame is unreliable on
@@ -1617,8 +1869,9 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 				rss_ring_slot_t meta;
 				if (rss_ring_read(ring, &read_seq, buf, buf_size, &len, &meta) != 0)
 					continue;
-				if (len >= 4 && buf[0] == 0xFF && buf[1] == 0xD8 &&
-				    buf[len - 2] == 0xFF && buf[len - 1] == 0xD9) {
+				/* SOI only: a torn frame loses its head, and gen3
+				 * encoders emit no trailing EOI at all. */
+				if (len >= 4 && buf[0] == 0xFF && buf[1] == 0xD8) {
 					got = true;
 					break;
 				}
