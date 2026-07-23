@@ -158,6 +158,7 @@ Runtime changes via `raptorctl`:
 ```sh
 raptorctl status                      # show running daemons
 raptorctl rvd set-bitrate 0 2000000   # change encoder bitrate at runtime
+raptorctl rvd save jpeg /tmp/snap.jpg # one-shot snapshot (also: raw = NV12, bayer = sensor RAW)
 raptorctl config save                 # persist running config to disk
 raptorctl rvd                         # show all RVD commands
 ```
