@@ -10,20 +10,25 @@ set -e
 
 platform="$1"
 br_output="$2"
-shift 2 2>/dev/null || true
+if [ $# -ge 2 ]; then
+    shift 2
+fi
 
 case "$platform" in
+    t10|T10) PLATFORM=T10 ;;
     t20|T20) PLATFORM=T20 ;;
     t21|T21) PLATFORM=T21 ;;
     t23|T23) PLATFORM=T23 ;;
     t30|T30) PLATFORM=T30 ;;
     t31|T31) PLATFORM=T31 ;;
     t32|T32) PLATFORM=T32 ;;
+    t33|T33) PLATFORM=T33 ;;
     t40|T40) PLATFORM=T40 ;;
     t41|T41) PLATFORM=T41 ;;
+    a1|A1)   PLATFORM=A1 ;;
     *)
         echo "Usage: $0 <platform> <br_output> [target...]"
-        echo "Platforms: t20 t21 t23 t30 t31 t32 t40 t41"
+        echo "Platforms: t10 t20 t21 t23 t30 t31 t32 t33 t40 t41 a1"
         echo ""
         echo "  <br_output> is the buildroot output directory containing"
         echo "  host/ with the cross-compiler and sysroot."

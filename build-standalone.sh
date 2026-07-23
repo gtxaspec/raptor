@@ -6,7 +6,7 @@
 # First run takes a few minutes (downloads). Subsequent runs are fast.
 #
 # Usage: ./build-standalone.sh <platform> [options]
-#   platform: t20, t21, t23, t30, t31, t32, t40, t41
+#   platform: t10, t20, t21, t23, t30, t31, t32, t33, t40, t41, a1
 #
 # Options:
 #   --no-tls       Disable TLS (no RTSPS/WebRTC)
@@ -144,7 +144,7 @@ JOBS="${JOBS:-$(nproc)}"
 
 usage() {
     echo "Usage: $0 <platform> [options]"
-    echo "  platform: t20, t21, t23, t30, t31, t32, t40, t41, a1"
+    echo "  platform: t10, t20, t21, t23, t30, t31, t32, t33, t40, t41, a1"
     echo ""
     echo "Options:"
     echo "  --no-tls       Disable TLS/WebRTC"
