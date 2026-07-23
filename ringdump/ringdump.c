@@ -6,8 +6,9 @@
  *   ringdump <ring> -f        Follow mode: print per-frame metadata
  *   ringdump <ring> -d        Dump raw Annex B to stdout (pipe to ffprobe)
  *   ringdump <ring> -f -n 10  Follow mode, stop after 10 frames
+ *   ringdump jpeg0 -d -n 1 -s > snap.jpg   Save one fresh JPEG
  *
- * Ring names: main, sub, audio
+ * Ring names: main, sub, audio, jpeg0, jpeg1, ...
  */
 
 #include <stdio.h>
@@ -117,17 +118,19 @@ static void usage(const char *prog)
 		"  -f          Follow mode (print each frame)\n"
 		"  -d          Dump raw frame data to stdout\n"
 		"  -l          Latency mode (measure pipeline latency)\n"
+		"  -s          Start at the newest frame (skip ring history)\n"
 		"  -n <count>  Stop after <count> frames\n"
 		"  -h          Show this help\n"
 		"\n"
-		"Ring names: main, sub, audio\n"
+		"Ring names: main, sub, audio, jpeg0, jpeg1, ...\n"
 		"\n"
 		"Examples:\n"
 		"  %s main              Show ring header\n"
 		"  %s main -f           Follow frames\n"
 		"  %s main -l           Measure latency\n"
-		"  %s main -d | ffprobe -i -   Analyze stream\n",
-		prog, prog, prog, prog, prog);
+		"  %s main -d | ffprobe -i -   Analyze stream\n"
+		"  %s jpeg0 -d -n 1 -s > snap.jpg   Save one fresh JPEG\n",
+		prog, prog, prog, prog, prog, prog);
 }
 
 int main(int argc, char **argv)
@@ -147,11 +150,12 @@ int main(int argc, char **argv)
 	bool follow = false;
 	bool dump_raw = false;
 	bool latency_mode = false;
+	bool start_newest = false;
 	int max_frames = 0;
 
 	int opt;
 	optind = 2; /* skip ring name */
-	while ((opt = getopt(argc, argv, "fdln:h")) != -1) {
+	while ((opt = getopt(argc, argv, "fdlsn:h")) != -1) {
 		switch (opt) {
 		case 'f':
 			follow = true;
@@ -162,6 +166,9 @@ int main(int argc, char **argv)
 		case 'l':
 			latency_mode = true;
 			follow = true;
+			break;
+		case 's':
+			start_newest = true;
 			break;
 		case 'n':
 			max_frames = (int)strtol(optarg, NULL, 10);
@@ -207,6 +214,15 @@ int main(int argc, char **argv)
 
 	uint64_t read_seq = 0;
 	uint64_t frame_count = 0;
+
+	/* Snapshot mode: skip history, wait for the next complete frame.
+	 * Attaching at the oldest slot on small demand-throttled JPEG
+	 * rings reads data the producer is about to reclaim, yielding a
+	 * torn first frame (rhd guards its reads the same way). */
+	if (start_newest) {
+		const rss_ring_header_t *hdr = rss_ring_get_header(ring);
+		read_seq = atomic_load(&((rss_ring_header_t *)hdr)->write_seq);
+	}
 	int64_t first_ts = 0;
 	int64_t last_ts = 0;
 	uint64_t total_bytes = 0;
@@ -217,6 +233,7 @@ int main(int argc, char **argv)
 	int64_t lat_min = INT64_MAX, lat_max = 0, lat_sum = 0;
 	uint64_t lat_count = 0;
 
+	uint32_t ring_codec = rss_ring_get_header(ring)->codec;
 	uint32_t buf_size = rss_ring_max_frame_size(ring);
 	uint8_t *frame_buf = malloc(buf_size);
 	if (!frame_buf) {
@@ -265,6 +282,18 @@ int main(int argc, char **argv)
 				"#%-6" PRIu64 " lat=%+" PRId64 "us (%+.1fms) len=%-8u key=%u\n",
 				frame_count, lat, (double)lat / 1000.0, length, meta.is_key);
 		} else if (dump_raw) {
+			/* JPEG rings: drop torn frames instead of emitting them.
+			 * The data region recycles ahead of the slot ring when
+			 * frames are large relative to it, and the slot-seq
+			 * recheck cannot see that (rhd guards the same way). */
+			if (ring_codec == 2 /* rss_codec_t JPEG */ &&
+			    (length < 4 || frame_buf[0] != 0xFF || frame_buf[1] != 0xD8 ||
+			     frame_buf[length - 2] != 0xFF || frame_buf[length - 1] != 0xD9)) {
+				fprintf(stderr,
+					"[TORN] skipped invalid JPEG frame (seq=%" PRIu64 ")\n",
+					meta.seq);
+				continue;
+			}
 			fwrite(frame_buf, 1, length, stdout);
 			fflush(stdout);
 		} else {
