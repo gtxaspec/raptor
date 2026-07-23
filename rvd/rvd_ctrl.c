@@ -13,6 +13,8 @@
 #include <limits.h>
 #include <inttypes.h>
 #include <stdatomic.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include "rvd.h"
 
@@ -1510,6 +1512,95 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, "height", h);
 		RSS_INFO("set-resolution: channel %d → %dx%d complete", chn, w, h);
 		return rss_ctrl_resp_ok(resp, resp_size);
+	}
+
+	if (strcmp(cmd, "save") == 0) {
+		char format[16] = "";
+		char file[256] = "";
+		int jpeg_ch = 0;
+		rss_json_get_str(cmd_json, "format", format, sizeof(format));
+		rss_json_get_str(cmd_json, "file", file, sizeof(file));
+		rss_json_get_int(cmd_json, "channel", &jpeg_ch);
+		if (!format[0] || !file[0])
+			return rss_ctrl_resp_error(resp, resp_size, "need format and file");
+		/* Format is the extension point: raw (IMP framesource) and
+		 * transcoded outputs can slot in beside jpeg later. */
+		if (strcmp(format, "jpeg") != 0)
+			return rss_ctrl_resp_error(resp, resp_size,
+						   "unsupported format (supported: jpeg)");
+		if (file[0] != '/')
+			return rss_ctrl_resp_error(resp, resp_size,
+						   "file must be an absolute path");
+		if (jpeg_ch < 0 || jpeg_ch >= RVD_MAX_JPEG)
+			return rss_ctrl_resp_error(resp, resp_size, "bad jpeg channel");
+
+		char ring_name[24];
+		snprintf(ring_name, sizeof(ring_name), "jpeg%d", jpeg_ch);
+		rss_ring_t *ring = rss_ring_open(ring_name);
+		if (!ring)
+			return rss_ctrl_resp_error(resp, resp_size,
+						   "jpeg ring not available (jpeg disabled?)");
+		/* Attach as a real consumer: the demand loop starts the JPEG
+		 * encoder on reader_count, exactly as for rhd. Skip history --
+		 * small jpeg rings recycle their data region ahead of the slot
+		 * ring, so only a frame written after attach is trustworthy
+		 * (and it still gets the SOI/EOI check below). */
+		rss_ring_acquire(ring);
+		uint64_t read_seq =
+			atomic_load(&((rss_ring_header_t *)rss_ring_get_header(ring))->write_seq);
+
+		uint32_t buf_size = rss_ring_max_frame_size(ring);
+		uint8_t *buf = malloc(buf_size);
+		uint32_t len = 0;
+		bool got = false;
+		if (buf) {
+			for (int waited = 0; waited < 3000; waited += 200) {
+				if (rss_ring_wait(ring, 200) != 0)
+					continue;
+				rss_ring_slot_t meta;
+				if (rss_ring_read(ring, &read_seq, buf, buf_size, &len, &meta) != 0)
+					continue;
+				if (len >= 4 && buf[0] == 0xFF && buf[1] == 0xD8 &&
+				    buf[len - 2] == 0xFF && buf[len - 1] == 0xD9) {
+					got = true;
+					break;
+				}
+			}
+		}
+		rss_ring_release(ring);
+		rss_ring_close(ring);
+		if (!buf)
+			return rss_ctrl_resp_error(resp, resp_size, "out of memory");
+		if (!got) {
+			free(buf);
+			return rss_ctrl_resp_error(resp, resp_size,
+						   "no complete jpeg frame within 3s");
+		}
+
+		/* Write via temp + rename so watchers never see a partial file */
+		char tmp[272];
+		snprintf(tmp, sizeof(tmp), "%s.tmp", file);
+		int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+		ssize_t wr = -1;
+		if (fd >= 0) {
+			wr = write(fd, buf, len);
+			close(fd);
+		}
+		free(buf);
+		if (fd < 0 || wr != (ssize_t)len || rename(tmp, file) != 0) {
+			unlink(tmp);
+			return rss_ctrl_resp_error(resp, resp_size, strerror(errno));
+		}
+
+		RSS_INFO("save: %s (%u bytes, %s)", file, len, format);
+		cJSON *r = cJSON_CreateObject();
+		if (!r)
+			return rss_ctrl_resp_error(resp, resp_size, "out of memory");
+		cJSON_AddStringToObject(r, "status", "ok");
+		cJSON_AddStringToObject(r, "file", file);
+		cJSON_AddStringToObject(r, "format", format);
+		cJSON_AddNumberToObject(r, "bytes", (double)len);
+		return rss_ctrl_resp_json(resp, resp_size, r);
 	}
 
 	if (strcmp(cmd, "set-jpeg-quality") == 0) {

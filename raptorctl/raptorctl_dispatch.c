@@ -99,6 +99,9 @@ static const struct cmd_arg args_enc_crop[] = {{"channel", A_INT}, {"enable", A_
 static const struct cmd_arg args_resolution[] = {
 	{"channel", A_INT}, {"width", A_INT}, {"height", A_INT}, {NULL, A_END}};
 
+static const struct cmd_arg args_save[] = {
+	{"format", A_STR}, {"file", A_STR}, {"channel", A_INT}, {NULL, A_END}};
+
 static const struct cmd_arg args_ns[] = {{"value", A_INT}, {"level", A_INT}, {NULL, A_END}};
 
 static const struct cmd_arg args_agc[] = {
@@ -193,6 +196,7 @@ static const struct cmd_def cmd_table[] = {
 	{"stream-restart", NULL, 1, args_ch},
 	{"set-resolution", NULL, 3, args_resolution},
 	{"set-jpeg-quality", NULL, 2, args_ch_val},
+	{"save", NULL, 2, args_save},
 	{"set-rc-mode", NULL, 2, args_rc_mode},
 
 	/* Audio */

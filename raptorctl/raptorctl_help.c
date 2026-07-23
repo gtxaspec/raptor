@@ -65,6 +65,7 @@ const struct help_entry help_entries[] = {
 	{"rvd", "set-codec <ch> <h264|h265>          Change codec (requires restart)"},
 	{"rvd", "set-resolution <ch> <w> <h>         Change resolution (requires restart)"},
 	{"rvd", "set-jpeg-quality <jpeg_ch> <1-100>    Change JPEG quality (restarts channel)"},
+	{"rvd", "save <format> <file> [jpeg_ch]       Save a snapshot to a file (formats: jpeg)"},
 	{"rvd", "request-pskip <ch>                  Request P-skip"},
 	{"rvd", "request-gdr <ch> <frames>           Request GDR"},
 	{"rvd", "set-brightness <val>                ISP brightness (0-255)"},
