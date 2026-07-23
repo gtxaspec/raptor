@@ -456,6 +456,7 @@ void *rsd_video_reader_thread(void *arg)
 			if (rctx->frame_buf_size < max_frame) {
 				uint8_t *new_buf = malloc(max_frame);
 				if (!new_buf) {
+					rss_ring_release(rctx->ring);
 					rss_ring_close(rctx->ring);
 					rctx->ring = NULL;
 					rctx->frame_buf_size = 0;
@@ -465,6 +466,10 @@ void *rsd_video_reader_thread(void *arg)
 				rctx->frame_buf = new_buf;
 				rctx->frame_buf_size = max_frame;
 			}
+			/* Register as a consumer: demand-driven producers
+			 * (rvd's jpeg pulse) only encode while the ring has
+			 * acquired readers; open() alone is invisible to them. */
+			rss_ring_acquire(rctx->ring);
 			rctx->read_seq = 0;
 			last_write_seq = 0;
 			idle_count = 0;
@@ -524,10 +529,28 @@ void *rsd_video_reader_thread(void *arg)
 			last_write_seq = ws;
 
 			if (idle_count >= 20) {
-				RSS_DEBUG("video reader[%d] idle, closing ring (%s)", stream_idx,
-					  rctx->ring_name);
-				rss_ring_close(rctx->ring);
-				rctx->ring = NULL;
+				/* Keep the ring open while any client is playing
+				 * this stream: rvd's jpeg encoder publishes only
+				 * while the ring has readers (demand pulse), so
+				 * idle-closing here starves a live client (rvd
+				 * waits for readers, we wait for writes). */
+				bool have_clients = false;
+				pthread_mutex_lock(&srv->clients_lock);
+				for (int i = 0; i < srv->client_count; i++) {
+					rsd_client_t *c = srv->clients[i];
+					if (c && c->stream_idx == stream_idx && c->video.playing) {
+						have_clients = true;
+						break;
+					}
+				}
+				pthread_mutex_unlock(&srv->clients_lock);
+				if (!have_clients) {
+					RSS_DEBUG("video reader[%d] idle, closing ring (%s)",
+						  stream_idx, rctx->ring_name);
+					rss_ring_release(rctx->ring);
+					rss_ring_close(rctx->ring);
+					rctx->ring = NULL;
+				}
 				idle_count = 0;
 			}
 			continue;
@@ -569,6 +592,7 @@ void *rsd_video_reader_thread(void *arg)
 					RSS_WARN("video[%d] ring incarnation changed, "
 						 "reopening (%s)",
 						 stream_idx, rctx->ring_name);
+					rss_ring_release(rctx->ring);
 					rss_ring_close(rctx->ring);
 					rctx->ring = NULL;
 					break;
