@@ -91,6 +91,18 @@ typedef struct {
 	pthread_mutex_t lock;
 	pthread_cond_t cond;
 	bool shutdown;
+	/*
+	 * Discard accounting. One queue carries both streams, audio pushes at
+	 * 50/s against video's 30/s, and a single video entry can hold the send
+	 * thread for the length of an IDR's worth of blocking writes -- so
+	 * RSD_SENDQ_SLOTS is only about 100ms of stream and a slow client
+	 * overflows it. Without these counters an overflow is indistinguishable
+	 * from a capture fault, which is exactly the confusion that cost a
+	 * round of board testing on the audio dropouts.
+	 */
+	uint32_t drop_audio; /* audio entries discarded to overflow */
+	uint32_t drop_video; /* video entries discarded to overflow */
+	uint32_t overflows;  /* times the queue was full on push */
 } rsd_sendq_t;
 
 /* Per-client state */
