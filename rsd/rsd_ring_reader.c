@@ -135,15 +135,53 @@ void rsd_sendq_destroy(rsd_sendq_t *q)
 	pthread_mutex_destroy(&q->lock);
 }
 
+/* Only reached from the video overflow path, so the discards are accounted
+ * here rather than at the call site. */
 static void sendq_flush_locked(rsd_sendq_t *q)
 {
 	while (q->count > 0) {
+		if (q->entries[q->tail].type == RSD_FRAME_AUDIO)
+			q->drop_audio++;
+		else
+			q->drop_video++;
 		sendq_release_entry(&q->entries[q->tail]);
 		q->tail = (q->tail + 1) % RSD_SENDQ_SLOTS;
 		q->count--;
 	}
 	q->head = 0;
 	q->tail = 0;
+}
+
+/*
+ * Remove the oldest audio entry from the queue, wherever it sits, and hand
+ * ownership of it to the caller. Caller holds q->lock.
+ *
+ * Audio is not necessarily at the tail, so taking it means closing the gap
+ * behind it. Shared by the two callers that need an audio entry out of the
+ * middle of the queue: the interleaved drain, which sends it, and the overflow
+ * path, which discards it.
+ */
+static bool sendq_take_audio_locked(rsd_sendq_t *q, rsd_sendq_entry_t *out)
+{
+	for (int i = 0; i < q->count; i++) {
+		int idx = (q->tail + i) % RSD_SENDQ_SLOTS;
+		if (q->entries[idx].type != RSD_FRAME_AUDIO)
+			continue;
+
+		*out = q->entries[idx];
+		q->entries[idx].data = NULL;
+		/* Shift the entries behind it forward to fill the gap */
+		for (int j = i; j > 0; j--) {
+			int dst = (q->tail + j) % RSD_SENDQ_SLOTS;
+			int src = (q->tail + j - 1) % RSD_SENDQ_SLOTS;
+			q->entries[dst] = q->entries[src];
+		}
+		q->entries[q->tail].data = NULL;
+		q->tail = (q->tail + 1) % RSD_SENDQ_SLOTS;
+		q->count--;
+		return true;
+	}
+	return false;
 }
 
 /*
@@ -210,6 +248,7 @@ static int rsd_sendq_push_video(rsd_sendq_t *q, const uint8_t *data, uint32_t le
 
 	bool dropped = false;
 	if (q->count >= RSD_SENDQ_SLOTS) {
+		q->overflows++;
 		sendq_flush_locked(q);
 		dropped = true;
 	}
@@ -244,8 +283,35 @@ static int rsd_sendq_push_audio(rsd_sendq_t *q, uint32_t codec, const uint8_t *d
 		return -1;
 	}
 
+	/*
+	 * Overflow used to flush the whole queue. That is a defensible video
+	 * policy -- a decoder that has lost frames wants the next IDR, not the
+	 * frames in between -- and the wrong one for audio, where every chunk
+	 * is independently useful: it discards up to RSD_SENDQ_SLOTS entries,
+	 * a ~100ms hole in the sound, to make room for 20ms of it. Worse, it
+	 * takes the queued video with it.
+	 *
+	 * Drop the oldest audio chunk instead. That bounds the loss at one
+	 * chunk per overflow and never touches video, so a slow client costs
+	 * a click rather than a dropout plus a decode artifact. If the queue
+	 * holds no audio at all, video is backed up badly enough that this
+	 * frame has nowhere to go; drop the incoming one rather than start
+	 * evicting video behind the send thread's back.
+	 */
 	if (q->count >= RSD_SENDQ_SLOTS) {
-		sendq_flush_locked(q);
+		rsd_sendq_entry_t victim;
+
+		q->overflows++;
+		q->drop_audio++;
+		if (!sendq_take_audio_locked(q, &victim)) {
+			pthread_mutex_unlock(&q->lock);
+			free(copy);
+			return RSD_SENDQ_DROPPED;
+		}
+		/* Freed under the lock, as sendq_flush_locked does: releasing it
+		 * to free() would let another push refill the queue before the
+		 * slot below is written. */
+		sendq_release_entry(&victim);
 	}
 
 	rsd_sendq_entry_t *slot = &q->entries[q->head];
@@ -270,28 +336,10 @@ static void sendq_drain_audio(rsd_client_t *c)
 {
 	rsd_sendq_t *q = &c->sendq;
 	rsd_sendq_entry_t audio;
-	bool got = false;
+	bool got;
 
 	pthread_mutex_lock(&q->lock);
-	/* Scan for the first audio entry (may not be at the tail) */
-	for (int i = 0; i < q->count; i++) {
-		int idx = (q->tail + i) % RSD_SENDQ_SLOTS;
-		if (q->entries[idx].type == RSD_FRAME_AUDIO) {
-			audio = q->entries[idx];
-			q->entries[idx].data = NULL;
-			/* Shift remaining entries to fill the gap */
-			for (int j = i; j > 0; j--) {
-				int dst = (q->tail + j) % RSD_SENDQ_SLOTS;
-				int src = (q->tail + j - 1) % RSD_SENDQ_SLOTS;
-				q->entries[dst] = q->entries[src];
-			}
-			q->entries[q->tail].data = NULL;
-			q->tail = (q->tail + 1) % RSD_SENDQ_SLOTS;
-			q->count--;
-			got = true;
-			break;
-		}
-	}
+	got = sendq_take_audio_locked(q, &audio);
 	pthread_mutex_unlock(&q->lock);
 
 	if (got) {
@@ -785,6 +833,7 @@ void *rsd_audio_reader_thread(void *arg)
 	bool has_last_audio_rtp_ts = false;
 	uint64_t last_write_seq = 0;
 	int idle_count = 0;
+	int64_t last_drop_report = rss_timestamp_us();
 
 	/* Initialize codec from pre-opened ring (server opens it before
 	 * spawning this thread).  Without this, audio_codec stays 0 and
@@ -961,6 +1010,39 @@ void *rsd_audio_reader_thread(void *arg)
 				uint32_t client_ts = rtp_ts - c->audio_ts_offset + c->audio_ts_rand;
 				rsd_sendq_push_audio(&c->sendq, audio_codec, audio_buf, length,
 						     client_ts);
+			}
+			pthread_mutex_unlock(&srv->clients_lock);
+		}
+
+		/*
+		 * Report send-queue discards. A client that cannot keep up loses
+		 * audio here, downstream of capture, and until this was counted
+		 * the symptom was indistinguishable at the log from the SDK
+		 * losing periods -- which is what sent the first round of
+		 * dropout debugging to the wrong half of the pipeline. Reported
+		 * only when non-zero, so a healthy stream stays silent.
+		 */
+		int64_t drop_now = rss_timestamp_us();
+		if (drop_now - last_drop_report >= 30000000) {
+			last_drop_report = drop_now;
+			pthread_mutex_lock(&srv->clients_lock);
+			for (int i = 0; i < srv->client_count; i++) {
+				rsd_client_t *c = srv->clients[i];
+				if (!c)
+					continue;
+				pthread_mutex_lock(&c->sendq.lock);
+				uint32_t ov = c->sendq.overflows;
+				uint32_t da = c->sendq.drop_audio;
+				uint32_t dv = c->sendq.drop_video;
+				c->sendq.overflows = 0;
+				c->sendq.drop_audio = 0;
+				c->sendq.drop_video = 0;
+				pthread_mutex_unlock(&c->sendq.lock);
+				if (ov)
+					RSS_WARN("client %d sendq overflowed %u time(s): dropped "
+						 "%u audio, %u video -- the client is not draining "
+						 "fast enough",
+						 i, ov, da, dv);
 			}
 			pthread_mutex_unlock(&srv->clients_lock);
 		}
