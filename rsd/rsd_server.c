@@ -427,29 +427,28 @@ int rsd_server_init(rsd_server_t *srv)
 		}
 	}
 
-	/* Create dual-stack IPv6 listen socket */
-	srv->listen_fd = socket(AF_INET6, SOCK_STREAM, 0);
+	/* Listen socket: dual-stack IPv6 where the kernel has IPv6, IPv4-only
+	 * where it does not. The stages stay open-coded rather than calling
+	 * rss_listen_tcp() so a failure still says which step failed — bind
+	 * losing to EADDRINUSE is the common one and worth naming. */
+	int family = AF_INET6;
+	srv->listen_fd = rss_socket_tcp(&family);
 	if (srv->listen_fd < 0) {
 		RSS_FATAL("socket failed: %s", strerror(errno));
 		return -1;
 	}
+	if (family == AF_INET)
+		RSS_INFO("kernel has no IPv6; listening on IPv4 only");
 
 	int one = 1;
 	setsockopt(srv->listen_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
 
-	/* Dual-stack: accept both IPv4 and IPv6 */
-	int zero = 0;
-	setsockopt(srv->listen_fd, IPPROTO_IPV6, IPV6_V6ONLY, &zero, sizeof(zero));
-
 	rss_set_nonblocking(srv->listen_fd);
 
-	struct sockaddr_in6 addr = {
-		.sin6_family = AF_INET6,
-		.sin6_port = htons(srv->port),
-		.sin6_addr = in6addr_any,
-	};
+	struct sockaddr_storage addr;
+	socklen_t addrlen = rss_sockaddr_any(family, (uint16_t)srv->port, &addr);
 
-	if (bind(srv->listen_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+	if (bind(srv->listen_fd, (struct sockaddr *)&addr, addrlen) < 0) {
 		RSS_FATAL("bind port %d failed: %s", srv->port, strerror(errno));
 		close(srv->listen_fd);
 		return -1;
