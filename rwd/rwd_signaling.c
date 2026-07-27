@@ -69,7 +69,7 @@ static void http_send(int fd, const char *status, const char *content_type, cons
 				  headers protect against unauthorized access. */
 			       "Access-Control-Allow-Origin: *\r\n"
 			       "Access-Control-Allow-Methods: POST, DELETE, OPTIONS\r\n"
-			       "Access-Control-Allow-Headers: Content-Type\r\n"
+			       "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
 			       "%s"
 			       "Connection: close\r\n"
 			       "\r\n",
@@ -228,7 +228,16 @@ static void handle_whip_post(rwd_server_t *srv, int fd, const char *body, size_t
 	rwd_client_t *c =
 		rwd_client_from_offer(srv, body, stream_idx, sdp_answer, sizeof(sdp_answer));
 	if (!c) {
-		http_error(fd, "400 Bad Request");
+		/*
+		 * Distinguish our failure from the caller's. Having no local
+		 * address to put in the answer is a server fault even when the
+		 * offer is perfectly good, and reporting it as 400 sends whoever
+		 * is debugging off to inspect their own SDP.
+		 */
+		if (srv->local_ip[0] == '\0')
+			http_error(fd, "500 Internal Server Error");
+		else
+			http_error(fd, "400 Bad Request");
 		return;
 	}
 
