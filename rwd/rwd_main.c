@@ -22,6 +22,8 @@
 #include <sys/epoll.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 
 #include <mbedtls/md.h>
 
@@ -58,6 +60,69 @@ int rwd_random_bytes(uint8_t *buf, size_t len)
 		return -1;
 	ssize_t n = read(urandom_fd, buf, len);
 	return n == (ssize_t)len ? 0 : -1;
+}
+
+/* Usable as an SDP connection address: not loopback, and not an address a
+ * peer cannot route to. IPv6 link-local is excluded because it is meaningless
+ * in SDP without a scope identifier (RFC 4007). */
+static int addr_is_usable(const struct sockaddr *sa)
+{
+	if (sa->sa_family == AF_INET) {
+		uint32_t v4 = ntohl(((const struct sockaddr_in *)sa)->sin_addr.s_addr);
+		if ((v4 >> 24) == 127)			/* 127.0.0.0/8   loopback */
+			return 0;
+		if ((v4 & 0xffff0000u) == 0xa9fe0000u)	/* 169.254.0.0/16 link-local */
+			return 0;
+		return 1;
+	}
+	if (sa->sa_family == AF_INET6) {
+		const struct in6_addr *a6 = &((const struct sockaddr_in6 *)sa)->sin6_addr;
+		if (IN6_IS_ADDR_LOOPBACK(a6) || IN6_IS_ADDR_LINKLOCAL(a6) ||
+		    IN6_IS_ADDR_SITELOCAL(a6) || IN6_IS_ADDR_UNSPECIFIED(a6))
+			return 0;
+		return 1;
+	}
+	return 0;
+}
+
+/* First usable address of the requested family on a carrier-up, non-loopback
+ * interface. IFF_RUNNING rather than IFF_UP: an administratively up interface
+ * with no carrier has no reachable address. */
+static int local_ip_from_ifaddrs(int family, char *buf, size_t buflen)
+{
+	struct ifaddrs *list = NULL;
+	struct ifaddrs *ifa;
+	int rc = -1;
+
+	if (getifaddrs(&list) != 0)
+		return -1;
+
+	for (ifa = list; ifa; ifa = ifa->ifa_next) {
+		const void *src;
+
+		if (!ifa->ifa_addr)
+			continue;
+		if (ifa->ifa_addr->sa_family != family)
+			continue;
+		if (ifa->ifa_flags & IFF_LOOPBACK)
+			continue;
+		if ((ifa->ifa_flags & (IFF_UP | IFF_RUNNING)) != (IFF_UP | IFF_RUNNING))
+			continue;
+		if (!addr_is_usable(ifa->ifa_addr))
+			continue;
+
+		src = (family == AF_INET6)
+			      ? (const void *)&((struct sockaddr_in6 *)ifa->ifa_addr)->sin6_addr
+			      : (const void *)&((struct sockaddr_in *)ifa->ifa_addr)->sin_addr;
+		if (!inet_ntop(family, src, buf, buflen))
+			continue;
+
+		rc = 0;
+		break;
+	}
+
+	freeifaddrs(list);
+	return rc;
 }
 
 /* ── Utility: auto-detect local IP address ── */
@@ -101,6 +166,24 @@ int rwd_get_local_ip(char *buf, size_t buflen)
 		}
 		close(fd);
 	}
+
+	/*
+	 * Both probes above need a route off the box. A camera serving its own
+	 * access point during provisioning has only a link-local route and no
+	 * gateway, so both connect() calls fail with ENETUNREACH and the SDP
+	 * would otherwise carry an empty address: "c=IN IP4 " and a candidate
+	 * line missing its address. Signalling completes and no media flows.
+	 *
+	 * Fall back to the first usable address on an up, non-loopback
+	 * interface. IPv6 is tried first to match the probes above and the
+	 * preference set in b920eb3; the media socket is dual-stack
+	 * (IPV6_V6ONLY off) and the SDP writer selects IP4/IP6 per address, so
+	 * either family is answerable.
+	 */
+	if (local_ip_from_ifaddrs(AF_INET6, buf, buflen) == 0)
+		return 0;
+	if (local_ip_from_ifaddrs(AF_INET, buf, buflen) == 0)
+		return 0;
 
 	return -1;
 }
