@@ -888,7 +888,9 @@ void *rwd_audio_reader_thread(void *arg)
 
 	uint32_t audio_codec = 0;
 	int sample_rate = 0;
-	uint8_t audio_profile = 0;
+#ifdef RAPTOR_AAC
+	uint8_t audio_profile = 0; /* ring header AAC object type; 5 = HE (SBR) */
+#endif
 	int64_t audio_ts_epoch = 0;
 	uint8_t audio_buf[4096];
 	uint8_t transcode_out[1024]; /* max Opus or PCMU frame output */
@@ -927,7 +929,9 @@ void *rwd_audio_reader_thread(void *arg)
 			const rss_ring_header_t *ahdr = rss_ring_get_header(srv->audio_ring);
 			audio_codec = ahdr->codec;
 			sample_rate = ahdr->fps_num;
+#ifdef RAPTOR_AAC
 			audio_profile = ahdr->profile;
+#endif
 			srv->audio_read_seq = ahdr->write_seq;
 			audio_ts_epoch = 0;
 			last_write_seq = 0;
