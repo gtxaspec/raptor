@@ -42,8 +42,10 @@ static void print_section_json(const char *section, const char *json_str)
 {
 	printf("[%s]\n", section);
 	cJSON *root = cJSON_Parse(json_str);
-	if (!root)
+	if (!root) {
+		fprintf(stderr, "(unparseable response for [%s], section omitted)\n", section);
 		return;
+	}
 	cJSON *keys_obj = cJSON_GetObjectItemCaseSensitive(root, "keys");
 	if (!keys_obj) {
 		cJSON_Delete(root);
@@ -103,8 +105,7 @@ int handle_config(int argc, char **argv)
 				char sock_path[64];
 				char resp[2048];
 				char cmd_json[256];
-				snprintf(sock_path, sizeof(sock_path), RSS_SOCK_FMT,
-					 target);
+				snprintf(sock_path, sizeof(sock_path), RSS_SOCK_FMT, target);
 				cJSON *j = jcmd("config-get");
 				if (!j)
 					return 1;
@@ -127,8 +128,7 @@ int handle_config(int argc, char **argv)
 				char sock_path[64];
 				char resp[2048];
 				char cmd_json[256];
-				snprintf(sock_path, sizeof(sock_path), RSS_SOCK_FMT,
-					 target);
+				snprintf(sock_path, sizeof(sock_path), RSS_SOCK_FMT, target);
 				cJSON *j = jcmd("config-get-section");
 				if (!j)
 					return 1;
