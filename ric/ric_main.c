@@ -85,31 +85,26 @@ static void load_config(ric_state_t *st)
  *   "ir850": 8          (IR LED GPIO)
  *   "ir940": 9          (IR LED GPIO, used if ir850 absent)
  *
- * This is one optional discovery source: raptor.conf's [ircut] section is
- * authoritative and is consulted first, and the file's absence is the normal
- * case on any image that is not thingino.  So a missing file stays silent --
- * warning about it on every boot of every OpenIPC camera would be noise.
+ * One optional discovery source: raptor.conf's [ircut] section is
+ * authoritative and is consulted first, and the file is absent on any image
+ * that is not thingino.  A missing file is therefore normal and stays silent.
  *
- * A file that exists but cannot be parsed is a different matter and does
- * warn.  It is a real fault, and from the outside it is indistinguishable
- * from the file being absent: the pins stay at -1, the >= 0 guards in
- * ric_daynight.c never fire, and the filter is simply never driven -- no
- * click, no log line, a magenta daylight cast, and nothing to grep for.
+ * A file that exists but will not parse does warn.  Failure here is otherwise
+ * invisible -- the pins stay at -1, the >= 0 guards in ric_daynight.c never
+ * fire, and the filter is never driven -- and so is indistinguishable from
+ * the file being absent unless the log says which one happened.  A file that
+ * parses and simply carries no "gpio" object is not a fault, and stays debug.
  */
 #define THINGINO_JSON "/etc/thingino.json"
 #define GPIO_PIN_MAX  191
 
 /*
- * Bound the read explicitly rather than by the size of some buffer.  This
- * was a fixed 2047-byte fread until 2026-07-28, which silently truncated
- * mid-structure on any larger file and handed cJSON a malformed document.
- * That is not a corner case on thingino: nothing there bounds the file and
- * several packages append to it independently (thingino-core seeds it,
- * thingino-agent and thingino-ha each import a block), so a stock image is
- * already over 2047 bytes before a camera-specific key is added -- 2727 on
- * the board this was found on.  On thingino this path had most likely never
- * worked; it only looked correct on OpenIPC, where the file is absent and
- * the early return is the right answer for the wrong reason.
+ * Bound the read explicitly rather than by the size of whatever buffer is at
+ * hand: a short read hands cJSON a document truncated mid-structure, which
+ * surfaces as a parse error and not as a size error.  Nothing bounds this
+ * file -- several thingino packages append to it independently -- so the cap
+ * is what limits how much gets handed to the parser, and no legitimate
+ * config comes close to it.
  */
 #define THINGINO_JSON_MAX (64 * 1024)
 
@@ -149,13 +144,14 @@ static void load_gpio_from_thingino_json(ric_config_t *c)
 		return;
 	}
 
+	/*
+	 * A short read is not special-cased: an empty or partial file is a fault
+	 * of the same kind as a malformed one, and letting it reach cJSON_Parse
+	 * means it reports through the same warning instead of returning silently.
+	 */
 	size_t n = fread(buf, 1, (size_t)sb.st_size, f);
 	fclose(f);
 	buf[n] = '\0';
-	if (n == 0) {
-		free(buf);
-		return;
-	}
 
 	/* cJSON copies what it keeps, so the buffer goes back either way. */
 	cJSON *root = cJSON_Parse(buf);
