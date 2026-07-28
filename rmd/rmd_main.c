@@ -83,6 +83,8 @@ static bool rmd_poll_motion(rmd_ctx_t *ctx)
 	if (root) {
 		motion = cJSON_IsTrue(cJSON_GetObjectItem(root, "motion"));
 		cJSON_Delete(root);
+	} else {
+		RSS_DEBUG("RVD motion response parse failed: %.80s", resp);
 	}
 	return motion;
 }
