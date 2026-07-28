@@ -1,4 +1,4 @@
-SRCS := ric_main.c ric_daynight.c ric_photo.c
+SRCS := ric_main.c ric_daynight.c ric_json.c ric_photo.c
 OBJS := $(SRCS:.c=.o)
 BIN  := ric
 

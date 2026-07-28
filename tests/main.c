@@ -1,5 +1,6 @@
 #include "greatest.h"
 
+extern SUITE(ric_json_suite);
 extern SUITE(nal_suite);
 extern SUITE(prebuf_suite);
 extern SUITE(mux_suite);
@@ -22,6 +23,7 @@ GREATEST_MAIN_DEFS();
 int main(int argc, char **argv)
 {
 	GREATEST_MAIN_BEGIN();
+	RUN_SUITE(ric_json_suite);
 	RUN_SUITE(nal_suite);
 	RUN_SUITE(prebuf_suite);
 	RUN_SUITE(mux_suite);

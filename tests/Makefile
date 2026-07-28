@@ -5,14 +5,14 @@ CC ?= gcc
 SAN ?= address
 
 CFLAGS = -Wall -Wextra -std=c11 -D_GNU_SOURCE -g -fsanitize=$(SAN) \
-         -I../rmr -I../rwd -I../rsp -I../rvd -I../../raptor-hal/include \
+         -I../rmr -I../ric -I../rwd -I../rsp -I../rvd -I../../raptor-hal/include \
          -I../../raptor-common/include -I../../raptor-common/third_party/monocypher \
          -I../../raptor-ipc/include -I.
 LDFLAGS = -fsanitize=$(SAN) -lpthread -lrt -lm
 
-TEST_SRCS = main.c test_nal.c test_prebuf.c test_mux.c test_codec.c test_sdp.c test_ring.c test_rsp.c \
+TEST_SRCS = main.c test_ric_json.c test_nal.c test_prebuf.c test_mux.c test_codec.c test_sdp.c test_ring.c test_rsp.c \
             test_ctrl.c test_sign.c test_storage.c
-LIB_SRCS = ../rmr/rmr_nal.c ../rmr/rmr_prebuf.c ../rmr/rmr_mux.c ../rmr/rmr_sign.c ../../raptor-common/src/rss_sign.c ../../raptor-common/src/rss_jpeg.c ../../raptor-common/src/rss_aac.c ../rmr/rmr_storage.c \
+LIB_SRCS = ../ric/ric_json.c ../rmr/rmr_nal.c ../rmr/rmr_prebuf.c ../rmr/rmr_mux.c ../rmr/rmr_sign.c ../../raptor-common/src/rss_sign.c ../../raptor-common/src/rss_jpeg.c ../../raptor-common/src/rss_aac.c ../rmr/rmr_storage.c \
            ../../raptor-common/src/rss_util.c ../../raptor-common/src/rss_log.c \
            ../../raptor-common/src/cJSON.c \
            ../../raptor-common/third_party/monocypher/monocypher.c \

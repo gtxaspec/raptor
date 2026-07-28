@@ -263,9 +263,10 @@ echo "  -> rsd"
 
 echo "=== RIC ==="
 $CC $CFLAGS -c "$RAPTOR_DIR/ric/ric_main.c" -o "$OUT/ric_main.o"
+$CC $CFLAGS -c "$RAPTOR_DIR/ric/ric_json.c" -o "$OUT/ric_json.o"
 $CC $CFLAGS -c "$RAPTOR_DIR/ric/ric_daynight.c" -o "$OUT/ric_daynight.o"
 $CC $CFLAGS -c "$RAPTOR_DIR/ric/ric_photo.c" -o "$OUT/ric_photo.o"
-$CC -o "$OUT/ric" "$OUT/ric_main.o" "$OUT/ric_daynight.o" "$OUT/ric_photo.o" $LIBS $LDFLAGS
+$CC -o "$OUT/ric" "$OUT/ric_main.o" "$OUT/ric_json.o" "$OUT/ric_daynight.o" "$OUT/ric_photo.o" $LIBS $LDFLAGS
 echo "  -> ric"
 
 echo "=== RMD ==="
