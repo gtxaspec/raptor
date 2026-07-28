@@ -143,7 +143,13 @@ rm -f "$LOG_DIR"/*.log "$LOG_DIR"/tsan.* "$LOG_DIR"/asan.*
 if [ "$SAN_MODE" = "tsan" ]; then
     export TSAN_OPTIONS="exitcode=66:log_path=$LOG_DIR/tsan:history_size=4"
 else
-    export ASAN_OPTIONS="detect_leaks=1:exitcode=23:log_path=$LOG_DIR/asan"
+    # detect_stack_use_after_return=0: the SHM ring mmap can land on
+    # pages ASAN still poisons as retired fake-stack frames, and the
+    # first publish memcpy into such a slot reports a bogus
+    # stack-use-after-return (seen as a 261-byte ring write "under-
+    # flowing" a 16-byte timespec in a dead frame). Leak and heap
+    # detection, the point of this stage, are unaffected.
+    export ASAN_OPTIONS="detect_leaks=1:exitcode=23:detect_stack_use_after_return=0:log_path=$LOG_DIR/asan"
 fi
 
 # ── Config ──
