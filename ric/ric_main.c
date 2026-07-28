@@ -14,6 +14,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/epoll.h>
+#include <sys/stat.h>
 
 #include "ric.h"
 
@@ -83,9 +84,34 @@ static void load_config(ric_state_t *st)
  *   "ircut": 57         (single GPIO as integer)
  *   "ir850": 8          (IR LED GPIO)
  *   "ir940": 9          (IR LED GPIO, used if ir850 absent)
+ *
+ * This is one optional discovery source: raptor.conf's [ircut] section is
+ * authoritative and is consulted first, and the file's absence is the normal
+ * case on any image that is not thingino.  So a missing file stays silent --
+ * warning about it on every boot of every OpenIPC camera would be noise.
+ *
+ * A file that exists but cannot be parsed is a different matter and does
+ * warn.  It is a real fault, and from the outside it is indistinguishable
+ * from the file being absent: the pins stay at -1, the >= 0 guards in
+ * ric_daynight.c never fire, and the filter is simply never driven -- no
+ * click, no log line, a magenta daylight cast, and nothing to grep for.
  */
 #define THINGINO_JSON "/etc/thingino.json"
 #define GPIO_PIN_MAX  191
+
+/*
+ * Bound the read explicitly rather than by the size of some buffer.  This
+ * was a fixed 2047-byte fread until 2026-07-28, which silently truncated
+ * mid-structure on any larger file and handed cJSON a malformed document.
+ * That is not a corner case on thingino: nothing there bounds the file and
+ * several packages append to it independently (thingino-core seeds it,
+ * thingino-agent and thingino-ha each import a block), so a stock image is
+ * already over 2047 bytes before a camera-specific key is added -- 2727 on
+ * the board this was found on.  On thingino this path had most likely never
+ * worked; it only looked correct on OpenIPC, where the file is absent and
+ * the early return is the right answer for the wrong reason.
+ */
+#define THINGINO_JSON_MAX (64 * 1024)
 
 static bool valid_gpio(int pin)
 {
@@ -101,19 +127,50 @@ static void load_gpio_from_thingino_json(ric_config_t *c)
 	if (!f)
 		return;
 
-	char buf[2048];
-	size_t n = fread(buf, 1, sizeof(buf) - 1, f);
-	fclose(f);
-	if (n == 0)
+	struct stat sb;
+	if (fstat(fileno(f), &sb) != 0 || !S_ISREG(sb.st_mode)) {
+		RSS_WARN("%s is not a readable regular file -- GPIO discovery skipped",
+			 THINGINO_JSON);
+		fclose(f);
 		return;
-	buf[n] = '\0';
+	}
 
-	cJSON *root = cJSON_Parse(buf);
-	if (!root)
+	if (sb.st_size > THINGINO_JSON_MAX) {
+		RSS_WARN("%s is %lld bytes, over the %d-byte limit -- GPIO discovery skipped",
+			 THINGINO_JSON, (long long)sb.st_size, THINGINO_JSON_MAX);
+		fclose(f);
 		return;
+	}
+
+	char *buf = malloc((size_t)sb.st_size + 1);
+	if (!buf) {
+		RSS_WARN("out of memory reading %s -- GPIO discovery skipped", THINGINO_JSON);
+		fclose(f);
+		return;
+	}
+
+	size_t n = fread(buf, 1, (size_t)sb.st_size, f);
+	fclose(f);
+	buf[n] = '\0';
+	if (n == 0) {
+		free(buf);
+		return;
+	}
+
+	/* cJSON copies what it keeps, so the buffer goes back either way. */
+	cJSON *root = cJSON_Parse(buf);
+	free(buf);
+	if (!root) {
+		RSS_WARN("%s exists but does not parse as JSON -- GPIO discovery skipped, "
+			 "IR-cut and IR LED pins stay unset unless [ircut] provides them",
+			 THINGINO_JSON);
+		return;
+	}
 
 	cJSON *gpio = cJSON_GetObjectItemCaseSensitive(root, "gpio");
 	if (!cJSON_IsObject(gpio)) {
+		/* Parsed fine, just has nothing for us: normal, so debug only. */
+		RSS_DEBUG("%s has no \"gpio\" object -- using [ircut] config only", THINGINO_JSON);
 		cJSON_Delete(root);
 		return;
 	}
