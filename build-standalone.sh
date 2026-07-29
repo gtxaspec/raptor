@@ -990,6 +990,11 @@ else
 fi
 [ "$OPT_RSD555" = 1 ] || LINK_LIVE555=""
 
+# --static-stdcxx must reach the daemon links too (rsr is C++ via
+# libsrt); the cmake flag above only covers libsrt's own artifacts.
+EXTRA_LDFLAGS=""
+[ "$OPT_STATIC_STDCXX" = 1 ] && EXTRA_LDFLAGS="-static-libstdc++ -static-libgcc"
+
 make -j"$JOBS" \
     PLATFORM="$PLATFORM_UPPER" \
     CROSS_COMPILE="$CROSS_COMPILE" \
@@ -1007,6 +1012,7 @@ make -j"$JOBS" \
     LIB_COMPY="$LINK_COMPY" \
     LIB_COMPY_FILE="$SYSROOT_DIR/usr/lib/libcompy.a" \
     COMPY_CFLAGS="$COMPY_CFLAGS" \
+    EXTRA_LDFLAGS="$EXTRA_LDFLAGS" \
     LIVE555_SYSROOT="$SYSROOT_DIR" \
     ${LINK_LIVE555:+LIVE555_LIBS="$LINK_LIVE555"} \
     EXTRA_CFLAGS="-I$SYSROOT_DIR/usr/include $([ "$OPT_RELEASE" = 1 ] && echo "-Oz -DNDEBUG")" \
