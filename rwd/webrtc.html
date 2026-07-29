@@ -57,7 +57,7 @@ async function start(){
   dbgSdp('Remote answer',sdp);
   await pc.setRemoteDescription({type:'answer',sdp});
   btn.textContent='Disconnect';document.getElementById('mute').style.display='';
-  if(sdp.includes('a=sendrecv')&&navigator.mediaDevices){dbg('backchannel audio available');document.getElementById('talk').style.display=''}
+  if(/a=(sendrecv|recvonly)/.test(sdp)&&navigator.mediaDevices){dbg('backchannel audio available');document.getElementById('talk').style.display=''}
   document.getElementById('stream').disabled=true;
 }
 async function stop(){

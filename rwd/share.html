@@ -333,7 +333,7 @@ async function start() {
     if (msg.answer?.sdp && pc) {
       dbgSdp('Remote answer', msg.answer.sdp);
       await pc.setRemoteDescription({ type: 'answer', sdp: msg.answer.sdp });
-      if (msg.answer.sdp.includes('a=sendrecv')) { dbg('backchannel audio available'); talkBtn.classList.remove('d-none'); }
+      if (/a=(sendrecv|recvonly)/.test(msg.answer.sdp)) { dbg('backchannel audio available'); talkBtn.classList.remove('d-none'); }
       setStatus('Connecting…', 'secondary', true);
     }
   };
