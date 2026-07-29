@@ -526,6 +526,7 @@ static void record_loop(rmr_state_t *st)
 	int video_idle = 0;
 	uint64_t last_audio_ws = 0;
 	int audio_idle = 0;
+	bool standby = false; /* no writable destination: detached from rings */
 
 	while (rss_running(st->running)) {
 		/* Handle control socket */
@@ -536,6 +537,44 @@ static void record_loop(rmr_state_t *st)
 			FD_SET(ctrl_fd, &fds);
 			if (select(ctrl_fd + 1, &fds, NULL, NULL, &tv) > 0)
 				rss_ctrl_accept_and_handle(st->ctrl, rmr_ctrl_handler, st);
+		}
+
+		/* ── Storage standby ── */
+		/* With no writable destination there is no work: detach from
+		 * the rings instead of consuming frames only to drop them. A
+		 * reader with nowhere to write falls behind, every overflow
+		 * requests an IDR, and the extra keyframes cost every OTHER
+		 * consumer quality at a fixed bitrate. Poll for media at 1Hz;
+		 * the reconnect paths below reattach when it appears, and
+		 * pre-roll staleness is age-bounded by the prebuffer window. */
+		bool have_dest = rmr_storage_available(st->storage) ||
+				 rmr_storage_available(st->clip_storage);
+		if (!have_dest) {
+			if (!standby) {
+				standby = true;
+				if (st->mux) {
+					close_segment(st);
+					was_recording = false;
+				}
+				if (st->clip_mux)
+					close_clip(st);
+				if (st->video_ring) {
+					rss_ring_release(st->video_ring);
+					rss_ring_close(st->video_ring);
+					st->video_ring = NULL;
+				}
+				if (st->audio_ring) {
+					rss_ring_close(st->audio_ring);
+					st->audio_ring = NULL;
+				}
+				RSS_WARN("no writable storage: standing by, rings released");
+			}
+			usleep(1000000);
+			continue;
+		}
+		if (standby) {
+			standby = false;
+			RSS_INFO("storage available: resuming");
 		}
 
 		/* Lazy audio ring attach — retry every ~2s until found */
@@ -776,11 +815,13 @@ static void record_loop(rmr_state_t *st)
 		}
 
 		if (rec) {
-			/* Wait for storage */
-			if (!rmr_storage_available(st->storage)) {
-				usleep(1000000);
+			/* Continuous destination absent (standby above covers
+			 * the nothing-writable case, so clips may still be
+			 * live): skip without stalling — sleeping here starves
+			 * the ring reader into overflow, and every overflow
+			 * requests an IDR. */
+			if (!rmr_storage_available(st->storage))
 				goto clip_handling;
-			}
 
 			/* Flush fragment periodically for steady write pattern.
 			 * On keyframe: also check segment rotation. */
