@@ -333,6 +333,17 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 	 * between our check and any header read, causing a UAF. */
 	rsd_ring_ctx_t *rctx = &self->srv->video[self->stream_idx];
 	bool has_video = rctx->last_width > 0;
+
+	/*
+	 * b=AS carries the stream's configured bitrate in kbps (RFC 4566
+	 * Section 5.8). A fixed value understates configured-up streams,
+	 * and bandwidth-sensitive clients (the live555 family) size
+	 * receive buffers from it. Defaults mirror rvd_pipeline.
+	 */
+	int video_kbps =
+		rss_config_get_int(self->srv->cfg, self->stream_idx == 0 ? "stream0" : "stream1",
+				   "bitrate", self->stream_idx == 0 ? 3000000 : 1000000) /
+		1000;
 	if (!has_video && !self->srv->has_audio) {
 		compy_respond(ctx, COMPY_STATUS_NOT_FOUND, "Stream not available");
 		return;
@@ -372,7 +383,7 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 			COMPY_SDP_DESCRIBE(
 				ret, sdp_w, (COMPY_SDP_MEDIA, "video 0 RTP/AVP %d", RSD_JPEG_PT),
 				(COMPY_SDP_CONNECTION, "IN IP4 0.0.0.0"),
-				(COMPY_SDP_BANDWIDTH, "AS:2000"),
+				(COMPY_SDP_BANDWIDTH, "AS:%d", video_kbps),
 				(COMPY_SDP_ATTR, "rtpmap:%d JPEG/%d", RSD_JPEG_PT, RSD_VIDEO_CLOCK),
 				(COMPY_SDP_ATTR, "control:video"),
 				(COMPY_SDP_ATTR, "framerate:%u", rctx->last_fps_num));
@@ -399,7 +410,7 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 					ret, sdp_w,
 					(COMPY_SDP_MEDIA, "video 0 RTP/AVP %d", RSD_VIDEO_PT),
 					(COMPY_SDP_CONNECTION, "IN IP4 0.0.0.0"),
-					(COMPY_SDP_BANDWIDTH, "AS:2000"),
+					(COMPY_SDP_BANDWIDTH, "AS:%d", video_kbps),
 					(COMPY_SDP_ATTR, "rtpmap:%d H265/%d", RSD_VIDEO_PT,
 					 RSD_VIDEO_CLOCK),
 					(COMPY_SDP_ATTR, "%s", fmtp),
@@ -410,7 +421,7 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 					ret, sdp_w,
 					(COMPY_SDP_MEDIA, "video 0 RTP/AVP %d", RSD_VIDEO_PT),
 					(COMPY_SDP_CONNECTION, "IN IP4 0.0.0.0"),
-					(COMPY_SDP_BANDWIDTH, "AS:2000"),
+					(COMPY_SDP_BANDWIDTH, "AS:%d", video_kbps),
 					(COMPY_SDP_ATTR, "rtpmap:%d H265/%d", RSD_VIDEO_PT,
 					 RSD_VIDEO_CLOCK),
 					(COMPY_SDP_ATTR, "control:video"),
@@ -450,7 +461,7 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 			COMPY_SDP_DESCRIBE(
 				ret, sdp_w, (COMPY_SDP_MEDIA, "video 0 RTP/AVP %d", RSD_VIDEO_PT),
 				(COMPY_SDP_CONNECTION, "IN IP4 0.0.0.0"),
-				(COMPY_SDP_BANDWIDTH, "AS:2000"),
+				(COMPY_SDP_BANDWIDTH, "AS:%d", video_kbps),
 				(COMPY_SDP_ATTR, "rtpmap:%d H264/%d", RSD_VIDEO_PT,
 				 RSD_VIDEO_CLOCK),
 				(COMPY_SDP_ATTR, "%s", fmtp), (COMPY_SDP_ATTR, "control:video"),
@@ -462,6 +473,13 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 		const rss_ring_header_t *ahdr = rss_ring_get_header(self->srv->ring_audio);
 		uint32_t codec = ahdr->codec;
 		int aclk = ahdr->fps_num; /* fps_num holds sample_rate */
+
+		/* Same contract as video: advertise the configured rate.
+		 * Defaults mirror rad's codec plugins. G.711 stays at its
+		 * codec-defined 64 kbps; L16 is sample_rate * 16 bits. */
+		int audio_kbps = rss_config_get_int(self->srv->cfg, "audio", "bitrate",
+						    codec == RSD_CODEC_OPUS ? 32000 : 128000) /
+				 1000;
 
 		if (codec == RSD_CODEC_PCMU) {
 			COMPY_SDP_DESCRIBE(ret, sdp_w, (COMPY_SDP_MEDIA, "audio 0 RTP/AVP 0"),
@@ -495,7 +513,7 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 				ret, sdp_w,
 				(COMPY_SDP_MEDIA, "audio 0 RTP/AVP %d", RSD_AUDIO_PT_AAC),
 				(COMPY_SDP_CONNECTION, "IN IP4 0.0.0.0"),
-				(COMPY_SDP_BANDWIDTH, "AS:64"),
+				(COMPY_SDP_BANDWIDTH, "AS:%d", audio_kbps),
 				(COMPY_SDP_ATTR, "rtpmap:%d mpeg4-generic/%d/1", RSD_AUDIO_PT_AAC,
 				 aclk),
 				(COMPY_SDP_ATTR,
@@ -508,7 +526,7 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 				ret, sdp_w,
 				(COMPY_SDP_MEDIA, "audio 0 RTP/AVP %d", RSD_AUDIO_PT_OPUS),
 				(COMPY_SDP_CONNECTION, "IN IP4 0.0.0.0"),
-				(COMPY_SDP_BANDWIDTH, "AS:64"),
+				(COMPY_SDP_BANDWIDTH, "AS:%d", audio_kbps),
 				(COMPY_SDP_ATTR, "rtpmap:%d opus/48000/2", RSD_AUDIO_PT_OPUS),
 				(COMPY_SDP_ATTR, "control:audio"));
 		} else {
@@ -516,7 +534,7 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 				ret, sdp_w,
 				(COMPY_SDP_MEDIA, "audio 0 RTP/AVP %d", RSD_AUDIO_PT_L16),
 				(COMPY_SDP_CONNECTION, "IN IP4 0.0.0.0"),
-				(COMPY_SDP_BANDWIDTH, "AS:256"),
+				(COMPY_SDP_BANDWIDTH, "AS:%d", aclk * 16 / 1000),
 				(COMPY_SDP_ATTR, "rtpmap:%d L16/%d/1", RSD_AUDIO_PT_L16, aclk),
 				(COMPY_SDP_ATTR, "control:audio"));
 		}
