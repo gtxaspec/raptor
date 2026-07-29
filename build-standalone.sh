@@ -956,6 +956,14 @@ fi
 
 # Build raptor
 echo ""
+# Daemon objects must not outlive the dependency set they were
+# compiled against: librss_common is rebuilt every run, and linking
+# stale LTO objects against a fresh lib dies in lto1 with
+# "resolution sub id not in object file". ccache makes the
+# recompile cheap; determinism is worth more than incrementality
+# in a standalone build.
+find "$SCRIPT_DIR" -name '*.o' -not -path "$DEPS_DIR/*" -delete
+
 echo "Building raptor daemons..."
 
 COMPY_CFLAGS="-I$SYSROOT_DIR/usr/include"
