@@ -48,6 +48,7 @@ typedef struct {
 	uint64_t frames_sent;
 	uint64_t bytes_sent;
 	int64_t connect_time_us;
+	uint64_t last_pat_us;
 } rsr_client_t;
 
 /* ── Server state ── */
