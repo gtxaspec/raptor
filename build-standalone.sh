@@ -115,7 +115,7 @@ HELIX_VERSION=05f2fb0045cc294b4e0d1a1a9747b89c22c1fea4
 SCHRIFT_VERSION=24737d2922b23df4a5692014f5ba03da0c296112
 MUSL_SHIM_VERSION=HEAD
 UCLIBC_SHIM_VERSION=HEAD
-LIBSRT_VERSION=v1.5.4
+LIBSRT_VERSION=v1.5.6
 
 # ── Parse arguments ──
 
@@ -678,7 +678,12 @@ build_helix_mp3() {
 
 build_schrift() {
     local src="$DEPS_DIR/libschrift"
-    local ext=so; [ "$OPT_STATIC" = 1 ] && ext=a
+    local ext=so other=a
+    if [ "$OPT_STATIC" = 1 ]; then ext=a; other=so; fi
+    # Drop the opposite variant: the linker prefers .so when both are
+    # present, so a leftover shared build silently defeats --static and
+    # ships a daemon needing a library the image does not carry.
+    rm -f "$SYSROOT_DIR/usr/lib/libschrift.$other"
     [ -f "$SYSROOT_DIR/usr/lib/libschrift.$ext" ] && return
 
     echo "Building libschrift..."
