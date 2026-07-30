@@ -79,13 +79,17 @@ void ric_json_gpio_load(ric_config_t *c, const char *path)
 	}
 
 	/*
-	 * A short read is not special-cased: an empty or partial file is
-	 * a fault of the same kind as a malformed one, and letting it
-	 * reach cJSON_Parse means it reports through the same warning
-	 * instead of returning silently.
+	 * Parse only a complete snapshot of the regular file; accepting a
+	 * short read could silently discard configuration near the end.
 	 */
 	size_t n = fread(buf, 1, (size_t)sb.st_size, f);
 	fclose(f);
+	if (n != (size_t)sb.st_size) {
+		RSS_WARN("short read from %s -- GPIO discovery skipped", path);
+		free(buf);
+		return;
+	}
+
 	buf[n] = '\0';
 
 	/* cJSON copies what it keeps, so the buffer goes back either way. */
