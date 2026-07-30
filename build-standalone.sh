@@ -721,7 +721,7 @@ build_live555() {
         local lib_link_opts="-shared -Wl,-soname,\$(notdir \$@) -L$SYSROOT_DIR/usr/lib"
     fi
     cat > config.raptor <<EOCFG
-COMPILE_OPTS =		\$(INCLUDES) -I. -DSOCKLEN_T=socklen_t -DNO_OPENSSL -DNO_STD_LIB -DLOCALE_NOT_USED -DALLOW_RTSP_SERVER_PORT_REUSE -Os -fPIC
+COMPILE_OPTS =		\$(INCLUDES) -I. -DSOCKLEN_T=socklen_t -DNO_OPENSSL -DNO_STD_LIB -DLOCALE_NOT_USED -DALLOW_RTSP_SERVER_PORT_REUSE -Os -fPIC -fno-strict-aliasing
 C =			c
 CPP =			cpp
 C_COMPILER =		${cc}
@@ -738,10 +738,20 @@ LIB_SUFFIX =		${lib_suffix}
 PREFIX =		/usr
 EOCFG
 
-    # Apply thingino patches (strict-aliasing fix + ONVIF backchannel)
+    # Apply the rsd-555 live555 patches. Failures are LOUD: a patch
+    # that stops applying after a live555 bump must fail the build,
+    # not silently ship a daemon without the fix. Already-applied is
+    # fine (idempotent re-runs on an existing checkout).
     chmod -R u+w .
     for p in "$SCRIPT_DIR/rsd-555/patches/"*.patch; do
-        [ -f "$p" ] && patch -p1 -N < "$p" 2>/dev/null || true
+        [ -f "$p" ] || continue
+        out=$(patch -p1 -N < "$p" 2>&1) || {
+            if ! echo "$out" | grep -q "previously applied"; then
+                echo "$out"
+                echo "FATAL: live555 patch failed: $(basename "$p")"
+                exit 1
+            fi
+        }
     done
 
     ./genMakefiles raptor
@@ -911,9 +921,10 @@ clone_repo libschrift   https://github.com/tomolt/libschrift         "$SCHRIFT_V
 [ "$OPT_RFS" = 1 ] && clone_repo media-server https://github.com/ireader/media-server      HEAD
 
 # live555 — download tarball (not a git repo); only needed for rsd-555
+LIVE555_VERSION=2026.07.23
 if [ "$OPT_RSD555" = 1 ] && [ ! -d "$DEPS_DIR/live" ]; then
-    echo "Downloading live555..."
-    curl -sL https://github.com/gtxaspec/live555-release-mirror/releases/download/v2026.04.22/live.2026.04.22.tar.gz | tar xz -C "$DEPS_DIR"
+    echo "Downloading live555 $LIVE555_VERSION..."
+    curl -sL "https://github.com/gtxaspec/live555-release-mirror/releases/download/v$LIVE555_VERSION/live.$LIVE555_VERSION.tar.gz" | tar xz -C "$DEPS_DIR"
 fi
 
 [ "$OPT_TLS" = 1 ] && clone_repo mbedtls https://github.com/Mbed-TLS/mbedtls "$MBEDTLS_VERSION" submodules
