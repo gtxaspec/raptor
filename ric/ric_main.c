@@ -230,10 +230,11 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "alloc");
 		cJSON_AddStringToObject(r, "status", "ok");
 		cJSON_AddStringToObject(r, "trigger",
-					c->trigger == RIC_TRIGGER_LUMA	 ? "luma"
-					: c->trigger == RIC_TRIGGER_GAIN ? "gain"
-					: c->trigger == RIC_TRIGGER_ADC	 ? "adc"
-									 : "photo");
+					c->trigger == RIC_TRIGGER_LUMA	  ? "luma"
+					: c->trigger == RIC_TRIGGER_GAIN  ? "gain"
+					: c->trigger == RIC_TRIGGER_ADC	  ? "adc"
+					: c->trigger == RIC_TRIGGER_PHOTO ? "photo"
+									  : "gpio");
 		cJSON_AddNumberToObject(r, "night_luma", c->night_luma);
 		cJSON_AddNumberToObject(r, "night_gain", c->night_gain);
 		cJSON_AddNumberToObject(r, "day_gain_pct", c->day_gain_pct);
@@ -376,7 +377,7 @@ int main(int argc, char **argv)
 		}
 	}
 
-	static const char *trigger_names[] = {"luma", "gain", "adc", "photo"};
+	static const char *trigger_names[] = {"luma", "gain", "adc", "photo", "gpio"};
 	RSS_INFO("ric running (mode=%s, trigger=%s, gpio_ircut=%d, gpio_ircut2=%d, gpio_irled=%d, "
 		 "gpio_irled2=%d)",
 		 st.settings.opmode == RIC_AUTO
