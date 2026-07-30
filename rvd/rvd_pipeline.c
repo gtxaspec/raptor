@@ -255,6 +255,40 @@ static void load_sensor_from_section(rss_config_t *cfg, const char *section,
 	if (vin < 0)
 		vin = 0;
 	sensor->vin_type = (rss_sensor_vin_t)vin;
+
+	/* Optional sensor mode request. Zero means native, and Ingenic backends
+	 * ignore these entirely — the mode there is a property of the loaded
+	 * driver. Backends that enumerate modes at runtime use them to select
+	 * one; see rss_sensor_config_t. No procfs fallback: these express what
+	 * the operator wants, not what the driver reports. */
+	sensor->width = (uint16_t)rss_config_get_int(cfg, section, "width", 0);
+	sensor->height = (uint16_t)rss_config_get_int(cfg, section, "height", 0);
+	sensor->fps = (uint32_t)rss_config_get_int(cfg, section, "fps", 0);
+
+	/* Optional ISP tuning binary. Only a backend whose ISP is driven by a
+	 * tuning file reads this, and it derives the usual path from the sensor
+	 * name, so this stays empty unless the file lives somewhere unusual. */
+	rss_strlcpy(sensor->iq_file, rss_config_get_str(cfg, section, "iq_file", ""),
+		    sizeof(sensor->iq_file));
+
+	/* Orientation is read here, out of the [image] section rather than this
+	 * one, because some backends have to know it before the sensor starts:
+	 * where orientation is a sensor register the driver latches it during
+	 * bring-up, so a value that only arrives later via isp_set_hflip cannot
+	 * decide how the first frame comes out. Section 3c still applies the
+	 * same keys through the ops, which is what backends that can change
+	 * orientation freely act on, and what a runtime change goes through. */
+	{
+		char img_sect[32];
+		const char *img = "image";
+
+		if (proc_idx > 0) {
+			snprintf(img_sect, sizeof(img_sect), "sensor%d_image", proc_idx);
+			img = img_sect;
+		}
+		sensor->hflip = rss_config_get_int(cfg, img, "hflip", 0) ? 1 : 0;
+		sensor->vflip = rss_config_get_int(cfg, img, "vflip", 0) ? 1 : 0;
+	}
 }
 
 /* FS channel base for a given sensor index (hardware mapping) */
@@ -403,15 +437,40 @@ int rvd_pipeline_init(rvd_state_t *st)
 	}
 	st->sensor_count = multi_cfg.sensor_count;
 
+	/* Ask the HAL to name the sensor when neither config nor procfs did.
+	 * Valid before init, and the only pre-init op — see raptor_hal.h. On a
+	 * platform where the SDK binds the sensor at driver-load time this is the
+	 * authoritative source, and /proc/jz/sensor does not exist at all. */
+	const rss_hal_caps_t *sensor_caps =
+		st->ops->get_caps ? st->ops->get_caps(st->hal_ctx) : NULL;
+	bool sensor_self_describing = sensor_caps && sensor_caps->has_sensor_detect;
+
+	if (!multi_cfg.sensors[0].name[0] && sensor_self_describing) {
+		char detected[sizeof(multi_cfg.sensors[0].name)];
+
+		if (RSS_HAL_CALL(st->ops, sensor_detect, st->hal_ctx, detected,
+				 sizeof(detected)) == RSS_OK &&
+		    detected[0]) {
+			rss_strlcpy(multi_cfg.sensors[0].name, detected,
+				    sizeof(multi_cfg.sensors[0].name));
+			RSS_INFO("sensor detected by HAL: %s", multi_cfg.sensors[0].name);
+		}
+	}
+
 	/* Validate primary sensor */
 	if (!multi_cfg.sensors[0].name[0]) {
-		RSS_FATAL("sensor name not in config and not in /proc/jz/sensor/sensor0/name");
+		RSS_FATAL("sensor name not in config, not in /proc/jz/sensor/sensor0/name, "
+			  "and not detected by the HAL");
 		rss_hal_destroy(st->hal_ctx);
 		st->hal_ctx = NULL;
 		return RSS_ERR;
 	}
 
-	if (multi_cfg.sensors[0].i2c_addr == 0) {
+	/* An I2C address is only meaningful where the daemon is what tells the
+	 * SDK how to reach the sensor. Where the HAL detects it, the SDK already
+	 * owns that bus and an address here would be ignored, so requiring one
+	 * would be demanding configuration that cannot matter. */
+	if (multi_cfg.sensors[0].i2c_addr == 0 && !sensor_self_describing) {
 		RSS_FATAL("i2c_addr not in config and not in /proc/jz/sensor/sensor0/i2c_addr");
 		rss_hal_destroy(st->hal_ctx);
 		st->hal_ctx = NULL;
@@ -499,7 +558,17 @@ int rvd_pipeline_init(rvd_state_t *st)
 			sensor_fps = 25;
 		/* Sensor 0 FPS via legacy ops */
 		ret = RSS_HAL_CALL(st->ops, isp_set_sensor_fps, st->hal_ctx, sensor_fps, 1);
-		if (ret != RSS_OK)
+		if (ret == RSS_ERR_NOTSUP)
+			/* Not a fault, so not a warning. The ISP tuning ops are
+			 * documented as optional ("return -ENOTSUP if unavailable",
+			 * raptor_hal.h), and on some SoCs the sensor rate is fixed when
+			 * the mode is selected during bring-up and cannot be changed
+			 * afterwards -- SigmaStar MI is one, where the encoder framerate
+			 * is what actually varies. */
+			RSS_INFO("sensor0 fps: setting sensor fps is unsupported on this "
+				 "platform, %d ignored",
+				 sensor_fps);
+		else if (ret != RSS_OK)
 			RSS_WARN("isp_set_sensor_fps failed: %d (non-fatal)", ret);
 		else
 			RSS_INFO("sensor0 fps: %d", sensor_fps);
@@ -525,8 +594,12 @@ int rvd_pipeline_init(rvd_state_t *st)
 		int temper = rss_config_get_int(cfg, img, "temper", 128);
 		int hue = rss_config_get_int(cfg, img, "hue", 128);
 		int ae_comp = rss_config_get_int(cfg, img, "ae_comp", 128);
+		int ae_target = rss_config_get_int(cfg, img, "ae_target", 128);
 		int max_again = rss_config_get_int(cfg, img, "max_again", 160);
 		int max_dgain = rss_config_get_int(cfg, img, "max_dgain", 80);
+		/* 0 leaves the tuning's own shutter ceiling in charge, which is
+		 * what every platform did before this key existed. */
+		int max_exposure_us = rss_config_get_int(cfg, img, "max_exposure_us", 0);
 		int dpc = rss_config_get_int(cfg, img, "dpc_strength", 128);
 		int drc = rss_config_get_int(cfg, img, "drc_strength", 128);
 		int highlight = rss_config_get_int(cfg, img, "highlight_depress", 0);
@@ -545,8 +618,12 @@ int rvd_pipeline_init(rvd_state_t *st)
 		RSS_HAL_CALL(st->ops, isp_set_temper_strength, st->hal_ctx, temper);
 		RSS_HAL_CALL(st->ops, isp_set_hue, st->hal_ctx, hue);
 		RSS_HAL_CALL(st->ops, isp_set_ae_comp, st->hal_ctx, ae_comp);
+		RSS_HAL_CALL(st->ops, isp_set_ae_target, st->hal_ctx, ae_target);
 		RSS_HAL_CALL(st->ops, isp_set_max_again, st->hal_ctx, max_again);
 		RSS_HAL_CALL(st->ops, isp_set_max_dgain, st->hal_ctx, max_dgain);
+		if (max_exposure_us > 0)
+			RSS_HAL_CALL(st->ops, isp_set_ae_it_max, st->hal_ctx,
+				     (uint32_t)max_exposure_us);
 		RSS_HAL_CALL(st->ops, isp_set_dpc_strength, st->hal_ctx, dpc);
 		RSS_HAL_CALL(st->ops, isp_set_drc_strength, st->hal_ctx, drc);
 		RSS_HAL_CALL(st->ops, isp_set_highlight_depress, st->hal_ctx, highlight);
@@ -561,9 +638,10 @@ int rvd_pipeline_init(rvd_state_t *st)
 		RSS_DEBUG("isp tuning: brightness=%d contrast=%d saturation=%d "
 			  "sharpness=%d",
 			  brightness, contrast, saturation, sharpness);
-		RSS_DEBUG("  sinter=%d temper=%d hue=%d ae_comp=%d", sinter, temper, hue, ae_comp);
-		RSS_DEBUG("  max_again=%d max_dgain=%d dpc=%d drc=%d", max_again, max_dgain, dpc,
-			  drc);
+		RSS_DEBUG("  sinter=%d temper=%d hue=%d ae_comp=%d ae_target=%d", sinter, temper,
+			  hue, ae_comp, ae_target);
+		RSS_DEBUG("  max_again=%d max_dgain=%d max_exposure_us=%d dpc=%d drc=%d", max_again,
+			  max_dgain, max_exposure_us, dpc, drc);
 		RSS_DEBUG("  highlight=%d backlight=%d defog=%d", highlight, backlight, defog);
 		RSS_DEBUG("  hflip=%d vflip=%d antiflicker=%d bypass=%d", hflip, vflip, antiflicker,
 			  ret == RSS_OK);
@@ -613,14 +691,31 @@ int rvd_pipeline_init(rvd_state_t *st)
 		RSS_HAL_CALL(st->ops, isp_set_custom_mode_n, st->hal_ctx, s, 0);
 	}
 
-	/* ── 3d. Read actual sensor resolution from /proc ── */
+	/* ── 3d. Determine the actual sensor resolution ──
+	 *
+	 * Order matters: procfs first (Ingenic's own registry), then the HAL, then
+	 * config. The HAL query beats config because config only *requests* a mode
+	 * — a backend that enumerates sensor modes may have fallen back to native
+	 * when the request matched nothing, and this is the answer after that
+	 * negotiation rather than before it. */
 	int sensor_w = 0, sensor_h = 0;
+	const char *sensor_res_src = "/proc/jz/sensor";
 	{
 		sensor_w = read_sensor_proc_int(0, "width", 10, 0);
 		sensor_h = read_sensor_proc_int(0, "height", 10, 0);
 	}
+	if (sensor_w <= 0 || sensor_h <= 0) {
+		uint32_t hal_w = 0, hal_h = 0;
+		if (RSS_HAL_CALL(st->ops, isp_get_sensor_attr, st->hal_ctx, &hal_w, &hal_h) ==
+			    RSS_OK &&
+		    hal_w > 0 && hal_h > 0) {
+			sensor_w = (int)hal_w;
+			sensor_h = (int)hal_h;
+			sensor_res_src = "HAL";
+		}
+	}
 	if (sensor_w > 0 && sensor_h > 0) {
-		RSS_INFO("sensor resolution: %dx%d", sensor_w, sensor_h);
+		RSS_INFO("sensor resolution: %dx%d (from %s)", sensor_w, sensor_h, sensor_res_src);
 	} else {
 		/* T40/T41: /proc/jz/sensor doesn't exist — use stream0 config as reference */
 		int cfg_w = rss_config_get_int(cfg, "stream0", "width", 0);

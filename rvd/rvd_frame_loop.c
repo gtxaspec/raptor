@@ -70,6 +70,7 @@ void *rvd_encoder_thread(void *arg)
 
 	uint64_t frame_count = 0;
 	int poll_errors = 0;
+	int empty_polls = 0;
 	int64_t last_stats = rss_timestamp_us();
 	int64_t last_reap = last_stats;
 	int64_t last_utc = 0; /* 0 = publish on first frame */
@@ -165,8 +166,23 @@ void *rvd_encoder_thread(void *arg)
 
 		rss_frame_t frame;
 		ret = RSS_HAL_CALL(st->ops, enc_get_frame, st->hal_ctx, s->chn, &frame);
-		if (ret == -EAGAIN)
-			continue; /* no frame this time (empty stream / JPEG fps divider) */
+		if (ret == -EAGAIN) {
+			/*
+			 * No frame this time -- routine on its own (empty stream,
+			 * JPEG fps divider). Sustained is not: the poll said the
+			 * encoder was ready every time and it yielded nothing, so
+			 * the channel is bound to something that never produces.
+			 * Say so, because the silent version of this state is
+			 * indistinguishable from an idle on-demand JPEG channel,
+			 * which is what makes it expensive to find.
+			 */
+			if (++empty_polls == 10)
+				RSS_WARN("stream%d: chn %d ready but yielding no frames -- "
+					 "check its source is bound and producing",
+					 idx, s->chn);
+			continue;
+		}
+		empty_polls = 0;
 		if (ret != RSS_OK) {
 			RSS_WARN("stream%d: enc_get_frame failed (chn %d, ret=%d)", idx, s->chn,
 				 ret);

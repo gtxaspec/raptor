@@ -83,6 +83,7 @@ const struct help_entry help_entries[] = {
 	{"rvd", "set-ae-comp <val>                   AE compensation"},
 	{"rvd", "set-max-again <val>                 Max analog gain"},
 	{"rvd", "set-max-dgain <val>                 Max digital gain"},
+	{"rvd", "set-max-exposure <us>               Max AE exposure, 0 for the tuning's own"},
 	{"rvd", "set-dpc <val>                       Dead pixel correction (0-255)"},
 	{"rvd", "set-drc <val>                       Dynamic range compression (0-255)"},
 	{"rvd", "set-highlight-depress <val>         Highlight suppression (0-255)"},
