@@ -173,6 +173,24 @@ usage() {
 for arg in "$@"; do
     case "$arg" in
         t10|t20|t21|t23|t30|t31|t32|t33|t40|t41|a1) PLATFORM="$arg" ;;
+        infinity6e|ssc30kq)
+            # Deliberately unsupported rather than merely unimplemented. This
+            # script bootstraps from two Ingenic-only sources: a thingino
+            # toolchain release (thingino is Ingenic by identity -- its SoC
+            # selector is BR2_INGENIC_SOC_MODEL and every toolchain fragment
+            # is linux-mipsel) and a per-SoC Ingenic SDK version map. Neither
+            # has a SigmaStar counterpart to point at, and the MI libraries
+            # come off a vendor SDK or a built image rather than a URL.
+            echo "$arg is SigmaStar/ARM. This script bootstraps an Ingenic"
+            echo "mipsel toolchain and SDK, and has nothing to fetch for it."
+            echo ""
+            echo "Build against an openipc-firmware output instead:"
+            echo "  ./build.sh infinity6e /path/to/openipc-firmware/output"
+            echo ""
+            echo "Or build the image, which packages raptor itself:"
+            echo "  make BOARD=ssc30kq_raptor RAPTOR_SRCDIR=/path/to/raptor-repos"
+            exit 1
+            ;;
         --no-tls)    OPT_TLS= ;;
         --alt)       OPT_ALT=1 ;;
         --no-aac)    OPT_AAC= ;;

@@ -6,9 +6,11 @@
 #   make clean
 #
 # Required:
-#   PLATFORM       - Target SoC: T10, T20, T21, T23, T30, T31, T32, T33, T40, T41, A1
+#   PLATFORM       - Target SoC:
+#                      Ingenic   - T10, T20, T21, T23, T30, T31, T32, T33, T40, T41, A1
+#                      SigmaStar - INFINITY6E
 #   CROSS_COMPILE  - Cross-compiler prefix
-
+#
 ifeq ($(filter clean distclean build,$(MAKECMDGOALS)),)
 ifndef PLATFORM
 $(error PLATFORM not set. Use: make PLATFORM=T31 CROSS_COMPILE=mipsel-linux-)
@@ -20,6 +22,16 @@ HAL_DIR    := ../raptor-hal
 IPC_DIR    := ../raptor-ipc
 COMMON_DIR := ../raptor-common
 COMPY_DIR  := ../compy
+
+# Vendor selection — must match raptor-hal's Makefile. Ingenic parts link the
+# single IMP library; SigmaStar parts link no vendor library at all, reaching
+# MI through dlopen (see raptor-hal/src/star/i6_common.h).
+SIGMASTAR_PLATFORMS := INFINITY6E
+ifneq ($(filter $(PLATFORM),$(SIGMASTAR_PLATFORMS)),)
+VENDOR := sigmastar
+else
+VENDOR := ingenic
+endif
 
 # Toolchain
 CC     := $(CROSS_COMPILE)gcc
@@ -98,8 +110,15 @@ else
 Q := @
 endif
 
-# Compy include paths (for RSD only)
-COMPY_BUILD  := $(CURDIR)/$(COMPY_DIR)/build-mips
+# Compy include paths (for RSD only).
+# The build dir is arch-suffixed because compy is a separate CMake project
+# built per target; build-standalone.sh overrides COMPY_BUILD/LIB_COMPY_FILE
+# outright, so this only sets the default for in-tree builds.
+ifeq ($(VENDOR),sigmastar)
+COMPY_BUILD  ?= $(CURDIR)/$(COMPY_DIR)/build-arm
+else
+COMPY_BUILD  ?= $(CURDIR)/$(COMPY_DIR)/build-mips
+endif
 COMPY_CFLAGS := -I$(CURDIR)/$(COMPY_DIR)/include \
                 -I$(COMPY_BUILD)/_deps/slice99-src \
                 -I$(COMPY_BUILD)/_deps/datatype99-src \
@@ -170,9 +189,41 @@ else
 LINK_STDCXX := -lstdc++
 endif
 
+# Vendor SDK libraries.
+#
+# SigmaStar links none of them. The MI backend reaches the SDK through dlopen
+# using the vendored loaders in raptor-hal/src/star/i6_*.h, so no MI .so has
+# to exist at build time and -ldl (already in LDFLAGS_HAL below) is the whole
+# requirement. That is not just a licensing convenience: the MI stack is
+# coupled to the device's 4.9.84 kernel, so binding at runtime to the
+# libraries the device itself carries beats baking in a build-host snapshot
+# of them.
+#
+# The symbol closure worked out for the earlier direct-link approach still
+# matters, but as dlopen *ordering* rather than as -l flags. Each libmi_*.so
+# declares only libc.so.6 as NEEDED and leaves every cross-library symbol
+# undefined for the loader to satisfy from the global scope, so each
+# dependency must be dlopen'd RTLD_GLOBAL before its consumer:
+#   libcam_os_wrapper — needed by every libmi_*, which is why i6_sys.h loads
+#     it before libmi_sys
+#   libispalgo → libcus3a → libmi_isp — libmi_isp calls CUS3A_*, and libcus3a
+#     in turn calls AeInit/DoAe/AwbInit/IspLoadIqCfg. Phase 3 must load them
+#     in that order; divinus's i6c_isp.h/m6_isp.h do exactly this.
+#
+# Audio needs no extra library either. The G711*/g726_*/Iaa*/MI_AED_* symbols
+# libmi_ai leaves undefined are declared WEAK, so they resolve to NULL rather
+# than failing, and the capture path never calls them — both references take
+# raw PCM and encode in software. libmi_ao is not needed at all; nothing in
+# scope plays audio out.
+ifeq ($(VENDOR),sigmastar)
+VENDOR_LIBS :=
+else
+VENDOR_LIBS := -limp -lalog
+endif
+
 # System libs for HAL-linked daemons
-# Shim must come BEFORE Ingenic SDK libs — symbols must be resolved first.
-LDFLAGS_HAL := $(LDFLAGS_SYSROOT) $(SHIM_LIB) -limp -lalog -lpthread -lrt -lm -ldl -latomic
+# Shim must come BEFORE the vendor SDK libs — symbols must be resolved first.
+LDFLAGS_HAL := $(LDFLAGS_SYSROOT) $(SHIM_LIB) $(VENDOR_LIBS) -lpthread -lrt -lm -ldl -latomic
 
 # IVS detection libs
 ifeq ($(IVS_DETECT),1)
@@ -185,8 +236,10 @@ endif
 endif
 LDFLAGS     := $(LDFLAGS_SYSROOT) -lpthread -lrt -latomic
 
-# MIPS page size: Ingenic SoCs use 4KB pages but the toolchain defaults to
-# 64KB max-page-size. Mismatched alignment causes SIGBUS on musl/uclibc.
+# Page size: Ingenic SoCs use 4KB pages but the MIPS toolchain defaults to
+# 64KB max-page-size, and mismatched alignment causes SIGBUS on musl/uclibc.
+# ARM targets are 4KB too and default to a larger max-page-size, so the same
+# value is correct there and additionally avoids the segment padding.
 LDFLAGS_HAL += -Wl,-z,max-page-size=0x1000 -Wl,--gc-sections -Wl,--as-needed -Wl,-rpath,/usr/lib $(if $(DEBUG),,-flto)
 LDFLAGS     += -Wl,-z,max-page-size=0x1000 -Wl,--gc-sections -Wl,--as-needed -Wl,-rpath,/usr/lib $(if $(DEBUG),,-flto)
 # rpath-link for local builds (finding .so at link time)
@@ -223,18 +276,97 @@ phase1: libs rvd ringdump raptorctl
 
 libs: $(LIB_HAL_VIDEO_FILE) $(LIB_HAL_AUDIO_FILE) $(LIB_IPC_FILE) $(LIB_COMMON_FILE)
 
-$(LIB_HAL_VIDEO_FILE) $(LIB_HAL_AUDIO_FILE):
+# The three sibling libraries are built by sub-makes, through stamp files.
+#
+# The stamps are not decoration. These rules used to be written as, for example,
+#
+#   $(LIB_HAL_VIDEO_FILE) $(LIB_HAL_AUDIO_FILE):
+#           $(MAKE) -C $(HAL_DIR) ...
+#
+# with no prerequisites at all, so once an archive existed make considered it
+# finished and never looked at the sources again. Edit raptor-hal, rebuild, and
+# the daemons relink against the *previous* archive: a build that reports success
+# while shipping code that is not the code in the checkout. It is silent, and it
+# reached a firmware image.
+#
+# The HAL rule had a second defect. Two targets sharing one recipe is two
+# independent rules as far as make is concerned, so under -j both ran that same
+# sub-make at once, each writing the other's archive, and a daemon linked
+# whichever half-written .a it happened to find. The symptom was a pile of
+# undefined rss_hal_* references from a build whose own `AR` lines had all
+# succeeded. A stamp gives the sub-make a single target, so it runs once.
+#
+# Note the hazard the stamps introduce in exchange: deleting an archive without
+# deleting its stamp leaves make believing the empty rule below already produced
+# it, and the link fails on a missing file. Everything that removes these
+# products removes the stamp too -- `clean` here, and RAPTOR_STREAMING_CLEAN_PRODUCTS
+# in the Buildroot package.
+#
+# find, not wildcard: the backends live in per-SoC subdirectories and a fixed
+# glob depth would quietly stop covering them.
+#
+# EACH BLOCK IS GUARDED ON THE SIBLING BEING THERE. These rules describe how to
+# build a developer checkout, where raptor-hal, raptor-ipc and raptor-common sit
+# next to this tree. A packaged build has no siblings: each library is built by
+# its own Buildroot package and handed to this one through LIB_*_FILE pointing
+# into the sysroot, where the file already exists and nothing here should claim
+# to produce it.
+#
+# Unguarded, the rule is still a rule. make reads
+#
+#   $(LIB_IPC_FILE): $(IPC_STAMP)
+#
+# with LIB_IPC_FILE pointing at the sysroot, goes looking for
+# ../raptor-ipc/Makefile as a prerequisite of that stamp, and dies with "No rule
+# to make target" before compiling a line -- while the library it wanted was in
+# the sysroot the whole time.
+#
+# Guarded per library rather than once for all three, because nothing forbids a
+# mixture: a developer bisecting one library can point the other two at staging.
+#
+# The alternative is what these rules looked like before the stamps, and what
+# upstream still does -- no prerequisites at all, so an existing file satisfies
+# them. That is precisely the defect described above, so guarding is how both
+# properties are kept.
+ifneq ($(wildcard $(HAL_DIR)/Makefile),)
+HAL_SRCS  := $(shell find $(HAL_DIR)/src $(HAL_DIR)/include -name '*.c' -o -name '*.h' 2>/dev/null)
+HAL_STAMP := $(CURDIR)/$(HAL_DIR)/.built
+
+$(HAL_STAMP): $(HAL_SRCS) $(HAL_DIR)/Makefile
 	@echo "  BUILD   raptor-hal"
 	$(Q)$(MAKE) -C $(HAL_DIR) PLATFORM=$(PLATFORM) CROSS_COMPILE=$(CROSS_COMPILE) \
 		$(if $(DEBUG),DEBUG=1,)
+	$(Q)touch $@
 
-$(LIB_IPC_FILE):
+$(LIB_HAL_VIDEO_FILE) $(LIB_HAL_AUDIO_FILE): $(HAL_STAMP)
+	@:
+endif
+
+ifneq ($(wildcard $(IPC_DIR)/Makefile),)
+IPC_SRCS  := $(shell find $(IPC_DIR)/src $(IPC_DIR)/include -name '*.c' -o -name '*.h' 2>/dev/null)
+IPC_STAMP := $(CURDIR)/$(IPC_DIR)/.built
+
+$(IPC_STAMP): $(IPC_SRCS) $(IPC_DIR)/Makefile
 	@echo "  BUILD   raptor-ipc"
 	$(Q)$(MAKE) -C $(IPC_DIR) CC="$(CC)"
+	$(Q)touch $@
 
-$(LIB_COMMON_FILE):
+$(LIB_IPC_FILE): $(IPC_STAMP)
+	@:
+endif
+
+ifneq ($(wildcard $(COMMON_DIR)/Makefile),)
+COMMON_SRCS  := $(shell find $(COMMON_DIR)/src $(COMMON_DIR)/include -name '*.c' -o -name '*.h' 2>/dev/null)
+COMMON_STAMP := $(CURDIR)/$(COMMON_DIR)/.built
+
+$(COMMON_STAMP): $(COMMON_SRCS) $(COMMON_DIR)/Makefile
 	@echo "  BUILD   raptor-common"
 	$(Q)$(MAKE) -C $(COMMON_DIR) CC="$(CC)"
+	$(Q)touch $@
+
+$(LIB_COMMON_FILE): $(COMMON_STAMP)
+	@:
+endif
 
 # -- Daemons --
 
@@ -270,10 +402,12 @@ rhd: $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_TLS_OBJ) $(RSS_BUILD_OBJ)
 		LIBS="$(LIB_IPC) $(LIB_COMMON) $(RSS_TLS_OBJ) $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS) $(LDFLAGS_TLS)" Q="$(Q)"
 
+# -lm must follow -lschrift: libschrift's rasteriser calls floor, ceil and
+# nextafter, and nothing else in rod pulls in libm.
 rod: $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_BUILD_OBJ)
 	@echo "  BUILD   rod"
 	$(Q)$(MAKE) -C rod CC="$(CC)" CFLAGS="$(CFLAGS)" \
-		LIBS="$(LIB_IPC) $(LIB_COMMON) -lschrift $(RSS_BUILD_LIBS)" \
+		LIBS="$(LIB_IPC) $(LIB_COMMON) -lschrift -lm $(RSS_BUILD_LIBS)" \
 		LDFLAGS="$(LDFLAGS)" Q="$(Q)"
 
 ric: $(LIB_IPC_FILE) $(LIB_COMMON_FILE) $(RSS_BUILD_OBJ)

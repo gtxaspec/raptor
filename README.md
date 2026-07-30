@@ -1,8 +1,9 @@
 # Raptor Streaming System (RSS)
 
-A modular microservice camera streamer for Ingenic SoCs. Raptor replaces the
-traditional monolithic streamer with independent daemons that communicate
-through POSIX shared-memory ring buffers and Unix domain control sockets.
+A modular microservice camera streamer for Ingenic and SigmaStar SoCs. Raptor
+replaces the traditional monolithic streamer with independent daemons that
+communicate through POSIX shared-memory ring buffers and Unix domain control
+sockets.
 
 ## Why Raptor
 
@@ -94,7 +95,7 @@ buffers at runtime, gracefully skipping any that don't exist.
 | RAD  | `rad`  | Raw Audio Daemon. Captures PCM, encodes through pluggable codecs (G.711 mu/A-law, L16, AAC, Opus) into the `audio` ring, and drives speaker output from the `speaker` ring. Optional noise suppression, HPF, AGC. A new codec is one source file. |
 | ROD  | `rod`  | OSD Rendering Daemon. Renders timestamp, uptime, user text, and logo bitmaps into BGRA SHM double-buffers using libschrift. No HAL dependency -- RVD handles the hardware OSD regions. |
 | RHD  | `rhd`  | HTTP Streaming Daemon. JPEG snapshots (`/snap`), MJPEG (`/mjpeg`), and audio (`/audio`) straight from the rings, with proper container framing (WAV, ADTS, Ogg). Dual-stack IPv4/IPv6, Basic auth, optional HTTPS. Optional EXIF capture times and Ed25519-signed snapshots. |
-| RIC  | `ric`  | IR-Cut Controller. Hybrid luma+gain day/night detection: ae_luma for day-to-night, auto-calibrating gain-ratio for night-to-day (prevents IR flip-flop). Pins from raptor.conf or auto-discovered from `/etc/thingino.json`; single and dual-GPIO filters. |
+| RIC  | `ric`  | IR-Cut Controller. Hybrid luma+gain day/night detection: ae_luma for day-to-night, auto-calibrating gain-ratio for night-to-day (prevents IR flip-flop). Alternative triggers where the board has the hardware: a photoresistor on an ADC (`trigger=adc`) or a photometric EV state machine (`trigger=photo`). Pins from raptor.conf or auto-discovered from `/etc/thingino.json`; single and dual-GPIO filters. |
 | RMR  | `rmr`  | Recording/Muxing Daemon. Writes crash-safe fragmented MP4 segments (H.264/H.265/MJPEG + audio) to SD with its own dependency-free fMP4 muxer. Optional MISB ST 0604 UTC timecodes and Ed25519 hash-chain provenance signing. |
 | RMD  | `rmd`  | Motion Detection Daemon. Consumes RVD's IVS results (hardware motion grid, JZDL YOLOv5 inference on NNA), runs the idle/active/cooldown state machine, and triggers RMR plus GPIO outputs. Configurable ROI, per-class filtering, external detection push via control socket. |
 | RWD  | `rwd`  | WebRTC Daemon. Live H.264 + Opus to browsers and go2rtc via WHIP with sub-second latency: ICE-lite, DTLS-SRTP, two-way audio (browser mic to camera speaker). Embedded player at `/webrtc`; optional WebTorrent sharing for external viewing without port forwarding. |
@@ -122,7 +123,7 @@ gadget patches (`CONFIG_USB_G_WEBCAM=m`).
 | Repository | Description |
 |-----------|-------------|
 | [raptor-docs](https://github.com/gtxaspec/raptor-docs) | Architecture docs, design notes, and API reference. |
-| [raptor-hal](https://github.com/gtxaspec/raptor-hal) | Hardware abstraction layer -- wraps Ingenic IMP SDK calls behind a unified API across SDK generations. |
+| [raptor-hal](https://github.com/gtxaspec/raptor-hal) | Hardware abstraction layer -- wraps Ingenic IMP and SigmaStar MI SDK calls behind a unified API across SDK generations and vendors. |
 | [raptor-ipc](https://github.com/gtxaspec/raptor-ipc) | SHM ring buffers, OSD double-buffer SHM, and Unix domain control socket protocol. |
 | [raptor-common](https://github.com/gtxaspec/raptor-common) | Config parser, logging, daemonize, signal handling, timestamp utilities. |
 | [compy](https://github.com/gtxaspec/compy) | RTSP/RTP server library (used by RSD). |
@@ -132,12 +133,17 @@ gadget patches (`CONFIG_USB_G_WEBCAM=m`).
 
 ## Dependencies
 
-Raptor is built against the above libraries and the Ingenic vendor SDK.
+Raptor is built against the above libraries and the SoC vendor's SDK.
 
-Runtime shared libraries from the Ingenic SDK / Buildroot sysroot:
+Runtime shared libraries from the vendor SDK / Buildroot sysroot:
 
-- `libimp` -- Ingenic multimedia platform
-- `libalog` -- Ingenic logging
+- `libimp` -- Ingenic multimedia platform (Ingenic only)
+- `libalog` -- Ingenic logging (Ingenic only)
+- `libmi_sys`, `libmi_vpe`, `libmi_venc`, `libmi_isp`, `libmi_ai`, `libmi_ao`
+  -- SigmaStar MI (INFINITY6E only). Resolved with `dlopen`/`dlsym` rather
+  than linked, so a single binary runs against whichever MI version the
+  image ships and a missing optional symbol degrades a feature instead of
+  failing the load.
 - `libschrift` -- TrueType font rasterizer (ROD)
 - `libfaac` -- AAC encoder (optional, `AAC=1`)
 - `libhelix-aac` / `libhelix-mp3` -- AAC/MP3 decoders (optional, for rac playback)
@@ -161,6 +167,12 @@ Runtime shared libraries from the Ingenic SDK / Buildroot sysroot:
 
 Supported platforms: `t10`, `t20`, `t21`, `t23`, `t30`, `t31`, `t32`, `t33`, `t40`, `t41`, `a1`.
 
+This script is Ingenic-only, and by design: it bootstraps a thingino mipsel
+toolchain release and an Ingenic SDK version map, neither of which has a
+SigmaStar counterpart. For `infinity6e`, build against an existing Buildroot
+output with `./build.sh infinity6e /path/to/openipc-firmware/output`, or build
+the whole image, which packages raptor itself.
+
 First run downloads the toolchain and all dependencies automatically.
 Output binaries go to `build/`. Options: `--no-tls`, `--no-aac`,
 `--no-opus`, `--no-mp3`, `--no-audio-effects`, `--alt` (jz-crypto HW
@@ -170,12 +182,13 @@ accel), `--libc=musl|uclibc|glibc`.
 
 ```sh
 make PLATFORM=T31 CROSS_COMPILE=mipsel-linux- SYSROOT=/path/to/sysroot
+make PLATFORM=INFINITY6E CROSS_COMPILE=arm-openipc-linux-gnueabihf- SYSROOT=/path/to/sysroot
 ```
 
 Required variables:
 
-- `PLATFORM` -- target SoC: `T10`, `T20`, `T21`, `T23`, `T30`, `T31`, `T32`, `T33`, `T40`, `T41`, `A1`
-- `CROSS_COMPILE` -- toolchain prefix (e.g., `mipsel-linux-`)
+- `PLATFORM` -- target SoC: `T10`, `T20`, `T21`, `T23`, `T30`, `T31`, `T32`, `T33`, `T40`, `T41`, `A1`, `INFINITY6E`
+- `CROSS_COMPILE` -- toolchain prefix (e.g., `mipsel-linux-`, `arm-openipc-linux-gnueabihf-`)
 
 Optional variables:
 
@@ -236,6 +249,14 @@ Two backing store paths are selected automatically based on the encoder IP:
 |------|--------|---------------|
 | T10-T30, T32, T33 | POSIX SHM injection | Named SHM (`/rss_enc_<stream>`) |
 | T31, T40, T41 | rmem zero-copy | `/dev/rmem` mmap |
+| SSC30KQ (Infinity6E) | not available | n/a — always copies |
+
+Refmode stays off on Infinity6E deliberately, not for want of an implementation.
+MI recycles a single stream buffer as soon as `MI_VENC_ReleaseStream` returns:
+three consecutive frames of 61634, 2582 and 4073 bytes were observed landing at
+the same address, so a reference published across that boundary would be read
+back as whatever the next frame overwrote it with. The HAL leaves
+`enc_get_rmem_info` unimplemented, which is what makes rvd fall back to copying.
 
 Enable in config:
 
@@ -343,11 +364,19 @@ clocks must be NTP-synced.
 | T40 | IMPVI         | Supported |
 | T41 | IMPVI         | Supported |
 | A1  | VDEC/VENC     | RFS only (no ISP HAL) |
+| SSC30KQ (Infinity6E) | SigmaStar MI | Supported — H.264/H.265 main+sub, audio, OSD, IR-cut day/night |
 
-Platform differences are handled by raptor-hal, which abstracts the three SDK
+Platform differences are handled by raptor-hal, which abstracts the SDK
 generations behind a common API. The `PLATFORM` build variable selects the
 correct HAL backend at compile time. On A1, HAL is not built — RFS serves as
 the video/audio producer instead of RVD+RAD.
+
+`INFINITY6E` is the first non-Ingenic backend, and it is a different SDK family
+rather than another IMP generation: SigmaStar's MI API (`libmi_sys`, `libmi_vpe`,
+`libmi_venc`, `libmi_isp`, `libmi_ai`, `libmi_ao`), loaded through `dlopen` so
+one binary runs against whichever vendor libraries the image ships. See
+[docs/sigmastar.md](docs/sigmastar.md) for what is implemented, what is
+deliberately stubbed, and what is untested.
 
 ## License
 

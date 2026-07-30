@@ -34,3 +34,6 @@ fuzz/fuzz_sdp
 fuzz/fuzz_stun
 fuzz/fuzz_http_auth
 tests/tools/
+
+# Claude Code worktrees live inside the repo; never commit them
+.claude/worktrees/
