@@ -172,6 +172,45 @@ TEST ric_json_conf_precedence(void)
 	PASS();
 }
 
+/*
+ * Trailing bytes after the document are the one malformation
+ * cJSON_Parse accepts silently; the loader must reject them rather
+ * than half-honor the file. Trailing whitespace is not a fault: jct
+ * ends every save with a newline.
+ */
+TEST ric_json_trailing_junk_rejected(void)
+{
+	ric_config_t c = fresh_config();
+	const char *j = "{\"gpio\":{\"ircut\":57}}junk{{{";
+	write_fixture(j, strlen(j));
+	ric_json_gpio_load(&c, FIXTURE);
+	ASSERT_EQ(-1, c.gpio_ircut);
+	unlink(FIXTURE);
+	PASS();
+}
+
+TEST ric_json_trailing_newline_accepted(void)
+{
+	ric_config_t c = fresh_config();
+	const char *j = "{\"gpio\":{\"ircut\":57}}\n";
+	write_fixture(j, strlen(j));
+	ric_json_gpio_load(&c, FIXTURE);
+	ASSERT_EQ(57, c.gpio_ircut);
+	unlink(FIXTURE);
+	PASS();
+}
+
+TEST ric_json_truncated_document(void)
+{
+	ric_config_t c = fresh_config();
+	const char *j = "{\"gpio\":{\"ircut\":5";
+	write_fixture(j, strlen(j));
+	ric_json_gpio_load(&c, FIXTURE);
+	ASSERT_EQ(-1, c.gpio_ircut);
+	unlink(FIXTURE);
+	PASS();
+}
+
 TEST ric_json_all_preset_skips_file(void)
 {
 	ric_config_t c = fresh_config();
@@ -198,6 +237,9 @@ SUITE(ric_json_suite)
 	RUN_TEST(ric_json_empty_file);
 	RUN_TEST(ric_json_no_gpio_object);
 	RUN_TEST(ric_json_out_of_range_pins);
+	RUN_TEST(ric_json_trailing_junk_rejected);
+	RUN_TEST(ric_json_trailing_newline_accepted);
+	RUN_TEST(ric_json_truncated_document);
 	RUN_TEST(ric_json_conf_precedence);
 	RUN_TEST(ric_json_all_preset_skips_file);
 }

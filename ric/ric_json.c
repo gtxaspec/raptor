@@ -35,11 +35,10 @@
 
 /*
  * Bound the read explicitly rather than by the size of whatever
- * buffer is at hand: a short read hands cJSON a document truncated
- * mid-structure, which surfaces as a parse error and not as a size
- * error. Nothing bounds this file -- several thingino packages append
- * to it independently -- so the cap is what limits how much gets
- * handed to the parser, and no legitimate config comes close to it.
+ * buffer is at hand. Nothing bounds this file -- several thingino
+ * packages append to it independently -- so the cap is what limits
+ * how much gets handed to the parser, and no legitimate config comes
+ * close to it.
  */
 #define RIC_JSON_MAX (64 * 1024)
 
@@ -79,21 +78,38 @@ void ric_json_gpio_load(ric_config_t *c, const char *path)
 	}
 
 	/*
-	 * A short read is not special-cased: an empty or partial file is
-	 * a fault of the same kind as a malformed one, and letting it
-	 * reach cJSON_Parse means it reports through the same warning
-	 * instead of returning silently.
+	 * jct before v1.2.0 rewrote this file in place (its cross-device
+	 * rename fallback truncated the target, then refilled it in 4 KiB
+	 * chunks), so a concurrent save could shrink the file between the
+	 * fstat and this read. jct v1.2.0 replaces the file atomically and
+	 * retires that race; the guard stays for images still shipping the
+	 * old tool. A torn read would fail the parse anyway -- this only
+	 * names the real cause instead of blaming the JSON.
 	 */
 	size_t n = fread(buf, 1, (size_t)sb.st_size, f);
 	fclose(f);
+	if (n != (size_t)sb.st_size) {
+		RSS_WARN("read %zu of %lld bytes from %s (rewritten mid-read?) -- GPIO discovery "
+			 "skipped",
+			 n, (long long)sb.st_size, path);
+		free(buf);
+		return;
+	}
 	buf[n] = '\0';
 
-	/* cJSON copies what it keeps, so the buffer goes back either way. */
-	cJSON *root = cJSON_Parse(buf);
+	/*
+	 * require_null_terminated: trailing bytes after the document are
+	 * the one malformation cJSON_Parse accepts silently (it stops at
+	 * the first complete value), and a config that only half-parses
+	 * should be rejected, not half-honored. Trailing whitespace still
+	 * passes. cJSON copies what it keeps, so the buffer goes back
+	 * either way.
+	 */
+	cJSON *root = cJSON_ParseWithOpts(buf, NULL, 1);
 	free(buf);
 	if (!root) {
-		RSS_WARN("%s exists but does not parse as JSON -- GPIO discovery skipped, "
-			 "IR-cut and IR LED pins stay unset unless [ircut] provides them",
+		RSS_WARN("%s exists but does not parse as a single JSON document -- GPIO discovery "
+			 "skipped, IR-cut and IR LED pins stay unset unless [ircut] provides them",
 			 path);
 		return;
 	}
