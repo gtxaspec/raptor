@@ -50,57 +50,33 @@ static uint64_t jpeg_frame_utc(rss_ring_t *ring, const rss_ring_slot_t *meta)
 	return (uint64_t)ts.tv_sec * 1000000ULL + (uint64_t)ts.tv_nsec / 1000;
 }
 
-static bool handle_snapshot(rhd_server_t *srv, rhd_client_t *c, int epoll_fd, rss_ring_t *ring,
-			    uint8_t *buf, uint32_t buf_size)
+/*
+ * Park a /snap request. Demand on the ring is not signalled here: the main
+ * loop derives it from client state, so a client that disconnects while
+ * parked releases the encoder without a separate cleanup path.
+ */
+static bool handle_snapshot(rhd_client_t *c, int stream, rss_ring_t *ring)
 {
-	if (!ring || !buf) {
+	if (!ring) {
 		http_error(c, "503 Service Unavailable", "JPEG ring not available");
 		return false;
 	}
 
-	/* Signal demand so the JPEG encoder starts if idle */
-	rss_ring_acquire(ring);
-
-	/* Skip stale frames — start past current write_seq so we only
-	 * get a frame produced AFTER the acquire woke the encoder.
-	 * JPEG may be 1 fps, so allow up to 2s for the first frame. */
+	/*
+	 * Start the cursor past what the ring already holds, so the reply is
+	 * a frame produced for this request rather than whatever the encoder
+	 * left behind the last time something watched it.
+	 */
 	const rss_ring_header_t *hdr = rss_ring_get_header(ring);
-	uint64_t seq = atomic_load(&hdr->write_seq);
-	uint32_t length = 0;
-	rss_ring_slot_t meta;
-	int ret = -EAGAIN;
+	c->snap_seq = atomic_load(&hdr->write_seq);
+	c->snap_stream = stream;
+	c->snap_pending = true;
 
-	for (int attempt = 0; attempt < 20; attempt++) {
-		rss_ring_wait(ring, 100);
-		ret = rss_ring_read(ring, &seq, buf, buf_size, &length, &meta);
-		if (ret == 0 && length >= 2 && buf[0] == 0xFF && buf[1] == 0xD8)
-			break;
-	}
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	c->snap_deadline = ts.tv_sec * 1000 + ts.tv_nsec / 1000000 + RHD_SNAP_TIMEOUT_MS;
 
-	rss_ring_release(ring);
-
-	if (ret != 0 || length < 2 || buf[0] != 0xFF || buf[1] != 0xD8) {
-		http_error(c, "503 Service Unavailable", "No snapshot available yet");
-		return false;
-	}
-
-	if (srv->exif_timestamp) {
-		int n = rss_jpeg_insert_exif(buf, buf_size, length, jpeg_frame_utc(ring, &meta));
-		if (n > 0)
-			length = (uint32_t)n;
-	}
-	if (srv->sign_ok) {
-		int n = rss_jpeg_sign(buf, buf_size, length, &srv->sign_key);
-		if (n > 0)
-			length = (uint32_t)n;
-	}
-
-	/* Queue for non-blocking send via epoll */
-	if (http_send_async(c, epoll_fd, "image/jpeg", buf, length) < 0) {
-		http_error(c, "500 Internal Server Error", "Out of memory");
-		return false;
-	}
-	return true; /* keep alive — epoll will drain and close */
+	return true; /* the main loop completes it or times it out */
 }
 
 /* ── Per-client send queue ── */
@@ -276,6 +252,84 @@ static void remove_client(rhd_server_t *srv, int idx)
 	srv->clients[idx] = srv->clients[--srv->client_count];
 }
 
+/*
+ * Complete every parked snapshot that has a frame waiting, and fail the ones
+ * that ran out of time. Runs once per main-loop pass, after ring demand has
+ * been applied so an encoder woken by the request has had a chance to produce.
+ */
+static void snap_poll(rhd_server_t *srv)
+{
+	if (!srv->snap_buf)
+		return;
+
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	int64_t now = ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+
+	for (int i = srv->client_count - 1; i >= 0; i--) {
+		rhd_client_t *c = srv->clients[i];
+		if (!c->snap_pending)
+			continue;
+
+		rss_ring_t *ring = srv->jpeg_rings[c->snap_stream];
+		if (!ring) {
+			c->snap_pending = false;
+			http_error(c, "503 Service Unavailable", "JPEG ring not available");
+			remove_client(srv, i);
+			continue;
+		}
+
+		uint32_t len = 0;
+		rss_ring_slot_t meta;
+		int ret = rss_ring_read(ring, &c->snap_seq, srv->snap_buf, srv->snap_buf_size, &len,
+					&meta);
+
+		/* Lapped by the writer: resync onto the newest frame and retry. */
+		if (ret == RSS_EOVERFLOW) {
+			const rss_ring_header_t *hdr = rss_ring_get_header(ring);
+			uint64_t w = atomic_load(&hdr->write_seq);
+			c->snap_seq = w > 0 ? w - 1 : 0;
+			continue;
+		}
+
+		if (ret == 0 && len >= 2 && srv->snap_buf[0] == 0xFF && srv->snap_buf[1] == 0xD8) {
+			c->snap_pending = false;
+			if (srv->exif_timestamp) {
+				int n = rss_jpeg_insert_exif(srv->snap_buf, srv->snap_buf_size, len,
+							     jpeg_frame_utc(ring, &meta));
+				if (n > 0)
+					len = (uint32_t)n;
+			}
+			if (srv->sign_ok) {
+				int n = rss_jpeg_sign(srv->snap_buf, srv->snap_buf_size, len,
+						      &srv->sign_key);
+				if (n > 0)
+					len = (uint32_t)n;
+			}
+			if (http_send_async(c, srv->epoll_fd, "image/jpeg", srv->snap_buf, len) < 0) {
+				http_error(c, "500 Internal Server Error", "Out of memory");
+				remove_client(srv, i);
+			}
+			continue;
+		}
+
+		if (now >= c->snap_deadline) {
+			c->snap_pending = false;
+			http_error(c, "503 Service Unavailable", "No snapshot available yet");
+			remove_client(srv, i);
+		}
+	}
+}
+
+/* True while any client has a snapshot parked on this JPEG ring. */
+static bool snap_waiting_on(const rhd_server_t *srv, int stream)
+{
+	for (int i = 0; i < srv->client_count; i++)
+		if (srv->clients[i]->snap_pending && srv->clients[i]->snap_stream == stream)
+			return true;
+	return false;
+}
+
 static int find_client(rhd_server_t *srv, int fd)
 {
 	for (int i = 0; i < srv->client_count; i++)
@@ -327,9 +381,8 @@ static void handle_request(rhd_server_t *srv, rhd_client_t *c)
 	if (strncmp(path, "/snap", 5) == 0) {
 		int si = parse_stream_param(path);
 		if (si < srv->jpeg_ring_count && srv->jpeg_rings[si]) {
-			if (handle_snapshot(srv, c, srv->epoll_fd, srv->jpeg_rings[si],
-					    srv->snap_buf, srv->snap_buf_size))
-				return; /* keep alive — async send in progress */
+			if (handle_snapshot(c, si, srv->jpeg_rings[si]))
+				return; /* keep alive — parked for the main loop */
 		} else {
 			http_error(c, "404 Not Found", "Stream not available");
 		}
@@ -577,12 +630,20 @@ static void server_run(rhd_server_t *srv)
 		 * encoder, which costs H.264 throughput on old SoCs. */
 		bool ring_wanted[RHD_MAX_JPEG] = {false};
 		bool has_mjpeg_clients = false;
+		bool has_snap_pending = false;
 		for (int i = 0; i < srv->client_count; i++) {
 			rhd_client_t *mc = srv->clients[i];
 			if (mc->is_mjpeg && mc->mjpeg_stream >= 0 &&
 			    mc->mjpeg_stream < RHD_MAX_JPEG) {
 				ring_wanted[mc->mjpeg_stream] = true;
 				has_mjpeg_clients = true;
+			}
+			/* A parked snapshot is demand too — it is what starts an
+			 * idle encoder, and it keeps it running until served. */
+			if (mc->snap_pending && mc->snap_stream >= 0 &&
+			    mc->snap_stream < RHD_MAX_JPEG) {
+				ring_wanted[mc->snap_stream] = true;
+				has_snap_pending = true;
 			}
 		}
 
@@ -624,6 +685,8 @@ static void server_run(rhd_server_t *srv)
 				}
 			}
 		}
+
+		snap_poll(srv);
 
 		/* Stream audio frames to audio clients */
 		bool has_audio_clients = false;
@@ -696,7 +759,7 @@ static void server_run(rhd_server_t *srv)
 			}
 		}
 
-		int timeout = (has_mjpeg_clients || has_audio_clients) ? 50 : 500;
+		int timeout = (has_mjpeg_clients || has_audio_clients || has_snap_pending) ? 50 : 500;
 		int n = epoll_wait(srv->epoll_fd, events, 16, timeout);
 
 		for (int i = 0; i < n; i++) {
@@ -806,8 +869,10 @@ static void server_run(rhd_server_t *srv)
 			/* Check for complete HTTP request */
 			if (strstr(c->recv_buf, "\r\n\r\n")) {
 				handle_request(srv, c);
-				/* Close non-streaming, non-async connections */
-				if (!c->is_mjpeg && !c->is_audio && !c->send_buf)
+				/* Close non-streaming, non-async connections. A
+				 * parked snapshot has neither a send buffer nor a
+				 * stream yet, and must outlive this pass. */
+				if (!c->is_mjpeg && !c->is_audio && !c->send_buf && !c->snap_pending)
 					remove_client(srv, ci);
 			}
 		}
@@ -880,7 +945,19 @@ static void server_run(rhd_server_t *srv)
 				else
 					jpeg_idle[j] = 0;
 				jpeg_last_ws[j] = ws;
-				if (jpeg_idle[j] >= 10) { /* ~20s (10 ticks * 2s/tick) */
+				/*
+				 * A parked snapshot holds the ring open. The
+				 * idle counter is already at its threshold when
+				 * such a request arrives — that is what made the
+				 * encoder idle in the first place — so without
+				 * this the very next tick closes the ring out
+				 * from under a request that is about to be
+				 * served. The parked request has its own
+				 * deadline, so this defers the close by seconds
+				 * at most.
+				 */
+				if (jpeg_idle[j] >= 10 &&
+				    !snap_waiting_on(srv, j)) { /* ~20s (10 ticks * 2s/tick) */
 					RSS_DEBUG("jpeg ring idle, closing (%s)",
 						  jpeg_ring_names[j]);
 					if (ring_acquired[j]) {
