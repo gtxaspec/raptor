@@ -72,6 +72,14 @@ static bool handle_snapshot(rhd_client_t *c, int stream, rss_ring_t *ring)
 	c->snap_stream = stream;
 	c->snap_pending = true;
 
+	/*
+	 * Drop the request text now that it has been acted on. It still ends
+	 * in the terminator the reader matches on, so leaving it would let the
+	 * next byte from the client re-run this handler against the same
+	 * request and park it again on a fresh deadline.
+	 */
+	c->recv_len = 0;
+
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	c->snap_deadline = ts.tv_sec * 1000 + ts.tv_nsec / 1000000 + RHD_SNAP_TIMEOUT_MS;
@@ -259,9 +267,6 @@ static void remove_client(rhd_server_t *srv, int idx)
  */
 static void snap_poll(rhd_server_t *srv)
 {
-	if (!srv->snap_buf)
-		return;
-
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	int64_t now = ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
@@ -279,10 +284,16 @@ static void snap_poll(rhd_server_t *srv)
 			continue;
 		}
 
+		/*
+		 * Read only when there is somewhere to read into. The deadline
+		 * below still runs without a buffer, so a failed allocation
+		 * fails the request rather than parking it forever.
+		 */
 		uint32_t len = 0;
 		rss_ring_slot_t meta;
-		int ret = rss_ring_read(ring, &c->snap_seq, srv->snap_buf, srv->snap_buf_size, &len,
-					&meta);
+		int ret = srv->snap_buf ? rss_ring_read(ring, &c->snap_seq, srv->snap_buf,
+						       srv->snap_buf_size, &len, &meta)
+					: -1;
 
 		/* Lapped by the writer: resync onto the newest frame and retry. */
 		if (ret == RSS_EOVERFLOW) {
@@ -306,7 +317,8 @@ static void snap_poll(rhd_server_t *srv)
 				if (n > 0)
 					len = (uint32_t)n;
 			}
-			if (http_send_async(c, srv->epoll_fd, "image/jpeg", srv->snap_buf, len) < 0) {
+			if (http_send_async(c, srv->epoll_fd, "image/jpeg", srv->snap_buf,
+					    len) < 0) {
 				http_error(c, "500 Internal Server Error", "Out of memory");
 				remove_client(srv, i);
 			}
@@ -759,7 +771,8 @@ static void server_run(rhd_server_t *srv)
 			}
 		}
 
-		int timeout = (has_mjpeg_clients || has_audio_clients || has_snap_pending) ? 50 : 500;
+		int timeout =
+			(has_mjpeg_clients || has_audio_clients || has_snap_pending) ? 50 : 500;
 		int n = epoll_wait(srv->epoll_fd, events, 16, timeout);
 
 		for (int i = 0; i < n; i++) {
@@ -866,13 +879,21 @@ static void server_run(rhd_server_t *srv)
 			c->recv_len += nr;
 			c->recv_buf[c->recv_len] = '\0';
 
-			/* Check for complete HTTP request */
-			if (strstr(c->recv_buf, "\r\n\r\n")) {
+			/*
+			 * Check for complete HTTP request. A client with a
+			 * snapshot already parked is not served a second one on
+			 * the same connection: the reply it is waiting for closes
+			 * the connection, so anything arriving now is either a
+			 * pipelined request that cannot be answered or noise, and
+			 * acting on it would re-park with a new deadline.
+			 */
+			if (strstr(c->recv_buf, "\r\n\r\n") && !c->snap_pending) {
 				handle_request(srv, c);
 				/* Close non-streaming, non-async connections. A
 				 * parked snapshot has neither a send buffer nor a
 				 * stream yet, and must outlive this pass. */
-				if (!c->is_mjpeg && !c->is_audio && !c->send_buf && !c->snap_pending)
+				if (!c->is_mjpeg && !c->is_audio && !c->send_buf &&
+				    !c->snap_pending)
 					remove_client(srv, ci);
 			}
 		}
