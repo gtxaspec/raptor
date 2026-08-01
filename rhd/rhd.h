@@ -34,6 +34,7 @@
 #define RHD_RECV_BUF	    4096
 #define RHD_MJPEG_BOUNDARY  "raptorframe"
 #define RHD_SEND_TIMEOUT_MS 3000 /* max time to drain a one-shot response */
+#define RHD_SNAP_TIMEOUT_MS 5000 /* max wait for a JPEG encoder to produce a fresh frame */
 #define RHD_MAX_JPEG	    6	 /* up to 2 per sensor, 3 sensors */
 
 /* Index page — loaded from file on first request, cached */
@@ -77,6 +78,18 @@ typedef struct {
 	struct sockaddr_storage addr;
 	char recv_buf[RHD_RECV_BUF];
 	size_t recv_len;
+
+	/*
+	 * Parked /snap request. An idle JPEG encoder needs a frame period or
+	 * more to produce, and this daemon serves every client from one
+	 * thread, so waiting for it inline stalls MJPEG and audio for the
+	 * duration. The request is held here and completed from the main
+	 * loop instead.
+	 */
+	bool snap_pending;
+	int snap_stream;       /* JPEG ring index */
+	uint64_t snap_seq;     /* read cursor, started past the ring's contents */
+	int64_t snap_deadline; /* monotonic ms */
 
 	/* Non-blocking send buffer (snapshot / one-shot responses) */
 	uint8_t *send_buf;  /* heap-allocated response (header + body) */
