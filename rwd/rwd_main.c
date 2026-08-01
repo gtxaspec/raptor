@@ -899,6 +899,10 @@ int main(int argc, char **argv)
 			    sizeof(wt.stun_server));
 		wt.stun_port = rss_config_get_int(dctx.cfg, "webtorrent", "stun_port", 19302);
 		wt.tls_verify = rss_config_get_bool(dctx.cfg, "webtorrent", "tls_verify", true);
+		/* The hosted viewer page lives in the thingino/webtorrent-viewer
+		 * repo (it used to be rwd/share.html here); viewer_url only
+		 * matters for self-hosters. webrtc.html below is unrelated: that
+		 * is the on-camera LAN page. */
 		rss_strlcpy(wt.viewer_base_url,
 			    rss_config_get_str(dctx.cfg, "webtorrent", "viewer_url",
 					       "https://viewer.thingino.com/share.html"),
