@@ -224,40 +224,20 @@ void rwd_generate_ice_credentials(char *ufrag, size_t ufrag_len, char *pwd, size
 
 static int create_udp_socket(int port)
 {
-	int fd = socket(AF_INET6, SOCK_DGRAM, 0);
-	if (fd < 0) {
-		/* Fallback to IPv4 if IPv6 not available */
-		fd = socket(AF_INET, SOCK_DGRAM, 0);
-		if (fd < 0)
-			return -1;
-
-		int reuse = 1;
-		setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
-
-		struct sockaddr_in addr = {
-			.sin_family = AF_INET,
-			.sin_port = htons(port),
-			.sin_addr.s_addr = INADDR_ANY,
-		};
-		if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-			close(fd);
-			return -1;
-		}
-		fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
-		return fd;
-	}
+	int family = AF_INET6;
+	int fd = rss_socket_udp(&family);
+	if (fd < 0)
+		return -1;
+	if (family == AF_INET)
+		RSS_INFO("kernel has no IPv6; WebRTC media on IPv4 only");
 
 	int reuse = 1;
 	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
-	int off = 0;
-	setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof(off));
 
-	struct sockaddr_in6 addr = {
-		.sin6_family = AF_INET6,
-		.sin6_port = htons(port),
-		.sin6_addr = IN6ADDR_ANY_INIT,
-	};
-	if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+	struct sockaddr_storage addr;
+	socklen_t addrlen = rss_sockaddr_any(family, (uint16_t)port, &addr);
+
+	if (bind(fd, (struct sockaddr *)&addr, addrlen) < 0) {
 		close(fd);
 		return -1;
 	}
@@ -272,42 +252,22 @@ static int create_udp_socket(int port)
 
 static int create_http_socket(int port)
 {
-	int fd = socket(AF_INET6, SOCK_STREAM, 0);
-	if (fd >= 0) {
-		int reuse = 1;
-		setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
-		int off = 0;
-		setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof(off));
+	int family = AF_INET6;
+	int fd = rss_socket_tcp(&family);
+	if (fd < 0)
+		return -1;
+	if (family == AF_INET)
+		RSS_INFO("kernel has no IPv6; WebRTC signaling on IPv4 only");
 
-		struct sockaddr_in6 addr6 = {
-			.sin6_family = AF_INET6,
-			.sin6_port = htons(port),
-			.sin6_addr = IN6ADDR_ANY_INIT,
-		};
-		if (bind(fd, (struct sockaddr *)&addr6, sizeof(addr6)) < 0) {
-			close(fd);
-			fd = -1;
-		}
-	}
+	int reuse = 1;
+	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
 
-	/* Fallback to IPv4 if IPv6 not available */
-	if (fd < 0) {
-		fd = socket(AF_INET, SOCK_STREAM, 0);
-		if (fd < 0)
-			return -1;
+	struct sockaddr_storage addr;
+	socklen_t addrlen = rss_sockaddr_any(family, (uint16_t)port, &addr);
 
-		int reuse = 1;
-		setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
-
-		struct sockaddr_in addr4 = {
-			.sin_family = AF_INET,
-			.sin_port = htons(port),
-			.sin_addr.s_addr = INADDR_ANY,
-		};
-		if (bind(fd, (struct sockaddr *)&addr4, sizeof(addr4)) < 0) {
-			close(fd);
-			return -1;
-		}
+	if (bind(fd, (struct sockaddr *)&addr, addrlen) < 0) {
+		close(fd);
+		return -1;
 	}
 
 	/* listen backlog of 8 provides implicit connection limiting */
