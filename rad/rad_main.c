@@ -1339,7 +1339,7 @@ int main(int argc, char **argv)
 
 		int64_t now = rss_timestamp_us();
 		if (now - last_stats >= 30000000) {
-			RSS_DEBUG("audio frames: %llu", (unsigned long long)frame_count);
+			RSS_TRACE("audio frames: %llu", (unsigned long long)frame_count);
 			last_stats = now;
 		}
 	}

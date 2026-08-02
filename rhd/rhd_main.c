@@ -99,7 +99,7 @@ static rss_ring_t *jpeg_ring_open_slot(rhd_server_t *srv, int j)
 	if (j + 1 > srv->jpeg_ring_count)
 		srv->jpeg_ring_count = j + 1;
 
-	RSS_DEBUG("jpeg ring open (%s, %u byte frames)", jpeg_ring_names[j], mfs);
+	RSS_TRACE("jpeg ring open (%s, %u byte frames)", jpeg_ring_names[j], mfs);
 	return ring;
 }
 
@@ -977,7 +977,7 @@ static void server_run(rhd_server_t *srv)
 				 */
 				if (jpeg_idle[j] >= 10 &&
 				    !snap_waiting_on(srv, j)) { /* ~20s (10 ticks * 2s/tick) */
-					RSS_DEBUG("jpeg ring idle, closing (%s)",
+					RSS_TRACE("jpeg ring idle, closing (%s)",
 						  jpeg_ring_names[j]);
 					if (ring_acquired[j]) {
 						rss_ring_release(srv->jpeg_rings[j]);
