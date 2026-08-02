@@ -7,6 +7,7 @@
 #include <string.h>
 #include <inttypes.h>
 #include <arpa/inet.h>
+#include <rss_net.h>
 
 /* ── Helpers ── */
 
@@ -107,18 +108,29 @@ int rsr_srt_init(rsr_state_t *st)
 
 	srt_listen_callback(st->listener, listen_callback, st);
 
-	struct sockaddr_in6 addr;
+	/* IPv6 first: the SRT socket has no family until bind, and with
+	 * SRTO_IPV6ONLY cleared above the v6 wildcard serves both families.
+	 * On a kernel without IPv6 that bind cannot succeed, so retry on the
+	 * v4 wildcard before giving up; libsrt folds the OS errno into its
+	 * own error space, so the retry keys on bind failure rather than a
+	 * specific errno, and a genuine EADDRINUSE just fails twice with
+	 * both errors reported. */
+	struct sockaddr_storage addr;
+	socklen_t addrlen = rss_sockaddr_any(AF_INET6, (uint16_t)st->port, &addr);
 
-	memset(&addr, 0, sizeof(addr));
-	addr.sin6_family = AF_INET6;
-	addr.sin6_port = htons((uint16_t)st->port);
-	addr.sin6_addr = in6addr_any;
+	if (srt_bind(st->listener, (struct sockaddr *)&addr, (int)addrlen) == SRT_ERROR) {
+		char v6_err[128];
 
-	if (srt_bind(st->listener, (struct sockaddr *)&addr, sizeof(addr)) == SRT_ERROR) {
-		RSS_ERROR("srt_bind port %d: %s", st->port, srt_getlasterror_str());
-		srt_close(st->listener);
-		srt_cleanup();
-		return -1;
+		snprintf(v6_err, sizeof(v6_err), "%s", srt_getlasterror_str());
+		addrlen = rss_sockaddr_any(AF_INET, (uint16_t)st->port, &addr);
+		if (srt_bind(st->listener, (struct sockaddr *)&addr, (int)addrlen) == SRT_ERROR) {
+			RSS_ERROR("srt_bind port %d: v6: %s; v4: %s", st->port, v6_err,
+				  srt_getlasterror_str());
+			srt_close(st->listener);
+			srt_cleanup();
+			return -1;
+		}
+		RSS_INFO("kernel has no IPv6; SRT listening on IPv4 only (v6 bind: %s)", v6_err);
 	}
 
 	if (srt_listen(st->listener, 5) == SRT_ERROR) {
