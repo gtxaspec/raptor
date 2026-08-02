@@ -669,8 +669,16 @@ def scenario_adc(stub, watch):
         ric.stop()
         return
     if "falling back to luma" in ric.read_log():
-        result(False, "adc: shim provides the device", ric.read_log()[-300:])
+        # The shim intercepted nothing: on some hosts the ASan runtime's
+        # own open/read interceptors resolve past an LD_PRELOAD that
+        # loads after it (reported on PR #17). Coverage is lost either
+        # way; strict mode refuses to lose it silently.
         ric.stop()
+        if os.environ.get("RIC_SUITE_STRICT", "") == "1":
+            result(False, "adc: shim provides the device", ric.read_log()[-300:])
+        else:
+            print("  SKIP  adc: preload shim inert on this host "
+                  "(ASan interceptor order)", flush=True)
         return
     mm = stub.mark()
     with open(backing, "wb") as f:
