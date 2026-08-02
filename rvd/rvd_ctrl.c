@@ -90,6 +90,11 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 		for (int i = 0; i < st->stream_count; i++) {
 			if (target >= 0 && i != target)
 				continue;
+			/* Same reason the frame loop skips them: every MJPEG
+			 * frame is already intra, so there is no keyframe to
+			 * ask for, and an encoder may reject the request. */
+			if (st->streams[i].is_jpeg)
+				continue;
 			RSS_HAL_CALL(st->ops, enc_request_idr, st->hal_ctx, st->streams[i].chn);
 		}
 		return rss_ctrl_resp_ok(resp, resp_size);

@@ -311,6 +311,48 @@ else
     fail "MJPEG stream starts" "exit $ret"
 fi
 
+# ── JPEG IDR gate: a consumer's keyframe request must reach the
+#    encoder for a video channel and must not for a JPEG one, where
+#    every frame is already intra. The gate is invisible on real
+#    hardware (the call it skips was a no-op there), so the mock's
+#    enc_request_idr trace is the only artifact that can pin it.
+#    Positive control first: the video assertion proves the
+#    instrumentation before the JPEG absence means anything.
+#    Every command is guarded: this file runs under set -e, and a
+#    test that can abort the suite is worse than no test.
+# Only lines written from here on count: raptorctl's request-idr test
+# above deliberately drives the same HAL call, so scanning the whole
+# log would read its output as this test's result.
+IDR_MARK=$(wc -l < "$LOG_DIR/rvd.log" 2>/dev/null || echo 0)
+idr_log_since() { tail -n "+$((IDR_MARK + 1))" "$LOG_DIR/rvd.log" 2>/dev/null || true; }
+if "$OUT/ringdump" main -i > /dev/null 2>&1; then
+    sleep 2
+    check_contains "IDR request on a video ring reaches the encoder" \
+        "mock: enc_request_idr chn=0$" idr_log_since
+
+    # A held reader starts the JPEG encoder, so the frame loop reaches
+    # the gate instead of parking in its no-consumers branch.
+    "$OUT/ringdump" jpeg0 -f -s > /dev/null 2>&1 &
+    IDR_READER=$!
+    sleep 2
+    JCHN=$(sed -n 's/.*jpeg chn \([0-9]*\): started.*/\1/p' "$LOG_DIR/rvd.log" | tail -1 || true)
+    IDR_MARK2=$(wc -l < "$LOG_DIR/rvd.log" 2>/dev/null || echo 0)
+    "$OUT/ringdump" jpeg0 -i > /dev/null 2>&1 || true
+    sleep 2
+    kill $IDR_READER 2>/dev/null || true
+    wait $IDR_READER 2>/dev/null || true
+    if [ -z "$JCHN" ]; then
+        fail "IDR request on a JPEG ring is gated" "jpeg channel never started"
+    elif tail -n "+$((IDR_MARK2 + 1))" "$LOG_DIR/rvd.log" 2>/dev/null |
+            grep -q "mock: enc_request_idr chn=$JCHN\$"; then
+        fail "IDR request on a JPEG ring is gated" "chn $JCHN received an IDR call"
+    else
+        pass "IDR request on a JPEG ring is gated (chn $JCHN: flag raised, no call)"
+    fi
+else
+    fail "JPEG IDR gate" "ringdump -i unavailable (stale asan build? run build-asan.sh)"
+fi
+
 # Audio stream
 if timeout 2 curl -s -o /dev/null "http://127.0.0.1:18080/audio" 2>/dev/null; ret=$?; [ "$ret" = 124 ] || [ "$ret" = 0 ]; then
     pass "audio stream starts"

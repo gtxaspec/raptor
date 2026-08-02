@@ -119,6 +119,7 @@ static void usage(const char *prog)
 		"  -d          Dump raw frame data to stdout\n"
 		"  -l          Latency mode (measure pipeline latency)\n"
 		"  -s          Start at the newest frame (skip ring history)\n"
+		"  -i          Raise the ring's IDR-request flag and exit\n"
 		"  -n <count>  Stop after <count> frames\n"
 		"  -h          Show this help\n"
 		"\n"
@@ -151,11 +152,12 @@ int main(int argc, char **argv)
 	bool dump_raw = false;
 	bool latency_mode = false;
 	bool start_newest = false;
+	bool request_idr = false;
 	int max_frames = 0;
 
 	int opt;
 	optind = 2; /* skip ring name */
-	while ((opt = getopt(argc, argv, "fdlsn:h")) != -1) {
+	while ((opt = getopt(argc, argv, "fdlsin:h")) != -1) {
 		switch (opt) {
 		case 'f':
 			follow = true;
@@ -169,6 +171,9 @@ int main(int argc, char **argv)
 			break;
 		case 's':
 			start_newest = true;
+			break;
+		case 'i':
+			request_idr = true;
 			break;
 		case 'n':
 			max_frames = (int)strtol(optarg, NULL, 10);
@@ -190,6 +195,12 @@ int main(int argc, char **argv)
 	if (!ring) {
 		fprintf(stderr, "Cannot open ring '%s' -- not created yet?\n", ring_name);
 		return 1;
+	}
+	if (request_idr) {
+		rss_ring_request_idr(ring);
+		printf("IDR requested on '%s'\n", ring_name);
+		rss_ring_close(ring);
+		return 0;
 	}
 	{
 		uint32_t ring_ver = 0;

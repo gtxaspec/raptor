@@ -136,6 +136,19 @@ static int mock_ok(void *ctx, ...)
 	return RSS_OK;
 }
 
+/*
+ * Named, not folded into mock_ok: the jpeg IDR gate in rvd is
+ * unobservable on real hardware (skipping a call that was a no-op
+ * there), so this trace line is the only artifact a regression test
+ * can assert on.
+ */
+static int mock_enc_request_idr(void *ctx, int chn)
+{
+	(void)ctx;
+	fprintf(stderr, "mock: enc_request_idr chn=%d\n", chn);
+	return RSS_OK;
+}
+
 static void *mock_null_ptr(void *ctx, ...)
 {
 	(void)ctx;
@@ -682,7 +695,7 @@ static const rss_hal_ops_t mock_ops = {
 	.enc_poll = mock_enc_poll,
 	.enc_get_frame = mock_enc_get_frame,
 	.enc_release_frame = (void *)mock_ok,
-	.enc_request_idr = (void *)mock_ok,
+	.enc_request_idr = mock_enc_request_idr,
 	.enc_inject_stream_shm = mock_enc_inject_stream_shm,
 	.enc_get_rmem_info = mock_enc_get_rmem_info,
 	.enc_set_rc_mode = (void *)mock_ok,
