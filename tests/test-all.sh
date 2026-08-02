@@ -6,7 +6,8 @@
 #   1. Build (ASAN or TSAN)
 #   2. Sibling repo tests (raptor-ipc, raptor-common)
 #   3. Unit tests (host x86, ASAN)
-#   4. Integration tests (daemons + curl/ffprobe)
+#   4. Integration tests (daemons + curl/ffprobe), then the ric
+#      behavior suite (stub rvd + fake sysfs GPIO, test-ric.sh)
 #   5. Leak/race detection (lifecycle soak)
 #
 # Usage:
@@ -130,6 +131,12 @@ if "$SCRIPT_DIR/test-integration.sh"; then
     stage_pass "integration tests"
 else
     stage_fail "integration tests"
+fi
+
+if "$SCRIPT_DIR/test-ric.sh"; then
+    stage_pass "ric behavior suite"
+else
+    stage_fail "ric behavior suite"
 fi
 
 # ── Stage 5: Leak / race detection ──
