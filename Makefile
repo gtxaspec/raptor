@@ -223,18 +223,56 @@ phase1: libs rvd ringdump raptorctl
 
 libs: $(LIB_HAL_VIDEO_FILE) $(LIB_HAL_AUDIO_FILE) $(LIB_IPC_FILE) $(LIB_COMMON_FILE)
 
-$(LIB_HAL_VIDEO_FILE) $(LIB_HAL_AUDIO_FILE):
+# The sibling libraries are built by sub-makes, reached through a phony
+# target rather than by a rule on the library files themselves.
+#
+# A rule whose target is the library and which carries no prerequisites runs
+# only when the file is missing, so edits to a sibling's sources never reach
+# the daemons here. Only the sub-make knows what its own library depends on,
+# and a phony prerequisite is what hands it that decision on every build.
+#
+# One phony target per sibling, not one per library file: make enters a phony
+# target once per run however many targets depend on it, so the raptor-hal
+# sub-make cannot run twice concurrently under -j for its two archives.
+#
+# Each block is guarded on its sibling being present, because these rules
+# describe a developer checkout, where raptor-hal, raptor-ipc and raptor-common
+# sit next to this tree. A packaged build has no siblings -- each library comes
+# from its own package through LIB_*_FILE pointing into the sysroot, where the
+# file already exists and nothing here should try to enter a directory that is
+# not there. Guarded per library rather than once for all three, because a
+# mixture is legal: bisecting one library while the other two come from
+# staging.
+ifneq ($(wildcard $(HAL_DIR)/Makefile),)
+.PHONY: build-raptor-hal
+build-raptor-hal:
 	@echo "  BUILD   raptor-hal"
 	$(Q)$(MAKE) -C $(HAL_DIR) PLATFORM=$(PLATFORM) CROSS_COMPILE=$(CROSS_COMPILE) \
 		$(if $(DEBUG),DEBUG=1,)
 
-$(LIB_IPC_FILE):
+$(LIB_HAL_VIDEO_FILE) $(LIB_HAL_AUDIO_FILE): build-raptor-hal
+	@:
+endif
+
+ifneq ($(wildcard $(IPC_DIR)/Makefile),)
+.PHONY: build-raptor-ipc
+build-raptor-ipc:
 	@echo "  BUILD   raptor-ipc"
 	$(Q)$(MAKE) -C $(IPC_DIR) CC="$(CC)"
 
-$(LIB_COMMON_FILE):
+$(LIB_IPC_FILE): build-raptor-ipc
+	@:
+endif
+
+ifneq ($(wildcard $(COMMON_DIR)/Makefile),)
+.PHONY: build-raptor-common
+build-raptor-common:
 	@echo "  BUILD   raptor-common"
 	$(Q)$(MAKE) -C $(COMMON_DIR) CC="$(CC)"
+
+$(LIB_COMMON_FILE): build-raptor-common
+	@:
+endif
 
 # -- Daemons --
 
