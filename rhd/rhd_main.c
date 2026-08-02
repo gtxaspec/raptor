@@ -50,6 +50,59 @@ static uint64_t jpeg_frame_utc(rss_ring_t *ring, const rss_ring_slot_t *meta)
 	return (uint64_t)ts.tv_sec * 1000000ULL + (uint64_t)ts.tv_nsec / 1000;
 }
 
+/* JPEG ring names: sensor 0 = jpeg0/jpeg1, sensor N = sN_jpeg0/sN_jpeg1 */
+static const char *jpeg_ring_names[RHD_MAX_JPEG] = {"jpeg0",	"jpeg1",    "s1_jpeg0",
+						    "s1_jpeg1", "s2_jpeg0", "s2_jpeg1"};
+
+/*
+ * Open a JPEG ring slot and size the shared frame buffers for it.
+ * Rings come and go with encoder idle management, so every consumer
+ * path opens on demand instead of waiting for the periodic sweep: a
+ * request that lands while a slot is closed costs one open, not a
+ * 404. Safe to call with the slot already open.
+ */
+static rss_ring_t *jpeg_ring_open_slot(rhd_server_t *srv, int j)
+{
+	if (srv->jpeg_rings[j])
+		return srv->jpeg_rings[j];
+
+	rss_ring_t *ring = rss_ring_open(jpeg_ring_names[j]);
+	if (!ring)
+		return NULL;
+
+	rss_ring_check_version(ring, jpeg_ring_names[j]);
+	srv->jpeg_rings[j] = ring;
+	srv->jpeg_read_seqs[j] = 0;
+
+	uint32_t mfs = rss_ring_max_frame_size(ring);
+	uint32_t cap = mfs + RSS_JPEG_EXIF_MAX + RSS_JPEG_SIG_SEGMENT;
+	if (mfs > srv->frame_buf_size || !srv->frame_buf) {
+		free(srv->frame_buf);
+		srv->frame_buf_size = mfs;
+		srv->frame_buf_cap = cap;
+		srv->frame_buf = malloc(cap);
+		if (!srv->frame_buf) {
+			RSS_WARN("failed to allocate frame buffer (%u bytes)", cap);
+			srv->frame_buf_size = 0;
+			srv->frame_buf_cap = 0;
+		}
+	}
+	if (cap > srv->snap_buf_size) {
+		free(srv->snap_buf);
+		srv->snap_buf_size = cap;
+		srv->snap_buf = malloc(cap);
+		if (!srv->snap_buf) {
+			RSS_WARN("failed to allocate snapshot buffer (%u bytes)", cap);
+			srv->snap_buf_size = 0;
+		}
+	}
+	if (j + 1 > srv->jpeg_ring_count)
+		srv->jpeg_ring_count = j + 1;
+
+	RSS_DEBUG("jpeg ring open (%s, %u byte frames)", jpeg_ring_names[j], mfs);
+	return ring;
+}
+
 /*
  * Park a /snap request. Demand on the ring is not signalled here: the main
  * loop derives it from client state, so a client that disconnects while
@@ -392,15 +445,16 @@ static void handle_request(rhd_server_t *srv, rhd_client_t *c)
 
 	if (strncmp(path, "/snap", 5) == 0) {
 		int si = parse_stream_param(path);
-		if (si < srv->jpeg_ring_count && srv->jpeg_rings[si]) {
-			if (handle_snapshot(c, si, srv->jpeg_rings[si]))
+		rss_ring_t *ring = jpeg_ring_open_slot(srv, si);
+		if (ring) {
+			if (handle_snapshot(c, si, ring))
 				return; /* keep alive — parked for the main loop */
 		} else {
 			http_error(c, "404 Not Found", "Stream not available");
 		}
 	} else if (strncmp(path, "/mjpeg", 6) == 0 || strncmp(path, "/mjpg", 5) == 0) {
 		int si = parse_stream_param(path);
-		if (si >= RHD_MAX_JPEG || !srv->jpeg_rings[si]) {
+		if (!jpeg_ring_open_slot(srv, si)) {
 			http_error(c, "404 Not Found", "Stream not available");
 			return;
 		}
@@ -564,7 +618,6 @@ static int server_init(rhd_server_t *srv)
 
 static void server_run(rhd_server_t *srv)
 {
-	uint64_t jpeg_read_seqs[RHD_MAX_JPEG] = {0};
 	uint64_t jpeg_last_ws[RHD_MAX_JPEG] = {0};
 	int jpeg_idle[RHD_MAX_JPEG] = {0};
 	int jpeg_reconnect_tick = 0;
@@ -574,28 +627,10 @@ static void server_run(rhd_server_t *srv)
 	uint64_t audio_last_write_seq = 0;
 	int audio_idle_count = 0;
 	uint8_t audio_buf[4096];
-	uint8_t *frame_buf = NULL;
-	uint32_t frame_buf_size = 0;
-	uint32_t frame_buf_cap = 0;
 
-	/* JPEG ring names: sensor 0 = jpeg0/jpeg1, sensor N = sN_jpeg0/sN_jpeg1 */
-	static const char *jpeg_ring_names[RHD_MAX_JPEG] = {"jpeg0",	"jpeg1",    "s1_jpeg0",
-							    "s1_jpeg1", "s2_jpeg0", "s2_jpeg1"};
-
-	/* Try to open JPEG rings (non-blocking, reconnection loop handles late arrivals) */
-	for (int j = 0; j < RHD_MAX_JPEG; j++) {
-		const char *name = jpeg_ring_names[j];
-		srv->jpeg_rings[j] = rss_ring_open(name);
-		if (srv->jpeg_rings[j]) {
-			rss_ring_check_version(srv->jpeg_rings[j], name);
-			const rss_ring_header_t *hdr = rss_ring_get_header(srv->jpeg_rings[j]);
-			RSS_DEBUG("%s ring available: %ux%u", name, hdr->width, hdr->height);
-			srv->jpeg_ring_count++;
-			uint32_t mfs = rss_ring_max_frame_size(srv->jpeg_rings[j]);
-			if (mfs > frame_buf_size)
-				frame_buf_size = mfs;
-		}
-	}
+	/* Try to open JPEG rings (non-blocking, late producers are opened on demand) */
+	for (int j = 0; j < RHD_MAX_JPEG; j++)
+		jpeg_ring_open_slot(srv, j);
 
 	/* Try to open audio ring */
 	srv->audio_ring = rss_ring_open("audio");
@@ -613,22 +648,9 @@ static void server_run(rhd_server_t *srv)
 	if (srv->jpeg_ring_count == 0 && !srv->audio_ring)
 		RSS_INFO("no rings available at startup, waiting for producers...");
 
-	if (frame_buf_size > 0) {
-		/* Headroom for in-place EXIF insertion and signing */
-		frame_buf_cap = frame_buf_size + RSS_JPEG_EXIF_MAX + RSS_JPEG_SIG_SEGMENT;
-		frame_buf = malloc(frame_buf_cap);
-		if (!frame_buf) {
-			RSS_FATAL("failed to allocate frame buffer (%u bytes)", frame_buf_cap);
-			return;
-		}
-		srv->snap_buf_size = frame_buf_cap;
-		srv->snap_buf = malloc(srv->snap_buf_size);
-		if (!srv->snap_buf) {
-			RSS_FATAL("failed to allocate snapshot buffer (%u bytes)",
-				  srv->snap_buf_size);
-			free(frame_buf);
-			return;
-		}
+	if (srv->jpeg_ring_count > 0 && (!srv->frame_buf || !srv->snap_buf)) {
+		RSS_FATAL("failed to allocate frame buffers");
+		return;
 	}
 
 	struct epoll_event events[16];
@@ -671,29 +693,31 @@ static void server_run(rhd_server_t *srv)
 			}
 		}
 
-		if (has_mjpeg_clients && frame_buf) {
+		if (has_mjpeg_clients && srv->frame_buf) {
 			for (int j = 0; j < RHD_MAX_JPEG; j++) {
 				if (!srv->jpeg_rings[j] || !ring_wanted[j])
 					continue;
 				uint32_t len;
 				rss_ring_slot_t meta;
-				int ret = rss_ring_read(srv->jpeg_rings[j], &jpeg_read_seqs[j],
-							frame_buf, frame_buf_size, &len, &meta);
-				if (ret == RSS_EOVERFLOW && jpeg_read_seqs[j] > 0) {
-					jpeg_read_seqs[j]--;
-					ret = rss_ring_read(srv->jpeg_rings[j], &jpeg_read_seqs[j],
-							    frame_buf, frame_buf_size, &len, &meta);
+				int ret = rss_ring_read(srv->jpeg_rings[j], &srv->jpeg_read_seqs[j],
+							srv->frame_buf, srv->frame_buf_size, &len,
+							&meta);
+				if (ret == RSS_EOVERFLOW && srv->jpeg_read_seqs[j] > 0) {
+					srv->jpeg_read_seqs[j]--;
+					ret = rss_ring_read(srv->jpeg_rings[j],
+							    &srv->jpeg_read_seqs[j], srv->frame_buf,
+							    srv->frame_buf_size, &len, &meta);
 				}
-				if (ret == 0 && len >= 2 && frame_buf[0] == 0xFF &&
-				    frame_buf[1] == 0xD8) {
+				if (ret == 0 && len >= 2 && srv->frame_buf[0] == 0xFF &&
+				    srv->frame_buf[1] == 0xD8) {
 					if (srv->exif_timestamp) {
 						int n = rss_jpeg_insert_exif(
-							frame_buf, frame_buf_cap, len,
+							srv->frame_buf, srv->frame_buf_cap, len,
 							jpeg_frame_utc(srv->jpeg_rings[j], &meta));
 						if (n > 0)
 							len = (uint32_t)n;
 					}
-					stream_mjpeg_frame(srv, j, frame_buf, len);
+					stream_mjpeg_frame(srv, j, srv->frame_buf, len);
 				}
 			}
 		}
@@ -916,45 +940,19 @@ static void server_run(rhd_server_t *srv)
 		else if (has_mjpeg_clients && srv->jpeg_rings[0])
 			rss_ring_wait(srv->jpeg_rings[0], 100);
 
-		/* Periodic JPEG ring reconnection (~every 2s) */
+		/*
+		 * Periodic sweep for rings that appeared with nothing asking
+		 * for them (a producer starting while no client is connected).
+		 * Requests open their ring on demand, so the sweep cadence
+		 * only bounds idle discovery, not request latency.
+		 */
 		if (++jpeg_reconnect_tick >= 20) {
 			jpeg_reconnect_tick = 0;
 			for (int j = 0; j < RHD_MAX_JPEG; j++) {
 				if (!srv->jpeg_rings[j]) {
-					srv->jpeg_rings[j] = rss_ring_open(jpeg_ring_names[j]);
-					if (srv->jpeg_rings[j]) {
-						rss_ring_check_version(srv->jpeg_rings[j],
-								       jpeg_ring_names[j]);
-						if (ring_wanted[j]) {
-							rss_ring_acquire(srv->jpeg_rings[j]);
-							ring_acquired[j] = true;
-						}
-						jpeg_read_seqs[j] = 0;
-						uint32_t mfs =
-							rss_ring_max_frame_size(srv->jpeg_rings[j]);
-						uint32_t cap = mfs + RSS_JPEG_EXIF_MAX +
-							       RSS_JPEG_SIG_SEGMENT;
-						if (mfs > frame_buf_size || !frame_buf) {
-							free(frame_buf);
-							frame_buf_size = mfs;
-							frame_buf_cap = cap;
-							frame_buf = malloc(frame_buf_cap);
-							if (!frame_buf) {
-								frame_buf_size = 0;
-								frame_buf_cap = 0;
-							}
-						}
-						if (cap > srv->snap_buf_size) {
-							free(srv->snap_buf);
-							srv->snap_buf_size = cap;
-							srv->snap_buf = malloc(srv->snap_buf_size);
-							if (!srv->snap_buf)
-								srv->snap_buf_size = 0;
-						}
-						if (j + 1 > srv->jpeg_ring_count)
-							srv->jpeg_ring_count = j + 1;
-						RSS_DEBUG("jpeg ring reconnected (%s)",
-							  jpeg_ring_names[j]);
+					if (jpeg_ring_open_slot(srv, j) && ring_wanted[j]) {
+						rss_ring_acquire(srv->jpeg_rings[j]);
+						ring_acquired[j] = true;
 					}
 					continue;
 				}
@@ -997,7 +995,7 @@ static void server_run(rhd_server_t *srv)
 	for (int i = srv->client_count - 1; i >= 0; i--)
 		remove_client(srv, i);
 
-	free(frame_buf);
+	free(srv->frame_buf);
 	free(srv->snap_buf);
 	for (int j = 0; j < RHD_MAX_JPEG; j++) {
 		if (srv->jpeg_rings[j]) {

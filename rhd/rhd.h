@@ -133,6 +133,12 @@ typedef struct {
 	uint8_t *snap_buf;
 	uint32_t snap_buf_size;
 
+	/* MJPEG fan-out buffer and per-ring read cursors (main loop only) */
+	uint8_t *frame_buf;
+	uint32_t frame_buf_size; /* largest ring frame */
+	uint32_t frame_buf_cap;	 /* + EXIF and signing headroom */
+	uint64_t jpeg_read_seqs[RHD_MAX_JPEG];
+
 	/* JPEG capture-time EXIF + snapshot signing */
 	bool exif_timestamp;
 	bool sign_ok; /* sign_snapshots enabled and key loaded */
