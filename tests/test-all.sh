@@ -139,6 +139,12 @@ else
     stage_fail "ric behavior suite"
 fi
 
+if "$SCRIPT_DIR/test-net-fallback.sh"; then
+    stage_pass "net fallback (IPv6-first, IPv4 fallback)"
+else
+    stage_fail "net fallback (IPv6-first, IPv4 fallback)"
+fi
+
 # ── Stage 5: Leak / race detection ──
 
 echo "=== Stage 5: Leak/race detection ==="
