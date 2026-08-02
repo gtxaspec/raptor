@@ -292,7 +292,7 @@ static void snap_poll(rhd_server_t *srv)
 		uint32_t len = 0;
 		rss_ring_slot_t meta;
 		int ret = srv->snap_buf ? rss_ring_read(ring, &c->snap_seq, srv->snap_buf,
-						       srv->snap_buf_size, &len, &meta)
+							srv->snap_buf_size, &len, &meta)
 					: -1;
 
 		/* Lapped by the writer: resync onto the newest frame and retry. */
@@ -317,8 +317,8 @@ static void snap_poll(rhd_server_t *srv)
 				if (n > 0)
 					len = (uint32_t)n;
 			}
-			if (http_send_async(c, srv->epoll_fd, "image/jpeg", srv->snap_buf,
-					    len) < 0) {
+			if (http_send_async(c, srv->epoll_fd, "image/jpeg", srv->snap_buf, len) <
+			    0) {
 				http_error(c, "500 Internal Server Error", "Out of memory");
 				remove_client(srv, i);
 			}
