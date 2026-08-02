@@ -372,9 +372,18 @@ void ric_poll_exposure(ric_state_t *st)
 		} else if (!have_gain) {
 			/* No gain means no baseline and so no ratio; the
 			 * inverse of the day→night test is all that is left.
-			 * Weaker, since IR illumination lifts luma too, but
-			 * never leaving night is the worse failure. */
-			want_day = have_luma && ae_luma >= (uint32_t)st->settings.night_luma;
+			 * On a board that lights IR LEDs at night that test
+			 * is an oscillator, not a fallback: IR lifts luma
+			 * over the threshold, day mode cuts the LEDs, the
+			 * scene goes dark again, and the filter clicks all
+			 * night. Recover on luma only when no IR bank is
+			 * active; with one, holding night is the lesser
+			 * failure. */
+			bool ir_lit =
+				(st->settings.gpio_irled >= 0 && st->settings.ir850_enabled) ||
+				(st->settings.gpio_irled2 >= 0 && st->settings.ir940_enabled);
+			want_day = !ir_lit && have_luma &&
+				   ae_luma >= (uint32_t)st->settings.night_luma;
 		} else {
 			want_day = false;
 		}

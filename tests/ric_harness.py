@@ -603,9 +603,11 @@ def scenario_partial_fields(stub, watch):
     result(ok, "gain-only: day via baseline ratio", str(stub.modes_since(mm)))
     ric.stop()
 
-    # luma-only: no gain means no baseline; the inverse test must recover
+    # luma-only, active IR bank: the inverse-luma day test would oscillate
+    # (IR lifts luma, day cuts the LEDs, dark again, night, ...), so the
+    # mode must hold night even with luma back over the threshold.
     stub.set_scene(luma=5, gain=0, ev=0)
-    ric = Ric("lumaonly", LUMA_CONF)
+    ric = Ric("lumaonly", LUMA_CONF)  # gpio_irled set, ir850 defaults true
     if not ric.wait_running():
         result(False, "luma-only: ric start", "no 'ric running'")
         ric.stop()
@@ -614,9 +616,31 @@ def scenario_partial_fields(stub, watch):
     ok = wait_for(lambda: "night" in stub.modes_since(mm), 4)
     result(ok, "luma-only: night via luma", str(stub.modes_since(mm)))
     time.sleep((3 + 1) * POLL_MS / 1000.0)
+    stub.set_scene(luma=100, gain=0, ev=0)  # what the lit IR does to luma
+    time.sleep(2.0)
+    result(
+        "day" not in stub.modes_since(mm),
+        "luma-only: active IR bank holds night (no oscillation)",
+        str(stub.modes_since(mm)),
+    )
+    ric.stop()
+
+    # luma-only, no active IR bank: luma is trustworthy at night, so the
+    # inverse test must bring the camera back out.
+    stub.set_scene(luma=5, gain=0, ev=0)
+    ric = Ric("lumanoir", LUMA_CONF + "ir850 = false\n")
+    if not ric.wait_running():
+        result(False, "luma-only-noir: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    mm = stub.mark()
+    ok = wait_for(lambda: "night" in stub.modes_since(mm), 4)
+    result(ok, "luma-only: night via luma (no IR bank)", str(stub.modes_since(mm)))
+    time.sleep((3 + 1) * POLL_MS / 1000.0)
     stub.set_scene(luma=100, gain=0, ev=0)
     ok = wait_for(lambda: "day" in stub.modes_since(mm), 4)
-    result(ok, "luma-only: day via inverse luma test", str(stub.modes_since(mm)))
+    result(ok, "luma-only: day via inverse luma (no active IR bank)",
+           str(stub.modes_since(mm)))
     ric.stop()
 
 
@@ -920,20 +944,13 @@ def main():
     stub = StubRvd()
     watch = GpioWatch()
 
+    # Legs for behavior that is specified but not yet landed go here and
+    # are reported as KNOWN-FAIL instead of failing the suite; strict mode
+    # (RIC_SUITE_STRICT=1) counts them regardless. Empty since the PR #14
+    # work landed -- a regression in those legs now fails like any other.
     known_fail = set()
-    if os.environ.get("RIC_SUITE_STRICT", "") != "1":
-        # Behaviors specified by raptor PR #14; documented-known-failing
-        # until it lands. Run them anyway so the log shows the truth.
-        known_fail = {
-            "zero exposure holds mode (no phantom night)",
-            "zero exposure warns exactly once",
-            # cascade: the phantom night above makes forced-night a
-            # same-mode no-op, so no actuation is observable
-            "zero exposure: manual override still actuates",
-            "luma-only: day via inverse luma test",
-            "photo: no ev falls back to luma trigger",
-            "photo: fallback luma path reaches night",
-        }
+    if os.environ.get("RIC_SUITE_STRICT", "") == "1":
+        known_fail.clear()
 
     scenarios = [
         scenario_startup_park,
