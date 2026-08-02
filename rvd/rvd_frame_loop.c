@@ -150,10 +150,10 @@ void *rvd_encoder_thread(void *arg)
 		 * Check for consumer IDR request (set via ring header flag).
 		 *
 		 * Not for JPEG: every MJPEG frame is already intra, so there is
-		 * no such thing as a keyframe request on that channel. A
-		 * consumer that skipped or overflowed sets the flag on whatever
-		 * ring it reads without knowing the codec, so the filtering has
-		 * to happen here.
+		 * no such thing as a keyframe request on that channel. The
+		 * consumers' skip and overflow paths raise the flag without
+		 * consulting the ring's codec, and this loop is the only place
+		 * that acts on it, so one gate here covers every raiser.
 		 */
 		if (s->ring && rss_ring_check_idr(s->ring) && !s->is_jpeg)
 			RSS_HAL_CALL(st->ops, enc_request_idr, st->hal_ctx, s->chn);
