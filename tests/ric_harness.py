@@ -719,8 +719,9 @@ def scenario_gain_trigger(stub, watch):
 def scenario_photo(stub, watch):
     """Photo trigger: AWB auto-calibration from bright samples, night via
     EV + R-gain spectral shift (path 1), day via the fixed-EV drift
-    detector. (The day-approach ratio path cannot fire: day_ref_ev is
-    never assigned anywhere in ric_photo.c.)"""
+    detector. The day-approach ratio path is the other way into day and
+    has its own scenario below; here ev stays above photo_ev_day, so the
+    ratio path's ring never accumulates and drift is the only route."""
     conf = GPIO_CONF + "trigger = photo\n"
     stub.set_scene(luma=100, gain=500, ev=3000, rgain=140, bgain=140)
     ric = Ric("photo", conf, poll_ms=100)
@@ -749,6 +750,48 @@ def scenario_photo(stub, watch):
     stub.set_scene(luma=60, gain=2000, ev=30000, rgain=150, bgain=140)
     ok = wait_for(lambda: "day" in stub.modes_since(mm), 8)
     result(ok, "photo: day via fixed-EV drift", str(stub.modes_since(mm)))
+    ric.stop()
+
+
+def scenario_photo_day_ratio(stub, watch):
+    """The day-approach ratio path must be able to fire at all.
+
+    day_ref_ev was declared and read but never assigned, so ref was
+    always 0, the `ref <= 0` early return ran on every poll, and
+    everything below it -- including its ric_set_mode(DAY) -- was dead.
+    Day recovery came only from the fixed-EV drift detector, which is a
+    separate path running in this same phase and would mask the defect
+    in a mode-only assertion. So assert on the ratio path's own log
+    line rather than on the mode.
+
+    photo_ev_day is raised so the ring can accumulate on a step down
+    small enough not to hand the win to the drift detector."""
+    conf = (GPIO_CONF + "trigger = photo\nphoto_ev_day = 90000\n"
+            + "hysteresis_sec = 0\n")
+    stub.set_scene(luma=100, gain=500, ev=3000, rgain=140, bgain=140)
+    ric = Ric("photodayratio", conf, poll_ms=100)
+    if not ric.wait_running():
+        result(False, "photo-day-ratio: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    if not wait_for(lambda: "photo AWB calibrated" in ric.read_log(), 6):
+        result(False, "photo-day-ratio: AWB calibration", ric.read_log()[-300:])
+        ric.stop()
+        return
+
+    mm = stub.mark()
+    stub.set_scene(luma=10, gain=20000, ev=100000, rgain=170, bgain=140)
+    if not wait_for(lambda: "night" in stub.modes_since(mm), 10):
+        result(False, "photo-day-ratio: reaches night", str(stub.modes_since(mm)))
+        ric.stop()
+        return
+
+    # Brighten to just under photo_ev_day and hold it there.
+    stub.set_scene(luma=60, gain=2000, ev=85000, rgain=150, bgain=140)
+    ok = wait_for(lambda: "photo day approach" in ric.read_log()
+                  or "photo day trigger" in ric.read_log(), 15)
+    result(ok, "photo: the day-approach ratio path can fire",
+           ric.read_log()[-400:])
     ric.stop()
 
 
@@ -964,6 +1007,7 @@ def main():
         scenario_startup_forced,
         scenario_gain_trigger,
         scenario_photo,
+        scenario_photo_day_ratio,
         scenario_photo_no_ev,
         scenario_zero_exposure,
         scenario_partial_fields,

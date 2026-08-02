@@ -257,12 +257,26 @@ static void photo_day_control(ric_state_t *st)
 
 	uint32_t sample = ps->day_ring[(idx - 1) % PHOTO_DAY_RING_SIZE];
 	double s = (double)sample;
-	double ref = (double)ps->day_ref_ev;
 
-	if (ref <= 0.0) {
-		ps->day_ring_idx = 0;
+	/*
+	 * The first full ring seeds the reference, the same way the
+	 * interference and fixed-EV detectors seed theirs: adopt the newest
+	 * sample only once the ring's ends agree, so the value stood still
+	 * rather than being caught mid-swing. Nothing below can run until
+	 * there is a reference to measure against.
+	 */
+	if (ps->day_ref_ev == 0) {
+		double first = (double)ps->day_ring[0];
+
+		if (s < first * FIXED_RATIO_LOW || s > first * FIXED_RATIO_HIGH) {
+			ps->day_ring_idx = 0;
+			return;
+		}
+		ps->day_ref_ev = sample;
 		return;
 	}
+
+	double ref = (double)ps->day_ref_ev;
 
 	/*
 	 * Ratio check — inverted because LOW ev = bright.
