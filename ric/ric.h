@@ -176,6 +176,10 @@ typedef struct {
 	/* ADC state */
 	bool adc_initialized;
 
+	/* One-shot diagnostics: a missing signal is worth saying once, and
+	 * saying every poll instead is how a log stops being read. */
+	bool no_exposure_warned;
+
 	/* Control */
 	rss_ctrl_t *ctrl;
 	rss_config_t *cfg;
