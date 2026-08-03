@@ -14,6 +14,7 @@
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -88,12 +89,39 @@ int ioctl(int fd, unsigned long request, ...)
 	return real(fd, request, arg);
 }
 
+/*
+ * Every read served from the backing file appends one byte to
+ * <backing>.hits. The harness asserts the file grew, so a bypass of
+ * the read interception -- by whatever future mechanism -- fails as
+ * "no reads reached the shim" instead of as a misleading day/night
+ * symptom three layers up (the shape issue #18 took).
+ */
+static void note_hit(void)
+{
+	const char *backing = getenv("RIC_ADC_BACKING");
+	char path[512];
+	int fd;
+
+	if (!backing)
+		return;
+	snprintf(path, sizeof(path), "%s.hits", backing);
+	fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
+	if (fd >= 0) {
+		if (write(fd, ".", 1) < 0) {
+			/* diagnostics only; the read itself must not fail */
+		}
+		close(fd);
+	}
+}
+
 ssize_t read(int fd, void *buf, size_t count)
 {
 	static ssize_t (*real)(int, void *, size_t);
 
-	if (fd >= 0 && fd == adc_fd)
+	if (fd >= 0 && fd == adc_fd) {
+		note_hit();
 		return pread(fd, buf, count < 4 ? count : 4, 0);
+	}
 
 	if (!real)
 		real = dlsym(RTLD_NEXT, "read");

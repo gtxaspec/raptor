@@ -40,6 +40,26 @@ else
     RIC_ADC_PRELOAD=""
 fi
 
+# Unit-check the shim before trusting the suite to it: both read entries
+# (plain and the fortified __read_chk that bypassed it in issue #18) and
+# the rewind semantics, host-independently. A failing shim is a hard
+# error, not a skip -- a suite running against a broken shim proves
+# nothing about ric.
+if [ -n "$RIC_ADC_PRELOAD" ]; then
+    PROBE="$OUT/ric_shim_probe"
+    if ! cc -O2 -o "$PROBE" "$RAPTOR_DIR/tests/ric_shim_probe.c"; then
+        echo "ERROR: shim probe build failed"
+        exit 1
+    fi
+    PROBE_BACKING="$(mktemp)"
+    if ! RIC_ADC_BACKING="$PROBE_BACKING" LD_PRELOAD="$SHIM" "$PROBE"; then
+        rm -f "$PROBE_BACKING" "$PROBE_BACKING.hits"
+        echo "ERROR: adc shim unit check failed"
+        exit 1
+    fi
+    rm -f "$PROBE_BACKING" "$PROBE_BACKING.hits"
+fi
+
 WORK="${TMPDIR:-/tmp}/ric-suite.$$"
 mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT

@@ -652,6 +652,11 @@ def scenario_adc(stub, watch):
         print("  SKIP  adc: shim not built", flush=True)
         return
     backing = WORK + "/adc-value"
+    hits = backing + ".hits"
+    try:
+        os.unlink(hits)
+    except OSError:
+        pass
     with open(backing, "wb") as f:
         f.write(struct.pack("<i", 700))  # bright side of adc_day=600
     conf = GPIO_CONF + (
@@ -679,8 +684,20 @@ def scenario_adc(stub, watch):
         if os.environ.get("RIC_SUITE_STRICT", "") == "1":
             result(False, "adc: shim provides the device", ric.read_log()[-300:])
         else:
-            print("  SKIP  adc: preload shim inert on this host "
-                  "(ASan interceptor order)", flush=True)
+            print("  SKIP  adc: preload shim inert on this host", flush=True)
+        return
+
+    # The shim appends to <backing>.hits on every read it serves. If
+    # polls are running but no hits appear, reads are bypassing the
+    # shim -- the exact shape of issue #18 -- and this leg names it
+    # instead of letting the transition legs fail three layers up.
+    ok = wait_for(
+        lambda: os.path.exists(hits) and os.path.getsize(hits) > 0, 4
+    )
+    result(ok, "adc: shim read interception engaged (hit counter)",
+           "polls running but no reads reached the shim (issue #18 shape)")
+    if not ok:
+        ric.stop()
         return
     mm = stub.mark()
     with open(backing, "wb") as f:
