@@ -76,6 +76,17 @@ static void load_config(ric_state_t *st)
 	c->hysteresis_sec = rss_config_get_int(cfg, "ircut", "hysteresis_sec", 5);
 	int default_poll = (c->trigger == RIC_TRIGGER_PHOTO) ? 100 : 1000;
 	c->poll_interval_ms = rss_config_get_int(cfg, "ircut", "poll_interval_ms", default_poll);
+
+	/* Dual-GPIO coil pulse. 10ms is what the thingino ircut script has
+	 * driven the whole fleet with since thingino-daynight existed; both
+	 * 10ms and 100ms measured 20/20 reliable on a dual-GPIO Wyze Cam3,
+	 * so the default follows the fleet. Clamped: a zero pulse moves no
+	 * filter, and holding the coil for seconds is a heater. */
+	c->pulse_ms = rss_config_get_int(cfg, "ircut", "pulse_ms", 10);
+	if (c->pulse_ms < 1)
+		c->pulse_ms = 1;
+	if (c->pulse_ms > 1000)
+		c->pulse_ms = 1000;
 }
 
 /* Pins may also be auto-discovered from the thingino device file

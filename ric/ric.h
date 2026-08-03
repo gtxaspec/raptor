@@ -155,6 +155,9 @@ typedef struct {
 
 	/* Sample interval */
 	int poll_interval_ms;
+
+	/* Dual-GPIO IR-cut coil pulse width */
+	int pulse_ms;
 } ric_config_t;
 
 /* Global state */

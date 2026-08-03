@@ -148,7 +148,7 @@ static void ric_set_gpio(ric_state_t *st, ric_mode_t mode)
 			if (c->gpio_ircut2 >= 0) {
 				gpio_set(c->gpio_ircut, 0);
 				gpio_set(c->gpio_ircut2, 1);
-				usleep(100000);
+				usleep((useconds_t)c->pulse_ms * 1000);
 				gpio_set(c->gpio_ircut, 0);
 				gpio_set(c->gpio_ircut2, 0);
 				RSS_INFO("ircut: gpio %d=0, gpio %d=0 (night)", c->gpio_ircut,
@@ -171,7 +171,7 @@ static void ric_set_gpio(ric_state_t *st, ric_mode_t mode)
 			if (c->gpio_ircut2 >= 0) {
 				gpio_set(c->gpio_ircut, 1);
 				gpio_set(c->gpio_ircut2, 0);
-				usleep(100000);
+				usleep((useconds_t)c->pulse_ms * 1000);
 				gpio_set(c->gpio_ircut, 0);
 				gpio_set(c->gpio_ircut2, 0);
 				RSS_INFO("ircut: gpio %d=0, gpio %d=0 (day)", c->gpio_ircut,

@@ -363,7 +363,7 @@ GPIO_CONF = (
 LUMA_CONF = (
     GPIO_CONF
     + "trigger = luma\nnight_luma = 20\nnight_gain = 80000\n"
-    + "day_gain_pct = 25\nhysteresis_sec = 2\n"
+    + "day_gain_pct = 25\nhysteresis_sec = 2\npulse_ms = 100\n"
 )
 
 
@@ -719,6 +719,28 @@ def scenario_adc(stub, watch):
     ric.stop()
 
 
+def scenario_pulse_width(stub, watch):
+    """pulse_ms drives the dual-GPIO coil pulse (default 10, the value
+    the fleet's ircut script has always used; thingino-firmware #1380).
+    100ms must measure as roughly 100ms; 10ms must measure clearly
+    shorter. Drain-time stamps cannot resolve 10ms exactly, so the
+    short assertion is an upper bound."""
+    for ms, lo, hi in ((100, 0.05, 0.3), (10, 0.0, 0.05)):
+        conf = LUMA_CONF.replace("pulse_ms = 100", "pulse_ms = %d" % ms)
+        stub.set_scene(luma=120, gain=500, ev=4000)
+        gm = watch.mark()
+        ric = Ric("pulse%d" % ms, conf)
+        if not ric.wait_running():
+            result(False, "pulse_ms=%d: ric start" % ms, "no 'ric running'")
+            ric.stop()
+            continue
+        w = wait_pulse(watch, gm, IRCUT1, IRCUT2)  # startup day park
+        result(w is not None and lo <= w < hi,
+               "pulse_ms=%d: coil pulse within expected bounds" % ms,
+               "width=%s" % w)
+        ric.stop()
+
+
 def scenario_gain_trigger(stub, watch):
     """Legacy gain trigger: fixed absolute thresholds, no baseline."""
     conf = GPIO_CONF + (
@@ -1032,6 +1054,7 @@ def main():
         scenario_single_gpio,
         scenario_ir_combos,
         scenario_startup_forced,
+        scenario_pulse_width,
         scenario_gain_trigger,
         scenario_photo,
         scenario_photo_day_ratio,
