@@ -499,7 +499,16 @@ int rvd_pipeline_init(rvd_state_t *st)
 			sensor_fps = 25;
 		/* Sensor 0 FPS via legacy ops */
 		ret = RSS_HAL_CALL(st->ops, isp_set_sensor_fps, st->hal_ctx, sensor_fps, 1);
-		if (ret != RSS_OK)
+		if (ret == RSS_ERR_NOTSUP)
+			/* Not a fault, so not a warning. The ISP tuning ops are
+			 * documented as optional ("return -ENOTSUP if unavailable",
+			 * raptor_hal.h), and on some SoCs the sensor rate is fixed when
+			 * the mode is selected during bring-up and cannot be changed
+			 * afterwards -- the encoder framerate is what varies there. */
+			RSS_INFO("sensor0 fps: setting sensor fps is unsupported on this "
+				 "platform, %d ignored",
+				 sensor_fps);
+		else if (ret != RSS_OK)
 			RSS_WARN("isp_set_sensor_fps failed: %d (non-fatal)", ret);
 		else
 			RSS_INFO("sensor0 fps: %d", sensor_fps);
