@@ -100,6 +100,18 @@ ssize_t read(int fd, void *buf, size_t count)
 	return real(fd, buf, count);
 }
 
+/*
+ * _FORTIFY_SOURCE rewrites read() into __read_chk() when the compiler
+ * elects to emit the runtime check, and those calls resolve straight
+ * past a shim that only defines read (raptor issue #18). Route the
+ * fortified entry through the interception above.
+ */
+ssize_t __read_chk(int fd, void *buf, size_t count, size_t buflen)
+{
+	(void)buflen;
+	return read(fd, buf, count);
+}
+
 int close(int fd)
 {
 	static int (*real)(int);
