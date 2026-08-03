@@ -255,6 +255,12 @@ static void load_sensor_from_section(rss_config_t *cfg, const char *section,
 	if (vin < 0)
 		vin = 0;
 	sensor->vin_type = (rss_sensor_vin_t)vin;
+
+	/* Optional ISP tuning binary. Only a backend whose ISP is driven by a
+	 * tuning file reads this, and it derives the usual path from the sensor
+	 * name, so this stays empty unless the file lives somewhere unusual. */
+	rss_strlcpy(sensor->iq_file, rss_config_get_str(cfg, section, "iq_file", ""),
+		    sizeof(sensor->iq_file));
 }
 
 /* FS channel base for a given sensor index (hardware mapping) */
