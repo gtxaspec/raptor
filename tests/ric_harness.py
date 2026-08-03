@@ -719,6 +719,96 @@ def scenario_adc(stub, watch):
     ric.stop()
 
 
+def scenario_adc_dead(stub, watch):
+    """A photoresistor that opens and then stops answering must say so.
+    A device that will not open at all is already reported, and ric
+    demotes itself to the luma trigger; what was uncovered is the one
+    that reads fine and then goes quiet, freezing day/night with a
+    clean log. Reads are made to come up short by truncating the
+    backing file, which is what a dead channel looks like from ric."""
+    if not ADC_PRELOAD:
+        print("  SKIP  adc-dead: shim not built", flush=True)
+        return
+    backing = WORK + "/adc-dead-value"
+    hits = backing + ".hits"
+    try:
+        os.unlink(hits)
+    except OSError:
+        pass
+    with open(backing, "wb") as f:
+        f.write(struct.pack("<i", 700))  # bright side of adc_day=600
+    conf = GPIO_CONF + (
+        "trigger = adc\nadc_channel = 0\nadc_night = 200\n"
+        "adc_day = 600\nhysteresis_sec = 2\n"
+    )
+    stub.set_scene(luma=0, gain=0, ev=0)
+    ric = Ric(
+        "adc-dead",
+        conf,
+        env_extra={"LD_PRELOAD": ADC_PRELOAD, "RIC_ADC_BACKING": backing},
+    )
+    if not ric.wait_running():
+        result(False, "adc-dead: ric start", ric.read_log()[-300:])
+        ric.stop()
+        return
+    if "falling back to luma" in ric.read_log():
+        # Same inert-shim case scenario_adc documents; skip, or fail
+        # under strict mode, rather than lose the coverage quietly.
+        ric.stop()
+        if os.environ.get("RIC_SUITE_STRICT", "") == "1":
+            result(False, "adc-dead: shim provides the device", ric.read_log()[-300:])
+        else:
+            print("  SKIP  adc-dead: preload shim inert on this host", flush=True)
+        return
+    if not wait_for(lambda: os.path.exists(hits) and os.path.getsize(hits) > 0, 4):
+        result(False, "adc-dead: shim read interception engaged",
+               "polls running but no reads reached the shim (issue #18 shape)")
+        ric.stop()
+        return
+
+    # A brief gap is not a fault. Truncating the backing file fails every
+    # read, but for well under the sustained threshold -- the hit counter
+    # proves ric really polled across it, so this is not vacuous.
+    before = os.path.getsize(hits)
+    with open(backing, "wb"):
+        pass
+    time.sleep(0.6)
+    polled = os.path.getsize(hits) - before
+    with open(backing, "wb") as f:
+        f.write(struct.pack("<i", 700))
+    log = ric.read_log()
+    result(
+        polled >= 2 and "read nothing" not in log and "reading again" not in log,
+        "adc-dead: a brief gap in readings stays quiet",
+        "polls across the gap=%d, log=%s" % (polled, log[-200:]),
+    )
+
+    # A sustained one is: day/night is stuck and nothing else will say so.
+    mm = stub.mark()
+    with open(backing, "wb"):
+        pass
+    ok = wait_for(lambda: "read nothing" in ric.read_log(), 8)
+    result(ok, "adc-dead: a sustained outage is reported", ric.read_log()[-300:])
+    if ok:
+        # Rate-limited: the repeat is a minute out, so several more
+        # seconds of failing polls must not add a second line.
+        time.sleep(3)
+        n = len(re.findall(r"read nothing", ric.read_log()))
+        result(n == 1, "adc-dead: the outage warning is rate-limited",
+               "%d warnings across ~5s of failed polls" % n)
+
+    # Recovery is reported, and the poll path drives modes again rather
+    # than merely logging.
+    with open(backing, "wb") as f:
+        f.write(struct.pack("<i", 100))  # dark
+    ok = wait_for(lambda: "reading again" in ric.read_log(), 5)
+    result(ok, "adc-dead: recovery is reported", ric.read_log()[-300:])
+    ok = wait_for(lambda: "night" in stub.modes_since(mm), 6)
+    result(ok, "adc-dead: readings resume driving day/night",
+           str(stub.modes_since(mm)))
+    ric.stop()
+
+
 def scenario_pulse_width(stub, watch):
     """pulse_ms drives the dual-GPIO coil pulse (default 10, the value
     the fleet's ircut script has always used; thingino-firmware #1380).
@@ -1113,6 +1203,7 @@ def main():
         scenario_zero_exposure,
         scenario_partial_fields,
         scenario_adc,
+        scenario_adc_dead,
         scenario_disabled,
         scenario_json_discovery,
     ]
