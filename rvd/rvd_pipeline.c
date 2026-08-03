@@ -403,15 +403,27 @@ int rvd_pipeline_init(rvd_state_t *st)
 	}
 	st->sensor_count = multi_cfg.sensor_count;
 
+	/*
+	 * Both checks below exist to catch a daemon that cannot reach its
+	 * sensor. Where the SDK binds the sensor as its driver loads and
+	 * addresses it by index, the HAL resolves the sensor's identity itself
+	 * and neither value is reachable configuration -- an address in
+	 * particular is never read -- so requiring them would refuse to start a
+	 * camera that is fully able to.
+	 */
+	const rss_hal_caps_t *sensor_caps =
+		st->ops->get_caps ? st->ops->get_caps(st->hal_ctx) : NULL;
+	bool sdk_owns_sensor = sensor_caps && sensor_caps->sdk_owns_sensor;
+
 	/* Validate primary sensor */
-	if (!multi_cfg.sensors[0].name[0]) {
+	if (!multi_cfg.sensors[0].name[0] && !sdk_owns_sensor) {
 		RSS_FATAL("sensor name not in config and not in /proc/jz/sensor/sensor0/name");
 		rss_hal_destroy(st->hal_ctx);
 		st->hal_ctx = NULL;
 		return RSS_ERR;
 	}
 
-	if (multi_cfg.sensors[0].i2c_addr == 0) {
+	if (multi_cfg.sensors[0].i2c_addr == 0 && !sdk_owns_sensor) {
 		RSS_FATAL("i2c_addr not in config and not in /proc/jz/sensor/sensor0/i2c_addr");
 		rss_hal_destroy(st->hal_ctx);
 		st->hal_ctx = NULL;
@@ -613,14 +625,30 @@ int rvd_pipeline_init(rvd_state_t *st)
 		RSS_HAL_CALL(st->ops, isp_set_custom_mode_n, st->hal_ctx, s, 0);
 	}
 
-	/* ── 3d. Read actual sensor resolution from /proc ── */
+	/* ── 3d. Determine the actual sensor resolution ──
+	 *
+	 * procfs first (Ingenic's own registry), then the HAL, then config. The
+	 * HAL beats config because config only *requests* a mode: a backend that
+	 * enumerates sensor modes may have fallen back to native when the request
+	 * matched nothing, so the HAL holds the answer after that negotiation. */
 	int sensor_w = 0, sensor_h = 0;
+	const char *sensor_res_src = "/proc/jz/sensor";
 	{
 		sensor_w = read_sensor_proc_int(0, "width", 10, 0);
 		sensor_h = read_sensor_proc_int(0, "height", 10, 0);
 	}
+	if (sensor_w <= 0 || sensor_h <= 0) {
+		uint32_t hal_w = 0, hal_h = 0;
+		if (RSS_HAL_CALL(st->ops, isp_get_sensor_attr, st->hal_ctx, &hal_w, &hal_h) ==
+			    RSS_OK &&
+		    hal_w > 0 && hal_h > 0) {
+			sensor_w = (int)hal_w;
+			sensor_h = (int)hal_h;
+			sensor_res_src = "HAL";
+		}
+	}
 	if (sensor_w > 0 && sensor_h > 0) {
-		RSS_INFO("sensor resolution: %dx%d", sensor_w, sensor_h);
+		RSS_INFO("sensor resolution: %dx%d (from %s)", sensor_w, sensor_h, sensor_res_src);
 	} else {
 		/* T40/T41: /proc/jz/sensor doesn't exist — use stream0 config as reference */
 		int cfg_w = rss_config_get_int(cfg, "stream0", "width", 0);
