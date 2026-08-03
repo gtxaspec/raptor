@@ -144,11 +144,28 @@ class StubRvd:
         self.scene = {}
         self.modes = []  # (monotonic, "day"|"night")
         self.lock = threading.Lock()
-        path = RUN_DIR + "/rvd.sock"
+        self.path = RUN_DIR + "/rvd.sock"
+        self._bind()
+
+    def _bind(self):
         self.srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.srv.bind(path)
+        self.srv.bind(self.path)
         self.srv.listen(8)
         threading.Thread(target=self._loop, daemon=True).start()
+
+    def pause(self):
+        """Simulate rvd dying: close the listener and remove the socket
+        so connects fail the way they do against a dead daemon."""
+        srv, self.srv = self.srv, None
+        srv.close()
+        try:
+            os.unlink(self.path)
+        except OSError:
+            pass
+
+    def resume(self):
+        """rvd comes back."""
+        self._bind()
 
     def set_scene(self, **kw):
         with self.lock:
@@ -163,8 +180,12 @@ class StubRvd:
             return [m for _, m in self.modes[mark:]]
 
     def _loop(self):
+        srv = self.srv
         while True:
-            conn, _ = self.srv.accept()
+            try:
+                conn, _ = srv.accept()
+            except OSError:
+                return  # paused: this listener is done
             try:
                 req = recv_msg(conn)
                 if req is None:
@@ -852,6 +873,17 @@ def scenario_gain_trigger(stub, watch):
     stub.set_scene(luma=0, gain=10000, ev=0)
     ok = wait_for(lambda: "day" in stub.modes_since(mm), 4)
     result(ok, "gain-trigger: day below day_threshold", str(stub.modes_since(mm)))
+
+    # the legacy thresholds retune live as well
+    mm = stub.mark()
+    stub.set_scene(luma=0, gain=50000, ev=0)
+    ok = wait_for(lambda: "night" in stub.modes_since(mm), 4)
+    time.sleep((3 + 1) * POLL_MS / 1000.0)
+    ctrl_cmd(RUN_DIR + "/ric.sock",
+             {"cmd": "set-threshold", "key": "day_threshold", "value": 60000})
+    ok = ok and wait_for(lambda: "day" in stub.modes_since(mm), 4)
+    result(ok, "gain-trigger: day_threshold retunes live",
+           str(stub.modes_since(mm)))
     ric.stop()
 
 
@@ -1122,7 +1154,236 @@ def scenario_ctrl_extras(stub, watch):
     )
     result(r is not None and r.get("status") == "error",
            "set-threshold: out-of-range rejected", str(r))
+    r = ctrl_cmd(
+        RUN_DIR + "/ric.sock",
+        {"cmd": "set-threshold", "key": "bogus_key", "value": 1},
+    )
+    result(r is not None and r.get("status") == "error",
+           "set-threshold: unknown key rejected", str(r))
     ric.stop()
+
+    # night_gain and day_gain_pct retune live too: a bright-luma scene
+    # goes night once its gain sits above a lowered night_gain, and the
+    # baseline ratio releases it once day_gain_pct is raised over the
+    # current gain fraction.
+    stub.set_scene(luma=120, gain=50000, ev=4000)
+    ric = Ric("ctrlx2", LUMA_CONF)
+    if not ric.wait_running():
+        result(False, "ctrl-extras: second ric start", "no 'ric running'")
+        ric.stop()
+        return
+    time.sleep(0.5)
+    mm = stub.mark()
+    ctrl_cmd(RUN_DIR + "/ric.sock",
+             {"cmd": "set-threshold", "key": "night_gain", "value": 40000})
+    ok = wait_for(lambda: "night" in stub.modes_since(mm), 4)
+    result(ok, "set-threshold: night_gain drives the gain term live",
+           str(stub.modes_since(mm)))
+    time.sleep((3 + 1) * POLL_MS / 1000.0)  # cooldown: baseline = 50000
+    # gain holds at 60% of baseline: below 25% never comes, 70% releases
+    stub.set_scene(luma=120, gain=30000, ev=4000)
+    time.sleep(1.0)
+    still_night = "day" not in stub.modes_since(mm)
+    ctrl_cmd(RUN_DIR + "/ric.sock",
+             {"cmd": "set-threshold", "key": "day_gain_pct", "value": 70})
+    ok = wait_for(lambda: "day" in stub.modes_since(mm), 4)
+    result(still_night and ok,
+           "set-threshold: day_gain_pct rescales the release ratio live",
+           str(stub.modes_since(mm)))
+    ric.stop()
+
+
+def scenario_rvd_lost(stub, watch):
+    """rvd dying mid-run must be said out loud. The poll's query fails,
+    the branch returns, and day/night freezes exactly like the dead
+    photoresistor of issue #18, one layer up -- at default log level
+    nothing prints at all. A normal rvd restart takes a few seconds
+    and must stay quiet; only a sustained outage is worth a line."""
+    stub.set_scene(luma=120, gain=500, ev=4000)
+    ric = Ric("rvdlost", LUMA_CONF)
+    if not ric.wait_running():
+        result(False, "rvd-lost: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    time.sleep(0.5)
+
+    stub.pause()
+    time.sleep(3)  # a routine daemon restart is about this long
+    stub.resume()
+    time.sleep(1)
+    log = ric.read_log()
+    result("not answered" not in log,
+           "rvd-lost: a restart-sized gap stays quiet", log[-200:])
+    mm = stub.mark()
+    stub.set_scene(luma=5, gain=20000, ev=100000)
+    ok = wait_for(lambda: "night" in stub.modes_since(mm), 4)
+    result(ok, "rvd-lost: transitions run after the gap",
+           str(stub.modes_since(mm)))
+
+    stub.pause()
+    ok = wait_for(lambda: "not answered" in ric.read_log(), 16)
+    result(ok, "rvd-lost: a sustained outage is reported",
+           ric.read_log()[-300:])
+    if ok:
+        time.sleep(3)
+        n = len(re.findall(r"not answered", ric.read_log()))
+        result(n == 1, "rvd-lost: the outage warning is rate-limited",
+               "%d warnings" % n)
+    stub.resume()
+    ok = wait_for(lambda: "answering again" in ric.read_log(), 6)
+    result(ok, "rvd-lost: recovery is reported", ric.read_log()[-300:])
+    # The outage froze the post-switch cooldown (failed polls return
+    # before it decrements), so it finishes only now -- let the night
+    # baseline sample from the still-dark scene before brightening.
+    time.sleep((3 + 2) * POLL_MS / 1000.0)
+    mm = stub.mark()
+    stub.set_scene(luma=120, gain=500, ev=4000)
+    ok = wait_for(lambda: "day" in stub.modes_since(mm), 6)
+    result(ok, "rvd-lost: polling drives day/night again",
+           str(stub.modes_since(mm)))
+    ric.stop()
+
+
+def scenario_photo_interference(stub, watch):
+    """After a ratio-path day trigger the photo machine watches for a
+    false day. A rise in ev (darker again) past the interference band
+    must hand the mode back to night -- that was headlights. A further
+    drop (genuinely brighter) must retire the watch back to
+    night-detect without touching the mode."""
+    conf = GPIO_CONF + "trigger = photo\nphoto_ev_day = 90000\n"
+    for arm, drive_ev, expect_night in (
+        ("false-day", 100000, True),
+        ("genuine-bright", 60000, False),
+    ):
+        stub.set_scene(luma=100, gain=500, ev=3000, rgain=140, bgain=140)
+        ric = Ric("photoint-%s" % arm, conf, poll_ms=100)
+        if not ric.wait_running() or not wait_for(
+            lambda: "photo AWB calibrated" in ric.read_log(), 6
+        ):
+            result(False, "interfere %s: bring-up" % arm, ric.read_log()[-200:])
+            ric.stop()
+            continue
+        stub.set_scene(luma=10, gain=20000, ev=100000, rgain=170, bgain=140)
+        if not wait_for(lambda: "photo night trigger" in ric.read_log(), 10):
+            result(False, "interfere %s: night entry" % arm, ric.read_log()[-200:])
+            ric.stop()
+            continue
+        stub.set_scene(luma=60, gain=2000, ev=85000, rgain=150, bgain=140)
+        if not wait_for(lambda: "photo day trigger" in ric.read_log(), 15):
+            result(False, "interfere %s: ratio day entry" % arm,
+                   ric.read_log()[-200:])
+            ric.stop()
+            continue
+        # the interference ring seeds from ~8 stable polls of the same ev
+        time.sleep(1.2)
+        mm = stub.mark()
+        stub.set_scene(luma=60, gain=2000, ev=drive_ev, rgain=150, bgain=140)
+        if expect_night:
+            ok = wait_for(lambda: "night" in stub.modes_since(mm), 5)
+            result(ok and "interfere: false day" in ric.read_log(),
+                   "interfere: a false day is handed back to night",
+                   ric.read_log()[-250:])
+        else:
+            ok = wait_for(lambda: "interfere: genuine bright" in ric.read_log(), 5)
+            time.sleep(0.5)
+            result(ok and "night" not in stub.modes_since(mm),
+                   "interfere: genuine brightness retires the watch, mode holds",
+                   str(stub.modes_since(mm)) + " " + ric.read_log()[-200:])
+        ric.stop()
+
+
+def scenario_default_topologies(stub, watch):
+    """Boards as shipped, remaining shapes: a dual-bank board must light
+    only its 850 by default (the 940 auto-enable must not overreach),
+    and a single-pin ircut board discovered from a number-form json
+    must level-drive its one pin."""
+    orig = open("/etc/thingino.json").read()
+    conf = "trigger = luma\nnight_luma = 20\nhysteresis_sec = 2\n"
+
+    try:
+        with open("/etc/thingino.json", "w") as f:
+            json.dump({"gpio": {"ircut": "%d %d" % (IRCUT1, IRCUT2),
+                                "ir850": IRLED, "ir940": IRLED2}}, f)
+        stub.set_scene(luma=120, gain=500, ev=4000)
+        ric = Ric("dualbank", conf)
+        if not ric.wait_running():
+            result(False, "dual-bank default: ric start", "no 'ric running'")
+            ric.stop()
+            return
+        time.sleep(0.5)
+        gm, mm = watch.mark(), stub.mark()
+        stub.set_scene(luma=5, gain=20000, ev=100000)
+        ok = wait_for(lambda: "night" in stub.modes_since(mm), 4)
+        ok = ok and wait_last(watch, gm, IRLED, "1")
+        result(ok and last_value(watch.since(gm), IRLED2) is None,
+               "dual-bank default: 850 lights, 940 stays opt-in",
+               str(watch.since(gm)))
+        ric.stop()
+
+        with open("/etc/thingino.json", "w") as f:
+            json.dump({"gpio": {"ircut": IRCUT1, "ir850": IRLED}}, f)
+        stub.set_scene(luma=120, gain=500, ev=4000)
+        ric = Ric("singlepin", conf)
+        if not ric.wait_running():
+            result(False, "single-pin default: ric start", "no 'ric running'")
+            ric.stop()
+            return
+        time.sleep(0.5)
+        gm, mm = watch.mark(), stub.mark()
+        stub.set_scene(luma=5, gain=20000, ev=100000)
+        ok = wait_for(lambda: "night" in stub.modes_since(mm), 4)
+        ok = ok and wait_last(watch, gm, IRCUT1, "0")
+        result(ok and last_value(watch.since(gm), IRCUT2) is None,
+               "single-pin default: level drive from a number-form json",
+               str(watch.since(gm)))
+        ric.stop()
+    finally:
+        with open("/etc/thingino.json", "w") as f:
+            f.write(orig)
+
+
+def scenario_gpio_failure(stub, watch):
+    """A GPIO that stops accepting writes must cost a warning, not the
+    daemon: ircut2's value becomes /dev/full (opens, every write fails
+    ENOSPC) and the ir850 value becomes a directory (open itself
+    fails). Both must be named in the log, the healthy pin must still
+    actuate, and the transition must complete."""
+    v2 = "%s/gpio%d/value" % (GPIO_ROOT, IRCUT2)
+    vl = "%s/gpio%d/value" % (GPIO_ROOT, IRLED)
+    os.rename(v2, v2 + ".save")
+    os.symlink("/dev/full", v2)
+    os.rename(vl, vl + ".save")
+    os.mkdir(vl)
+    try:
+        stub.set_scene(luma=120, gain=500, ev=4000)
+        ric = Ric("gpiofail", LUMA_CONF)
+        if not ric.wait_running():
+            result(False, "gpio-failure: ric start", "no 'ric running'")
+            ric.stop()
+            return
+        time.sleep(0.5)
+        gm, mm = watch.mark(), stub.mark()
+        stub.set_scene(luma=5, gain=20000, ev=100000)
+        ok = wait_for(lambda: "night" in stub.modes_since(mm), 4)
+        result(ok, "gpio-failure: transition still completes",
+               str(stub.modes_since(mm)))
+        log = ric.read_log()
+        result("gpio %d set: write failed" % IRCUT2 in log,
+               "gpio-failure: a failing write is named", log[-250:])
+        result("gpio %d set:" % IRLED in log,
+               "gpio-failure: a pin that will not open is named", log[-250:])
+        result(wait_last(watch, gm, IRCUT1, "0"),
+               "gpio-failure: the healthy pin still actuates",
+               str(watch.since(gm)))
+        s = ric_status()
+        result(s is not None and s.get("status") == "ok",
+               "gpio-failure: daemon healthy after the storm", str(s))
+        ric.stop()
+    finally:
+        os.unlink(v2)
+        os.rename(v2 + ".save", v2)
+        os.rmdir(vl)
+        os.rename(vl + ".save", vl)
 
 
 def scenario_disabled(stub, watch):
@@ -1199,11 +1460,15 @@ def main():
         scenario_gain_trigger,
         scenario_photo,
         scenario_photo_day_ratio,
+        scenario_photo_interference,
         scenario_photo_no_ev,
         scenario_zero_exposure,
         scenario_partial_fields,
         scenario_adc,
         scenario_adc_dead,
+        scenario_rvd_lost,
+        scenario_default_topologies,
+        scenario_gpio_failure,
         scenario_disabled,
         scenario_json_discovery,
     ]

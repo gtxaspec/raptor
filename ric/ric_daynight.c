@@ -76,23 +76,27 @@ static int adc_read(int channel)
 #define ADC_FAIL_WARN_SEC   2
 #define ADC_FAIL_REPEAT_SEC 60
 
-static int adc_polls_per(const ric_state_t *st, int seconds)
+/* rvd restarts routinely take a few seconds; only longer is an outage. */
+#define RVD_FAIL_WARN_SEC   10
+#define RVD_FAIL_REPEAT_SEC 60
+
+static int polls_per(const ric_state_t *st, int seconds)
 {
 	int ms = st->settings.poll_interval_ms > 0 ? st->settings.poll_interval_ms : 1000;
 	int polls = (seconds * 1000 + ms - 1) / ms;
 	return polls > 0 ? polls : 1;
 }
 
-static int adc_fail_secs(const ric_state_t *st)
+static int fail_secs(const ric_state_t *st, int run)
 {
 	int ms = st->settings.poll_interval_ms > 0 ? st->settings.poll_interval_ms : 1000;
-	return (int)((long)st->adc_fail_run * ms / 1000);
+	return (int)((long)run * ms / 1000);
 }
 
 static void adc_note_failed_read(ric_state_t *st)
 {
-	int first = adc_polls_per(st, ADC_FAIL_WARN_SEC);
-	int repeat = adc_polls_per(st, ADC_FAIL_REPEAT_SEC);
+	int first = polls_per(st, ADC_FAIL_WARN_SEC);
+	int repeat = polls_per(st, ADC_FAIL_REPEAT_SEC);
 	int run = ++st->adc_fail_run;
 
 	if (run < first || (run - first) % repeat != 0)
@@ -101,7 +105,7 @@ static void adc_note_failed_read(ric_state_t *st)
 	RSS_WARN("ADC: channel %d has read nothing for %ds -- day/night is frozen in "
 		 "%s mode. Check the photoresistor wiring, or set [ircut] trigger to "
 		 "something this board can measure",
-		 st->settings.adc_channel, adc_fail_secs(st),
+		 st->settings.adc_channel, fail_secs(st, st->adc_fail_run),
 		 st->current_mode == RIC_MODE_NIGHT ? "night" : "day");
 	st->adc_fail_warned = true;
 }
@@ -110,9 +114,38 @@ static void adc_note_good_read(ric_state_t *st)
 {
 	if (st->adc_fail_warned)
 		RSS_INFO("ADC: channel %d reading again after %ds", st->settings.adc_channel,
-			 adc_fail_secs(st));
+			 fail_secs(st, st->adc_fail_run));
 	st->adc_fail_run = 0;
 	st->adc_fail_warned = false;
+}
+
+/*
+ * The same silence, one layer up: rvd dying mid-run fails the poll's
+ * query, the poll returns, and day/night freezes with nothing at
+ * default log level -- the per-poll line below it is DEBUG. A routine
+ * rvd restart is a few seconds and stays quiet.
+ */
+static void rvd_note_failed_query(ric_state_t *st)
+{
+	int first = polls_per(st, RVD_FAIL_WARN_SEC);
+	int repeat = polls_per(st, RVD_FAIL_REPEAT_SEC);
+	int run = ++st->rvd_fail_run;
+
+	if (run < first || (run - first) % repeat != 0)
+		return;
+
+	RSS_WARN("rvd has not answered for %ds -- day/night is frozen in %s mode",
+		 fail_secs(st, st->rvd_fail_run),
+		 st->current_mode == RIC_MODE_NIGHT ? "night" : "day");
+	st->rvd_fail_warned = true;
+}
+
+static void rvd_note_good_query(ric_state_t *st)
+{
+	if (st->rvd_fail_warned)
+		RSS_INFO("rvd answering again after %ds", fail_secs(st, st->rvd_fail_run));
+	st->rvd_fail_run = 0;
+	st->rvd_fail_warned = false;
 }
 
 void ric_adc_cleanup(ric_state_t *st)
@@ -160,11 +193,15 @@ static void gpio_set(int pin, int value)
 	char path[64];
 	snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/value", pin);
 	int fd = open(path, O_WRONLY);
-	if (fd >= 0) {
-		if (write(fd, value ? "1" : "0", 1) < 0)
-			RSS_WARN("gpio %d set: write failed: %s", pin, strerror(errno));
-		close(fd);
+	if (fd < 0) {
+		/* As loud as a failed write: a pin that cannot open is an
+		 * ircut or LED silently not moving. */
+		RSS_WARN("gpio %d set: cannot open: %s", pin, strerror(errno));
+		return;
 	}
+	if (write(fd, value ? "1" : "0", 1) < 0)
+		RSS_WARN("gpio %d set: write failed: %s", pin, strerror(errno));
+	close(fd);
 }
 
 void ric_gpio_init(ric_state_t *st)
@@ -322,8 +359,10 @@ void ric_poll_exposure(ric_state_t *st)
 					sizeof(resp), 1000);
 	if (ret < 0) {
 		RSS_DEBUG("RVD query failed (%d)", ret);
+		rvd_note_failed_query(st);
 		return;
 	}
+	rvd_note_good_query(st);
 
 	uint32_t total_gain = 0, ae_luma = 0;
 	uint32_t ev = 0;
