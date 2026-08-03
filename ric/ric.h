@@ -178,6 +178,8 @@ typedef struct {
 
 	/* ADC state */
 	bool adc_initialized;
+	int adc_fail_run;     /* consecutive failed reads, 0 while healthy */
+	bool adc_fail_warned; /* a warning has fired for the current run */
 
 	/* One-shot diagnostics: a missing signal is worth saying once, and
 	 * saying every poll instead is how a log stops being read. */

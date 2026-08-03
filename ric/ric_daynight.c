@@ -62,6 +62,59 @@ static int adc_read(int channel)
 	return (read(adc_fd, &value, sizeof(value)) == sizeof(value)) ? value : -1;
 }
 
+/*
+ * A photoresistor that stops answering is silent by nature: the read
+ * fails, the poll is skipped, and day/night freezes wherever it stood
+ * with nothing in the log to explain it. A start that fails is already
+ * reported and demoted to the luma trigger, so what is left uncovered
+ * is the device that opens and then goes quiet.
+ *
+ * Report a sustained run of failed reads rather than a single one --
+ * one skipped poll costs nothing and says nothing -- and repeat rarely
+ * enough that a log carrying the message for hours stays readable.
+ */
+#define ADC_FAIL_WARN_SEC 2
+#define ADC_FAIL_REPEAT_SEC 60
+
+static int adc_polls_per(const ric_state_t *st, int seconds)
+{
+	int ms = st->settings.poll_interval_ms > 0 ? st->settings.poll_interval_ms : 1000;
+	int polls = (seconds * 1000 + ms - 1) / ms;
+	return polls > 0 ? polls : 1;
+}
+
+static int adc_fail_secs(const ric_state_t *st)
+{
+	int ms = st->settings.poll_interval_ms > 0 ? st->settings.poll_interval_ms : 1000;
+	return (int)((long)st->adc_fail_run * ms / 1000);
+}
+
+static void adc_note_failed_read(ric_state_t *st)
+{
+	int first = adc_polls_per(st, ADC_FAIL_WARN_SEC);
+	int repeat = adc_polls_per(st, ADC_FAIL_REPEAT_SEC);
+	int run = ++st->adc_fail_run;
+
+	if (run < first || (run - first) % repeat != 0)
+		return;
+
+	RSS_WARN("ADC: channel %d has read nothing for %ds -- day/night is frozen in "
+		 "%s mode. Check the photoresistor wiring, or set [ircut] trigger to "
+		 "something this board can measure",
+		 st->settings.adc_channel, adc_fail_secs(st),
+		 st->current_mode == RIC_MODE_NIGHT ? "night" : "day");
+	st->adc_fail_warned = true;
+}
+
+static void adc_note_good_read(ric_state_t *st)
+{
+	if (st->adc_fail_warned)
+		RSS_INFO("ADC: channel %d reading again after %ds", st->settings.adc_channel,
+			 adc_fail_secs(st));
+	st->adc_fail_run = 0;
+	st->adc_fail_warned = false;
+}
+
 void ric_adc_cleanup(ric_state_t *st)
 {
 	if (adc_fd >= 0) {
@@ -400,9 +453,10 @@ void ric_poll_exposure(ric_state_t *st)
 		 */
 		int adc_val = adc_read(st->settings.adc_channel);
 		if (adc_val < 0) {
-			/* ADC read failed — skip this poll */
+			adc_note_failed_read(st);
 			return;
 		}
+		adc_note_good_read(st);
 		want_night = (adc_val < st->settings.adc_night);
 		want_day = (adc_val > st->settings.adc_day);
 		snprintf(why, sizeof(why), "adc=%d, night<%d day>%d", adc_val,
