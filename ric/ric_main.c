@@ -39,6 +39,11 @@ static void load_config(ric_state_t *st)
 	c->gpio_irled = rss_config_get_int(cfg, "ircut", "gpio_irled", -1);
 	c->gpio_irled2 = rss_config_get_int(cfg, "ircut", "gpio_irled2", -1);
 	c->ir850_enabled = rss_config_get_bool(cfg, "ircut", "ir850", true);
+	/* Probed before the get, because the getters store their default into
+	 * the config on a miss (for config-get-section) and the key would
+	 * always look present afterwards. The 940-only default below needs
+	 * to know the difference. */
+	c->ir940_explicit = rss_config_get_str(cfg, "ircut", "ir940", NULL) != NULL;
 	c->ir940_enabled = rss_config_get_bool(cfg, "ircut", "ir940", false);
 
 	/* Trigger mode: "luma" (default), "gain" (legacy), "adc", "photo" */
@@ -326,6 +331,19 @@ int main(int argc, char **argv)
 	st.current_mode = RIC_MODE_DAY;
 	load_config(&st);
 	ric_json_gpio_load(&st.settings, THINGINO_JSON);
+
+	/* The only IR bank a board has must light by default. ir940 defaults
+	 * to off as the opt-in second bank, which left a 940nm-only board
+	 * blind at night with a clean log unless a config said otherwise --
+	 * found in the field on a wuuk y0510. Decided here, after discovery,
+	 * because that is when the bank topology is finally known; only the
+	 * shipped default is overridden, an explicit ir940 key keeps its say. */
+	if (st.settings.gpio_irled < 0 && st.settings.gpio_irled2 >= 0 &&
+	    !st.settings.ir940_enabled && !st.settings.ir940_explicit) {
+		st.settings.ir940_enabled = true;
+		RSS_INFO("940nm is the only IR bank; enabling it "
+			 "(set ircut.ir940 = false to override)");
+	}
 
 	/* Wait for RVD control socket to be available */
 	RSS_DEBUG("waiting for RVD...");

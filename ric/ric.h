@@ -130,6 +130,7 @@ typedef struct {
 	int gpio_irled2;  /* second IR LED pin (ir940), -1 = none */
 	bool ir850_enabled;
 	bool ir940_enabled;
+	bool ir940_explicit; /* config carries an ir940 key (vs the default) */
 
 	/* Trigger mode */
 	ric_trigger_t trigger;

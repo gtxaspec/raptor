@@ -943,6 +943,56 @@ def scenario_ir_combos(stub, watch):
     ric.stop()
 
 
+def scenario_ir940_only_board(stub, watch):
+    """A board whose ONLY IR bank is 940nm, running as shipped: pins from
+    discovery, every [ircut] flag at its default. The only bank a board
+    has must light at night without anyone editing a config -- found in
+    the field on a wuuk y0510 that sat pitch black because ir940
+    defaults to off. An explicit ir940 = false must still win."""
+    orig = open("/etc/thingino.json").read()
+    with open("/etc/thingino.json", "w") as f:
+        json.dump({"gpio": {"ircut": "%d %d" % (IRCUT1, IRCUT2),
+                            "ir940": IRLED2}}, f)
+    try:
+        conf = "trigger = luma\nnight_luma = 20\nhysteresis_sec = 2\n"
+        stub.set_scene(luma=120, gain=500, ev=4000)
+        ric = Ric("ir940only", conf)
+        if not ric.wait_running():
+            result(False, "ir940-only: ric start", "no 'ric running'")
+            ric.stop()
+            return
+        time.sleep(0.5)
+        gm, mm = watch.mark(), stub.mark()
+        stub.set_scene(luma=5, gain=20000, ev=100000)
+        ok = wait_for(lambda: "night" in stub.modes_since(mm), 4)
+        result(ok, "ir940-only: night switch", str(stub.modes_since(mm)))
+        result(wait_last(watch, gm, IRLED2, "1"),
+               "ir940-only: the only IR bank lights by default",
+               "gpio%d never went high -- 940-only board is blind at night"
+               % IRLED2)
+        ric.stop()
+
+        # the user's explicit no must still be a no
+        stub.set_scene(luma=120, gain=500, ev=4000)
+        ric = Ric("ir940off", conf + "ir940 = false\n")
+        if not ric.wait_running():
+            result(False, "ir940-only: explicit-off ric start", "no 'ric running'")
+            ric.stop()
+            return
+        time.sleep(0.5)
+        gm, mm = watch.mark(), stub.mark()
+        stub.set_scene(luma=5, gain=20000, ev=100000)
+        ok = wait_for(lambda: "night" in stub.modes_since(mm), 4)
+        time.sleep(0.5)
+        result(ok and last_value(watch.since(gm), IRLED2) is None,
+               "ir940-only: explicit ir940=false stays dark",
+               str(watch.since(gm)))
+        ric.stop()
+    finally:
+        with open("/etc/thingino.json", "w") as f:
+            f.write(orig)
+
+
 def scenario_ctrl_extras(stub, watch):
     """isp-mode changes only the ISP; set-threshold retunes live."""
     stub.set_scene(luma=120, gain=500, ev=4000)
@@ -1053,6 +1103,7 @@ def main():
         scenario_ctrl_extras,
         scenario_single_gpio,
         scenario_ir_combos,
+        scenario_ir940_only_board,
         scenario_startup_forced,
         scenario_pulse_width,
         scenario_gain_trigger,
