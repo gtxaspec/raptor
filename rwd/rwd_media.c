@@ -690,7 +690,7 @@ void *rwd_video_reader_thread(void *arg)
 			const rss_ring_header_t *vhdr = rss_ring_get_header(srv->video_rings[s]);
 			uint64_t ws = vhdr->write_seq;
 			if (ws > read_seq + 10 && read_seq > 0) {
-				read_seq = ws - 1;
+				read_seq = ws;
 				rwd_request_idr(srv, s);
 				pthread_mutex_lock(&srv->clients_lock);
 				for (int i = 0; i < RWD_MAX_CLIENTS; i++) {

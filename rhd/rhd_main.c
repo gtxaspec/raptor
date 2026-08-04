@@ -121,7 +121,9 @@ static bool handle_snapshot(rhd_client_t *c, int stream, rss_ring_t *ring)
 	 * left behind the last time something watched it.
 	 */
 	const rss_ring_header_t *hdr = rss_ring_get_header(ring);
-	c->snap_seq = atomic_load(&hdr->write_seq);
+	/* +1: seq == write_seq is readable, so the cursor must start past
+	 * it or the reply could be the newest frame already in the ring. */
+	c->snap_seq = atomic_load(&hdr->write_seq) + 1;
 	c->snap_stream = stream;
 	c->snap_pending = true;
 
@@ -351,8 +353,7 @@ static void snap_poll(rhd_server_t *srv)
 		/* Lapped by the writer: resync onto the newest frame and retry. */
 		if (ret == RSS_EOVERFLOW) {
 			const rss_ring_header_t *hdr = rss_ring_get_header(ring);
-			uint64_t w = atomic_load(&hdr->write_seq);
-			c->snap_seq = w > 0 ? w - 1 : 0;
+			c->snap_seq = atomic_load(&hdr->write_seq);
 			continue;
 		}
 
@@ -773,8 +774,7 @@ static void server_run(rhd_server_t *srv)
 				int ret = rss_ring_read(srv->audio_ring, &audio_read_seq, audio_buf,
 							sizeof(audio_buf), &alen, &meta);
 				if (ret == RSS_EOVERFLOW) {
-					audio_read_seq =
-						ahdr->write_seq > 0 ? ahdr->write_seq - 1 : 0;
+					audio_read_seq = ahdr->write_seq;
 					continue;
 				}
 				if (ret != 0 || alen == 0)

@@ -458,8 +458,7 @@ static void serve_loop(rsr_state_t *st)
 					RSS_DEBUG("audio ring overflow, resetting");
 					const rss_ring_header_t *ahdr =
 						rss_ring_get_header(st->audio_ring);
-					st->audio_read_seq =
-						ahdr->write_seq > 0 ? ahdr->write_seq - 1 : 0;
+					st->audio_read_seq = ahdr->write_seq;
 					continue;
 				}
 				if (ret != 0)
