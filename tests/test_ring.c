@@ -79,9 +79,6 @@ TEST ring_publish_read_basic(void)
 
 	uint8_t data[] = {0xDE, 0xAD, 0xBE, 0xEF};
 	publish_frame(w, data, sizeof(data), 1000, 0x13, true);
-	/* Second publish makes first readable (write_seq advances past it) */
-	uint8_t dummy[] = {0};
-	publish_frame(w, dummy, sizeof(dummy), 2000, 0x14, false);
 
 	uint64_t seq = 1; /* first real frame */
 	uint8_t buf[256];
@@ -109,13 +106,12 @@ TEST ring_sequence_tracking(void)
 	uint8_t data[64];
 	memset(data, 0xAA, sizeof(data));
 
-	/* Publish 6 frames — first 5 readable, 6th makes 5th readable */
+	/* Publish 6 frames — every one readable, including the newest */
 	for (int i = 0; i < 6; i++)
 		publish_frame(w, data, sizeof(data), i * 40000, 0x14, i == 0);
 
-	/* Read 5 frames starting at seq=1 */
 	uint64_t seq = 1;
-	for (int i = 0; i < 5; i++) {
+	for (int i = 0; i < 6; i++) {
 		uint8_t buf[256];
 		uint32_t len;
 		rss_ring_slot_t meta;
@@ -124,8 +120,13 @@ TEST ring_sequence_tracking(void)
 		ASSERT_EQ(i * 40000, (int)meta.timestamp);
 	}
 
-	/* seq=6 should have the last frame (ts=5*40000), but write_seq=6
-	 * so read at 6 → EAGAIN. One unreadable "in flight" frame. */
+	/* Fully drained: the next read has nothing to return */
+	{
+		uint8_t buf[256];
+		uint32_t len;
+		rss_ring_slot_t meta;
+		ASSERT_EQ(-EAGAIN, rss_ring_read(rd, &seq, buf, sizeof(buf), &len, &meta));
+	}
 
 	rss_ring_close(rd);
 	rss_ring_destroy(w);
@@ -287,9 +288,6 @@ TEST ring_large_frame(void)
 	big[32767] = 0x43;
 
 	publish_frame(w, big, 32768, 100000, 0x13, true);
-	/* Publish dummy to make first frame readable */
-	uint8_t dummy[] = {0};
-	publish_frame(w, dummy, sizeof(dummy), 200000, 0x14, false);
 	uint64_t seq = 1;
 
 	uint8_t *rbuf = calloc(1, 65536);
@@ -320,8 +318,6 @@ TEST ring_multiple_readers(void)
 
 	uint8_t data[] = {0x01, 0x02, 0x03};
 	publish_frame(w, data, sizeof(data), 5000, 0x14, false);
-	uint8_t dummy[] = {0};
-	publish_frame(w, dummy, sizeof(dummy), 6000, 0x14, false);
 
 	uint64_t seq1 = 1;
 	uint64_t seq2 = 1;
@@ -354,8 +350,6 @@ TEST ring_dest_too_small(void)
 	uint8_t data[256];
 	memset(data, 0xEE, sizeof(data));
 	publish_frame(w, data, sizeof(data), 1000, 0x14, false);
-	uint8_t dummy[] = {0};
-	publish_frame(w, dummy, sizeof(dummy), 2000, 0x14, false);
 	uint64_t seq = 1;
 
 	/* Try to read into a buffer that's too small — should return -ENOSPC */
@@ -402,10 +396,9 @@ TEST ring_keyframe_flag(void)
 	uint8_t data[32];
 	memset(data, 0, sizeof(data));
 
-	/* Publish IDR (key=1), P-frame (key=0), dummy (makes P readable) */
+	/* Publish IDR (key=1) then P-frame (key=0) */
 	publish_frame(w, data, sizeof(data), 0, 0x13, true);
 	publish_frame(w, data, sizeof(data), 40000, 0x14, false);
-	publish_frame(w, data, sizeof(data), 80000, 0x14, false);
 
 	uint64_t seq = 1;
 
@@ -420,6 +413,89 @@ TEST ring_keyframe_flag(void)
 	rss_ring_read(rd, &seq, buf, sizeof(buf), &len, &meta);
 	ASSERT_EQ(0, (int)meta.is_key);
 	ASSERT_EQ(0x14, (int)meta.nal_type);
+
+	rss_ring_close(rd);
+	rss_ring_destroy(w);
+	PASS();
+}
+
+TEST ring_newest_frame_readable(void)
+{
+	/* The regression that lost the last frame of every finite stream:
+	 * with 1-based sequences, seq == write_seq is a fully published
+	 * frame and must be readable without waiting for a successor. */
+	rss_ring_t *w = make_ring("test_nfr", 4, 4096);
+	ASSERT(w);
+	rss_ring_t *rd = rss_ring_open("test_nfr");
+	ASSERT(rd);
+
+	uint8_t data[] = {0x5A, 0xA5};
+	publish_frame(w, data, sizeof(data), 7000, 0x14, false);
+
+	uint64_t seq = 1;
+	uint8_t buf[64];
+	uint32_t len;
+	rss_ring_slot_t meta;
+	ASSERT_EQ(0, rss_ring_read(rd, &seq, buf, sizeof(buf), &len, &meta));
+	ASSERT_EQ(2, (int)len);
+	ASSERT_MEM_EQ(data, buf, 2);
+	ASSERT_EQ(2, (int)seq);
+
+	rss_ring_close(rd);
+	rss_ring_destroy(w);
+	PASS();
+}
+
+TEST ring_peek_newest_frame(void)
+{
+	rss_ring_t *w = make_ring("test_pnf", 4, 4096);
+	ASSERT(w);
+	rss_ring_t *rd = rss_ring_open("test_pnf");
+	ASSERT(rd);
+
+	uint8_t data[] = {0x11, 0x22, 0x33};
+	publish_frame(w, data, sizeof(data), 9000, 0x14, false);
+
+	uint64_t seq = 1;
+	const uint8_t *ptr = NULL;
+	uint32_t len;
+	rss_ring_slot_t meta;
+	ASSERT_EQ(0, rss_ring_peek(rd, &seq, &ptr, &len, &meta));
+	ASSERT(ptr);
+	ASSERT_EQ(3, (int)len);
+	ASSERT_MEM_EQ(data, ptr, 3);
+	ASSERT_EQ(0, rss_ring_peek_done(rd, &meta));
+
+	rss_ring_close(rd);
+	rss_ring_destroy(w);
+	PASS();
+}
+
+TEST ring_cold_start_seq_zero(void)
+{
+	/* read_seq = 0 is the common cold-start init. Empty ring: EAGAIN,
+	 * never a resync loop. Non-empty: one overflow resyncs to the
+	 * newest frame, which is then readable. */
+	rss_ring_t *w = make_ring("test_cs0", 4, 4096);
+	ASSERT(w);
+	rss_ring_t *rd = rss_ring_open("test_cs0");
+	ASSERT(rd);
+
+	uint64_t seq = 0;
+	uint8_t buf[64];
+	uint32_t len;
+	rss_ring_slot_t meta;
+	ASSERT_EQ(-EAGAIN, rss_ring_read(rd, &seq, buf, sizeof(buf), &len, &meta));
+	ASSERT_EQ(0, (int)seq);
+
+	uint8_t data[] = {0x77};
+	publish_frame(w, data, sizeof(data), 100, 0x14, false);
+	publish_frame(w, data, sizeof(data), 200, 0x14, false);
+
+	ASSERT_EQ(RSS_EOVERFLOW, rss_ring_read(rd, &seq, buf, sizeof(buf), &len, &meta));
+	ASSERT_EQ(2, (int)seq);
+	ASSERT_EQ(0, rss_ring_read(rd, &seq, buf, sizeof(buf), &len, &meta));
+	ASSERT_EQ(200, (int)meta.timestamp);
 
 	rss_ring_close(rd);
 	rss_ring_destroy(w);
@@ -442,4 +518,7 @@ SUITE(ring_suite)
 	RUN_TEST(ring_dest_too_small);
 	RUN_TEST(ring_no_data_available);
 	RUN_TEST(ring_keyframe_flag);
+	RUN_TEST(ring_newest_frame_readable);
+	RUN_TEST(ring_peek_newest_frame);
+	RUN_TEST(ring_cold_start_seq_zero);
 }
