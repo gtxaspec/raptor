@@ -7,7 +7,8 @@
 #   2. Sibling repo tests (raptor-ipc, raptor-common)
 #   3. Unit tests (host x86, ASAN)
 #   4. Integration tests (daemons + curl/ffprobe), then the ric
-#      behavior suite (stub rvd + fake sysfs GPIO, test-ric.sh)
+#      behavior suite (stub rvd + fake sysfs GPIO, test-ric.sh),
+#      the rac beep suite, and the net-fallback suite
 #   5. Leak/race detection (lifecycle soak)
 #
 # Usage:
@@ -137,6 +138,12 @@ if "$SCRIPT_DIR/test-ric.sh"; then
     stage_pass "ric behavior suite"
 else
     stage_fail "ric behavior suite"
+fi
+
+if "$SCRIPT_DIR/test-rac.sh"; then
+    stage_pass "rac beep suite"
+else
+    stage_fail "rac beep suite"
 fi
 
 if "$SCRIPT_DIR/test-net-fallback.sh"; then

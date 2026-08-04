@@ -6,7 +6,7 @@ all: $(BIN)
 
 $(BIN): $(OBJS)
 	@echo "  LD      $@"
-	$(Q)$(CC) -o $@ $^ $(LIBS) $(LDFLAGS)
+	$(Q)$(CC) -o $@ $^ $(LIBS) -lm $(LDFLAGS)
 
 %.o: %.c
 	@echo "  CC      $<"

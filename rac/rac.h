@@ -30,6 +30,7 @@ int cmd_record(const char *dest, int max_seconds);
 
 /* Play audio file to speaker ring */
 int cmd_play(const char *src, int sample_rate);
+int cmd_beep(int freq_hz, int duration_ms, int sample_rate);
 
 /* Send control command to RAD */
 int cmd_ctrl(const char *cmd_json);

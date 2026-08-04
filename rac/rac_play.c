@@ -4,6 +4,7 @@
  * Decode audio (PCM, MP3, AAC, Opus) and publish to speaker ring.
  */
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -584,4 +585,96 @@ done:
 	fprintf(stderr, "rac: played %.1fs, %llu samples\n", duration,
 		(unsigned long long)total_samples);
 	return ret;
+}
+
+/* ── Beep: synthesize a sine tone, no file needed ── */
+
+int cmd_beep(int freq_hz, int duration_ms, int sample_rate)
+{
+	if (freq_hz < 20 || freq_hz > sample_rate / 2) {
+		fprintf(stderr, "rac: frequency must be 20..%d Hz at %d Hz output\n",
+			sample_rate / 2, sample_rate);
+		return 1;
+	}
+	if (duration_ms < 10 || duration_ms > 30000) {
+		fprintf(stderr, "rac: duration must be 10..30000 ms\n");
+		return 1;
+	}
+
+	fprintf(stderr, "rac: beep %d Hz, %d ms, %d Hz output\n", freq_hz, duration_ms,
+		sample_rate);
+
+	/* Same prologue as playback: flush stale hardware audio, own the
+	 * speaker ring, give the AO thread a moment to attach. */
+	{
+		char resp[256];
+		rss_ctrl_send_command(RSS_RUN_DIR "/rad.sock", "{\"cmd\":\"ao-flush\"}", resp,
+				      sizeof(resp), 500);
+	}
+	rss_ring_t *ring = rss_ring_create("speaker", 16, 64 * 1024);
+	if (!ring) {
+		fprintf(stderr, "rac: failed to create speaker ring\n");
+		return 1;
+	}
+	rss_ring_set_stream_info(ring, 0x11, 0, 0, 0, sample_rate, 1, 0, 0);
+	for (int i = 0; i < 40 && g_running; i++) {
+		if (rss_ring_reader_count(ring) > 0)
+			break;
+		usleep(5000);
+	}
+
+	int total = (int)((int64_t)sample_rate * duration_ms / 1000);
+	/* Raised-cosine ramps kill the on/off clicks; 5ms, or a quarter of a
+	 * very short beep. */
+	int ramp = sample_rate * 5 / 1000;
+	if (ramp > total / 4)
+		ramp = total / 4;
+
+	rac_pacer_t pacer;
+	pacer_init(&pacer, sample_rate);
+
+	int chunk = sample_rate / 50; /* 20ms */
+	int16_t *buf = malloc((size_t)chunk * sizeof(int16_t));
+	if (!buf) {
+		rss_ring_destroy(ring);
+		return 1;
+	}
+
+	const double step = 2.0 * M_PI * freq_hz / sample_rate;
+	double phase = 0.0;
+	uint64_t total_samples = 0;
+	int done_samples = 0;
+	while (done_samples < total && g_running) {
+		int n = total - done_samples < chunk ? total - done_samples : chunk;
+		for (int i = 0; i < n; i++) {
+			int idx = done_samples + i;
+			double amp = 0.35;
+			if (idx < ramp)
+				amp *= 0.5 * (1.0 - cos(M_PI * idx / ramp));
+			else if (idx >= total - ramp)
+				amp *= 0.5 * (1.0 - cos(M_PI * (total - 1 - idx) / ramp));
+			buf[i] = (int16_t)(32767.0 * amp * sin(phase));
+			phase += step;
+		}
+		rss_ring_publish(ring, (const uint8_t *)buf, (uint32_t)(n * 2), rss_timestamp_us(),
+				 0, 0);
+		total_samples += (uint64_t)n;
+		done_samples += n;
+		pacer_advance(&pacer, n);
+	}
+	free(buf);
+
+	/* Same epilogue as playback: let RAD drain the hardware pipeline so
+	 * the tail is not cut when the ring goes away. */
+	{
+		char resp[128];
+		int r = rss_ctrl_send_command(RSS_RUN_DIR "/rad.sock", "{\"cmd\":\"ao-drain\"}",
+					      resp, sizeof(resp), 4000);
+		if (r <= 0 || !strstr(resp, "\"status\":\"ok\""))
+			usleep(100000);
+	}
+	rss_ring_destroy(ring);
+	fprintf(stderr, "rac: beeped %.1fs, %llu samples\n", (double)total_samples / sample_rate,
+		(unsigned long long)total_samples);
+	return 0;
 }

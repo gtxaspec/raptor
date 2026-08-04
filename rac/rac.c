@@ -66,6 +66,10 @@ static void usage(void)
 			", Opus"
 #endif
 			"\n"
+			"  beep [options]              Play a sine beep to the speaker (no file)\n"
+			"    -f <hz>                   Frequency (default: 1000)\n"
+			"    -d <ms>                   Duration (default: 200)\n"
+			"    -r <rate>                 Sample rate (default: 16000)\n"
 			"  status                      Show audio daemon status\n"
 			"  ao-volume <val>             Set speaker volume\n"
 			"  ao-gain <val>               Set speaker gain\n");
@@ -136,6 +140,34 @@ int main(int argc, char **argv)
 			return 1;
 		}
 		return cmd_play(argv[optind], sample_rate);
+
+	} else if (strcmp(cmd, "beep") == 0) {
+		int freq = 1000;
+		int duration_ms = 200;
+		int sample_rate = 16000;
+		int opt;
+		optind = 2;
+		while ((opt = getopt(argc, argv, "f:d:r:")) != -1) {
+			switch (opt) {
+			case 'f':
+				freq = (int)strtol(optarg, NULL, 10);
+				break;
+			case 'd':
+				duration_ms = (int)strtol(optarg, NULL, 10);
+				break;
+			case 'r':
+				sample_rate = (int)strtol(optarg, NULL, 10);
+				break;
+			default:
+				usage();
+				return 1;
+			}
+		}
+		if (sample_rate <= 0) {
+			fprintf(stderr, "rac: invalid sample rate\n");
+			return 1;
+		}
+		return cmd_beep(freq, duration_ms, sample_rate);
 
 	} else if (strcmp(cmd, "status") == 0) {
 		return cmd_ctrl("{\"cmd\":\"status\"}");
