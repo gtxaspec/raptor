@@ -131,6 +131,57 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 	}
 
+	/*
+	 * Manual hardware control, one piece at a time. Deliberately does
+	 * not touch current_mode or opmode: this is a bench tool, and the
+	 * next automatic transition reasserts whatever auto wants -- the
+	 * response carries the operating mode so the caller knows whether
+	 * that can happen. The LED commands also ignore the ir850/ir940
+	 * enable flags on purpose: those gate automatic behavior, while a
+	 * manual command is explicit intent (lighting a disabled bank from
+	 * the shell is exactly what bench debugging needs).
+	 */
+	if (strcmp(cmd, "ircut") == 0) {
+		char val[8];
+		if (rss_json_get_str(cmd_json, "value", val, sizeof(val)) != 0 ||
+		    (strcmp(val, "day") != 0 && strcmp(val, "night") != 0))
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value day|night");
+		if (ric_ircut_drive(st, strcmp(val, "night") == 0 ? RIC_MODE_NIGHT : RIC_MODE_DAY) <
+		    0)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+						   "no ircut pins configured");
+		RSS_INFO("manual ircut -> %s", val);
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddStringToObject(r, "status", "ok");
+		cJSON_AddStringToObject(r, "ircut", val);
+		cJSON_AddStringToObject(r, "mode",
+					st->settings.opmode == RIC_AUTO	       ? "auto"
+					: st->settings.opmode == RIC_FORCE_DAY ? "day"
+									       : "night");
+		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
+	}
+
+	if (strcmp(cmd, "ir850") == 0 || strcmp(cmd, "ir940") == 0) {
+		char val[8];
+		bool bank940 = cmd[2] == '9';
+		if (rss_json_get_str(cmd_json, "value", val, sizeof(val)) != 0 ||
+		    (strcmp(val, "on") != 0 && strcmp(val, "off") != 0))
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value on|off");
+		if (ric_irled_drive(st, bank940, strcmp(val, "on") == 0) < 0)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+						   bank940 ? "no ir940 pin configured"
+							   : "no ir850 pin configured");
+		RSS_INFO("manual %s -> %s", cmd, val);
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddStringToObject(r, "status", "ok");
+		cJSON_AddStringToObject(r, cmd, val);
+		cJSON_AddStringToObject(r, "mode",
+					st->settings.opmode == RIC_AUTO	       ? "auto"
+					: st->settings.opmode == RIC_FORCE_DAY ? "day"
+									       : "night");
+		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
+	}
+
 	if (strcmp(cmd, "mode") == 0) {
 		char val[16];
 		if (rss_json_get_str(cmd_json, "value", val, sizeof(val)) == 0) {

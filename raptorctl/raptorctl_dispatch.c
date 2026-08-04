@@ -217,6 +217,9 @@ static const struct cmd_def cmd_table[] = {
 	/* IRcut */
 	{"mode", NULL, 1, args_val_str},
 	{"isp-mode", NULL, 1, args_val_str},
+	{"ircut", NULL, 1, args_val_str},
+	{"ir850", NULL, 1, args_val_str},
+	{"ir940", NULL, 1, args_val_str},
 	{"set-threshold", NULL, 2, args_key_val},
 	{"get-thresholds", NULL, 0, args_none},
 

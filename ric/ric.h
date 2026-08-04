@@ -202,6 +202,8 @@ typedef struct {
 void ric_gpio_init(ric_state_t *st);
 void ric_set_mode(ric_state_t *st, ric_mode_t mode);
 void ric_set_isp_mode(ric_mode_t mode);
+int ric_ircut_drive(ric_state_t *st, ric_mode_t pos);
+int ric_irled_drive(ric_state_t *st, bool bank940, bool on);
 void ric_poll_exposure(ric_state_t *st);
 bool ric_adc_start(ric_state_t *st);
 void ric_adc_cleanup(ric_state_t *st);

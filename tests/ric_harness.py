@@ -1115,6 +1115,73 @@ def scenario_ir940_only_board(stub, watch):
             f.write(orig)
 
 
+def scenario_manual_gpio(stub, watch):
+    """raptorctl-level manual hardware control: ircut, ir850 and ir940
+    each drive their piece alone -- no ISP call, no mode change. The
+    LED commands ignore the enable flags (manual intent beats the
+    automatic gating; lighting a disabled bank is the bench move), and
+    the next automatic transition reasserts over manual state for the
+    banks auto manages, while a manually-lit disabled bank stays lit."""
+    conf = LUMA_CONF + ("gpio_irled2 = %d\nir940 = false\n" % IRLED2)
+    stub.set_scene(luma=120, gain=500, ev=4000)
+    ric = Ric("manualgpio", conf)
+    if not ric.wait_running():
+        result(False, "manual-gpio: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    time.sleep(0.5)
+
+    gm, mm = watch.mark(), stub.mark()
+    r = ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "ircut", "value": "night"})
+    ok = r is not None and r.get("status") == "ok" and r.get("mode") == "auto"
+    w = wait_pulse(watch, gm, IRCUT2, IRCUT1)
+    result(ok and w is not None,
+           "manual ircut: filter pulses alone", "resp=%s width=%s" % (r, w))
+    time.sleep(0.3)
+    result(stub.modes_since(mm) == [],
+           "manual ircut: no ISP call, no mode change", str(stub.modes_since(mm)))
+
+    gm = watch.mark()
+    r = ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "ir850", "value": "on"})
+    ok = r is not None and r.get("status") == "ok" and wait_last(watch, gm, IRLED, "1")
+    result(ok, "manual ir850: bank lights alone", str(r))
+
+    gm = watch.mark()
+    r = ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "ir940", "value": "on"})
+    ok = r is not None and r.get("status") == "ok" and wait_last(watch, gm, IRLED2, "1")
+    result(ok, "manual ir940: disabled bank still lights (manual beats flag)",
+           str(r))
+
+    r = ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "ircut", "value": "sideways"})
+    r2 = ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "ir850", "value": "maybe"})
+    result(r is not None and r.get("status") == "error"
+           and r2 is not None and r2.get("status") == "error",
+           "manual control: bad values rejected", "%s %s" % (r, r2))
+
+    # auto reasserts what it manages; the disabled bank keeps manual state
+    ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "mode", "value": "night"})
+    time.sleep(0.3)
+    gm = watch.mark()
+    ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "mode", "value": "day"})
+    ok = wait_last(watch, gm, IRLED, "0")
+    result(ok and last_value(watch.since(gm), IRLED2) is None,
+           "manual control: auto reasserts managed banks, disabled bank keeps manual state",
+           str(watch.since(gm)))
+    ric.stop()
+
+    # a bank with no pin errors instead of pretending
+    stub.set_scene(luma=120, gain=500, ev=4000)
+    ric = Ric("manualnopin", LUMA_CONF)  # no gpio_irled2
+    if not ric.wait_running():
+        result(False, "manual-gpio: second ric start", "no 'ric running'")
+        ric.stop()
+        return
+    r = ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "ir940", "value": "on"})
+    result(r is not None and r.get("status") == "error",
+           "manual ir940: missing pin is an error", str(r))
+    ric.stop()
+
+
 def scenario_ctrl_extras(stub, watch):
     """isp-mode changes only the ISP; set-threshold retunes live."""
     stub.set_scene(luma=120, gain=500, ev=4000)
@@ -1452,6 +1519,7 @@ def main():
         scenario_cooldown,
         scenario_ctrl,
         scenario_ctrl_extras,
+        scenario_manual_gpio,
         scenario_single_gpio,
         scenario_ir_combos,
         scenario_ir940_only_board,

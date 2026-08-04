@@ -229,57 +229,79 @@ void ric_set_isp_mode(ric_mode_t mode)
 			      resp, sizeof(resp), 2000);
 }
 
-static void ric_set_gpio(ric_state_t *st, ric_mode_t mode)
+/*
+ * Drive the IR-cut filter alone. Exported for raptorctl's manual
+ * control; a manual position lasts until the next mode switch
+ * reasserts the automatic one. Returns -1 when no ircut pin exists.
+ */
+int ric_ircut_drive(ric_state_t *st, ric_mode_t pos)
 {
 	ric_config_t *c = &st->settings;
 
-	if (mode == RIC_MODE_NIGHT) {
-		if (c->gpio_ircut >= 0) {
-			if (c->gpio_ircut2 >= 0) {
-				gpio_set(c->gpio_ircut, 0);
-				gpio_set(c->gpio_ircut2, 1);
-				usleep((useconds_t)c->pulse_ms * 1000);
-				gpio_set(c->gpio_ircut, 0);
-				gpio_set(c->gpio_ircut2, 0);
-				RSS_INFO("ircut: gpio %d=0, gpio %d=0 (night)", c->gpio_ircut,
-					 c->gpio_ircut2);
-			} else {
-				gpio_set(c->gpio_ircut, 0);
-				RSS_INFO("ircut: gpio %d=0 (night)", c->gpio_ircut);
-			}
-		}
-		if (c->gpio_irled >= 0 && c->ir850_enabled) {
-			gpio_set(c->gpio_irled, 1);
-			RSS_INFO("ir850: gpio %d=1 (on)", c->gpio_irled);
-		}
-		if (c->gpio_irled2 >= 0 && c->ir940_enabled) {
-			gpio_set(c->gpio_irled2, 1);
-			RSS_INFO("ir940: gpio %d=1 (on)", c->gpio_irled2);
+	if (c->gpio_ircut < 0)
+		return -1;
+
+	if (pos == RIC_MODE_NIGHT) {
+		if (c->gpio_ircut2 >= 0) {
+			gpio_set(c->gpio_ircut, 0);
+			gpio_set(c->gpio_ircut2, 1);
+			usleep((useconds_t)c->pulse_ms * 1000);
+			gpio_set(c->gpio_ircut, 0);
+			gpio_set(c->gpio_ircut2, 0);
+			RSS_INFO("ircut: gpio %d=0, gpio %d=0 (night)", c->gpio_ircut,
+				 c->gpio_ircut2);
+		} else {
+			gpio_set(c->gpio_ircut, 0);
+			RSS_INFO("ircut: gpio %d=0 (night)", c->gpio_ircut);
 		}
 	} else {
-		if (c->gpio_ircut >= 0) {
-			if (c->gpio_ircut2 >= 0) {
-				gpio_set(c->gpio_ircut, 1);
-				gpio_set(c->gpio_ircut2, 0);
-				usleep((useconds_t)c->pulse_ms * 1000);
-				gpio_set(c->gpio_ircut, 0);
-				gpio_set(c->gpio_ircut2, 0);
-				RSS_INFO("ircut: gpio %d=0, gpio %d=0 (day)", c->gpio_ircut,
-					 c->gpio_ircut2);
-			} else {
-				gpio_set(c->gpio_ircut, 1);
-				RSS_INFO("ircut: gpio %d=1 (day)", c->gpio_ircut);
-			}
-		}
-		if (c->gpio_irled >= 0 && c->ir850_enabled) {
-			gpio_set(c->gpio_irled, 0);
-			RSS_INFO("ir850: gpio %d=0 (off)", c->gpio_irled);
-		}
-		if (c->gpio_irled2 >= 0 && c->ir940_enabled) {
-			gpio_set(c->gpio_irled2, 0);
-			RSS_INFO("ir940: gpio %d=0 (off)", c->gpio_irled2);
+		if (c->gpio_ircut2 >= 0) {
+			gpio_set(c->gpio_ircut, 1);
+			gpio_set(c->gpio_ircut2, 0);
+			usleep((useconds_t)c->pulse_ms * 1000);
+			gpio_set(c->gpio_ircut, 0);
+			gpio_set(c->gpio_ircut2, 0);
+			RSS_INFO("ircut: gpio %d=0, gpio %d=0 (day)", c->gpio_ircut,
+				 c->gpio_ircut2);
+		} else {
+			gpio_set(c->gpio_ircut, 1);
+			RSS_INFO("ircut: gpio %d=1 (day)", c->gpio_ircut);
 		}
 	}
+	return 0;
+}
+
+/*
+ * Drive one IR LED bank alone (bank940 selects 940nm). Exported for
+ * raptorctl's manual control, which deliberately ignores the
+ * ir850/ir940 enable flags: those gate what the AUTOMATIC transitions
+ * do, while a manual command is explicit human intent -- lighting a
+ * disabled bank from the shell is exactly what bench debugging needs.
+ * Returns -1 when the bank has no pin.
+ */
+int ric_irled_drive(ric_state_t *st, bool bank940, bool on)
+{
+	ric_config_t *c = &st->settings;
+	int pin = bank940 ? c->gpio_irled2 : c->gpio_irled;
+
+	if (pin < 0)
+		return -1;
+	gpio_set(pin, on ? 1 : 0);
+	RSS_INFO("%s: gpio %d=%d (%s)", bank940 ? "ir940" : "ir850", pin, on ? 1 : 0,
+		 on ? "on" : "off");
+	return 0;
+}
+
+static void ric_set_gpio(ric_state_t *st, ric_mode_t mode)
+{
+	ric_config_t *c = &st->settings;
+	bool night = mode == RIC_MODE_NIGHT;
+
+	ric_ircut_drive(st, mode);
+	if (c->ir850_enabled)
+		ric_irled_drive(st, false, night);
+	if (c->ir940_enabled)
+		ric_irled_drive(st, true, night);
 }
 
 void ric_set_mode(ric_state_t *st, ric_mode_t mode)
