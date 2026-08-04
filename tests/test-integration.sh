@@ -427,6 +427,32 @@ else
     skip "ffprobe RTSP" "ffprobe not installed"
 fi
 
+# ── SR wall-clock mapping (rlatency over UDP) ──
+# rlatency maps RTP timestamps to NTP via the Sender Reports and
+# compares against this host's clock. Client and server share the
+# clock here, so the p50 is loopback flight plus scheduler noise --
+# microseconds -- and the assertion is really about compy's
+# mono-to-NTP anchor: a sub-second truncation in it sat at a steady
+# -519 ms while this whole suite stayed green, because nothing on x86
+# mapped SR NTP against a wall clock. The 15 ms budget is orders of
+# magnitude above loopback jitter and below every failure mode this
+# guards. Incidentally the suite's only UDP-transport RTSP session.
+if cc -O2 -o "$OUT/rlatency-host" "$RAPTOR_DIR/rlatency/rlatency.c" -lm > /dev/null 2>&1; then
+    RLAT_OUT=$(timeout 40 "$OUT/rlatency-host" "rtsp://127.0.0.1:15554/stream0" -n 100 -q 2>&1)
+    RLAT_P50=$(echo "$RLAT_OUT" | sed -n 's/.*P50: *\(-*[0-9.]*\) ms.*/\1/p')
+    if [ -z "$RLAT_P50" ]; then
+        fail "SR wall-clock mapping (rlatency, UDP)" \
+            "no samples: $(echo "$RLAT_OUT" | tail -1)"
+    elif python3 -c "import sys; sys.exit(0 if abs(float('$RLAT_P50')) <= 15 else 1)"; then
+        pass "SR wall-clock mapping (rlatency, UDP): p50 ${RLAT_P50}ms"
+    else
+        fail "SR wall-clock mapping (rlatency, UDP)" \
+            "p50 ${RLAT_P50}ms -- SR NTP anchor off against the shared host clock"
+    fi
+else
+    fail "SR wall-clock mapping (rlatency, UDP)" "rlatency build failed"
+fi
+
 echo ""
 echo "=== Multi-client stress test ==="
 
