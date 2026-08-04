@@ -586,6 +586,50 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 		return;
 	}
 
+	/* Re-SETUP of a playing track would swap transports under the
+	 * reader thread; refuse it (RFC 2326 455) instead of racing.
+	 * Before PLAY it is transport renegotiation: drop what the first
+	 * SETUP built, or the replaced RTCP instance leaks and pins the
+	 * SR NTP anchor armed for the daemon's lifetime. */
+	if (!is_backchannel &&
+	    ((is_audio && self->audio.playing) || (!is_audio && self->video.playing))) {
+		bool resetup = is_audio ? (self->audio.rtp != NULL) : (self->video.rtp != NULL);
+		if (resetup) {
+			compy_respond(ctx, COMPY_STATUS_METHOD_NOT_VALID_IN_THIS_STATE,
+				      "SETUP after PLAY not supported");
+			return;
+		}
+	}
+	if (is_backchannel && self->backchannel) {
+		VCALL(DYN(Compy_Backchannel, Compy_Droppable, self->backchannel), drop);
+		self->backchannel = NULL;
+		free(self->bc_recv);
+		self->bc_recv = NULL;
+	} else if (is_audio) {
+		if (self->audio.rtp) {
+			VCALL(DYN(Compy_RtpTransport, Compy_Droppable, self->audio.rtp), drop);
+			self->audio.rtp = NULL;
+		}
+		if (self->audio.rtcp) {
+			VCALL(DYN(Compy_Rtcp, Compy_Droppable, self->audio.rtcp), drop);
+			self->audio.rtcp = NULL;
+		}
+	} else if (!is_backchannel) {
+		if (self->video.jpeg) {
+			VCALL(DYN(Compy_JpegTransport, Compy_Droppable, self->video.jpeg), drop);
+			self->video.jpeg = NULL;
+			self->video.rtp = NULL;
+		} else if (self->video.nal) {
+			VCALL(DYN(Compy_NalTransport, Compy_Droppable, self->video.nal), drop);
+			self->video.nal = NULL;
+			self->video.rtp = NULL;
+		}
+		if (self->video.rtcp) {
+			VCALL(DYN(Compy_Rtcp, Compy_Droppable, self->video.rtcp), drop);
+			self->video.rtcp = NULL;
+		}
+	}
+
 	Compy_Transport rtp_t, rtcp_t;
 
 	if (tcfg.lower == Compy_LowerTransport_TCP) {

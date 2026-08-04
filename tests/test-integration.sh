@@ -453,6 +453,72 @@ else
     fail "SR wall-clock mapping (rlatency, UDP)" "rlatency build failed"
 fi
 
+# ── Track re-SETUP lifecycle ──
+# Pre-PLAY re-SETUP is transport renegotiation and must replace the
+# first SETUP's transports (the replaced RTCP instance used to leak
+# and pin the SR NTP anchor armed for the daemon's lifetime -- LSAN
+# in the sanitizer stage now sees such a leak). After PLAY a re-SETUP
+# is refused 455 with the session intact.
+RESETUP_OUT=$(python3 - <<'RESETUP_EOF'
+import socket
+
+def req(sock, buf, method, url, cseq, extra=""):
+    sock.sendall(f"{method} {url} RTSP/1.0\r\nCSeq: {cseq}\r\n{extra}\r\n".encode())
+    while b"\r\n\r\n" not in buf[0]:
+        d = sock.recv(4096)
+        if not d:
+            return ""
+        buf[0] += d
+    head, _, rest = buf[0].partition(b"\r\n\r\n")
+    headers = head.decode(errors="replace")
+    clen = 0
+    for line in headers.split("\r\n"):
+        if line.lower().startswith("content-length:"):
+            clen = int(line.split(":", 1)[1])
+    while len(rest) < clen:
+        rest += sock.recv(4096)
+    buf[0] = rest[clen:]
+    return headers
+
+s = socket.create_connection(("127.0.0.1", 15554), timeout=5)
+buf = [b""]
+base = "rtsp://127.0.0.1:15554/stream0"
+req(s, buf, "DESCRIBE", base, 1, "Accept: application/sdp\r\n")
+t = "Transport: RTP/AVP;unicast;client_port=45400-45401\r\n"
+r1 = req(s, buf, "SETUP", base + "/video", 2, t)
+sid = ""
+for line in r1.split("\r\n"):
+    if line.lower().startswith("session:"):
+        sid = line.split(":", 1)[1].split(";")[0].strip()
+sess = f"Session: {sid}\r\n"
+t2 = "Transport: RTP/AVP;unicast;client_port=45402-45403\r\n"
+r2 = req(s, buf, "SETUP", base + "/video", 3, t2 + sess)
+r3 = req(s, buf, "PLAY", base, 4, sess + "Range: npt=0.000-\r\n")
+r4 = req(s, buf, "SETUP", base + "/video", 5, t + sess)
+r5 = req(s, buf, "GET_PARAMETER", base, 6, sess)
+req(s, buf, "TEARDOWN", base, 7, sess)
+s.close()
+print("RENEG=" + ("200" if " 200 " in r2.split("\r\n")[0] + " " else r2.split("\r\n")[0]))
+print("MIDPLAY=" + ("455" if " 455 " in r4.split("\r\n")[0] + " " else r4.split("\r\n")[0]))
+print("ALIVE=" + ("200" if " 200 " in r5.split("\r\n")[0] + " " else r5.split("\r\n")[0]))
+RESETUP_EOF
+)
+if echo "$RESETUP_OUT" | grep -q "RENEG=200"; then
+    pass "pre-PLAY re-SETUP renegotiates (200, old transports dropped)"
+else
+    fail "pre-PLAY re-SETUP" "$(echo "$RESETUP_OUT" | grep RENEG=)"
+fi
+if echo "$RESETUP_OUT" | grep -q "MIDPLAY=455"; then
+    pass "mid-PLAY re-SETUP refused (455)"
+else
+    fail "mid-PLAY re-SETUP" "expected 455: $(echo "$RESETUP_OUT" | grep MIDPLAY=)"
+fi
+if echo "$RESETUP_OUT" | grep -q "ALIVE=200"; then
+    pass "session intact after refused re-SETUP"
+else
+    fail "session after refused re-SETUP" "$(echo "$RESETUP_OUT" | grep ALIVE=)"
+fi
+
 echo ""
 echo "=== Multi-client stress test ==="
 
