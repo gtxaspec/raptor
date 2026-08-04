@@ -140,9 +140,15 @@ fi
 MBEDTLS_CFLAGS="-I$MBEDTLS_PREFIX/include"
 MBEDTLS_LIBS="$MBEDTLS_PREFIX/lib/libmbedtls.a $MBEDTLS_PREFIX/lib/libmbedx509.a $MBEDTLS_PREFIX/lib/libmbedcrypto.a"
 
-# Build compy for x86 with TLS
+# Build compy for x86 with TLS. Configure is cached; the build step
+# always runs and cmake's own dependency tracking makes it a no-op when
+# the checkout is unchanged. Gating everything on libcompy.a existing
+# froze the archive forever: an SR NTP fix landed in the sibling and
+# every asan rsd kept linking the pre-fix compy until the integration
+# suite's SR wall-clock leg read a steady 642 ms against a shared clock.
+# The same disease the target Makefile just shed for its siblings.
 COMPY_BUILD="$OUT/compy-build"
-if [ ! -f "$COMPY_BUILD/libcompy.a" ]; then
+if [ ! -f "$COMPY_BUILD/CMakeCache.txt" ]; then
     echo "=== compy (cmake + mbedTLS) ==="
     mkdir -p "$COMPY_BUILD"
     cmake -S "$COMPY_DIR" -B "$COMPY_BUILD" \
@@ -151,9 +157,8 @@ if [ ! -f "$COMPY_BUILD/libcompy.a" ]; then
         -DCOMPY_TLS_MBEDTLS=ON \
         -DCMAKE_PREFIX_PATH="$MBEDTLS_PREFIX" \
         > /dev/null 2>&1
-    cmake --build "$COMPY_BUILD" -j"$(nproc)" > /dev/null 2>&1
-    echo "  -> libcompy.a (with TLS)"
 fi
+cmake --build "$COMPY_BUILD" -j"$(nproc)" > /dev/null 2>&1
 
 # Build libsrt for x86 with mbedTLS
 SRT_VER="1.5.4"
