@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <signal.h>
 #include <unistd.h>
 #include <inttypes.h>
@@ -232,7 +233,9 @@ int main(int argc, char **argv)
 	 * torn first frame (rhd guards its reads the same way). */
 	if (start_newest) {
 		const rss_ring_header_t *hdr = rss_ring_get_header(ring);
-		read_seq = atomic_load(&((rss_ring_header_t *)hdr)->write_seq);
+		/* +1: seq == write_seq is readable, so starting there would
+		 * deliver the newest existing frame instead of the next one. */
+		read_seq = atomic_load(&((rss_ring_header_t *)hdr)->write_seq) + 1;
 	}
 	int64_t first_ts = 0;
 	int64_t last_ts = 0;
@@ -255,14 +258,18 @@ int main(int argc, char **argv)
 	}
 
 	while (g_running) {
-		int ret = rss_ring_wait(ring, 1000);
-		if (ret != 0)
-			continue;
-
 		uint32_t length;
 		rss_ring_slot_t meta;
 
-		ret = rss_ring_read(ring, &read_seq, frame_buf, buf_size, &length, &meta);
+		/* Read first, wait only on -EAGAIN (the rad pattern). Waiting
+		 * first loses frames published before the wait's futex snapshot:
+		 * once the producer goes quiet, the wait can only time out and
+		 * the pending tail is never read. */
+		int ret = rss_ring_read(ring, &read_seq, frame_buf, buf_size, &length, &meta);
+		if (ret == -EAGAIN) {
+			rss_ring_wait(ring, 1000);
+			continue;
+		}
 		if (ret == RSS_EOVERFLOW) {
 			fprintf(stderr, "[OVERFLOW] consumer fell behind\n");
 			continue;
