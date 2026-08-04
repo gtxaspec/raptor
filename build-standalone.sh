@@ -280,7 +280,7 @@ setup_toolchain() {
         *)       SOC_ARCH=xburst1 ;;
     esac
 
-    TOOLCHAIN_NAME="thingino-toolchain-${HOST_ARCH}_${SOC_ARCH}_${LIBC}_gcc15-linux-mipsel"
+    TOOLCHAIN_NAME="thingino-toolchain-${HOST_ARCH}_${SOC_ARCH}_${LIBC}_gcc16-linux-mipsel"
     TOOLCHAIN_URL="https://github.com/themactep/thingino-firmware/releases/download/toolchain-${HOST_ARCH}/${TOOLCHAIN_NAME}.tar.gz"
 
     if [ ! -d "$TOOLCHAIN_DIR" ] || [ ! -f "$TOOLCHAIN_DIR/.version_${TOOLCHAIN_NAME}" ]; then
