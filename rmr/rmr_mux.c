@@ -756,10 +756,6 @@ static int write_fragment(rmr_mux_t *m)
 	for (uint32_t i = 0; i < m->v_count; i++)
 		v_data_size += m->v_samples[i].size;
 
-	uint32_t a_data_size = 0;
-	for (uint32_t i = 0; i < m->a_count; i++)
-		a_data_size += m->a_samples[i].size;
-
 	/* Build moof */
 	bb_reset(m);
 	uint32_t moof_off = bb_box_begin(m, "moof");
