@@ -701,6 +701,42 @@ else
 fi
 "$OUT/raptorctl" rmr enable > /dev/null 2>&1
 
+# ── Producer restart under a lingering client ──
+# A playing client whose media goes unread (stalled player, dead NVR
+# that still ACKs) must not pin the ring reader to a dead producer's
+# frozen ring: the field wedge was 4+ minutes of no-frames for every
+# new client until the zombie aged out. Reconnect must come from
+# staleness detection, not the idle-close path a playing client blocks.
+python3 - <<'ZOMBIE_EOF' &
+import sys, time, os
+sys.path.insert(0, os.path.expanduser("~/projects/thingino/raptor-test/probes"))
+try:
+    from rtsplib import RtspSession
+    s = RtspSession("127.0.0.1", 15554, "/stream0")
+    s.describe(); s.setup("video", 0); s.play()
+    time.sleep(45)
+    s.close()
+except Exception:
+    time.sleep(45)
+ZOMBIE_EOF
+ZOMBIE_PID=$!
+sleep 3
+
+pkill -f "$OUT/rvd" 2>/dev/null || true
+sleep 2
+start_daemon rvd "$OUT/rvd" -c "$CONFIG" -f -d
+sleep 3
+
+if timeout -k 3 15 ffprobe -v error -rtsp_transport tcp \
+    -show_entries stream=codec_name -of csv=p=0 "rtsp://127.0.0.1:15554/stream0" \
+    2>/dev/null | grep -q h264; then
+    pass "fresh client gets frames after producer restart under a lingering client"
+else
+    fail "producer restart under lingering client" "no frames within 15s -- reader pinned to the dead ring"
+fi
+kill $ZOMBIE_PID 2>/dev/null || true
+wait $ZOMBIE_PID 2>/dev/null || true
+
 if [ "$KEEP" = "1" ]; then
     echo ""
     echo "=== Keeping daemons running (Ctrl-C to stop) ==="

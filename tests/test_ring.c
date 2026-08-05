@@ -502,6 +502,36 @@ TEST ring_cold_start_seq_zero(void)
 	PASS();
 }
 
+TEST ring_stale_detection(void)
+{
+	rss_ring_t *w = make_ring("test_stale", 4, 4096);
+	ASSERT(w);
+	rss_ring_t *rd = rss_ring_open("test_stale");
+	ASSERT(rd);
+
+	/* Live producer: not stale. */
+	ASSERT_EQ(false, rss_ring_stale(rd));
+
+	/* Producer dies and is reborn: same name, new file. The old
+	 * handle's mapping is frozen and must report stale. */
+	rss_ring_destroy(w);
+	ASSERT_EQ(true, rss_ring_stale(rd));
+
+	w = make_ring("test_stale", 4, 4096);
+	ASSERT(w);
+	ASSERT_EQ(true, rss_ring_stale(rd));
+
+	/* A fresh open resolves to the reborn file: not stale. */
+	rss_ring_t *rd2 = rss_ring_open("test_stale");
+	ASSERT(rd2);
+	ASSERT_EQ(false, rss_ring_stale(rd2));
+
+	rss_ring_close(rd);
+	rss_ring_close(rd2);
+	rss_ring_destroy(w);
+	PASS();
+}
+
 SUITE(ring_suite)
 {
 	RUN_TEST(ring_create_destroy);
@@ -521,4 +551,5 @@ SUITE(ring_suite)
 	RUN_TEST(ring_newest_frame_readable);
 	RUN_TEST(ring_peek_newest_frame);
 	RUN_TEST(ring_cold_start_seq_zero);
+	RUN_TEST(ring_stale_detection);
 }

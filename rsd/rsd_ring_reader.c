@@ -576,6 +576,22 @@ void *rsd_video_reader_thread(void *arg)
 				idle_count = 0;
 			last_write_seq = ws;
 
+			/* A frozen write_seq can mean an idle encoder OR a
+			 * producer that died and was reborn: the new instance
+			 * is a NEW shm file, so this mapping never moves again.
+			 * The idle-close below cannot fire while any client is
+			 * playing, and a lingering client (stalled player that
+			 * still ACKs) pinned readers to a dead ring for minutes
+			 * in the field. Detect the rebirth directly. */
+			if (idle_count >= 10 && rss_ring_stale(rctx->ring)) {
+				RSS_WARN("video reader[%d]: ring %s replaced under us "
+					 "(producer restart) -- reopening",
+					 stream_idx, rctx->ring_name);
+				rss_ring_release(rctx->ring);
+				rss_ring_close(rctx->ring);
+				rctx->ring = NULL;
+				continue;
+			}
 			if (idle_count >= 20) {
 				/* Keep the ring open while any client is playing
 				 * this stream: rvd's jpeg encoder publishes only
