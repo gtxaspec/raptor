@@ -504,8 +504,9 @@ def scenario_cooldown(stub, watch):
         ric.stop()
         return
     # Immediately look day-worthy. Within the cooldown window nothing may
-    # move, and afterwards the baseline was sampled from THIS low gain, so
-    # day now needs < 25% of it: still nothing may move.
+    # move; afterwards the baseline samples this low gain (clamped to 10%
+    # of the detection gain), and the scene still sits above the derived
+    # day trigger: still nothing may move.
     mm2 = stub.mark()
     stub.set_scene(luma=5, gain=1000, ev=100000)
     time.sleep((3 + 2 + 2) * POLL_MS / 1000.0)
@@ -514,6 +515,113 @@ def scenario_cooldown(stub, watch):
         "no flap during cooldown; baseline from settled scene",
         str(stub.modes_since(mm2)),
     )
+    ric.stop()
+
+
+def scenario_covered_lens_baseline(stub, watch):
+    """The covered-lens test every user runs, modeled with IR-dependent
+    optics: covering goes dark -> night; the IR LED bounces off the
+    cover so the scene reads bright (gain 459 vs 45025 at detection);
+    when a false day switches the IR off, the covered lens goes dark
+    again. Brightness cannot separate this from a real bright scene
+    (459 vs 377 in the field), so ric must verify a ratio-triggered
+    day after the IR drops: a night-dark verdict reverts with backoff
+    instead of oscillating, and a real uncover verifies and sticks."""
+    stub.set_scene(luma=120, gain=400, ev=500)
+    ric = Ric("covered", LUMA_CONF)
+    if not ric.wait_running():
+        result(False, "covered-lens: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    time.sleep(0.5)
+
+    mm = stub.mark()
+    stub.set_scene(luma=17, gain=45025, ev=60000)  # covered, dark
+    if not wait_for(lambda: "night" in stub.modes_since(mm), 4):
+        result(False, "covered-lens: night entry", str(stub.modes_since(mm)))
+        ric.stop()
+        return
+    # IR on, reflecting off the cover: bright to every metric.
+    stub.set_scene(luma=50, gain=459, ev=2600)
+
+    # The reflection crosses the clamped trigger and a day attempt
+    # happens; the moment it does, the IR is off and the cover reads
+    # dark again. Feed that back like the physics would.
+    mm2 = stub.mark()
+    if not wait_for(lambda: "day" in stub.modes_since(mm2), 10):
+        result(False, "covered-lens: expected a day attempt off the reflection",
+               str(stub.modes_since(mm2)))
+        ric.stop()
+        return
+    stub.set_scene(luma=8, gain=44002, ev=242354)  # IR off, still covered
+
+    ok = wait_for(lambda: "night" in stub.modes_since(mm2), 6)
+    result(ok, "covered-lens: false day reverts to night",
+           str(stub.modes_since(mm2)))
+    verified_warn = "day verification failed" in ric.read_log()
+    result(verified_warn, "covered-lens: false day diagnosed",
+           ric.read_log()[-300:])
+
+    # Back in night: reflection again. The backoff must hold -- no
+    # second day attempt in the lockout window (the old behavior
+    # flapped once per cooldown+hysteresis).
+    stub.set_scene(luma=50, gain=459, ev=2600)
+    mm3 = stub.mark()
+    time.sleep(20 * POLL_MS / 1000.0)
+    result("day" not in stub.modes_since(mm3),
+           "covered-lens: backoff holds night against the reflection",
+           str(stub.modes_since(mm3)))
+
+    # Uncover with a bright light: identical brightness to the
+    # reflection, but now the scene stays bright when the IR drops.
+    # The next attempt verifies and day sticks.
+    stub.set_scene(luma=51, gain=377, ev=521)
+    mm4 = stub.mark()
+    ok = wait_for(lambda: "day" in stub.modes_since(mm4), 45 * POLL_MS / 1000.0 + 8)
+    result(ok, "covered-lens: real uncover verifies day after backoff",
+           str(stub.modes_since(mm4)))
+    if ok:
+        time.sleep((3 + 3) * POLL_MS / 1000.0)
+        post = stub.modes_since(mm4)
+        result("night" not in post,
+               "covered-lens: verified day is stable",
+               str(post))
+    ric.stop()
+
+
+def scenario_baseline_refresh(stub, watch):
+    """A poisoned (or stale) baseline recovers once the scene shows its
+    true dark reading: the running max raises the baseline, so a later
+    moderate brightening crosses the honest trigger. Without the
+    refresh, gain 3000 sits above any clamped-from-poison trigger and
+    day never comes."""
+    stub.set_scene(luma=120, gain=400, ev=500)
+    ric = Ric("baserefresh", LUMA_CONF)
+    if not ric.wait_running():
+        result(False, "baseline-refresh: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    time.sleep(0.5)
+
+    mm = stub.mark()
+    stub.set_scene(luma=17, gain=45025, ev=60000)
+    if not wait_for(lambda: "night" in stub.modes_since(mm), 4):
+        result(False, "baseline-refresh: night entry", str(stub.modes_since(mm)))
+        ric.stop()
+        return
+    stub.set_scene(luma=50, gain=459, ev=2600)  # reflection poisons the sample
+    time.sleep((3 + 1) * POLL_MS / 1000.0)
+
+    # Cover removed in a genuinely dark room: the real IR-lit night
+    # reading appears and the running max adopts it.
+    stub.set_scene(luma=30, gain=20000, ev=80000)
+    time.sleep(3 * POLL_MS / 1000.0)
+
+    mm2 = stub.mark()
+    stub.set_scene(luma=45, gain=3000, ev=3000)  # dawn, moderate light
+    ok = wait_for(lambda: "day" in stub.modes_since(mm2), 6)
+    result(ok, "baseline-refresh: running max restores an honest day trigger",
+           str(stub.modes_since(mm2)) + " " + ric.read_log()[-200:])
     ric.stop()
 
 
@@ -1517,6 +1625,8 @@ def main():
         scenario_dusk_dawn,
         scenario_hysteresis,
         scenario_cooldown,
+        scenario_covered_lens_baseline,
+        scenario_baseline_refresh,
         scenario_ctrl,
         scenario_ctrl_extras,
         scenario_manual_gpio,

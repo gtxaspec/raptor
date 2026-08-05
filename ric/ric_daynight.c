@@ -15,6 +15,11 @@
 
 #include "ric.h"
 
+/* Backoff for day attempts after a failed verification, in polls
+ * (seconds at the default 1s poll): first hold, then doubling. */
+#define RIC_DAY_LOCKOUT_FIRST 30
+#define RIC_DAY_LOCKOUT_MAX   300
+
 /* ── ADC via kernel device nodes ── */
 
 static int adc_fd = -1;
@@ -330,7 +335,8 @@ void ric_set_mode(ric_state_t *st, ric_mode_t mode)
  * agreeing before the filter moves. `why` is the trigger's own account of
  * the decision, since the numbers that justify it differ per trigger.
  */
-static void ric_debounce(ric_state_t *st, bool want_night, bool want_day, const char *why)
+static void ric_debounce(ric_state_t *st, bool want_night, bool want_day, uint32_t total_gain,
+			 const char *why)
 {
 	if (st->current_mode == RIC_MODE_DAY) {
 		if (want_night) {
@@ -339,6 +345,7 @@ static void ric_debounce(ric_state_t *st, bool want_night, bool want_day, const 
 			if (st->night_count >= st->settings.hysteresis_sec) {
 				RSS_DEBUG("night detected (%s for %ds)", why,
 					  st->settings.hysteresis_sec);
+				st->night_detect_gain = total_gain;
 				ric_set_mode(st, RIC_MODE_NIGHT);
 			}
 		} else {
@@ -351,6 +358,8 @@ static void ric_debounce(ric_state_t *st, bool want_night, bool want_day, const 
 			if (st->day_count >= st->settings.hysteresis_sec) {
 				RSS_DEBUG("day detected (%s for %ds)", why,
 					  st->settings.hysteresis_sec);
+				if (st->settings.trigger == RIC_TRIGGER_LUMA)
+					st->day_verify_pending = true;
 				ric_set_mode(st, RIC_MODE_DAY);
 			}
 		} else {
@@ -446,10 +455,52 @@ void ric_poll_exposure(ric_state_t *st)
 	 * the auto-calibrating night→day transition. */
 	if (st->cooldown_remaining > 0) {
 		st->cooldown_remaining--;
+		if (st->cooldown_remaining == 0 && st->current_mode == RIC_MODE_DAY &&
+		    st->day_verify_pending) {
+			st->day_verify_pending = false;
+			if (have_luma && ae_luma < (uint32_t)st->settings.night_luma) {
+				/* The scene reads night-dark with the IR off: the
+				 * "day" was the LED's own light bouncing back (a
+				 * covered lens, a point-blank surface). Revert and
+				 * back off so this cannot oscillate; a covered
+				 * lens re-checks rarely instead of blinking. */
+				int hold = st->day_lockout_next ? st->day_lockout_next
+								: RIC_DAY_LOCKOUT_FIRST;
+				RSS_WARN("day verification failed: scene reads night-dark "
+					 "without IR (luma %u < %d) -- the day was IR "
+					 "reflection; reverting, next attempt in %d polls",
+					 ae_luma, st->settings.night_luma, hold);
+				st->day_lockout_polls = hold;
+				st->day_lockout_next = hold * 2 > RIC_DAY_LOCKOUT_MAX
+							       ? RIC_DAY_LOCKOUT_MAX
+							       : hold * 2;
+				st->night_detect_gain = total_gain;
+				ric_set_mode(st, RIC_MODE_NIGHT);
+			} else {
+				st->day_lockout_next = 0;
+			}
+		}
 		if (st->cooldown_remaining == 0 && st->current_mode == RIC_MODE_NIGHT) {
-			st->night_gain_baseline = total_gain;
-			RSS_DEBUG("night baseline: gain=%u (day trigger < %u)", total_gain,
-				  total_gain * (uint32_t)st->settings.day_gain_pct / 100);
+			/* A baseline far below the gain that triggered night is
+			 * self-contradictory (night through the IR reading
+			 * brighter than the darkness that caused it) -- the IR
+			 * LED bouncing off a covered lens or a point-blank
+			 * surface crashes AE during this window and would make
+			 * the day trigger unreachable. */
+			uint32_t floor_gain = st->night_detect_gain / 10;
+			if (total_gain < floor_gain) {
+				RSS_WARN("night baseline %u is under 10%% of the gain that "
+					 "triggered night (%u) -- IR reflection off a covered "
+					 "lens? clamped to %u",
+					 total_gain, st->night_detect_gain, floor_gain);
+				st->night_gain_baseline = floor_gain;
+			} else {
+				st->night_gain_baseline = total_gain;
+			}
+			RSS_DEBUG("night baseline: gain=%u (day trigger < %u)",
+				  st->night_gain_baseline,
+				  st->night_gain_baseline * (uint32_t)st->settings.day_gain_pct /
+					  100);
 		}
 		return;
 	}
@@ -480,6 +531,13 @@ void ric_poll_exposure(ric_state_t *st)
 			     (have_gain && total_gain > (uint32_t)st->settings.night_gain);
 
 		if (have_gain && st->night_gain_baseline > 0) {
+			if (st->current_mode == RIC_MODE_NIGHT &&
+			    total_gain > st->night_gain_baseline) {
+				RSS_DEBUG("night baseline raised %u -> %u (scene showed its "
+					  "real dark reading)",
+					  st->night_gain_baseline, total_gain);
+				st->night_gain_baseline = total_gain;
+			}
 			uint32_t day_thr =
 				st->night_gain_baseline * (uint32_t)st->settings.day_gain_pct / 100;
 			want_day = (total_gain < day_thr);
@@ -499,6 +557,11 @@ void ric_poll_exposure(ric_state_t *st)
 			want_day = !ir_lit && have_luma &&
 				   ae_luma >= (uint32_t)st->settings.night_luma;
 		} else {
+			want_day = false;
+		}
+
+		if (st->day_lockout_polls > 0) {
+			st->day_lockout_polls--;
 			want_day = false;
 		}
 
@@ -530,5 +593,5 @@ void ric_poll_exposure(ric_state_t *st)
 			 st->settings.night_threshold, st->settings.day_threshold);
 	}
 
-	ric_debounce(st, want_night, want_day, why);
+	ric_debounce(st, want_night, want_day, total_gain, why);
 }

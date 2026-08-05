@@ -126,8 +126,8 @@ typedef struct {
 	/* GPIO pins (-1 = not used) */
 	int gpio_ircut;	 /* IR-cut filter pin (single GPIO mode) */
 	int gpio_ircut2; /* second pin for dual GPIO mode, -1 = single */
-	int gpio_irled;	  /* IR LED enable pin (ir850) */
-	int gpio_irled2;  /* second IR LED pin (ir940), -1 = none */
+	int gpio_irled;	 /* IR LED enable pin (ir850) */
+	int gpio_irled2; /* second IR LED pin (ir940), -1 = none */
 	bool ir850_enabled;
 	bool ir940_enabled;
 	bool ir940_explicit; /* config carries an ir940 key (vs the default) */
@@ -173,6 +173,14 @@ typedef struct {
 	/* Anti-flap: cooldown after mode switch + gain baseline */
 	int cooldown_remaining;	      /* polls remaining before evaluating transitions */
 	uint32_t night_gain_baseline; /* total_gain sampled after IR LEDs stabilize */
+	uint32_t night_detect_gain;   /* gain at the moment night was detected */
+
+	/* Ratio-triggered day switches are verified once the IR is off:
+	 * a covered lens under IR is optically identical to a bright
+	 * scene, and only the post-switch reading separates them. */
+	bool day_verify_pending;
+	int day_lockout_polls; /* suppress day attempts while > 0 */
+	int day_lockout_next;  /* doubling backoff, 0 = start over */
 
 	/* Photo mode state */
 	ric_photo_state_t photo;
