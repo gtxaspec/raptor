@@ -90,7 +90,7 @@ buffers at runtime, gracefully skipping any that don't exist.
 |------|--------|-------------|
 | RVD  | `rvd`  | Raw Video Daemon. Initializes HAL, configures sensor and encoder channels, creates SHM ring buffers (`main`, `sub`, `jpeg0`, `jpeg1`), and runs the frame acquisition loop. Exposes ISP controls and encoder tuning via its control socket. |
 | RSD  | `rsd`  | RTSP Streaming Daemon. Serves RTSP/RTSPS (Digest auth, TLS via mbedTLS) from the video/audio rings using compy; video+audio, video-only, or audio-only sessions, with audio interleaved during IDR delivery so large keyframes never starve it. Optional per-frame MISB ST 0604 UTC timecode SEI, MJPEG endpoints (`/jpeg`, `/jpeg_sub`), and ONVIF Profile T audio backchannel into the `speaker` ring. |
-| RSD-555 | `rsd-555` | Alternative RTSP server built on live555, statically linked. Same `[rtsp]` config (port override via `[rtsp-555]`), H.264/H.265 plus all five audio codecs, per-client refcounted fan-out. Runs alongside or instead of RSD. |
+| RSD-555 | `rsd-555` | Alternative RTSP server built on live555, statically linked. Same `[rtsp]` config (port override via `[rtsp-555]`), H.264/H.265 plus all five audio codecs, per-client refcounted fan-out. Runs alongside or instead of RSD. Not enabled by default; see the note below the table. |
 | RAD  | `rad`  | Raw Audio Daemon. Captures PCM, encodes through pluggable codecs (G.711 mu/A-law, L16, AAC, Opus) into the `audio` ring, and drives speaker output from the `speaker` ring. Optional noise suppression, HPF, AGC. A new codec is one source file. |
 | ROD  | `rod`  | OSD Rendering Daemon. Renders timestamp, uptime, user text, and logo bitmaps into BGRA SHM double-buffers using libschrift. No HAL dependency -- RVD handles the hardware OSD regions. |
 | RHD  | `rhd`  | HTTP Streaming Daemon. JPEG snapshots (`/snap`), MJPEG (`/mjpeg`), and audio (`/audio`) straight from the rings, with proper container framing (WAV, ADTS, Ogg). Dual-stack IPv4/IPv6, Basic auth, optional HTTPS. Optional EXIF capture times and Ed25519-signed snapshots. |
@@ -106,6 +106,19 @@ buffers at runtime, gracefully skipping any that don't exist.
 Feature-to-build-flag mapping (`TLS=1`, `AAC=1`, `OPUS=1`, `WEBTORRENT=1`) is
 under [Build](#build). RWC additionally needs the thingino kernel's webcam
 gadget patches (`CONFIG_USB_G_WEBCAM=m`).
+
+**Why RSD-555 exists.** RSD (compy) is raptor's RTSP server and the
+default; RSD-555 is not a replacement for it. It exists because some
+deployments require the live555 stack specifically -- it was added for
+a user whose consumer tooling depended on live555's exact RTSP/RTP
+behavior and who wanted to keep the rest of the raptor ecosystem
+(rings, HAL, config, tooling) unchanged. If your NVR, client library,
+or certification path expects live555 on the camera side, RSD-555
+gives you that with the same configuration and stream sources as RSD.
+Everyone else should run RSD. Firmware builds include RSD-555 only
+when its package option is selected (off by default in thingino), and
+it never starts unless configured; both servers pass the same
+raptor-test conformance battery.
 
 ### Tools
 
