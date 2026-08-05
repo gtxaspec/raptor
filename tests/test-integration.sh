@@ -112,6 +112,7 @@ if [ ! -f "$OUT/create_rings" ] || [ ! -f "$OUT/rvd" ]; then
 fi
 
 mkdir -p "$LOG_DIR"
+touch "$LOG_DIR/.suite-start"
 DAEMON_PIDS=""
 
 # Use a test config
@@ -171,6 +172,7 @@ stream = 0
 audio = false
 storage_path = __LOG_DIR__/rec
 segment_minutes = 5
+segment_seconds = 10
 sei_timecode = true
 sign = true
 sign_key = __LOG_DIR__/sign.key
@@ -638,6 +640,38 @@ fi
 
 check_contains "rmr sign-status" "fingerprint" "$OUT/raptorctl" rmr sign-status
 check_contains "rmr export-pubkey" "pubkey" "$OUT/raptorctl" rmr export-pubkey
+
+# ── Wall-clock-aligned rotation ──
+# Segments run at 10s granularity for the suite. Other legs bounce the
+# pipeline (producer restart, rmr disable), and a segment opened on
+# recovery is legitimately unaligned -- so the assertion is on chained
+# rotations: whenever two segments sit one period apart, the second
+# opened on a wall-clock boundary (filename is HH-MM-SS from the same
+# realtime clock the OSD burns), within 1s. The pre-boundary IDR
+# request is what makes that tight.
+if ALIGN_OUT=$(find "$LOG_DIR/rec" -name '*.mp4' -newer "$LOG_DIR/.suite-start" | sort | python3 -c "
+import sys, os
+files = [line.strip() for line in sys.stdin if line.strip()]
+secs = []
+for f in files:
+    h, m, s = os.path.basename(f)[:-4].split('-')
+    secs.append((int(h) * 3600 + int(m) * 60 + int(s), os.path.basename(f)))
+secs.sort()
+pairs = 0
+bad = []
+for (a, _), (b, name) in zip(secs, secs[1:]):
+    gap = b - a
+    if 8 <= gap <= 12:
+        pairs += 1
+        off = b % 10
+        if 1 < off < 9:
+            bad.append(name)
+print(f'{len(secs)} segments, {pairs} chained rotations, misaligned: {bad}')
+sys.exit(1 if bad or pairs < 2 else 0)"); then
+    pass "chained rotations open on wall-clock boundaries ($ALIGN_OUT)"
+else
+    fail "recording segment alignment" "$ALIGN_OUT"
+fi
 
 # Cleanly close the current segment, then verify its chain
 "$OUT/raptorctl" rmr disable > /dev/null 2>&1

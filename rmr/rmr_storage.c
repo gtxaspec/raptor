@@ -22,6 +22,7 @@
 struct rmr_storage {
 	char base_path[256];
 	int segment_minutes;
+	int segment_seconds;
 	int max_storage_mb;
 	bool refuse_logged;	   /* rootfs auto-create refusal logged once */
 	int64_t last_wait_warn_us; /* rate-limit for the waiting log       */
@@ -38,6 +39,7 @@ rmr_storage_t *rmr_storage_create(const rmr_storage_config_t *cfg)
 
 	snprintf(st->base_path, sizeof(st->base_path), "%s", cfg->base_path);
 	st->segment_minutes = cfg->segment_minutes > 0 ? cfg->segment_minutes : 5;
+	st->segment_seconds = cfg->segment_seconds;
 	st->max_storage_mb = cfg->max_storage_mb;
 
 	return st;
@@ -82,12 +84,28 @@ void rmr_storage_close_segment(int fd)
 	}
 }
 
-bool rmr_storage_should_rotate(rmr_storage_t *st, int64_t segment_start_us)
+int64_t rmr_storage_next_boundary(int64_t now_rt_us, int segment_len_sec)
 {
-	if (!st || st->segment_minutes <= 0)
+	int64_t period = (int64_t)segment_len_sec * 1000000LL;
+	return (now_rt_us / period + 1) * period;
+}
+
+int rmr_storage_segment_len_sec(rmr_storage_t *st)
+{
+	if (!st)
+		return 300;
+	return st->segment_seconds > 0 ? st->segment_seconds : st->segment_minutes * 60;
+}
+
+#define RMR_MIN_SEGMENT_US (5 * 1000000LL)
+
+bool rmr_storage_should_rotate_at(rmr_storage_t *st, int64_t start_rt_us, int64_t now_rt_us)
+{
+	if (!st)
 		return false;
-	int64_t elapsed = rss_timestamp_us() - segment_start_us;
-	return elapsed >= (int64_t)st->segment_minutes * 60 * 1000000LL;
+	if (now_rt_us - start_rt_us < RMR_MIN_SEGMENT_US)
+		return false;
+	return now_rt_us >= rmr_storage_next_boundary(start_rt_us, rmr_storage_segment_len_sec(st));
 }
 
 /*

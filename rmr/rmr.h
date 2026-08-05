@@ -64,6 +64,9 @@ typedef struct {
 	int segment_fd;
 	char segment_path[256];
 	int64_t segment_start_us;
+	int64_t segment_start_rt_us;	/* wall clock at open (boundary math) */
+	int64_t segment_boundary_rt_us; /* next wall-clock split point */
+	bool segment_idr_requested;	/* one sharpening IDR per boundary */
 
 	/* Pre-buffer for motion clips (main thread only) */
 	rmr_prebuf_t *video_pb;

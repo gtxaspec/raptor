@@ -74,6 +74,7 @@ static const uint8_t h265_p_sc[] = {0x00, 0x00, 0x00, 0x01, 0x02, 0x01};
 
 typedef struct {
 	bool active;
+	bool force_idr; /* honor enc_request_idr on the next frame */
 	uint32_t frame_seq;
 	uint8_t buf_idx;
 
@@ -144,7 +145,9 @@ static int mock_ok(void *ctx, ...)
  */
 static int mock_enc_request_idr(void *ctx, int chn)
 {
-	(void)ctx;
+	rss_hal_ctx_t *hal = ctx;
+	if (hal && chn >= 0 && chn < MOCK_MAX_CHANNELS)
+		hal->channels[chn].force_idr = true;
 	fprintf(stderr, "mock: enc_request_idr chn=%d\n", chn);
 	return RSS_OK;
 }
@@ -241,7 +244,8 @@ static int mock_enc_get_frame(void *ctx, int chn, rss_frame_t *frame)
 		return -EAGAIN;
 
 	uint32_t gop = ch->cfg.gop_length ? ch->cfg.gop_length : 50;
-	bool is_key = (ch->frame_seq % gop == 0);
+	bool is_key = (ch->frame_seq % gop == 0) || ch->force_idr;
+	ch->force_idr = false;
 	bool is_jpeg = (ch->cfg.codec == RSS_CODEC_JPEG || ch->cfg.codec == RSS_CODEC_MJPEG);
 
 	uint8_t *dest;

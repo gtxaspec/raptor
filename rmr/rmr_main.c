@@ -156,6 +156,10 @@ static int start_segment(rmr_state_t *st)
 	if (st->sign_enabled)
 		rmr_sign_stream_emit(&st->sign_seg, false, direct_write, st);
 	st->segment_start_us = rss_timestamp_us();
+	st->segment_start_rt_us = rss_wallclock_us();
+	st->segment_boundary_rt_us = rmr_storage_next_boundary(
+		st->segment_start_rt_us, rmr_storage_segment_len_sec(st->storage));
+	st->segment_idr_requested = false;
 
 	RSS_INFO("recording segment: %s", st->segment_path);
 	return 0;
@@ -827,14 +831,23 @@ static void record_loop(rmr_state_t *st)
 			 * On keyframe: also check segment rotation. */
 			if (st->mux) {
 				st->frames_since_flush++;
+				/* Ask the encoder for an IDR just before the
+				 * wall-clock boundary so the split lands within
+				 * a frame of :00 instead of a GOP late. */
+				int64_t now_rt = rss_wallclock_us();
+				if (!st->segment_idr_requested &&
+				    st->segment_boundary_rt_us - now_rt <= 1000000LL) {
+					rss_ring_request_idr(st->video_ring);
+					st->segment_idr_requested = true;
+				}
 				if (meta.is_key) {
 					rmr_mux_flush_fragment(st->mux);
 					if (st->sign_enabled)
 						rmr_sign_stream_emit(&st->sign_seg, false,
 								     direct_write, st);
 					st->frames_since_flush = 0;
-					if (rmr_storage_should_rotate(st->storage,
-								      st->segment_start_us)) {
+					if (rmr_storage_should_rotate_at(
+						    st->storage, st->segment_start_rt_us, now_rt)) {
 						close_segment(st);
 						rmr_storage_enforce_limit(st->storage);
 					}
@@ -1120,6 +1133,7 @@ int main(int argc, char **argv)
 		.base_path = rss_config_get_str(dctx.cfg, "recording", "storage_path",
 						"/mnt/mmcblk0p1/raptor"),
 		.segment_minutes = rss_config_get_int(dctx.cfg, "recording", "segment_minutes", 5),
+		.segment_seconds = rss_config_get_int(dctx.cfg, "recording", "segment_seconds", 0),
 		.max_storage_mb = rss_config_get_int(dctx.cfg, "recording", "max_storage_mb", 0),
 	};
 	st.storage = rmr_storage_create(&scfg);

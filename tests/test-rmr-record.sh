@@ -30,6 +30,7 @@ CLIP_DURATION=60
 while [ $# -gt 0 ]; do
     case "$1" in
         --duration) CLIP_DURATION="$2"; shift 2 ;;
+        --align-only) ALIGN_ONLY=1; shift ;;
         -h|--help)
             echo "Usage: $0 <device-ip> [--duration <seconds>]"
             exit 0 ;;
@@ -38,7 +39,8 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-[ -z "$DEVICE_IP" ] && { echo "Usage: $0 <device-ip> [--duration <seconds>]"; exit 1; }
+ALIGN_ONLY=${ALIGN_ONLY:-0}
+[ -z "$DEVICE_IP" ] && { echo "Usage: $0 <device-ip> [--duration <seconds>] [--align-only]"; exit 1; }
 
 # ── Paths ──
 
@@ -65,7 +67,8 @@ cleanup() {
     $SSH "killall -9 $RAPTOR_DAEMONS 2>/dev/null" 2>/dev/null
     $SSH "rm -rf $DEVICE_SD" 2>/dev/null
     $SSH 'rm -f /dev/shm/rss_ring_* /dev/shm/rss_osd_* /var/run/rss/*.pid /var/run/rss/*.sock' 2>/dev/null
-    rm -rf "$HOST_TMP"
+    sudo rm -rf "$HOST_TMP" 2>/dev/null || rm -rf "$HOST_TMP"
+    $SSH '[ -x /etc/init.d/S31raptor ] && /etc/init.d/S31raptor start' 2>/dev/null || true
     echo "    done"
     set -e
 }
@@ -291,9 +294,12 @@ pass "SSH connectivity"
 SD_AVAIL=$($SSH 'df -k /mnt/mmcblk0p1 2>/dev/null | awk "NR==2{print \$4}"' 2>/dev/null || echo "0")
 SD_AVAIL_MB=$((SD_AVAIL / 1024))
 if [ "$SD_AVAIL_MB" -lt 100 ]; then
-    echo "ERROR: SD card has ${SD_AVAIL_MB}MB free (need 100MB)"; exit 1
+    # No usable SD: the NFS fallback below records there instead.
+    skip "SD card" "${SD_AVAIL_MB}MB free -- falling back to NFS storage"
+    DEVICE_SD="$DEVICE_NFS_TMP/rec"
+else
+    pass "SD card (${SD_AVAIL_MB}MB free)"
 fi
-pass "SD card (${SD_AVAIL_MB}MB free)"
 
 if ! $SSH "test -x $DEVICE_BUILD/rvd" 2>/dev/null; then
     echo "ERROR: $DEVICE_BUILD/rvd not found — check NFS mount and build"; exit 1
@@ -317,8 +323,24 @@ $SSH "killall -9 $RAPTOR_DAEMONS 2>/dev/null" 2>/dev/null || true
 $SSH 'rm -f /dev/shm/rss_ring_* /dev/shm/rss_osd_* /var/run/rss/*.pid /var/run/rss/*.sock 2>/dev/null' 2>/dev/null || true
 pass "clean slate"
 
+# No SD card mounted: record to NFS instead. It is a distinct
+# filesystem, so rmr's rootfs auto-create refusal does not apply.
+if ! $SSH 'mountpoint -q /mnt/mmcblk0p1 2>/dev/null || grep -q mmcblk /proc/mounts' 2>/dev/null; then
+    DEVICE_SD="$DEVICE_NFS_TMP/rec"
+    echo "    no SD card -- recording to NFS ($DEVICE_SD)"
+fi
 mkdir -p "$HOST_TMP"
-$SSH "mkdir -p $DEVICE_SD" 2>/dev/null
+case "$DEVICE_SD" in
+"$DEVICE_NFS_TMP"/*)
+    # The export squashes device root: pre-create the recording tree
+    # host-side, world-writable, so the squashed writer can use it.
+    mkdir -p "$HOST_TMP/rec"
+    chmod 1777 "$HOST_TMP/rec"
+    ;;
+*)
+    $SSH "mkdir -p $DEVICE_SD" 2>/dev/null
+    ;;
+esac
 echo ""
 
 # ── Start pipeline (RVD + RAD stay up for both clips) ──
@@ -355,7 +377,65 @@ fi
 pass "audio ring"
 echo ""
 
+# ── Wall-clock segment alignment ──
+
+test_alignment() {
+    echo "=== alignment: continuous 15s segments across 3+ boundaries ==="
+    write_config "false"
+    sed -i 's/^mode = motion/mode = continuous/' "$HOST_TMP/test.conf"
+    sed -i '/^clip_length_sec/d' "$HOST_TMP/test.conf"
+    sed -i '/^storage_path/a segment_seconds = 15' "$HOST_TMP/test.conf"
+
+    $SSH "rm -rf $DEVICE_SD/*" 2>/dev/null || true
+    $SSH "$DEVICE_BUILD/rmr -c $CONF_DEVICE -d" 2>/dev/null
+    sleep 2
+    if ! $SSH 'pidof rmr > /dev/null 2>&1' 2>/dev/null; then
+        fail "alignment" "RMR failed to start"
+        return
+    fi
+    pass "alignment RMR running"
+    echo "    recording 55s..."
+    sleep 55
+    $SSH 'killall rmr 2>/dev/null' 2>/dev/null || true
+    sleep 2
+
+    local names
+    names=$($SSH "find $DEVICE_SD -name '*.mp4' -type f | sort" 2>/dev/null | xargs -rn1 basename)
+    if ALIGN_OUT=$(printf '%s\n' "$names" | python3 -c "
+import sys
+names = [line.strip() for line in sys.stdin if line.strip()]
+secs = []
+for n in names:
+    h, m, s = n[:-4].split('-')
+    secs.append((int(h) * 3600 + int(m) * 60 + int(s), n))
+secs.sort()
+pairs = 0
+bad = []
+for (a, _), (b, name) in zip(secs, secs[1:]):
+    if 13 <= b - a <= 17:
+        pairs += 1
+        off = b % 15
+        if 1 < off < 14:
+            bad.append(name)
+print(f'{len(secs)} segments, {pairs} chained rotations, misaligned: {bad}')
+sys.exit(1 if bad or pairs < 2 else 0)"); then
+        pass "chained rotations open on wall-clock boundaries ($ALIGN_OUT)"
+    else
+        fail "segment alignment" "$ALIGN_OUT"
+    fi
+}
+
+test_alignment
+
 # ── Record clips ──
+
+if [ "$ALIGN_ONLY" = 1 ]; then
+    echo ""
+    echo "========================================"
+    echo "PASS: $PASS  FAIL: $FAIL  SKIP: $SKIP"
+    [ "$FAIL" -eq 0 ] || exit 1
+    exit 0
+fi
 
 record_clip "clip1" "true"
 record_clip "clip2" "false"
