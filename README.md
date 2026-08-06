@@ -215,6 +215,28 @@ first (it creates the rings), then the rest; each daemon checks its own
 
 ## Configuration
 
+### Standalone V4L2 video
+
+RVD can use a public capture node instead of owning the private IMP frame
+graph:
+
+```ini
+[system]
+video_backend = v4l2
+video_device = /dev/video0
+```
+
+Build Raptor with `V4L2_OPENIMP=1`; selecting this backend without that build
+option fails explicitly while the default IMP backend remains available.
+
+The initial backend is deliberately narrow: one H.264 main stream, NV12 MMAP
+capture exported as DMA-BUF, and zero-copy submission to OpenIMP AVC. It does
+not create sub/JPEG/OSD/IVS channels. Runtime IDR requests and read-only stream
+configuration queries are supported; encoder reconfiguration and ISP effects
+return an explicit unsupported response. A separate ISP tuning service owns
+image policy so capture, encoding, and creative profiles have independent
+lifecycles.
+
 All daemons share a single INI-style config file: `/etc/raptor.conf`.
 See [raptor-docs/23-rss-config.md](https://github.com/gtxaspec/raptor-docs/blob/main/23-rss-config.md)
 for the complete reference (all sections, keys, types, defaults).
