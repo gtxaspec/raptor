@@ -60,6 +60,43 @@ static uint8_t rvd_level_idc(int width, int height)
 	return 52; /* 5.2 */
 }
 
+/*
+ * Publish a stream's geometry and rate into its ring header.
+ *
+ * rsd builds the SDP from this header, so anything that changes a stream at
+ * runtime has to call it again -- otherwise the next client to connect is
+ * told the value the stream started with.
+ */
+void rvd_stream_publish_info(rvd_state_t *st, int idx)
+{
+	rvd_stream_t *s;
+
+	if (!st || idx < 0 || idx >= st->stream_count)
+		return;
+
+	s = &st->streams[idx];
+	if (!s->ring)
+		return;
+
+	if (s->is_jpeg) {
+		int jpeg_idx = 0;
+		for (int j = 0; j < st->jpeg_count; j++) {
+			if (st->jpeg_streams[j] == idx) {
+				jpeg_idx = j;
+				break;
+			}
+		}
+		rss_ring_set_stream_info(s->ring, RVD_JPEG_STREAM_ID_BASE + jpeg_idx, RSS_CODEC_JPEG,
+					 s->enc_cfg.width, s->enc_cfg.height, s->enc_cfg.fps_num,
+					 s->enc_cfg.fps_den, 0, 0);
+	} else {
+		rss_ring_set_stream_info(s->ring, idx, s->enc_cfg.codec, s->enc_cfg.width,
+					 s->enc_cfg.height, s->enc_cfg.fps_num, s->enc_cfg.fps_den,
+					 rvd_profile_idc(s->enc_cfg.profile),
+					 rvd_level_idc(s->enc_cfg.width, s->enc_cfg.height));
+	}
+}
+
 /* Parse codec string from config */
 static rss_codec_t parse_codec(const char *s)
 {
@@ -1223,25 +1260,7 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 
 	/* ── Create ring (or reuse existing across encoder restart) ── */
 	if (s->ring) {
-		if (s->is_jpeg) {
-			int jpeg_idx = 0;
-			for (int j = 0; j < st->jpeg_count; j++) {
-				if (st->jpeg_streams[j] == idx) {
-					jpeg_idx = j;
-					break;
-				}
-			}
-			rss_ring_set_stream_info(s->ring, RVD_JPEG_STREAM_ID_BASE + jpeg_idx,
-						 RSS_CODEC_JPEG, s->enc_cfg.width,
-						 s->enc_cfg.height, s->enc_cfg.fps_num,
-						 s->enc_cfg.fps_den, 0, 0);
-		} else {
-			rss_ring_set_stream_info(
-				s->ring, idx, s->enc_cfg.codec, s->enc_cfg.width, s->enc_cfg.height,
-				s->enc_cfg.fps_num, s->enc_cfg.fps_den,
-				rvd_profile_idc(s->enc_cfg.profile),
-				rvd_level_idc(s->enc_cfg.width, s->enc_cfg.height));
-		}
+		rvd_stream_publish_info(st, idx);
 		RSS_DEBUG("stream%d ring: reused", idx);
 	} else {
 		int local = s->fs_chn - fs_base_channel(s->sensor_idx);

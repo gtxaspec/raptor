@@ -164,6 +164,9 @@ void rvd_stream_deinit(rvd_state_t *st, int idx);
 int rvd_stream_start(rvd_state_t *st, int idx);
 void rvd_stream_stop(rvd_state_t *st, int idx);
 
+/* Republish geometry and rate into the ring header; rsd's SDP reads it. */
+void rvd_stream_publish_info(rvd_state_t *st, int idx);
+
 /* rvd_frame_loop.c */
 void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running);
 void *rvd_encoder_thread(void *arg);
