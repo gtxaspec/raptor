@@ -29,11 +29,15 @@ if [ "$1" = "tsan" ]; then
     shift
 fi
 
+# Flags shared with tests/Makefile so the sources both build compile
+# the same way -- see sanitizer-flags.mk.
+. "$RAPTOR_DIR/sanitizer-flags.mk"
+
 if [ "$SAN_MODE" = "tsan" ]; then
-    SANITIZE="-fsanitize=thread -fno-omit-frame-pointer"
+    SANITIZE="$RAPTOR_SAN_THREAD $RAPTOR_SAN_EXTRA"
     SAN_LABEL="TSan"
 else
-    SANITIZE="-fsanitize=address,undefined -fno-omit-frame-pointer"
+    SANITIZE="$RAPTOR_SAN_ADDRESS $RAPTOR_SAN_EXTRA"
     SAN_LABEL="ASan"
 fi
 
@@ -223,7 +227,7 @@ COMPY_CFLAGS="$COMPY_CFLAGS -I$COMPY_BUILD/_deps/metalang99-src/include"
 # ── Compiler setup ──
 
 CC=gcc
-CFLAGS="-Wall -Wextra -Werror -std=gnu11 -D_GNU_SOURCE -DPLATFORM_T31 -O1 -g $SANITIZE"
+CFLAGS="-Wall -Wextra -Werror -std=$RAPTOR_STD -D_GNU_SOURCE -DPLATFORM_T31 -O1 -g $SANITIZE"
 CFLAGS="$CFLAGS -I$IPC_DIR/include -I$COMMON_DIR/include -I$COMMON_DIR/third_party/monocypher $MBEDTLS_CFLAGS"
 LDFLAGS="$SANITIZE -lpthread -lrt -lm"
 
