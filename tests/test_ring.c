@@ -559,6 +559,33 @@ TEST ring_producer_survives_recreate_larger(void)
 	PASS();
 }
 
+TEST ring_refmode_producer_superseded(void)
+{
+	/* The refmode twin of the test above, and the path devices
+	 * actually run: frame data lives in external shm, but the slot
+	 * array is still inside this handle's mapping, so a re-create with
+	 * more slots would index past its end. Publishing must be refused.
+	 * No /dev/rmem needed -- refmode resolves named POSIX shm first. */
+	rss_ring_t *old = make_ring("test_refsup", 4, 4096);
+	ASSERT(old);
+	ASSERT_EQ(0, rss_ring_enable_refmode(old, 65536, 0, 2, 32768));
+
+	/* Publishing works while this handle owns the ring. */
+	ASSERT_EQ(0, rss_ring_publish_ref(old, 0, 1024, 5000, 0x14, false, 0));
+
+	/* Someone re-creates it with more slots; our slot array is still
+	 * the old, smaller one. */
+	rss_ring_t *fresh = rss_ring_create("test_refsup", 32, 4096);
+	ASSERT(fresh);
+	ASSERT_EQ(0, rss_ring_enable_refmode(fresh, 65536, 0, 2, 32768));
+
+	ASSERT_EQ(-EPIPE, rss_ring_publish_ref(old, 0, 1024, 6000, 0x14, false, 0));
+
+	rss_ring_destroy(fresh);
+	rss_ring_destroy(old);
+	PASS();
+}
+
 SUITE(ring_suite)
 {
 	RUN_TEST(ring_create_destroy);
@@ -580,4 +607,5 @@ SUITE(ring_suite)
 	RUN_TEST(ring_cold_start_seq_zero);
 	RUN_TEST(ring_stale_detection);
 	RUN_TEST(ring_producer_survives_recreate_larger);
+	RUN_TEST(ring_refmode_producer_superseded);
 }
