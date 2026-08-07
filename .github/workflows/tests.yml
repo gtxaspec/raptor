@@ -13,7 +13,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake git curl \
-            autoconf automake libtool meson ninja-build python3 \
+            autoconf automake libtool meson ninja-build python3 clang \
             libopus-dev ffmpeg
 
       - name: Symlink sibling repos for unit test Makefile
@@ -44,7 +44,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake git curl \
-            autoconf automake libtool meson ninja-build python3 \
+            autoconf automake libtool meson ninja-build python3 clang \
             libopus-dev ffmpeg
 
       - name: Symlink sibling repos for unit test Makefile

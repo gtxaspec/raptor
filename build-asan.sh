@@ -39,6 +39,12 @@ fi
 
 OUT="$RAPTOR_DIR/asan-out"
 DEPS="$OUT/deps"
+# Completion marker: cleared while the tree is in flux, written only
+# after every binary links. A build that dies partway otherwise leaves
+# a tree that looks complete to anything checking timestamps or the
+# sanitizer stamp -- which is how a missing rsr survived into a
+# "cached" run and failed the leak stage.
+rm -f "$OUT/.build-ok"
 
 if [ "$1" = "clean" ]; then
     rm -f "$OUT"/*.o "$OUT"/*.a "$OUT"/rss_build_info.c
@@ -69,12 +75,30 @@ rm -f "$OUT"/*.o "$OUT"/rss_build_info.c
 STAMP="$OUT/.sanitizer"
 PREV_SAN=""
 [ -f "$STAMP" ] && PREV_SAN=$(cat "$STAMP")
+# No stamp but dependency libs on disk: their instrumentation cannot be
+# proven to match, and guessing wrong fails at link with a wall of
+# undefined __asan_* references. Treat it as a mismatch and rebuild.
+if [ -z "$PREV_SAN" ] && [ -n "$(find "$OUT" -name '*.a' -print -quit 2>/dev/null)" ]; then
+    PREV_SAN="unknown"
+fi
 if [ -n "$PREV_SAN" ] && [ "$PREV_SAN" != "$SAN_LABEL" ]; then
     echo "  sanitizer changed ($PREV_SAN -> $SAN_LABEL), cleaning dep libs"
-    rm -rf "$OUT"/mbedtls-build "$OUT"/mbedtls-install "$OUT"/compy-build
-    rm -f "$OUT"/schrift.o "$OUT"/*.a
+    # Every dependency built here carries the previous sanitizer's
+    # instrumentation and will not link against the new one. This was a
+    # hand-listed set and drifted: SRT and faac were added later and
+    # never added here, so switching to TSan died linking an ASan
+    # libsrt.a -- invisible while the suite's mode-blind cache served
+    # asan binaries for tsan runs. Derive the list instead of naming it.
+    find "$OUT" -name '*.a' -print0 2>/dev/null | xargs -0r rm -f
+    rm -rf "$OUT"/mbedtls-build "$OUT"/mbedtls-install "$OUT"/compy-build \
+        "$OUT"/srt-build "$OUT"/srt-install "$OUT"/faac-build
+    rm -f "$OUT"/schrift.o
 fi
-echo "$SAN_LABEL" > "$STAMP"
+# The stamp is written at the END, with .build-ok: it records what was
+# actually built, not what this run intends to build. Written here, a
+# build that died mid-switch would leave it claiming the new sanitizer
+# while the dep libs were still the old one -- so the next run saw no
+# change to make, skipped the clean, and failed the same link forever.
 
 # ── Clone/update dependencies ──
 
@@ -440,6 +464,9 @@ $CC -o "$OUT/rwd" "$OUT"/rwd_main.o "$OUT"/rwd_signaling.o "$OUT"/rwd_sdp.o \
     "$OUT"/rwd_ice.o "$OUT"/rwd_dtls.o "$OUT"/rwd_media.o "$OUT"/rwd_webtorrent.o \
     $LIBS "$COMPY_BUILD/libcompy.a" $LIBS_TLS -lopus $LDFLAGS
 echo "  -> rwd"
+
+echo "$SAN_LABEL" > "$STAMP"
+touch "$OUT/.build-ok"
 
 echo ""
 echo "Done. All binaries in asan-out/"
