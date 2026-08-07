@@ -1,0 +1,5 @@
+v= IP4 
+m=video 9 UDP
+a=ice-pwd:0123456
+a=ice-ufrag:a
+a=fingerprint:ha-

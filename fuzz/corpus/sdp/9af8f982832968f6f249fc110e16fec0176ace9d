@@ -1,0 +1,8 @@
+v=0
+<
+m=
+m=audio/1
+a=rtpmap:111 opus/A/4XX
+a=rtpmap:1opus/411
+a=rtpmap:111 opus/480011
+a=rtpmap:111 opus/480:1 4¶/Sdio 

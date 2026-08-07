@@ -21,11 +21,11 @@ TEST storage_boundary_from_mid_period(void)
 {
 	/* 12:03:37 UTC with 1-minute segments -> 12:04:00 */
 	int64_t now = ((int64_t)12 * 3600 + 3 * 60 + 37) * 1000000LL;
-	ASSERT_EQ_FMT(((int64_t)12 * 3600 + 4 * 60) * 1000000LL, rmr_storage_next_boundary(now, 60),
-		      "%lld");
+	ASSERT_EQ_FMT((long long)(((int64_t)12 * 3600 + 4 * 60) * 1000000LL),
+		      (long long)rmr_storage_next_boundary(now, 60), "%lld");
 	/* Same instant with 5-minute segments -> 12:05:00 */
-	ASSERT_EQ_FMT(((int64_t)12 * 3600 + 5 * 60) * 1000000LL,
-		      rmr_storage_next_boundary(now, 300), "%lld");
+	ASSERT_EQ_FMT((long long)(((int64_t)12 * 3600 + 5 * 60) * 1000000LL),
+		      (long long)rmr_storage_next_boundary(now, 300), "%lld");
 	PASS();
 }
 
@@ -33,8 +33,8 @@ TEST storage_boundary_on_the_boundary(void)
 {
 	/* Exactly on a boundary the next one is a full period away. */
 	int64_t now = ((int64_t)12 * 3600 + 4 * 60) * 1000000LL;
-	ASSERT_EQ_FMT(((int64_t)12 * 3600 + 5 * 60) * 1000000LL, rmr_storage_next_boundary(now, 60),
-		      "%lld");
+	ASSERT_EQ_FMT((long long)(((int64_t)12 * 3600 + 5 * 60) * 1000000LL),
+		      (long long)rmr_storage_next_boundary(now, 60), "%lld");
 	PASS();
 }
 
@@ -98,8 +98,8 @@ TEST storage_segment_seconds_override(void)
 {
 	/* segment_seconds (testing/debug knob) overrides minutes. */
 	int64_t now = ((int64_t)12 * 3600 + 3 * 60 + 37) * 1000000LL;
-	ASSERT_EQ_FMT(((int64_t)12 * 3600 + 3 * 60 + 40) * 1000000LL,
-		      rmr_storage_next_boundary(now, 10), "%lld");
+	ASSERT_EQ_FMT((long long)(((int64_t)12 * 3600 + 3 * 60 + 40) * 1000000LL),
+		      (long long)rmr_storage_next_boundary(now, 10), "%lld");
 	PASS();
 }
 

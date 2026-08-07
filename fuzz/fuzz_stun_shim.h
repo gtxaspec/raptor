@@ -28,6 +28,8 @@
 #define STUN_ATTR_FINGERPRINT	    0x8028
 #define STUN_FINGERPRINT_XOR	    0x5354554E
 
+#define RWD_MAX_VERIFIED_ADDRS 4
+
 typedef struct rwd_client rwd_client_t;
 typedef struct rwd_server rwd_server_t;
 
@@ -43,8 +45,17 @@ struct rwd_client {
 	bool ice_verified;
 	int64_t last_stun_at;
 
+	/* Mirrors rwd.h: ICE peer-address verification ring. Kept in sync
+	 * by hand -- this shim exists so the STUN parser can be fuzzed
+	 * without dragging in compy and mbedTLS. */
+	struct sockaddr_storage verified_addrs[RWD_MAX_VERIFIED_ADDRS];
+	socklen_t verified_lens[RWD_MAX_VERIFIED_ADDRS];
+	int n_verified;
+
 	char session_id[RWD_SESSION_ID_LEN * 2 + 1];
 };
+
+bool rwd_sockaddr_equal(const struct sockaddr_storage *a, const struct sockaddr_storage *b);
 
 struct rwd_server {
 	int udp_fd;

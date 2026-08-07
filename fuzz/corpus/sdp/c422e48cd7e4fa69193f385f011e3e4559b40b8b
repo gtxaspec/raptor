@@ -1,0 +1,43 @@
+v=0
+o=m-------
+a=fingerprint:sha-256 0123
+a=fingerprint:sha-278 00: 1
+s=v---------
+a=finingerprint:sha-256 0123
+a=fingerprint:sha-278 00: 1
+s=v---------
+a=fingerprint:sha
+a=fingerprint:sha-278 00:177:88:99:AA:BB:=--
+a=fingerprint:shaa=candid-256 10123
+a=fingerprint:sha-25XX-------
+a=fingerprint:sha
+a=fingerprint:sha-278 00:17ÿÿÿÿÿÿÿÿÿÿÿ-123
+a=fingerprint:sha-296 0010 IN I- 1
+s=v---------
+a=fingerprint:sha-256 0123
+a=fingerprint:sha-278 00: 1
+s=v---------
+a=fingerprint:sha
+a=fingerprint:sha-278 00:177:88:99:AA:BB:=--
+a=fingerprint:shaa=candid-256 10123
+a=fingerprint:sha-25XX-------
+a=fingerprint:sha
+a=fingerprint:sha-278 00:17ÿÿÿÿÿÿÿÿÿÿÿ-123
+a=fingerpringerprint:sha
+a=fingerprint:sha-278 00:177:88:99:AA:BB:=--
+a=fingerprint:shaa=candid-256 10123
+a=fingerprint:sha-25XX-------
+a=fingerprint:sha
+a=fingerprint:sha-278 00:17ÿÿÿÿÿÿÿÿÿÿÿ-123
+a=fingerprint:sha-296 0010 IN I- 1
+s=v---------
+a=fingerprint:sha-256 0123
+a=fingerprint:sha-278 00: 1
+s=v---------
+a=fingerprint:sha
+a=fingerprint:sha-278 00:177:88:99:AA:BB:=--
+a=fingerprint:shaa=candid-256 10123
+a=fingerprint:sha-25XX-------
+a=fingerprint:sha
+a=fingerprint:sha-278 00:17ÿÿÿÿÿÿÿÿÿÿÿ-123
+a=fingerprint:sha-296 0010 IN I77f

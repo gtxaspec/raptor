@@ -1,0 +1,1 @@
+Digest username="thingino", realm="raptor", nonce="0123456789abcdef", uri="rtsp://cam/ch0", response="00112233445566778899aabbccddeeff"

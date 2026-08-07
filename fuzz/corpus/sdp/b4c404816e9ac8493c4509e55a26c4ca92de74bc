@@ -1,0 +1,4 @@
+v=0F 111
+a=rtpmap:288v
+a=rtpmap:288 0
+a=rtpmap:288 ot=0

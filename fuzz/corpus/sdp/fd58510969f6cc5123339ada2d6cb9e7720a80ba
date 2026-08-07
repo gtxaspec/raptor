@@ -1,0 +1,7 @@
+v=0“ 0
+m=video 
+a=rtpmap:96 H264/90
+
+a=fmtp:96!
+a=fmtp:96!iJawd
+a=cä

@@ -1,0 +1,9 @@
+v=0 7.
+m=video 0mmmmmmmmmmm SAVPF 96
+c=0.0
+a=rtpmap:96 H264/90ĞÏÏòõÂ›ingerpri:U4~ 0.0.0.0
+a=rtpmap:96 H264/90000 0.0.0.0
+a=rtpmap:96 H264/90000
+a=firi:U.0
+a=rtpmap:96 H264/9000U4~ 0.0.0.0
+a=rtpmap:96 H264/90a=rv

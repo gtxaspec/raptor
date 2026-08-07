@@ -160,6 +160,14 @@ model = gc2053
 name = gc2053
 i2c_addr = 0x37
 
+# Embedded rings on purpose. Integration and net-fallback run refmode
+# (the mock HAL injects encoder SHM), so this soak is the only
+# daemon-level coverage the embedded publish path gets -- and its
+# reconnect churn is what surfaced a wild write there. Flipping this to
+# true would leave that path exercised by unit tests alone.
+[ring]
+refmode = false
+
 [stream0]
 width = 1920
 height = 1080

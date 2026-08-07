@@ -1,0 +1,7 @@
+v=0
+|VPF 111
+a=rtpmap:288v=0
+|VPF 111
+a=rtpmap:288 opus/000/2
+=ecv1
+a=rtpmap:288 ot=0

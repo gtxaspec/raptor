@@ -144,6 +144,7 @@ sample_rate = 16000
 codec = l16
 
 [rtsp]
+backchannel = true
 port = 15554
 
 [http]
@@ -700,6 +701,129 @@ else
     skip "signed recording verification" "no recording or rverify missing"
 fi
 "$OUT/raptorctl" rmr enable > /dev/null 2>&1
+
+# ── ONVIF backchannel: client audio reaches the speaker ring ──
+# rsd's receive path (sendonly SETUP, RTP over an interleaved channel,
+# PCMU decode, publish) had no x86 coverage at all -- it was exercised
+# only by the hardware battery, and only ever asserted that the ring
+# existed. Here the frames are read back out, which is what catches
+# rsd publishing into a handle that cannot publish.
+# Do NOT clear the speaker ring first: create_rings already owns one
+# here, which is the realistic state (rac playing, rad up) and the
+# case rsd got wrong -- it opened the existing ring, got a consumer
+# handle, and every publish failed -EINVAL in silence. Removing the
+# ring would push rsd down the create path and hide exactly that.
+python3 - > "$LOG_DIR/backchannel.out" 2>&1 <<'BC_EOF' &
+import socket, struct, sys, time
+
+def rsp(sock, buf):
+    while b"\r\n\r\n" not in buf[0]:
+        d = sock.recv(4096)
+        if not d:
+            return "", buf
+        buf[0] += d
+    head, _, rest = buf[0].partition(b"\r\n\r\n")
+    txt = head.decode(errors="replace")
+    clen = 0
+    for line in txt.split("\r\n"):
+        if line.lower().startswith("content-length:"):
+            clen = int(line.split(":", 1)[1])
+    while len(rest) < clen:
+        rest += sock.recv(4096)
+    body, buf[0] = rest[:clen], rest[clen:]
+    return txt + "\r\n\r\n" + body.decode(errors="replace"), buf
+
+REQ = "Require: www.onvif.org/ver20/backchannel\r\n"
+s = socket.create_connection(("127.0.0.1", 15554), timeout=10)
+buf = [b""]
+base = "rtsp://127.0.0.1:15554/stream0"
+s.sendall(f"DESCRIBE {base} RTSP/1.0\r\nCSeq: 1\r\nAccept: application/sdp\r\n{REQ}\r\n".encode())
+desc, buf = rsp(s, buf)
+if " 200 " not in desc.split("\r\n")[0]:
+    print("DESCRIBE_FAILED"); sys.exit(0)
+if "a=sendonly" not in desc:
+    print("NO_SENDONLY"); sys.exit(0)
+print("SENDONLY_OK")
+
+ctl = None
+for sec in desc.split("m=")[1:]:
+    if "a=sendonly" in sec:
+        for line in sec.split("\n"):
+            if line.strip().startswith("a=control:"):
+                ctl = line.strip().split(":", 1)[1]
+if not ctl:
+    print("NO_CONTROL"); sys.exit(0)
+
+# A backchannel-only session has nothing to play: set up the video
+# track first, exactly as a real ONVIF client does, then the
+# sendonly track beside it.
+s.sendall(f"SETUP {base}/video RTSP/1.0\r\nCSeq: 2\r\n"
+          f"Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n\r\n".encode())
+vsetup, buf = rsp(s, buf)
+sid = ""
+for line in vsetup.split("\r\n"):
+    if line.lower().startswith("session:"):
+        sid = line.split(":", 1)[1].split(";")[0].strip()
+if " 200 " not in vsetup.split("\r\n")[0]:
+    print("VIDEO_SETUP_FAILED"); sys.exit(0)
+
+url = ctl if ctl.startswith("rtsp") else base + "/" + ctl
+s.sendall(f"SETUP {url} RTSP/1.0\r\nCSeq: 3\r\nSession: {sid}\r\n"
+          f"Transport: RTP/AVP/TCP;unicast;interleaved=4-5\r\n{REQ}\r\n".encode())
+setup, buf = rsp(s, buf)
+if " 200 " not in setup.split("\r\n")[0]:
+    print("SETUP_FAILED"); sys.exit(0)
+
+s.sendall(f"PLAY {base} RTSP/1.0\r\nCSeq: 4\r\nSession: {sid}\r\nRange: npt=0.000-\r\n\r\n".encode())
+play, buf = rsp(s, buf)
+if " 200 " not in play.split("\r\n")[0]:
+    print("PLAY_FAILED"); sys.exit(0)
+
+seq = ts = sent = 0
+for _ in range(50):
+    rtp = struct.pack("!BBHII", 0x80, 0, seq & 0xFFFF, ts, 0x1234ABCD) + b"\xff" * 160
+    s.sendall(b"\x24" + struct.pack("!BH", 4, len(rtp)) + rtp)
+    seq += 1; ts += 160; sent += 1
+    time.sleep(0.005)
+print(f"SENT={sent}", flush=True)
+# rsd destroys the speaker ring when the client goes away, so hold the
+# session while the caller inspects it -- the same reason the hardware
+# battery's probe holds.
+time.sleep(6.0)
+s.close()
+BC_EOF
+BC_PID=$!
+# Poll for the ring while the probe holds its session, then read the
+# header: write_seq counts what rsd actually published. This is the
+# assertion the hardware battery cannot make -- it can only see that
+# the ring exists.
+BC_SEQ=0
+for _ in $(seq 1 40); do
+    if [ -e /dev/shm/rss_ring_speaker ]; then
+        BC_SEQ=$(timeout 5 "$OUT/ringdump" speaker 2>&1 |
+                 sed -n 's/.*Write seq: *\([0-9]*\).*/\1/p' | head -1)
+        [ "${BC_SEQ:-0}" -gt 0 ] 2>/dev/null && break
+    fi
+    sleep 0.25
+done
+wait $BC_PID 2>/dev/null
+BC_OUT=$(cat "$LOG_DIR/backchannel.out" 2>/dev/null)
+
+echo "$BC_OUT" | grep -q "SENDONLY_OK" \
+    && pass "backchannel advertises a sendonly track" \
+    || fail "backchannel sendonly track" "$(echo "$BC_OUT" | head -1)"
+
+if echo "$BC_OUT" | grep -q "SENT=50"; then
+    pass "backchannel accepts 50 RTP frames"
+else
+    fail "backchannel send" "$(echo "$BC_OUT" | tail -1)"
+fi
+
+if [ "${BC_SEQ:-0}" -gt 0 ] 2>/dev/null; then
+    pass "backchannel audio reaches the speaker ring ($BC_SEQ frames published)"
+else
+    fail "backchannel speaker ring" "rsd published nothing (write_seq=${BC_SEQ:-none})"
+fi
 
 # ── Producer restart under a lingering client ──
 # A playing client whose media goes unread (stalled player, dead NVR

@@ -1,0 +1,63 @@
+name: Fuzz
+
+# Manual only, like the other workflows. test-all runs these parsers
+# for 20s each as a smoke test; this is the version that actually
+# hunts -- long runs over a corpus that persists between dispatches,
+# so coverage accumulates instead of restarting from the seeds every
+# time.
+on:
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: Seconds per target
+        default: "600"
+        required: false
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake git curl clang \
+            autoconf automake libtool meson ninja-build python3 libopus-dev
+
+      - name: Symlink sibling repos
+        run: |
+          cd ..
+          for repo in raptor-ipc raptor-common raptor-hal compy; do
+            git clone --depth 1 "https://github.com/gtxaspec/$repo" "$repo" || true
+          done
+
+      - name: Restore corpus
+        uses: actions/cache/restore@v5
+        with:
+          path: fuzz-corpus
+          key: fuzz-corpus-${{ github.run_id }}
+          restore-keys: fuzz-corpus-
+
+      - name: Fuzz
+        run: ./tests/test-fuzz.sh --seconds "${{ inputs.seconds }}" --corpus "$PWD/fuzz-corpus"
+
+      - name: Save corpus
+        if: always()
+        uses: actions/cache/save@v5
+        with:
+          path: fuzz-corpus
+          key: fuzz-corpus-${{ github.run_id }}
+
+      - name: Upload crashes
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-crashes
+          path: |
+            crash-*
+            leak-*
+            timeout-*
+            /tmp/fuzz_*.log

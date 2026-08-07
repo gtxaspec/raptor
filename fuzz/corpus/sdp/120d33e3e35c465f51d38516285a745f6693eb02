@@ -1,0 +1,12 @@
+v=0
+o=- 0 0 IN IP4 127.0.0.1
+s=-
+t=0 0
+m=video UDP/TLS/RTP/SAVPF 96
+c=IN I0.0.0
+a=rtpmap:96 H264/90000
+a=ice-ufrag:abcd
+a=ice-pwd:0123456789abcdef0123
+a=fingerprint:sha-256 00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF
+a=setup:actpass
+a=sendrecv

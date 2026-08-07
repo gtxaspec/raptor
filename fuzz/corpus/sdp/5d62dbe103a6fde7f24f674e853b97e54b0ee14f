@@ -1,0 +1,7 @@
+v0 0
+m=video UDP/T0LSP/SAVPF 96
+c0
+a=rtpmap:96 H264/90000
+a=ice-ufrag:abcd
+a=ice-pwd:0123456789abcdef0123
+a=fingerprint:sha56 I0:11:2233::44:55:66:77:88:99:AA:BB:AC:DD:ÿÿÿÿÿÿÿÿ:33:44:55:66:77:88:99:AA:BB:CC:DD:r:a#tp=sendrecv

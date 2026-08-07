@@ -1,0 +1,17 @@
+v==0 0
+m=video 90000
+a=ice-ufrag:abcv9=0 0
+a=ice-ufrag:abcd
+a=ice-pwd=0 0
+mcd
+a=ice-pwd:=video 9
+m=video 90000
+a=ice-ufrag:abcd
+a=ice-pwd=0 0
+mcd
+a=ice-pwd:=video 90
+a=ice-ufrag:abcda
+a=ice-0.0..0.t=0 0
+m=video 90p00
+a=ice-ufrag:abcd
+a=ice-pwd:01z3¿ÿÿÿ

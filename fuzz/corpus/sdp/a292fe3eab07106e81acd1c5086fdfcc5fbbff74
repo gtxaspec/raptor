@@ -1,0 +1,20 @@
+v||ÁIN IP4~ 0.0..0.0.0
+a=extmap:95 H26/90sdes:midfingerpri:a=IN IP4~ 0.0.0.0
+a=extmap:96 H264/90sdes:midfingerpri:abcdp|*|||||t=5 0=fin65m0id.0
+a=extmap:96 H264/9*sdes:midfiogerpr0.0
+a=extmap:96 H264/90sdes:midfingerpr7:00oly
+P4~ 0.0..0.0.0
+a=extmap:96 H26/90sdes:midfingerpri:a=IN 0.0.0.0
+a=extmap:96sdes:midsdes:bcdp|'|||||t=5 0=fin59.0
+a=extmap:96 H264/9*sdes:midfingerpr0.0
+a=extmap:96 H264/90sdes:midfinRF 79
+c=IN IP4~ 0.0..0.0.0
+a=extmap:95 H26/90sdes:midfingerp 0.0.0.0
+a=extmap:96 H264/90sdes:midfingerprirt=pmap|*|||||t=5 0=fin65m0id.0
+a=extmap:96 H264/9*sdes:midfiogerpr0.0
+a=extmap:96 H264/90sdes:midfingerpr7:00oly
+P4~ 0.0..0.0.0
+a=extmap:96 H26/90sdes:midfingerpri:a=IN 0.0.0.0
+a=extmap:96sdes:midsdes:bcdp|'|||||t=5 0=fi59.0
+a=extmap:96 H264/9*sdes:midfingerpr0.0
+a=extmap:96 H264/90sdes:midfingerpr7:863/900oly

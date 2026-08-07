@@ -1,0 +1,25 @@
+ 0
+m=video 
+a=rtpmap:96 H=rtpmap@69: 264/90
+
+
+
+a=f 0
+m=video 
+a=rtpmap:96 H264/9
+900
+¨d
+
+
+a=fmtp:96!26sdes:264/90
+90
+¨d
+
+
+a=fmtp:96!26sdes:midmTpo 
+a=rtpmap@69: 264/90
+
+
+a=fmt
+
+a=fmtp:96!es:midmTpo d

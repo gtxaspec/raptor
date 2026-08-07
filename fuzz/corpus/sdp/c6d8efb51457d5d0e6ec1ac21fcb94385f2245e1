@@ -1,0 +1,13 @@
+v=0
+o=mid- 1
+s=v---------
+a=fingerprint:sha-256 0123
+a=fingerprint:sha-278 
+s=v---------
+a=fingerprint:sha
+a=fingerprint:sha-278 00:177:88:99:-
+a=fingerprint:shaa=candid-256 10123
+a=fingerprint:sha-25XX-------
+a=fingerprint:sha
+a=fingerprint:sha-278 00:17extmap:96 H-123
+a=fingerprint:sha-296 0010 IN I77f

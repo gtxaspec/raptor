@@ -69,11 +69,17 @@ static void rsd_bc_recv_t_on_audio(VSelf, uint8_t payload_type, uint32_t timesta
 
 	rss_ring_t **ring_ptr = self->speaker_ring_ptr;
 	if (!*ring_ptr) {
-		*ring_ptr = rss_ring_open("speaker");
-		if (!*ring_ptr)
-			*ring_ptr = rss_ring_create("speaker", 16, 64 * 1024);
+		/* Create, never open: we are the producer of this audio, and
+		 * rss_ring_open() hands back a consumer handle that every
+		 * publish path rejects with -EINVAL. Opening first meant that
+		 * whenever the ring already existed -- rac playing a file, a
+		 * second backchannel client -- every frame was silently
+		 * discarded. create() reuses the existing shm and takes over
+		 * as producer; the previous one learns via -EPIPE rather than
+		 * interleaving into the same ring. */
+		*ring_ptr = rss_ring_create("speaker", 16, 64 * 1024);
 		if (!*ring_ptr) {
-			RSS_WARN("backchannel: failed to open/create speaker ring");
+			RSS_WARN("backchannel: failed to create speaker ring");
 			return;
 		}
 		rss_ring_set_stream_info(*ring_ptr, 0x11, 0, 0, 0, 16000, 1, 0, 0);

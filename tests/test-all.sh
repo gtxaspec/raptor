@@ -8,7 +8,8 @@
 #   3. Unit tests (host x86, ASAN)
 #   4. Integration tests (daemons + curl/ffprobe), then the ric
 #      behavior suite (stub rvd + fake sysfs GPIO, test-ric.sh),
-#      the rac beep suite, and the net-fallback suite
+#      the rac beep suite, the pre-auth parser fuzzers, and the
+#      net-fallback suite
 #   5. Leak/race detection (lifecycle soak)
 #
 # Usage:
@@ -71,9 +72,49 @@ echo ""
 
 echo "=== Stage 1: Build ($SAN_MODE) ==="
 
-if [ -f "$RAPTOR_DIR/asan-out/rsd" ] && [ -f "$RAPTOR_DIR/asan-out/create_rings" ]; then
-    echo "  binaries exist, skipping build (delete asan-out/ to force)"
-    stage_pass "build ($SAN_MODE) [cached]"
+# Reuse the tree only when it is genuinely the tree this run wants:
+# the right sanitizer, and newer than every source that feeds it. The
+# old check was bare file existence, so `--tsan` after an asan build
+# printed "[cached]" and ran asan binaries under a tsan banner, and
+# editing a daemon then running the suite tested the previous build.
+BUILD_CACHED=0
+if [ -f "$RAPTOR_DIR/asan-out/.build-ok" ] && [ -f "$RAPTOR_DIR/asan-out/rsd" ] &&
+   [ -f "$RAPTOR_DIR/asan-out/create_rings" ]; then
+    # build-asan.sh already stamps asan-out/.sanitizer (ASan/TSan) so it
+    # can clean dep libs across a switch; read that rather than writing
+    # a second stamp in a different vocabulary.
+    WANT_SAN=ASan
+    [ "$SAN_MODE" = "tsan" ] && WANT_SAN=TSan
+    HAVE_SAN=$(cat "$RAPTOR_DIR/asan-out/.sanitizer" 2>/dev/null || echo unknown)
+    if [ "$HAVE_SAN" != "$WANT_SAN" ]; then
+        echo "  asan-out/ was built with '$HAVE_SAN', this run wants '$WANT_SAN' — rebuilding"
+    else
+        # Generated sources are excluded by name (build-asan.sh writes
+        # rss_build_info.c, tests/Makefile seds sdp_parse.c out of
+        # rwd_sdp.c) -- both are rewritten every build and would pin the
+        # verdict to "stale" forever. Missing a future generated file
+        # only costs a rebuild: this check fails safe.
+        # -newer against the binary, first hit wins. No pipe into head:
+        # this script runs under `set -o pipefail`, and head closing the
+        # pipe early would abort the suite rather than answer the
+        # question.
+        NEWER=$(find "$RAPTOR_DIR" "$RAPTOR_DIR/../raptor-ipc" "$RAPTOR_DIR/../raptor-common" \
+            \( -name '*.c' -o -name '*.h' \) -newer "$RAPTOR_DIR/asan-out/rsd" \
+            -not -path '*/asan-out/*' -not -path '*/.git/*' \
+            -not -name 'rss_build_info.c' -not -name 'sdp_parse.c' \
+            -print -quit 2>/dev/null || true)
+        if [ -n "$NEWER" ]; then
+            echo "  $(basename "$NEWER") is newer than the build — rebuilding"
+        else
+            echo "  binaries current for $SAN_MODE, skipping build"
+            stage_pass "build ($SAN_MODE) [cached]"
+            BUILD_CACHED=1
+        fi
+    fi
+fi
+
+if [ "$BUILD_CACHED" = 1 ]; then
+    :
 elif [ "$SAN_MODE" = "tsan" ]; then
     if (cd "$RAPTOR_DIR" && ./build-asan.sh tsan); then
         stage_pass "build (tsan)"
@@ -144,6 +185,12 @@ if "$SCRIPT_DIR/test-rac.sh"; then
     stage_pass "rac beep suite"
 else
     stage_fail "rac beep suite"
+fi
+
+if "$SCRIPT_DIR/test-fuzz.sh"; then
+    stage_pass "fuzz (pre-auth parsers)"
+else
+    stage_fail "fuzz (pre-auth parsers)"
 fi
 
 if "$SCRIPT_DIR/test-net-fallback.sh"; then

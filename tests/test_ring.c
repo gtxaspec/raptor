@@ -532,6 +532,86 @@ TEST ring_stale_detection(void)
 	PASS();
 }
 
+TEST ring_producer_survives_recreate_larger(void)
+{
+	/* A ring re-created larger while an old producer still holds it:
+	 * the old handle's mapping is the ORIGINAL size, but data_size in
+	 * the shared header now describes the new, bigger region. A
+	 * producer that bounds its writes by the header walks off the end
+	 * of its own mapping -- CI caught exactly that as a SEGV inside
+	 * rss_ring_publish_iov's memcpy during the leak soak's reconnect
+	 * churn. Publishing from the stale handle must fail, not write. */
+	rss_ring_t *old = make_ring("test_recr", 4, 4096);
+	ASSERT(old);
+
+	rss_ring_t *fresh = rss_ring_create("test_recr", 8, 262144);
+	ASSERT(fresh);
+
+	uint8_t payload[65536];
+	memset(payload, 0x5A, sizeof(payload));
+	/* Larger than the old mapping's whole data region, smaller than
+	 * the new one's: the size the header now advertises. */
+	int ret = rss_ring_publish(old, payload, sizeof(payload), 1000, 0x14, false);
+	ASSERT(ret != 0);
+
+	rss_ring_destroy(fresh);
+	rss_ring_destroy(old);
+	PASS();
+}
+
+TEST ring_refmode_producer_superseded(void)
+{
+	/* The refmode twin of the test above, and the path devices
+	 * actually run: frame data lives in external shm, but the slot
+	 * array is still inside this handle's mapping, so a re-create with
+	 * more slots would index past its end. Publishing must be refused.
+	 * No /dev/rmem needed -- refmode resolves named POSIX shm first. */
+	rss_ring_t *old = make_ring("test_refsup", 4, 4096);
+	ASSERT(old);
+	ASSERT_EQ(0, rss_ring_enable_refmode(old, 65536, 0, 2, 32768));
+
+	/* Publishing works while this handle owns the ring. */
+	ASSERT_EQ(0, rss_ring_publish_ref(old, 0, 1024, 5000, 0x14, false, 0));
+
+	/* Someone re-creates it with more slots; our slot array is still
+	 * the old, smaller one. */
+	rss_ring_t *fresh = rss_ring_create("test_refsup", 32, 4096);
+	ASSERT(fresh);
+	ASSERT_EQ(0, rss_ring_enable_refmode(fresh, 65536, 0, 2, 32768));
+
+	ASSERT_EQ(-EPIPE, rss_ring_publish_ref(old, 0, 1024, 6000, 0x14, false, 0));
+
+	rss_ring_destroy(fresh);
+	rss_ring_destroy(old);
+	PASS();
+}
+
+TEST ring_open_handle_cannot_publish(void)
+{
+	/* rss_ring_open() yields a consumer handle, and every publish path
+	 * rejects those. Code that opens-then-publishes therefore throws
+	 * its data away silently unless it checks the return -- which is
+	 * what rsd's backchannel did whenever the speaker ring already
+	 * existed. */
+	rss_ring_t *owner = make_ring("test_ownpub", 4, 4096);
+	ASSERT(owner);
+
+	rss_ring_t *opened = rss_ring_open("test_ownpub");
+	ASSERT(opened);
+
+	uint8_t data[] = {0x01, 0x02};
+	ASSERT_EQ(-EINVAL, rss_ring_publish(opened, data, sizeof(data), 1000, 0x14, false));
+	/* A create on the same name does yield a producer handle. */
+	rss_ring_t *taken = rss_ring_create("test_ownpub", 4, 4096);
+	ASSERT(taken);
+	ASSERT_EQ(0, rss_ring_publish(taken, data, sizeof(data), 2000, 0x14, false));
+
+	rss_ring_close(opened);
+	rss_ring_destroy(taken);
+	rss_ring_destroy(owner);
+	PASS();
+}
+
 SUITE(ring_suite)
 {
 	RUN_TEST(ring_create_destroy);
@@ -552,4 +632,7 @@ SUITE(ring_suite)
 	RUN_TEST(ring_peek_newest_frame);
 	RUN_TEST(ring_cold_start_seq_zero);
 	RUN_TEST(ring_stale_detection);
+	RUN_TEST(ring_producer_survives_recreate_larger);
+	RUN_TEST(ring_refmode_producer_superseded);
+	RUN_TEST(ring_open_handle_cannot_publish);
 }

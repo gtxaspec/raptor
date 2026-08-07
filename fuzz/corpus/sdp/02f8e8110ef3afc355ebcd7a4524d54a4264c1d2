@@ -1,0 +1,30 @@
+v=0
+m=audio 0
+m::||||z 0
+m=audio=0
+m=audio IN IP4 ::||||z 00
+m=audio=0
+m=audio IN IP4 ::||||z 0
+m=audio 9 UDP//Rv=0
+o=-- 0 4	F |0
+m=audio 9 UDP+TSLIN IP4 ::||||z 0
+m=aud0io=0
+m=audiud ::||||z 0
+m=audio=0
+m=audio INàºP4 ::||||z 0
+m=audio 9 PDU/LS/Rv=0
+o=-4 :||||z 0
+m=audio=0
+m=audi4 ::||||z=0
+m=audio I||z 0
+m=audio=0
+m=audio Isdes:mid||||z 0
+m=audio 9 UDP/LS/Rv=0
+o=-4 :||||z 0
+m=audio=0
+m=audiudio IN IP4 ::||| 0
+m=audio=0
+m=audio IN IP4 ::||||z 0
+m=audio 9 UDP/TLS/Rv=0
+o=-- 0 4	F |0
+m=audio 9 UDP|||=-PF TP/9

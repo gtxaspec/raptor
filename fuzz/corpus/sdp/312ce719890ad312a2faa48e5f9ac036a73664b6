@@ -1,0 +1,8 @@
+
+s
+m=video 9
+a=rtpmap:96 H264/9264/90000
+a=f 0.0.0.0
+a=rtpmap:96 H264/90000
+a=f‘n
+a=sendrecv

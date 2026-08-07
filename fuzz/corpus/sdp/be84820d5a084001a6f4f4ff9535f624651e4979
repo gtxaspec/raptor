@@ -1,0 +1,15 @@
+v=tpmap:9ov=0
+a=rt=v=1
+.0
+a=rtpmap:9ov=0
+a=rtpmap:96 H264ÿÿÿÿÿv=0
+a=rtpmap:96 H264/89ÿÿÿÿÿÿÿÿÿÿ/8rtp=0
+
+a=rtpmap:96 H264/Xv=1
+.0
+a=rtpmap:9ov=0
+a=rtpmap:96 H26:96 H2v=1
+.0
+a=rtpmap:9ov=0
+a=rtpmap:96 H264/890æ9
+a=fiEE:F F
