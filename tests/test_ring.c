@@ -586,6 +586,32 @@ TEST ring_refmode_producer_superseded(void)
 	PASS();
 }
 
+TEST ring_open_handle_cannot_publish(void)
+{
+	/* rss_ring_open() yields a consumer handle, and every publish path
+	 * rejects those. Code that opens-then-publishes therefore throws
+	 * its data away silently unless it checks the return -- which is
+	 * what rsd's backchannel did whenever the speaker ring already
+	 * existed. */
+	rss_ring_t *owner = make_ring("test_ownpub", 4, 4096);
+	ASSERT(owner);
+
+	rss_ring_t *opened = rss_ring_open("test_ownpub");
+	ASSERT(opened);
+
+	uint8_t data[] = {0x01, 0x02};
+	ASSERT_EQ(-EINVAL, rss_ring_publish(opened, data, sizeof(data), 1000, 0x14, false));
+	/* A create on the same name does yield a producer handle. */
+	rss_ring_t *taken = rss_ring_create("test_ownpub", 4, 4096);
+	ASSERT(taken);
+	ASSERT_EQ(0, rss_ring_publish(taken, data, sizeof(data), 2000, 0x14, false));
+
+	rss_ring_close(opened);
+	rss_ring_destroy(taken);
+	rss_ring_destroy(owner);
+	PASS();
+}
+
 SUITE(ring_suite)
 {
 	RUN_TEST(ring_create_destroy);
@@ -608,4 +634,5 @@ SUITE(ring_suite)
 	RUN_TEST(ring_stale_detection);
 	RUN_TEST(ring_producer_survives_recreate_larger);
 	RUN_TEST(ring_refmode_producer_superseded);
+	RUN_TEST(ring_open_handle_cannot_publish);
 }
