@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <errno.h>
@@ -74,7 +75,10 @@ static const uint8_t h265_p_sc[] = {0x00, 0x00, 0x00, 0x01, 0x02, 0x01};
 
 typedef struct {
 	bool active;
-	bool force_idr; /* honor enc_request_idr on the next frame */
+	/* Set from the ctrl thread, consumed by the encoder thread: the
+	 * two never synchronise, so a plain bool is a data race (TSan
+	 * caught it the first time the suite ran a real tsan build). */
+	_Atomic bool force_idr;
 	uint32_t frame_seq;
 	uint8_t buf_idx;
 
@@ -147,7 +151,7 @@ static int mock_enc_request_idr(void *ctx, int chn)
 {
 	rss_hal_ctx_t *hal = ctx;
 	if (hal && chn >= 0 && chn < MOCK_MAX_CHANNELS)
-		hal->channels[chn].force_idr = true;
+		atomic_store(&hal->channels[chn].force_idr, true);
 	fprintf(stderr, "mock: enc_request_idr chn=%d\n", chn);
 	return RSS_OK;
 }
@@ -244,8 +248,7 @@ static int mock_enc_get_frame(void *ctx, int chn, rss_frame_t *frame)
 		return -EAGAIN;
 
 	uint32_t gop = ch->cfg.gop_length ? ch->cfg.gop_length : 50;
-	bool is_key = (ch->frame_seq % gop == 0) || ch->force_idr;
-	ch->force_idr = false;
+	bool is_key = (ch->frame_seq % gop == 0) || atomic_exchange(&ch->force_idr, false);
 	bool is_jpeg = (ch->cfg.codec == RSS_CODEC_JPEG || ch->cfg.codec == RSS_CODEC_MJPEG);
 
 	uint8_t *dest;
