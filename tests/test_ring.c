@@ -532,6 +532,33 @@ TEST ring_stale_detection(void)
 	PASS();
 }
 
+TEST ring_producer_survives_recreate_larger(void)
+{
+	/* A ring re-created larger while an old producer still holds it:
+	 * the old handle's mapping is the ORIGINAL size, but data_size in
+	 * the shared header now describes the new, bigger region. A
+	 * producer that bounds its writes by the header walks off the end
+	 * of its own mapping -- CI caught exactly that as a SEGV inside
+	 * rss_ring_publish_iov's memcpy during the leak soak's reconnect
+	 * churn. Publishing from the stale handle must fail, not write. */
+	rss_ring_t *old = make_ring("test_recr", 4, 4096);
+	ASSERT(old);
+
+	rss_ring_t *fresh = rss_ring_create("test_recr", 8, 262144);
+	ASSERT(fresh);
+
+	uint8_t payload[65536];
+	memset(payload, 0x5A, sizeof(payload));
+	/* Larger than the old mapping's whole data region, smaller than
+	 * the new one's: the size the header now advertises. */
+	int ret = rss_ring_publish(old, payload, sizeof(payload), 1000, 0x14, false);
+	ASSERT(ret != 0);
+
+	rss_ring_destroy(fresh);
+	rss_ring_destroy(old);
+	PASS();
+}
+
 SUITE(ring_suite)
 {
 	RUN_TEST(ring_create_destroy);
@@ -552,4 +579,5 @@ SUITE(ring_suite)
 	RUN_TEST(ring_peek_newest_frame);
 	RUN_TEST(ring_cold_start_seq_zero);
 	RUN_TEST(ring_stale_detection);
+	RUN_TEST(ring_producer_survives_recreate_larger);
 }
