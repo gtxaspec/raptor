@@ -182,7 +182,9 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 					       st->streams[chn].chn, val, 1);
 			if (ret == 0) {
 				st->streams[chn].enc_cfg.fps_num = val;
+				st->streams[chn].enc_cfg.fps_den = 1;
 				rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, "fps", val);
+				rvd_stream_publish_info(st, chn);
 			}
 			return fmt_hal_result(resp, resp_size, ret);
 		}

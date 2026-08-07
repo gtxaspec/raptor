@@ -226,6 +226,12 @@ void rvd_stream_stop(rvd_state_t *st, int idx)
 	(void)idx;
 }
 
+void rvd_stream_publish_info(rvd_state_t *st, int idx)
+{
+	(void)st;
+	(void)idx;
+}
+
 void rvd_osd_set_privacy(rvd_state_t *st, bool enable, int stream)
 {
 	if (stream >= 0 && stream < st->stream_count) {
