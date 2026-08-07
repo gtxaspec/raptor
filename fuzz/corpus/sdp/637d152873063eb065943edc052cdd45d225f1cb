@@ -1,0 +1,7 @@
+v=0
+m=audio60
+11.0
+a=rtpmap:2ÿP4$11.0
+a=rtpmap:94A 0.0.01.011.0
+a=rtpmap:94finge¤p
+a=rtpmap:94X

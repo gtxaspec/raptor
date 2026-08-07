@@ -1,0 +1,23 @@
+v=0
+m=audio60-e-.IN IP4 
+...011.0
+a=rtpma(p:96 ĞÏÏòõÂ›inrrpgei:U4~ 0.0.0.0
+a=rtpmap:96 Hÿÿÿÿÿÿÿÿ
+a=rtpmap:96.0
+a=rtpmap:96 H264=fi.0.0.0
+a=rtpm
+a=rtpmap:96 stpmap:94A 0.0.01.011.0
+a=rtpmap:94A 0.ap:96 H264/90000 0
+.0.0.0
+a=rtpmap:96 H264=firi:ri:U.0
+a=rtpmap:96 H264/9000U4~ 0.0.0.0-a
+a=rtpmap:94A 0.0.0.0.011.0
+a=rtpmap:94A 0.
+a=rtpmap:94.0.0.0
+a=rtpmap:96 H264=fi.0.0.0
+a=rtpmap:96 H264/90000 0
+.0.0.0
+a=rtpmap:96 H264=firk:ri:U.0
+a=rtpmap:96 H264/9000U4~ 0.00.0.0.0.011.0
+a=rtpmap:94A 0.
+a=rtpmap:94 6sdesa=ca||

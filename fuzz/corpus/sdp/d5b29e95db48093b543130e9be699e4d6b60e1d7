@@ -1,0 +1,224 @@
+ 0
+m=video 
+a=rt @2=f 0
+m=video 
+a=rtpmap:96 H264/90
+90
+¨d
+
+
+a=fmtp:96!26sdes:msdes:midc=
+ŸÂ 0
+m=video 
+a=rtpmap:97 H528/90
+90
+¨andid-256 
+a=fmtp:96!V!26sdeH528/90
+90
+4/90
+6 @264/90deo 
+a=rtpmap:96 H264/90
+90
+¨d
+
+
+a=fmtp:96!26sdes:msdes:midc=
+a=rt4/Ç0
+
+
+
+a=f 0
+m=video 
+a=rtpmap:97 H528/90
+9¼¼¼¼¼¼¼¼¼¼¼¼¼¼0
+¨d
+
+
+a=fmtp:96!
+m=video 
+a=rtp9:AA:BB:=--
+a=fingerprint:shaa=candid-256 
+a=fmtp:96!2=fmtp:96!26sdeH528/90
+90
+¨d
+
+
+a=fmtp:96!
+m=video 
+a=rtp9:AA:BB:=6 H264/90
+90
+¨d
+
+
+a=fmtp:96!26sdeH528/90
+90
+¨d
+
+
+a=fmtp:96!
+m=video 
+a=rtpshaa=aufingÿÿÿ0
+a=can
+
+
+a=fmtp:96!26sdeH528/90
+90
+¨d
+
+
+a=fmtp:96!
+m=video 
+a=rtpshaa=candid-256¨d
+
+
+a=fmtp:96!
+m=video 
+a=rtp9:AA:BB:=6 H264/90
+90
+¨d
+
+
+a=extmap:9ÿÿsdes:mfmtp:96!20
+90ìmidc=
+a=rt4/Ç0
+
+
+
+a=f 0
+m=video 
+a=rtpmap:97X H528/90
+90
+¨d
+
+
+a=fmtp:96!
+m=video 
+a=rtp9:AA:BB:=--
+a=fingerprint:shaa=candid-256 
+a=fmtp:96!V!26sdeH528/90
+90
+4/90
+6 @264/90deo 
+a=rtpmap:96 H264/90
+90
+X›õõ
+a=fmtp:96!26sdes:msdes:midc=
+a=rt4/Ç0
+
+
+
+a=f 0
+m=video 
+a=rtpmap:97 H528/90
+90
+¨d
+
+
+a=fmtp:96!
+m=video 
+a=rtp9:AA:BB:=--
+a=fingerprint:shaa=candid-256 
+a=fmtp:96!26sdeH528/90
+90
+¨d
+
+
+a=fmtp:96!
+m=video 
+a=rtp9:AA:BB:=6 H264/90
+90
+¨d
+
+
+a=fmtp:96!26sdeH528/90
+90
+¨d
+
+
+a=fmtp:96!
+m=video 
+a=rtpshaa=can
+
+
+a=fmtp:96!26sdeH528/90
+90
+¨d
+
+
+a=fmtp:96!
+m=video 
+a=rtpshaa=candid-256¨d
+
+
+a=fmtp:96!
+m=video 
+a=rtp9:AA:BB:=6 H264/90
+90
+¨d
+
+
+a=fmtp:96!20
+90ì¨d
+
+
+a=fmtp:96!
+m=video 
+a=rtpmap:96 H2
+
+64/90
+6 ²264/90deo 
+a=rtpmap:96 H264/90
+90
+¨d
+
+
+a=fmtp:96!26sdes:msdes:midc=
+a=rt4/Ç0
+
+
+
+a=f 0
+m=video 
+a=rtpmap:97 H528idfi:4~ 0.02
+a=exgÿÿÿ090
+90
+¨d
+
+
+a=fmtp:96!
+m=video 
+a=r
+s
+rtpm/8:BB:=--
+a=fingerprint:shaa=candid-256 
+a=fmtp:96!26sdeH528/90
+90
+¨d
+
+
+a=fmtp:96!
+m=video 
+a=rtp9:AA:BB:=6 H264/90
+90
+¨d
+
+
+a=fmtp:96!26sdeH528/90
+90
+¨d
+
+
+a=fmtp:96!
+m=video 
+a=rtpshaa=can
+
+
+a=fmtp:96!26sdeH528/90
+90
+¨d
+
+5555555555555555555555555555¨d
+
+
+a=fmtp:96!
+m=

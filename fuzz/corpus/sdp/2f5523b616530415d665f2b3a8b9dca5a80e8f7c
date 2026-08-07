@@ -1,0 +1,5 @@
+
+s
+m=video 0
+a=rtpmap:96 H264/9io 9
+a=rtpmap:96 H264/4f 0.0

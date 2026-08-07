@@ -1,0 +1,16 @@
+
+ot:SAVPD 96
+c
+
+m=video 9TRL./S..011.0
+a=rtpmap:96 s=-
+t=6´Nÿÿÿÿÿÿÿÿ0.011.0
+a=rtpmap:94ÿoÒÏÑÎ.0=r1pt01.[
+a=rtpmap:96 Iice-ufrag:abcýdeD.0
+a=rtpmap:96 s=-
+a=rtpmap:96 s==
+t=6Nÿÿÿ0.011.0
+a=rtpmap:94 0ÒÏÑÎ.0
+a=r1pt00.[
+a=rtpmap:9UDP/TLSÑ­ÑÑ0
+a=rtpmap:96 s=-6/9=ic

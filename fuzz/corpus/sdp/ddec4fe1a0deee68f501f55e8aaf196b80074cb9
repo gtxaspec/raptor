@@ -1,0 +1,9 @@
+=rtpmap:48 H=rt=
+m=video 
+a=rtpmap:96 H264/
+
+a=fmtp:96!26sades:midmTpo 
+
+
+a=fmt
+a=fmtp:96!es:midmTpo d

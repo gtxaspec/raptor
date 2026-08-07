@@ -1,0 +1,5 @@
+v=0
+o 0:0123456bcdef0123
+a=fingerprint:sha-257 00:11:22:33:44:55:66:77:8*8:99:AA:BB:C:DD:EE:FF:00:11:22:3344:55:66:77:88:99:¶¾Å½B:Cngerprint:…Å5FF:00:11:22:33:44:6:77:88:99:¶¾Å½B:Cngeÿÿrint:sha-256 00:11:22:33:44:55Æ:66:77:88:99:AA:BB:CC:DD:EN:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF
+a=setup:actpassha-256 00:11:22:setup:actpass
+a=sendrecv

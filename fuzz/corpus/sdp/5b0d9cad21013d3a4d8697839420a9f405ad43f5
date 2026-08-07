@@ -1,0 +1,53 @@
+v=tpmap:9ov=0
+a=rt=v=1
+.0
+a=rtpmap:9ov=0
+a=r/8rtp=0
+a=rtpmap:96 HÎÉËÎ890æ9
+a=fiEE:F0
+a=rtpmap:96 H26/X
+a=rtpmap:9ov=0
+a=rtpmap:96 H2=0r=at
+=v=1
+.0
+a=rtpmap:9ov=0
+a=rtpmap:96 H264ÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿ/8rtp=0
+a=rtpmap:96 H264/890æ9
+a=fiEE:F0
+a=rtpmap:96 H264/Xv=1.0
+a=rtpmap:9ov=0
+a=r/8rtp=0
+a=rtpmap:96 H264/890æ9
+a=fiEE:F0
+a=rtpmap:96 H26/X
+a=rtpmap:9ov=0
+a=rtpmap:96 H2=0r=at
+=v=1
+.0
+a=rtpmap:9ov=0
+a=rtpmap:96 H264ÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿ/8rtp=0
+a=rtpmap:96 H264/890æ9
+
+a=rtpmap:96 H264/Xv=1
+.0
+a=rtpmap:9ov=0
+a=rtpmap:96 H26:96 H264/X~=1
+.0
+a=rtpmap:9ov=0
+a=rtpmap:9iEE:F0
+a=rtpmap:96 H264/Xv=1
+.0
+a=rtpmap:9ov=0
+a=rtpmap:96 H26:96 H90æ9
+a=
+.0
+a=rtpmap:9ov=0
+a=rtpmap:96 H26:96 H264/X~=1
+.0
+a=rtpmap:9ov=0
+a=rtpmap:9iEE:F0
+a=rtpmap:96 H264/Xv=1
+.0
+a=rtpmap:9ov=0
+a=rtpmap:96 H26:96 H90æ9
+a=fiEE:F F

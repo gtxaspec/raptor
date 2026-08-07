@@ -1,0 +1,5 @@
+þ||è
+a=rtpmap:288 opSAVPF 111
+a=rtpmap:288F 111
+a=rtpmap:288 opuP/SAV€F 111
+a=rtpmap:288 s/480 1/2

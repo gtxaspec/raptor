@@ -1,0 +1,37 @@
+ot
+A:VSPD 96
+c
+t=0 0
+m=video 9 UDP/TLS/R...011.0
+a=rtpmap:96 s=-
+=video 9 UDP/TLS/R...011.0
+a=rtpmap:96 s=-
+Nÿÿÿÿÿÿÿÿ0.011.0
+c
+t=0 0
+m=video 9 UDP/TLS/R...011.0
+a=rtpmap:96 s=-
+=video 9 UDP/TLS/R...011.0
+a=rtpmap:96 s=-
+t=6Nÿÿÿÿÿÿÿÿ0.011.0
+a=rtpmap:94ÿoÒÏÑÎ.0
+a=r1pt01.[
+a=rtpmap:96 Iice-ufrag:at=6Nÿÿÿÿÿÿÿÿ0.011.0
+a=rtpmap:9tpmap:96 Iice-ufrag:abcýdeo 9 UD.0
+a=rtpmap:96 s=-
+a=rtpmap:96 H26
+t=6Nÿÿÿÿ0.011.0
+a=rtpmap:94 0ÒÏÑÎ.0
+a=r1pt01.[
+a=rtpmap:96 Iice-ufrag:abcýdeo 9 Uvideo 9 UDP/TLS/R..
+a=rtpmap:95ÿoÒ)ÑÎ.0
+a=r1pt01.[
+a=rtpmap:96 It:SAVPD 96
+c
+t=0m=video 9 UDP0TLS/R...011.0
+a=rtpmap:96 s=-
+=vid tpmap:96 s=-
+a=rtpmap:96 s=-
+t=6Nÿÿÿÿ0.011.0
+a=rtpmap:94 0ÒÏÑÎ.0
+a=r1pt01.[ap:96 s=-6/9=ic

@@ -1,0 +1,8 @@
+P2 
+t=0 0
+m=video AVPF 96
+c=,.0
+a=rtpmap:92 H264/90Ð.
+a=rtpmap:96 H264/9000ÿ1 0.0.0.ÿÿÿÿ0
+a=rtpmap:96 H264/m=aud(9000.0
+a=rtpmap:96 H264/bc SAVPF.~0ecv

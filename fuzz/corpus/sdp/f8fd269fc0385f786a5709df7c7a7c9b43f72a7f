@@ -1,0 +1,7 @@
+
+s=-
+t
+t=0 0
+m=audio 9 UDP/TLS/RTP/SA 113
+a=rtpmap:111 opus/23ÿ/2
+a=recvonly

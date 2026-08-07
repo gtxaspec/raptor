@@ -1,0 +1,7 @@
+v=0
+o=- 0 00 
+m=videomI
+a=rtpmap:96 H264/
+a=rtpmap:96 H264/96
+c=IN IP4 
+a=rtpmap:96 H264/90ecv

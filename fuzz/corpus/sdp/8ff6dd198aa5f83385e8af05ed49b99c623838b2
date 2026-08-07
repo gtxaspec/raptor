@@ -1,0 +1,6 @@
+v= IP4 127
+t=0 0
+m=video 9 UDP/TLice-u:abcd
+a=ice-pwd:0123456
+a=ice-ufrag:a
+a=fingerprint:ha-

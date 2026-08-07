@@ -1,0 +1,10 @@
+v==5 0
+m=video 90000
+a=ice-ufrag:abcv
+m=video 90000
+a=ice-ufrag:s=-]
+t=0 0
+m=video :0123.0.01
+s=
+m=video 90p00
+a=ice-ufrag:abcdÿÿ

@@ -1,0 +1,18 @@
+v=0
+o=- 0 0 IN IfingerpriP2 1×7.0.0.1
+s=-
+t=0 0
+m=video 0mmmmmmmmmmm SAVPF 96
+c=0.0
+a=rtpmap:96 H264/90ÐÏÏU4~ 0.0.0.0
+a=rtpmap:96 H264/90000 0.0.0.0
+a=rtpmap:.0
+a=rtpmap:96 H264/90ÐÏÏòõžÂ›ingerpri:U4~ 0.0.0.0
+a=rtpmap:96 H264/90000 0.0.0.0
+a=rtpmap:9 H264/90000
+a=firi:U.0
+a=rtpmap:96 H264/90~ 0.0.0.0
+a=rtpmap:96 H264/90a=rv96 H264/90000
+a=firi:U.0
+a=rtpmap:96 H264/9000U$~ 0.0.0.0
+a=rtpmap:96 H264/90a=rv

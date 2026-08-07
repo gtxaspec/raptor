@@ -1,0 +1,10 @@
+ 0
+m=video 
+a=rtpmap:17 H264/B0
+
+
+a=fmtp:96n
+
+a=fmtp:96mid+n
+
+a=fmtp:9-tp

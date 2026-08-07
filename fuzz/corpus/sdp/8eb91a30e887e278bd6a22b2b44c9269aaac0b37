@@ -1,0 +1,17 @@
+
+ot:SAVPD 96
+c
+t=0 0
+m=video 9 UDP/TLS/R...011.0
+a=rtpmap:96 s=-
+t=6Nÿÿÿÿÿÿÿÿ0.011.0
+a=rtpmap:94ÿoÒÏÑÎ.0
+a=r1pt01.[
+a=rtpmap:96 Iice-ufrag:abcýdeo 9 UD.0
+a=rtpmap:96 s=-
+a=rtpmap:96 s=-
+t=6Nÿÿÿÿ0.011.0
+a=rtpmap:94 0ÒÏÑÎ.0
+a=r1pt01.[
+a=rtpmap:9UDP/TLS/R...011.0
+a=rtpmap:96 s=-6/9=ic
