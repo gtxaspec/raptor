@@ -157,6 +157,11 @@ port = 18443
 username =
 password =
 
+[srt]
+enabled = true
+port = 19000
+audio = false
+
 [osd]
 enabled = false
 
@@ -239,6 +244,7 @@ start_daemon() {
 start_daemon rvd "$OUT/rvd" -c "$CONFIG" -f -d
 start_daemon rhd "$OUT/rhd" -c "$CONFIG" -f -d
 start_daemon rsd "$OUT/rsd" -c "$CONFIG" -f -d
+start_daemon rsr "$OUT/rsr" -c "$CONFIG" -f -d
 
 # Optional daemons (may exit immediately if disabled in config — that's OK)
 start_daemon rod "$OUT/rod" -c "$CONFIG" -f -d
@@ -656,6 +662,67 @@ if cfg_log_since | grep -q "running config saved"; then
 else
     fail "dirty config save logs the write" \
         "expected 'running config saved' in rvd log"
+fi
+
+echo ""
+echo "=== SRT PSI cadence ==="
+
+# PAT/PMT repetition measured in PCR time from a RAW capture
+# (srt-live-transmit; ffmpeg would remux and regenerate PSI at its own
+# cadence). PSI can only ride a frame, so a fixed emission threshold
+# quantizes to threshold plus one frame period: at this config's 25fps
+# the old fixed 450ms threshold produced 12-frame (480ms) intervals on
+# the wire, grazing the 500ms DVB bound under device load. The
+# predictive budget emits a frame early (11 frames = 440ms), holding
+# the bound with margin at any frame rate. 460ms splits the two.
+if command -v srt-live-transmit > /dev/null 2>&1; then
+    timeout -k 3 25 srt-live-transmit "srt://127.0.0.1:19000" file://con \
+        > "$LOG_DIR/psi_capture.ts" 2>/dev/null || true
+    PSI_RC=0
+    PSI_RES=$(python3 - "$LOG_DIR/psi_capture.ts" <<'PSI_EOF'
+import bisect, sys
+data = open(sys.argv[1], 'rb').read()
+pcrs = []  # (byte offset, PCR seconds)
+pats = []  # byte offsets of PAT section starts
+for off in range(0, len(data) - 187, 188):
+    p = data[off:off + 188]
+    if p[0] != 0x47:
+        continue
+    pid = ((p[1] & 0x1f) << 8) | p[2]
+    afc = (p[3] >> 4) & 0x3
+    if afc in (2, 3) and p[4] >= 7 and (p[5] & 0x10):
+        base = (p[6] << 25) | (p[7] << 17) | (p[8] << 9) | (p[9] << 1) | (p[10] >> 7)
+        ext = ((p[10] & 1) << 8) | p[11]
+        pcrs.append((off, (base * 300 + ext) / 27e6))
+    if pid == 0 and (p[1] & 0x40):
+        pats.append(off)
+if len(pcrs) < 2 or len(pats) < 10:
+    print(f"FAIL insufficient data: {len(pcrs)} PCRs, {len(pats)} PATs")
+    sys.exit(1)
+offs = [o for o, _ in pcrs]
+def at(off):
+    i = bisect.bisect_left(offs, off)
+    if i == 0:
+        return pcrs[0][1]
+    if i >= len(pcrs):
+        return pcrs[-1][1]
+    (o1, t1), (o2, t2) = pcrs[i - 1], pcrs[i]
+    return t1 + (t2 - t1) * (off - o1) / (o2 - o1) if o2 > o1 else t1
+times = [at(o) for o in pats]
+gaps = [(b - a) * 1000 for a, b in zip(times, times[1:])]
+mx = max(gaps)
+tag = "PASS" if mx <= 460 else "FAIL"
+print(f"{tag} {len(pats)} PATs over {times[-1] - times[0]:.1f}s, max interval {mx:.1f}ms")
+sys.exit(0 if mx <= 460 else 1)
+PSI_EOF
+    ) || PSI_RC=$?
+    if [ "$PSI_RC" -eq 0 ]; then
+        pass "SRT PSI cadence with margin (${PSI_RES#PASS })"
+    else
+        fail "SRT PSI cadence with margin" "${PSI_RES#FAIL }"
+    fi
+else
+    skip "SRT PSI cadence" "srt-live-transmit not installed"
 fi
 
 echo ""

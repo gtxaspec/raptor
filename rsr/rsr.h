@@ -25,6 +25,7 @@ typedef struct {
 	const char *name;
 	uint64_t read_seq;
 	uint64_t last_write_seq;
+	uint64_t prev_frame_us; /* arrival of the previous frame, for the PSI gap predictor */
 	int idle_count;
 	uint32_t codec;
 	uint32_t width;

@@ -380,6 +380,9 @@ static void serve_loop(rsr_state_t *st)
 			s->idle_count = 0;
 			got_frame = true;
 			uint64_t pts = meta.timestamp * 9 / 100;
+			uint64_t now_us = rss_timestamp_us();
+			uint64_t frame_gap_us = s->prev_frame_us ? now_us - s->prev_frame_us : 0;
+			s->prev_frame_us = now_us;
 
 			RSS_TRACE("frame: %s len=%u key=%d pts=%" PRIu64, s->name, length,
 				  meta.is_key, pts);
@@ -403,12 +406,16 @@ static void serve_loop(rsr_state_t *st)
 
 				uint64_t vpts = c->video_pts_set ? pts - c->video_pts_base : pts;
 
-				/* PAT/PMT before keyframes, and at least every 500ms
-				 * regardless (DVB TR 101 290 table cadence): a joiner
-				 * otherwise waits a full GOP just to learn the program
-				 * layout. */
-				uint64_t now_us = rss_timestamp_us();
-				if (meta.is_key || now_us - c->last_pat_us >= 450000) {
+				/* PAT/PMT before keyframes, and frequently enough that
+				 * a joiner never waits long for the program layout
+				 * (DVB TR 101 290 wants tables inside 500ms). PSI can
+				 * only ride a frame, so a fixed threshold quantizes to
+				 * threshold plus one frame period and grazes that
+				 * bound under load; emit when waiting for the next
+				 * frame -- predicted by the gap just observed -- would
+				 * pass the 450ms budget instead. */
+				if (meta.is_key ||
+				    now_us - c->last_pat_us + frame_gap_us >= 450000) {
 					size_t pat_len = rss_ts_write_pat_pmt(&c->ts, st->ts_buf,
 									      st->ts_buf_size);
 					if (pat_len > 0) {
