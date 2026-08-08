@@ -621,6 +621,43 @@ echo "=== Config round-trip ==="
 
 check_contains "config save" "ok" "$OUT/raptorctl" config save
 
+# ── Truthful config-save logging ──
+# A daemon that wrote its runtime changes logs "running config saved";
+# one with nothing dirty must say so and leave the file alone. The
+# save above cleared rvd's dirty state, so the next save is a no-op.
+CFG_MARK=$(wc -l < "$LOG_DIR/rvd.log" 2>/dev/null || echo 0)
+cfg_log_since() { tail -n "+$((CFG_MARK + 1))" "$LOG_DIR/rvd.log" 2>/dev/null || true; }
+
+"$OUT/raptorctl" config save > /dev/null 2>&1
+sleep 1
+if cfg_log_since | grep -q "no config changes to save"; then
+    pass "no-op config save logs untouched"
+else
+    fail "no-op config save logs untouched" \
+        "expected 'no config changes to save' in rvd log"
+fi
+if cfg_log_since | grep -q "running config saved"; then
+    fail "no-op config save does not claim a write" \
+        "'running config saved' logged with nothing dirty"
+else
+    pass "no-op config save does not claim a write"
+fi
+
+# Dirty rvd's config without changing effective state: re-set the gop
+# to the value it already has (set marks it dirty regardless)
+GOP_NOW=$("$OUT/raptorctl" rvd enc-get 0 gop 2>/dev/null | grep -o '[0-9][0-9]*' | tail -1)
+[ -n "$GOP_NOW" ] || GOP_NOW=50
+"$OUT/raptorctl" rvd set-gop 0 "$GOP_NOW" > /dev/null 2>&1
+CFG_MARK=$(wc -l < "$LOG_DIR/rvd.log" 2>/dev/null || echo 0)
+"$OUT/raptorctl" config save > /dev/null 2>&1
+sleep 1
+if cfg_log_since | grep -q "running config saved"; then
+    pass "dirty config save logs the write"
+else
+    fail "dirty config save logs the write" \
+        "expected 'running config saved' in rvd log"
+fi
+
 echo ""
 echo "=== SEI timecode + signed recording ==="
 
