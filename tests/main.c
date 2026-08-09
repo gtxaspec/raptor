@@ -17,6 +17,7 @@ extern SUITE(rsp_state_suite);
 extern SUITE(ctrl_suite);
 extern SUITE(sign_suite);
 extern SUITE(storage_suite);
+extern SUITE(resync_suite);
 
 GREATEST_MAIN_DEFS();
 
@@ -40,5 +41,6 @@ int main(int argc, char **argv)
 	RUN_SUITE(ctrl_suite);
 	RUN_SUITE(sign_suite);
 	RUN_SUITE(storage_suite);
+	RUN_SUITE(resync_suite);
 	GREATEST_MAIN_END();
 }

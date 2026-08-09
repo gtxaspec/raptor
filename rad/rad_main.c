@@ -27,6 +27,7 @@
 #include <rss_common.h>
 
 #include "rad.h"
+#include "rad_resync.h"
 
 /*
  * Synthetic audio clock slew (AI loop). The clock advances by sample
@@ -51,69 +52,6 @@
 #define RAD_SYNTH_RESYNC_AHEAD_US  1000000
 #define RAD_SYNTH_NUDGE_BAND_US	   20000
 #define RAD_SYNTH_NUDGE_US	   1000
-
-/*
- * Resync reporting.
- *
- * One resync is worth a line of its own: it names audio the SDK lost. But a
- * sustained loss episode fires one every time the error climbs back over the
- * threshold, and hundreds of identical warnings evict everything else from a
- * 64 KB syslog ring -- destroying the very context needed to explain them. So
- * the first is logged in full, the rest are counted, and the episode is
- * summarised when it ends or once a minute while it continues.
- *
- * The summary is the useful diagnostic anyway: a count and a total say how
- * much audio went missing and how fast, which a stream of identical
- * threshold-sized corrections does not.
- */
-#define RAD_RESYNC_QUIET_US   5000000  /* no resync for this long ends an episode */
-#define RAD_RESYNC_SUMMARY_US 60000000 /* a longer episode reports in as it runs */
-
-typedef struct {
-	int64_t open_us; /* wall time the window opened; 0 when none is open */
-	int64_t last_us; /* wall time of the most recent resync */
-	int64_t total_us;
-	unsigned int count;
-} rad_resync_log_t;
-
-static void rad_resync_summarise(rad_resync_log_t *r, int64_t now_us)
-{
-	if (r->count > 1)
-		RSS_WARN("audio clock resynced %u times in %llds, %+lldms corrected in total",
-			 r->count, (long long)((r->last_us - r->open_us) / 1000000),
-			 (long long)(r->total_us / 1000));
-
-	r->count = 0;
-	r->total_us = 0;
-	r->open_us = now_us;
-}
-
-static void rad_resync_note(rad_resync_log_t *r, int64_t now_us, int64_t corr_us)
-{
-	if (!r->open_us) {
-		RSS_WARN("audio clock resync %+lldms (lost samples or stall)",
-			 (long long)(corr_us / 1000));
-		r->open_us = now_us;
-	}
-
-	r->last_us = now_us;
-	r->total_us += corr_us;
-	r->count++;
-}
-
-/* Called every chunk, so an episode that stops still gets its summary. */
-static void rad_resync_tick(rad_resync_log_t *r, int64_t now_us)
-{
-	if (!r->open_us)
-		return;
-
-	if (now_us - r->last_us >= RAD_RESYNC_QUIET_US) {
-		rad_resync_summarise(r, now_us);
-		r->open_us = 0;
-	} else if (now_us - r->open_us >= RAD_RESYNC_SUMMARY_US) {
-		rad_resync_summarise(r, now_us);
-	}
-}
 
 /* ── AO thread context (needed by ctrl handler for ao-enable/ao-disable) ── */
 
@@ -1341,7 +1279,7 @@ int main(int argc, char **argv)
 
 	int64_t synth_audio_ts = rss_timestamp_us();
 	int64_t last_read_us = 0; /* pacing detector for the clock slew */
-	rad_resync_log_t resync_log = { 0 };
+	rad_resync_log_t resync_log = {0};
 
 	ctrl_ctx = (rad_ctrl_ctx_t){
 		.cfg = dctx.cfg,

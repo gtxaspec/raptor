@@ -423,10 +423,10 @@ fi
 FAAC_CFLAGS="-I$FAAC_DIR/include"
 FAAC_LIBS="$FAAC_BUILD/libfaac.a"
 
-for f in rad_main.c rad_codec.c rad_codec_g711.c rad_codec_l16.c rad_codec_aac.c rad_codec_opus.c; do
+for f in rad_main.c rad_resync.c rad_codec.c rad_codec_g711.c rad_codec_l16.c rad_codec_aac.c rad_codec_opus.c; do
   $CC $CFLAGS $HAL_CFLAGS $FAAC_CFLAGS -c "$RAPTOR_DIR/rad/$f" -o "$OUT/${f%.c}.o"
 done
-$CC -o "$OUT/rad" "$OUT"/rad_main.o "$OUT"/rad_codec.o "$OUT"/rad_codec_g711.o \
+$CC -o "$OUT/rad" "$OUT"/rad_main.o "$OUT"/rad_resync.o "$OUT"/rad_codec.o "$OUT"/rad_codec_g711.o \
     "$OUT"/rad_codec_l16.o "$OUT"/rad_codec_aac.o "$OUT"/rad_codec_opus.o \
     $LIBS_HAL $FAAC_LIBS -lopus $LDFLAGS
 echo "  -> rad"
