@@ -54,6 +54,10 @@ static struct {
 	/* ISP */
 	int set_brightness;
 	int brightness_stored;
+
+	/* Ring header republishes, and the channel of the last one */
+	int publish_count;
+	int publish_chn;
 } rec;
 
 static void rec_reset(void)
@@ -226,10 +230,15 @@ void rvd_stream_stop(rvd_state_t *st, int idx)
 	(void)idx;
 }
 
+/*
+ * Recorded, not discarded: republishing the ring header is the whole point
+ * of the set-fps path, and nothing else in the daemon's reach observes it.
+ */
 void rvd_stream_publish_info(rvd_state_t *st, int idx)
 {
 	(void)st;
-	(void)idx;
+	rec.publish_count++;
+	rec.publish_chn = idx;
 }
 
 void rvd_osd_set_privacy(rvd_state_t *st, bool enable, int stream)
@@ -423,6 +432,57 @@ TEST set_fps_updates_state_on_success(void)
 	call("{\"cmd\":\"set-fps\",\"channel\":0,\"value\":30}");
 	ASSERT_EQ(30, (int)st.streams[0].enc_cfg.fps_num);
 	ASSERT_EQ(30, rss_config_get_int(st.cfg, "stream0", "fps", 0));
+	/* The HAL was asked for a whole number of frames per second... */
+	ASSERT_EQ_FMT(30u, rec.set_fps_num, "%u");
+	ASSERT_EQ_FMT(1u, rec.set_fps_den, "%u");
+	/* ...so the cached denominator has to say so too, or state and
+	 * hardware disagree the moment anything reads the pair back. */
+	ASSERT_EQ(1, (int)st.streams[0].enc_cfg.fps_den);
+	/* And the ring header carries the new rate to rsd's SDP. */
+	ASSERT_EQ_FMT(1, rec.publish_count, "%d");
+	ASSERT_EQ_FMT(0, rec.publish_chn, "%d");
+	teardown();
+	PASS();
+}
+
+/* A stale den is the defect: 5/2 fps then set-fps 30 must not leave 30/2. */
+TEST set_fps_resets_a_fractional_den(void)
+{
+	setup();
+	st.streams[0].enc_cfg.fps_num = 5;
+	st.streams[0].enc_cfg.fps_den = 2;
+	rec.return_val = 0;
+	call("{\"cmd\":\"set-fps\",\"channel\":0,\"value\":30}");
+	ASSERT_EQ(30, (int)st.streams[0].enc_cfg.fps_num);
+	ASSERT_EQ(1, (int)st.streams[0].enc_cfg.fps_den);
+	teardown();
+	PASS();
+}
+
+/* The republish has to name the channel that changed, not always the first. */
+TEST set_fps_publishes_the_channel_it_changed(void)
+{
+	setup();
+	rec.return_val = 0;
+	call("{\"cmd\":\"set-fps\",\"channel\":1,\"value\":20}");
+	ASSERT_EQ(20, (int)st.streams[1].enc_cfg.fps_num);
+	ASSERT_EQ_FMT(1, rec.publish_count, "%d");
+	ASSERT_EQ_FMT(1, rec.publish_chn, "%d");
+	/* stream0 was not touched */
+	ASSERT_EQ(25, (int)st.streams[0].enc_cfg.fps_num);
+	teardown();
+	PASS();
+}
+
+/* A refused rate must leave the header alone -- publishing a rate the
+ * hardware rejected would advertise a lie to every new client. */
+TEST set_fps_no_publish_on_hal_failure(void)
+{
+	setup();
+	rec.return_val = -1;
+	call("{\"cmd\":\"set-fps\",\"channel\":0,\"value\":60}");
+	ASSERT_EQ(25, (int)st.streams[0].enc_cfg.fps_num);
+	ASSERT_EQ_FMT(0, rec.publish_count, "%d");
 	teardown();
 	PASS();
 }
@@ -928,6 +988,9 @@ SUITE(ctrl_suite)
 	RUN_TEST(set_bitrate_no_state_change_on_hal_failure);
 	RUN_TEST(set_gop_no_state_change_on_hal_failure);
 	RUN_TEST(set_fps_updates_state_on_success);
+	RUN_TEST(set_fps_resets_a_fractional_den);
+	RUN_TEST(set_fps_publishes_the_channel_it_changed);
+	RUN_TEST(set_fps_no_publish_on_hal_failure);
 	RUN_TEST(set_qp_bounds_atomic_update);
 	RUN_TEST(set_qp_bounds_neither_updated_on_failure);
 	RUN_TEST(set_rc_mode_stores_enum_not_string);

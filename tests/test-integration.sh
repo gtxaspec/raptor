@@ -416,6 +416,35 @@ else
     skip "H.265 SDP" "DESCRIBE failed or codec mismatch"
 fi
 
+# ── A rate change reaches the next client's SDP ──
+# rvd republishes the ring header on set-fps, but rsd answers DESCRIBE from
+# a cache it filled when it opened the ring, and an in-place republish wakes
+# nobody. Without a refresh in the reader every client after the change is
+# still told the old rate -- which the ring header cannot show, so this goes
+# through DESCRIBE.
+sdp_framerate() {
+    rtsp_describe 15554 stream0 | sed -n 's/.*a=framerate:\([0-9][0-9]*\).*/\1/p' | head -1
+}
+
+FPS_SDP_BEFORE=$(sdp_framerate)
+"$OUT/raptorctl" rvd set-fps 0 12 > /dev/null 2>&1
+sleep 2
+FPS_SDP_AFTER=$(sdp_framerate)
+if [ "$FPS_SDP_AFTER" = "12" ] && [ "$FPS_SDP_BEFORE" != "12" ]; then
+    pass "set-fps moves a=framerate for the next client ($FPS_SDP_BEFORE -> $FPS_SDP_AFTER)"
+elif [ -z "$FPS_SDP_BEFORE" ]; then
+    skip "set-fps moves a=framerate" "no a=framerate in the SDP (DESCRIBE failed?)"
+else
+    fail "set-fps moves a=framerate for the next client" \
+        "before=$FPS_SDP_BEFORE after=$FPS_SDP_AFTER, expected 12"
+fi
+
+# Hand the following legs back the rate they had
+if [ -n "$FPS_SDP_BEFORE" ]; then
+    "$OUT/raptorctl" rvd set-fps 0 "$FPS_SDP_BEFORE" > /dev/null 2>&1
+    sleep 1
+fi
+
 # ffprobe (if available — best RTSP test tool)
 if command -v ffprobe > /dev/null 2>&1; then
     # ffprobe with timeout — exit 124 (timeout) means it connected and received data

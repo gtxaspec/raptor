@@ -636,6 +636,22 @@ void *rsd_video_reader_thread(void *arg)
 				       : 30;
 		uint32_t frame_dur = 90000 / fps;
 
+		/*
+		 * The session thread builds a=framerate from the cache below, and
+		 * a rate change reaches the header in place -- the ring is not
+		 * reopened and nobody is woken -- so the reconnect path above
+		 * never sees it. Refresh it here, where the header is already in
+		 * hand for the pacing above. Rate only: a codec or geometry
+		 * change has to reset clients, which stays the reconnect path's
+		 * job.
+		 */
+		if (rhdr->fps_num != rctx->last_fps_num || rhdr->fps_den != rctx->last_fps_den) {
+			RSS_INFO("ring[%d]: rate now %u/%u fps", rctx->idx, rhdr->fps_num,
+				 rhdr->fps_den);
+			rctx->last_fps_num = rhdr->fps_num;
+			rctx->last_fps_den = rhdr->fps_den;
+		}
+
 		for (int burst = 0; burst < 8; burst++) {
 			uint32_t length;
 			rss_ring_slot_t meta;

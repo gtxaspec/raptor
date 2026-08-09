@@ -86,9 +86,9 @@ void rvd_stream_publish_info(rvd_state_t *st, int idx)
 				break;
 			}
 		}
-		rss_ring_set_stream_info(s->ring, RVD_JPEG_STREAM_ID_BASE + jpeg_idx, RSS_CODEC_JPEG,
-					 s->enc_cfg.width, s->enc_cfg.height, s->enc_cfg.fps_num,
-					 s->enc_cfg.fps_den, 0, 0);
+		rss_ring_set_stream_info(s->ring, RVD_JPEG_STREAM_ID_BASE + jpeg_idx,
+					 RSS_CODEC_JPEG, s->enc_cfg.width, s->enc_cfg.height,
+					 s->enc_cfg.fps_num, s->enc_cfg.fps_den, 0, 0);
 	} else {
 		rss_ring_set_stream_info(s->ring, idx, s->enc_cfg.codec, s->enc_cfg.width,
 					 s->enc_cfg.height, s->enc_cfg.fps_num, s->enc_cfg.fps_den,
