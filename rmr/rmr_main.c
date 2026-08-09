@@ -17,6 +17,7 @@
 #include <inttypes.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <time.h>
 #include <sys/select.h>
 
 #include "rmr.h"
@@ -87,9 +88,39 @@ static int clip_write(const void *buf, uint32_t len, void *ctx)
 	return 0;
 }
 
+static int tl_write(const void *buf, uint32_t len, void *ctx)
+{
+	rmr_state_t *st = ctx;
+	if (len == 0)
+		return 0;
+
+	int fd = st->tl_fd;
+	if (fd < 0)
+		return -1;
+
+	const uint8_t *p = buf;
+	uint32_t remaining = len;
+	while (remaining > 0) {
+		ssize_t n = write(fd, p, remaining);
+		if (n > 0) {
+			p += n;
+			remaining -= (uint32_t)n;
+			st->tl_bytes += (uint64_t)n;
+		} else if (n < 0) {
+			if (errno == EINTR)
+				continue;
+			RSS_ERROR("timelapse write error: %s", strerror(errno));
+			return -1;
+		}
+	}
+	if (st->sign_enabled)
+		rmr_sign_stream_update(&st->sign_tl, buf, len);
+	return 0;
+}
+
 /* ── Segment management ── */
 
-static void setup_mux_tracks(rmr_mux_t *mux, rmr_state_t *st)
+static void setup_mux_video_track(rmr_mux_t *mux, rmr_state_t *st)
 {
 	rmr_video_params_t vp = {
 		.codec = (st->video_codec == 2)	  ? RMR_CODEC_MJPEG
@@ -106,6 +137,11 @@ static void setup_mux_tracks(rmr_mux_t *mux, rmr_state_t *st)
 				  st->params.pps_len,
 				  st->params.vps_len > 0 ? st->params.vps : NULL,
 				  st->params.vps_len);
+}
+
+static void setup_mux_tracks(rmr_mux_t *mux, rmr_state_t *st)
+{
+	setup_mux_video_track(mux, st);
 
 	if (st->audio_ring) {
 		rmr_audio_params_t ap = {
@@ -235,6 +271,107 @@ static void close_clip(rmr_state_t *st)
 			  st->clip_bytes);
 		st->clip_fd = -1;
 	}
+}
+
+/* ── Timelapse file management ── */
+
+/* Local calendar date as yyyymmdd; drives daily rotation, so files
+ * split at the user's midnight, matching the storage date dirs. */
+static int32_t rmr_local_day(void)
+{
+	time_t now = time(NULL);
+	struct tm tm;
+	localtime_r(&now, &tm);
+	return (int32_t)((tm.tm_year + 1900) * 10000 + (tm.tm_mon + 1) * 100 + tm.tm_mday);
+}
+
+static void close_timelapse(rmr_state_t *st)
+{
+	if (st->tl_mux) {
+		rmr_mux_finalize(st->tl_mux);
+		if (st->sign_enabled)
+			rmr_sign_stream_emit(&st->sign_tl, true, tl_write, st);
+		rmr_mux_destroy(st->tl_mux);
+		st->tl_mux = NULL;
+	}
+	if (st->tl_fd >= 0) {
+		rmr_storage_close_segment(st->tl_fd);
+		RSS_INFO("timelapse file closed: %s (%u frames, %" PRIu64 " bytes)", st->tl_path,
+			 st->tl.frames_in_file, st->tl_bytes);
+		st->tl_fd = -1;
+	}
+	st->tl.file_day = 0;
+}
+
+static int open_timelapse(rmr_state_t *st, int32_t day)
+{
+	if (!st->tl_storage)
+		return -1;
+
+	int fd = rmr_storage_open_segment(st->tl_storage, st->tl_path, sizeof(st->tl_path));
+	if (fd < 0) {
+		/* One warn per minute: storage failures repeat every tick
+		 * and a timelapse must never own the syslog ring. */
+		int64_t now = rss_timestamp_us();
+		if (now - st->tl_last_err_us >= 60000000) {
+			RSS_WARN("timelapse: cannot open file under %s", st->tl_path);
+			st->tl_last_err_us = now;
+		}
+		return -1;
+	}
+
+	st->tl_mux = rmr_mux_create(tl_write, st);
+	if (!st->tl_mux) {
+		rmr_storage_close_segment(fd);
+		return -1;
+	}
+
+	st->tl_fd = fd;
+	st->tl_bytes = 0;
+
+	setup_mux_video_track(st->tl_mux, st);
+	if (st->sign_enabled)
+		rmr_sign_stream_begin(&st->sign_tl, &st->sign_key);
+	rmr_mux_start(st->tl_mux);
+	if (st->sign_enabled)
+		rmr_sign_stream_emit(&st->sign_tl, false, tl_write, st);
+
+	rmr_tl_file_opened(&st->tl, day);
+	RSS_INFO("timelapse file: %s (1 frame per %llds, %u fps playback)", st->tl_path,
+		 (long long)(st->tl.interval_us / 1000000), st->tl.playback_fps);
+	return 0;
+}
+
+/* Write one claimed sample; rotates the file when the sampler says so. */
+static void timelapse_write_sample(rmr_state_t *st, const uint8_t *data, uint32_t len)
+{
+	int32_t day = rmr_local_day();
+
+	if (rmr_tl_needs_rotate(&st->tl, day)) {
+		close_timelapse(st);
+		if (open_timelapse(st, day) < 0)
+			return;
+	}
+	if (!st->tl_mux)
+		return;
+
+	/* Every sample is a keyframe: fragment-per-sample keeps the file
+	 * valid to the last written frame and chains a signature box per
+	 * sample, mirroring the per-GOP pattern of the other writers. */
+	rmr_mux_flush_fragment(st->tl_mux);
+	if (st->sign_enabled)
+		rmr_sign_stream_emit(&st->sign_tl, false, tl_write, st);
+
+	int64_t dts = rmr_tl_sample_dts90(&st->tl);
+	rmr_video_sample_t vs = {
+		.data = data,
+		.size = len,
+		.dts = dts,
+		.pts = dts,
+		.is_key = true,
+	};
+	if (rmr_mux_write_video(st->tl_mux, &vs) == 0)
+		st->tl_frames_total++;
 }
 
 /* Write a video frame to the clip mux with independent DTS. */
@@ -468,6 +605,7 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		cJSON_AddNumberToObject(r, "bytes", (double)st->bytes_written);
 		cJSON_AddBoolToObject(r, "sign", st->sign_enabled);
 		cJSON_AddBoolToObject(r, "sei_timecode", st->sei_timecode);
+		cJSON_AddBoolToObject(r, "timelapse", st->tl_enabled);
 		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 	}
 
@@ -491,6 +629,67 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			snprintf(hex + i * 2, 3, "%02x", st->sign_key.public[i]);
 		cJSON *r = cJSON_CreateObject();
 		cJSON_AddStringToObject(r, "pubkey", hex);
+		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
+	}
+
+	if (strcmp(cmd, "timelapse-enable") == 0) {
+		st->tl_enabled = true;
+		rss_config_set_bool(st->cfg, "timelapse", "enabled", true);
+		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+	}
+
+	if (strcmp(cmd, "timelapse-disable") == 0) {
+		st->tl_enabled = false;
+		rss_config_set_bool(st->cfg, "timelapse", "enabled", false);
+		if (st->tl_mux)
+			close_timelapse(st);
+		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+	}
+
+	if (strcmp(cmd, "timelapse-snap") == 0) {
+		if (!st->tl_enabled)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "timelapse disabled");
+		rmr_tl_force(&st->tl);
+		if (st->video_ring && st->video_codec != 2)
+			rss_ring_request_idr(st->video_ring);
+		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+	}
+
+	if (strcmp(cmd, "timelapse-set") == 0) {
+		char key[32];
+		int val;
+		if (rss_json_get_str(cmd_json, "key", key, sizeof(key)) != 0 ||
+		    rss_json_get_int(cmd_json, "value", &val) != 0)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need key and value");
+		if (strcmp(key, "interval") == 0) {
+			rmr_tl_set_interval(&st->tl, val);
+			rss_config_set_int(st->cfg, "timelapse", "interval",
+					   (int)(st->tl.interval_us / 1000000));
+		} else if (strcmp(key, "playback_fps") == 0) {
+			/* The DTS timeline cannot bend mid-track: a rate
+			 * change rotates the file. */
+			if (rmr_tl_set_playback_fps(&st->tl, val) && st->tl_mux)
+				close_timelapse(st);
+			rss_config_set_int(st->cfg, "timelapse", "playback_fps",
+					   (int)st->tl.playback_fps);
+		} else {
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "unknown key");
+		}
+		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+	}
+
+	if (strcmp(cmd, "timelapse-status") == 0) {
+		cJSON *r = cJSON_CreateObject();
+		if (!r)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "alloc");
+		cJSON_AddBoolToObject(r, "enabled", st->tl_enabled);
+		cJSON_AddNumberToObject(r, "interval", (double)(st->tl.interval_us / 1000000));
+		cJSON_AddNumberToObject(r, "playback_fps", st->tl.playback_fps);
+		cJSON_AddNumberToObject(r, "file_frames", st->tl.file_frames);
+		cJSON_AddStringToObject(r, "file", st->tl_mux ? st->tl_path : "");
+		cJSON_AddNumberToObject(r, "frames_in_file", st->tl.frames_in_file);
+		cJSON_AddNumberToObject(r, "frames_total", (double)st->tl_frames_total);
+		cJSON_AddNumberToObject(r, "bytes", (double)st->tl_bytes);
 		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 	}
 
@@ -640,6 +839,14 @@ static void record_loop(rmr_state_t *st)
 				video_idle = 0;
 				last_video_ws = 0;
 				rss_ring_acquire(st->video_ring);
+				/* Codec or geometry may have changed: a
+				 * timelapse track cannot bend mid-file. The new
+				 * ring also restarts its sequence space, so the
+				 * sampler's claimed-seq guard must forget the
+				 * old one or it rejects every new frame. */
+				if (st->tl_mux)
+					close_timelapse(st);
+				rmr_tl_ring_reset(&st->tl);
 				RSS_DEBUG("video ring reconnected (%s)", st->video_ring_name);
 			} else {
 				usleep(200000);
@@ -955,6 +1162,22 @@ static void record_loop(rmr_state_t *st)
 			if (!clip_want && st->clip_mux)
 				close_clip(st);
 		}
+
+		/* ── Timelapse sampling ── */
+		if (st->tl_enabled && (st->params.ready || st->video_codec == 2)) {
+			bool was_armed = st->tl.want_sample;
+			rmr_tl_tick(&st->tl, rss_timestamp_us());
+			/* The sample must be a keyframe; ask for one the
+			 * moment a tick arms so the wait is one frame, not
+			 * the rest of a GOP. Requests coalesce with the
+			 * segment splitter's own. */
+			if (!was_armed && st->tl.want_sample && st->video_codec != 2)
+				rss_ring_request_idr(st->video_ring);
+
+			bool tl_key = meta.is_key || st->video_codec == 2;
+			if (tl_key && rmr_tl_take(&st->tl, st->video_read_seq))
+				timelapse_write_sample(st, mux_data, mux_len);
+		}
 	}
 
 	/* Shutdown */
@@ -986,8 +1209,10 @@ int main(int argc, char **argv)
 	int ret = rss_daemon_init(&dctx, "rmr", argc, argv, NULL);
 	if (ret != 0)
 		return ret < 0 ? 1 : 0;
-	if (!rss_config_get_bool(dctx.cfg, "recording", "enabled", false)) {
-		RSS_INFO("recording disabled in config");
+	bool rec_enabled = rss_config_get_bool(dctx.cfg, "recording", "enabled", false);
+	bool tl_enabled = rss_config_get_bool(dctx.cfg, "timelapse", "enabled", false);
+	if (!rec_enabled && !tl_enabled) {
+		RSS_INFO("recording and timelapse disabled in config");
 		rss_config_free(dctx.cfg);
 		rss_daemon_cleanup("rmr");
 		return 0;
@@ -999,6 +1224,11 @@ int main(int argc, char **argv)
 	st.running = dctx.running;
 	st.segment_fd = -1;
 	st.clip_fd = -1;
+	st.tl_fd = -1;
+	st.tl_enabled = tl_enabled;
+	rmr_tl_init(&st.tl, rss_config_get_int(dctx.cfg, "timelapse", "interval", 10),
+		    rss_config_get_int(dctx.cfg, "timelapse", "playback_fps", 30),
+		    rss_config_get_int(dctx.cfg, "timelapse", "file_frames", 0));
 	st.stream_idx = rss_config_get_int(dctx.cfg, "recording", "stream", 0);
 	st.audio_enabled = rss_config_get_bool(dctx.cfg, "recording", "audio", true);
 	st.sei_timecode = rss_config_get_bool(dctx.cfg, "recording", "sei_timecode", true);
@@ -1167,8 +1397,28 @@ int main(int argc, char **argv)
 			RSS_WARN("clip storage init failed — motion clips disabled");
 	}
 
-	/* Start continuous recording for 'continuous' and 'both' modes */
-	if (st.mode != RMR_MODE_MOTION)
+	/* Timelapse storage: same proven shape as clips — its own
+	 * subdirectory and its own quota, invisible to the main scan. */
+	{
+		char tl_path[280];
+		snprintf(tl_path, sizeof(tl_path), "%s/timelapse",
+			 rss_config_get_str(dctx.cfg, "recording", "storage_path",
+					    "/mnt/mmcblk0p1/raptor"));
+		rmr_storage_config_t tcfg = {
+			.base_path = tl_path,
+			.segment_minutes = 24 * 60,
+			.max_storage_mb = rss_config_get_int(dctx.cfg, "timelapse", "max_mb", 2048),
+		};
+		st.tl_storage = rmr_storage_create(&tcfg);
+		if (!st.tl_storage)
+			RSS_WARN("timelapse storage init failed — timelapse disabled");
+	}
+
+	/* Start continuous recording for 'continuous' and 'both' modes,
+	 * but never when only the timelapse enabled this daemon. */
+	if (!rec_enabled)
+		RSS_INFO("timelapse only — recording stays off");
+	else if (st.mode != RMR_MODE_MOTION)
 		atomic_store(&st.recording, true);
 	else
 		RSS_INFO("mode=motion — waiting for trigger");
@@ -1183,6 +1433,10 @@ cleanup:
 		rss_ctrl_destroy(st.ctrl);
 	if (st.clip_mux)
 		close_clip(&st);
+	if (st.tl_mux)
+		close_timelapse(&st);
+	if (st.tl_storage)
+		rmr_storage_destroy(st.tl_storage);
 	if (st.clip_storage)
 		rmr_storage_destroy(st.clip_storage);
 	if (st.storage)

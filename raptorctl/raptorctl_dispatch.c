@@ -153,6 +153,7 @@ static const struct cmd_def cmd_table[] = {
 	{"set-bitrate", NULL, 2, args_ch_val},
 	{"set-gop", NULL, 2, args_ch_val},
 	{"set-fps", NULL, 2, args_ch_val},
+	{"timelapse-set", NULL, 2, args_key_val},
 	{"set-h264-trans", NULL, 2, args_ch_val},
 
 	/* Video encoder: multi-arg set commands */

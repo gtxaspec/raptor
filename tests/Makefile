@@ -21,8 +21,8 @@ CFLAGS = -Wall -Wextra -std=$(RAPTOR_STD) -D_GNU_SOURCE -g $(SAN_FLAGS) $(RAPTOR
 LDFLAGS = $(SAN_FLAGS) -lpthread -lrt -lm
 
 TEST_SRCS = main.c test_ric_json.c test_nal.c test_prebuf.c test_mux.c test_codec.c test_sdp.c test_ring.c test_rsp.c \
-            test_ctrl.c test_sign.c test_storage.c
-LIB_SRCS = ../ric/ric_json.c ../rmr/rmr_nal.c ../rmr/rmr_prebuf.c ../rmr/rmr_mux.c ../rmr/rmr_sign.c ../../raptor-common/src/rss_sign.c ../../raptor-common/src/rss_jpeg.c ../../raptor-common/src/rss_aac.c ../rmr/rmr_storage.c \
+            test_ctrl.c test_sign.c test_storage.c test_timelapse.c
+LIB_SRCS = ../ric/ric_json.c ../rmr/rmr_nal.c ../rmr/rmr_prebuf.c ../rmr/rmr_mux.c ../rmr/rmr_sign.c ../rmr/rmr_timelapse.c ../../raptor-common/src/rss_sign.c ../../raptor-common/src/rss_jpeg.c ../../raptor-common/src/rss_aac.c ../rmr/rmr_storage.c \
            ../../raptor-common/src/rss_util.c ../../raptor-common/src/rss_log.c \
            ../../raptor-common/src/cJSON.c \
            ../../raptor-common/third_party/monocypher/monocypher.c \

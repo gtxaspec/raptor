@@ -781,7 +781,7 @@ fi
 # Cleanly close the current segment, then verify its chain
 "$OUT/raptorctl" rmr disable > /dev/null 2>&1
 sleep 1
-REC_FILE=$(find "$LOG_DIR/rec" -name '*.mp4' | head -1)
+REC_FILE=$(find "$LOG_DIR/rec" -name '*.mp4' -not -path '*/timelapse/*' | head -1)
 if [ -n "$REC_FILE" ] && [ -x "$OUT/rverify" ]; then
     if "$OUT/rverify" -k "$LOG_DIR/sign.key.pub" "$REC_FILE" \
         > "$LOG_DIR/rverify.log" 2>&1; then
@@ -805,6 +805,81 @@ else
     skip "signed recording verification" "no recording or rverify missing"
 fi
 "$OUT/raptorctl" rmr enable > /dev/null 2>&1
+
+echo ""
+echo "=== Timelapse ==="
+
+# Runtime-enabled via ctrl (the test config ships it off), sampled
+# deterministically with timelapse-snap. The file must be all-keyframe
+# with playback-spaced timestamps -- a real-time-spaced file would mean
+# the synthetic DTS path broke -- and carries the same SEI timecodes
+# and signature chain as every other recording.
+check_contains "timelapse initially off" '"enabled":[[:space:]]*false' \
+    "$OUT/raptorctl" rmr timelapse-status
+check_contains "timelapse-enable" "ok" "$OUT/raptorctl" rmr timelapse-enable
+check_contains "timelapse-set interval" "ok" "$OUT/raptorctl" rmr timelapse-set interval 1
+sleep 1
+for i in 1 2 3 4; do
+    "$OUT/raptorctl" rmr timelapse-snap > /dev/null 2>&1
+    sleep 0.6
+done
+TL_STATUS=$("$OUT/raptorctl" rmr timelapse-status 2>/dev/null)
+echo "$TL_STATUS" | grep -q '"interval":[[:space:]]*2' &&
+    pass "interval clamped to minimum" ||
+    fail "interval clamped to minimum" "$TL_STATUS"
+
+check_contains "timelapse-disable" "ok" "$OUT/raptorctl" rmr timelapse-disable
+sleep 1
+TL_FILE=$(find "$LOG_DIR/rec/timelapse" -name '*.mp4' 2>/dev/null | head -1)
+if [ -z "$TL_FILE" ]; then
+    fail "timelapse file created" "no mp4 under rec/timelapse"
+elif command -v ffprobe > /dev/null 2>&1; then
+    pass "timelapse file created"
+    TL_RC=0
+    TL_RES=$(ffprobe -v error -select_streams v -show_entries packet=pts_time,flags \
+        -of csv=p=0 "$TL_FILE" 2>/dev/null | python3 -c '
+import sys
+rows = [l.strip().split(",") for l in sys.stdin if l.strip()]
+n = len(rows)
+nonkey = sum(1 for r in rows if "K" not in r[1])
+pts = [float(r[0]) for r in rows]
+gaps = [b - a for a, b in zip(pts, pts[1:])]
+bad = sum(1 for g in gaps if abs(g - 1.0 / 30.0) > 0.001)
+print(f"{n} samples, {nonkey} non-key, {bad} bad gaps")
+sys.exit(0 if n >= 4 and nonkey == 0 and bad == 0 else 1)
+') || TL_RC=$?
+    if [ "$TL_RC" -eq 0 ]; then
+        pass "timelapse all-keyframe at playback spacing ($TL_RES)"
+    else
+        fail "timelapse all-keyframe at playback spacing" "$TL_RES"
+    fi
+    grep -c 'MISPmicrosectime' "$TL_FILE" > /dev/null 2>&1 &&
+        pass "timelapse carries ST 0604 SEI" ||
+        fail "timelapse carries ST 0604 SEI" "none found"
+    if [ -x "$OUT/rverify" ]; then
+        if "$OUT/rverify" -k "$LOG_DIR/sign.key.pub" "$TL_FILE" \
+            > "$LOG_DIR/rverify-tl.log" 2>&1; then
+            pass "timelapse signature chain verifies"
+        else
+            fail "timelapse signature chain verifies" "see rverify-tl.log"
+        fi
+    fi
+    # Disable closed the file; a fresh enable+snap must open a second
+    # one -- the same close/reopen path a ring reconnect exercises.
+    "$OUT/raptorctl" rmr timelapse-enable > /dev/null 2>&1
+    "$OUT/raptorctl" rmr timelapse-snap > /dev/null 2>&1
+    sleep 1
+    "$OUT/raptorctl" rmr timelapse-disable > /dev/null 2>&1
+    TL_COUNT=$(find "$LOG_DIR/rec/timelapse" -name '*.mp4' 2>/dev/null | wc -l)
+    if [ "$TL_COUNT" -ge 2 ]; then
+        pass "timelapse reopens a fresh file ($TL_COUNT files)"
+    else
+        fail "timelapse reopens a fresh file" "only $TL_COUNT file(s)"
+    fi
+else
+    pass "timelapse file created"
+    skip "timelapse packet checks" "ffprobe not installed"
+fi
 
 # ── ONVIF backchannel: client audio reaches the speaker ring ──
 # rsd's receive path (sendonly SETUP, RTP over an interleaved channel,

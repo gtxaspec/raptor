@@ -135,9 +135,12 @@ const struct help_entry help_entries[] = {
 	{"rod", "set-stroke-size <0-5>               Global stroke width"},
 	{"ric", "mode <auto|day|night>               Set day/night mode (GPIO + ISP)"},
 	{"ric", "isp-mode <day|night>                Set ISP mode only (no GPIO)"},
-	{"ric", "ircut <day|night>                   Drive the IR-cut filter alone (until next auto switch)"},
-	{"ric", "ir850 <on|off>                      Drive the 850nm LED bank alone (ignores enable flag)"},
-	{"ric", "ir940 <on|off>                      Drive the 940nm LED bank alone (ignores enable flag)"},
+	{"ric", "ircut <day|night>                   Drive the IR-cut filter alone (until next "
+		"auto switch)"},
+	{"ric", "ir850 <on|off>                      Drive the 850nm LED bank alone (ignores "
+		"enable flag)"},
+	{"ric", "ir940 <on|off>                      Drive the 940nm LED bank alone (ignores "
+		"enable flag)"},
 	{"ric", "set-threshold <key> <val>           Set day/night threshold"},
 	{"ric", "get-thresholds                      Show all thresholds"},
 	{"rhd", "clients                             List connected clients"},
@@ -152,6 +155,11 @@ const struct help_entry help_entries[] = {
 	 "sign-status                         Show provenance signing state + key fingerprint"},
 	{"rmr",
 	 "export-pubkey                       Print the Ed25519 public key (hex) for rverify"},
+	{"rmr", "timelapse-status                    Show timelapse state and current file"},
+	{"rmr", "timelapse-enable                    Enable timelapse capture"},
+	{"rmr", "timelapse-disable                   Disable timelapse (closes the file)"},
+	{"rmr", "timelapse-set <key> <value>         Set interval or playback_fps live"},
+	{"rmr", "timelapse-snap                      Capture one sample now"},
 	{"rmd", "sensitivity <0-4>                   Set motion sensitivity"},
 	{"rmd", "skip-frames <N>                      Set IVS skip frame count"},
 	{NULL, "test-motion [sec]                   Trigger clip recording (default 10s)"},

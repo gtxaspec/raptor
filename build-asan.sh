@@ -341,7 +341,8 @@ $CC $CFLAGS -c "$RAPTOR_DIR/rmr/rmr_nal.c" -o "$OUT/rmr_nal.o"
 $CC $CFLAGS -c "$RAPTOR_DIR/rmr/rmr_prebuf.c" -o "$OUT/rmr_prebuf.o"
 $CC $CFLAGS -c "$RAPTOR_DIR/rmr/rmr_sign.c" -o "$OUT/rmr_sign.o"
 $CC $CFLAGS -c "$RAPTOR_DIR/rmr/rmr_storage.c" -o "$OUT/rmr_storage.o"
-$CC -o "$OUT/rmr" "$OUT"/rmr_main.o "$OUT"/rmr_mux.o "$OUT"/rmr_nal.o "$OUT"/rmr_prebuf.o "$OUT"/rmr_sign.o "$OUT"/rmr_storage.o $LIBS $LDFLAGS
+$CC $CFLAGS -c "$RAPTOR_DIR/rmr/rmr_timelapse.c" -o "$OUT/rmr_timelapse.o"
+$CC -o "$OUT/rmr" "$OUT"/rmr_main.o "$OUT"/rmr_mux.o "$OUT"/rmr_nal.o "$OUT"/rmr_prebuf.o "$OUT"/rmr_sign.o "$OUT"/rmr_storage.o "$OUT"/rmr_timelapse.o $LIBS $LDFLAGS
 echo "  -> rmr"
 
 echo "=== RSP ==="

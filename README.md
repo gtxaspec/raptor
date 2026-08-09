@@ -71,7 +71,7 @@ buffers at runtime, gracefully skipping any that don't exist.
    |   \              +--> [RSD] RTSP/RTSPS server (via compy)
    |   \              +--> [RSD-555] RTSP server (via live555)
    |    \             +--> [RHD] HTTP snapshots / MJPEG / audio
-   |     \            +--> [RMR] fragmented MP4 recording
+   |     \            +--> [RMR] fragmented MP4 recording + timelapse
    |      \           +--> [RWD] WebRTC/WHIP server (DTLS-SRTP)
    |       \          +--> [RWC] USB webcam (UVC + UAC1)
    |       \          +--> [RSP] RTMP/RTMPS push (YouTube, Twitch)
