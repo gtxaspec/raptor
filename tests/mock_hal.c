@@ -599,6 +599,48 @@ static int mock_isp_get_wb(void *ctx, rss_wb_config_t *wb_cfg)
 	return RSS_OK;
 }
 
+/*
+ * Sensor rate, and the two knobs that let a test choose which platform
+ * this mock imitates. Defaults reproduce a settable sensor with no
+ * read-back, so a suite that sets neither sees the behavior it always saw.
+ *
+ * RSS_MOCK_SENSOR_FPS_SET=notsup   the setter refuses as unsupported, as a
+ *                                  SoC whose rate is fixed at bring-up does
+ * RSS_MOCK_SENSOR_FPS_SET=error    the setter fails outright, which is a
+ *                                  fault and must still be reported as one
+ * RSS_MOCK_SENSOR_FPS_ACTUAL=<n>   the getter reports n fps; absent, it
+ *                                  refuses too, as a backend with no
+ *                                  read-back does
+ */
+static int mock_isp_set_sensor_fps(void *ctx, uint32_t fps_num, uint32_t fps_den)
+{
+	(void)ctx;
+	(void)fps_num;
+	(void)fps_den;
+	const char *mode = getenv("RSS_MOCK_SENSOR_FPS_SET");
+
+	if (mode && strcmp(mode, "notsup") == 0)
+		return RSS_ERR_NOTSUP;
+	if (mode && strcmp(mode, "error") == 0)
+		return RSS_ERR;
+	return RSS_OK;
+}
+
+static int mock_isp_get_sensor_fps(void *ctx, uint32_t *fps_num, uint32_t *fps_den)
+{
+	(void)ctx;
+	const char *v = getenv("RSS_MOCK_SENSOR_FPS_ACTUAL");
+	int actual = v ? atoi(v) : 0;
+
+	if (actual <= 0)
+		return RSS_ERR_NOTSUP;
+	if (!fps_num || !fps_den)
+		return RSS_ERR_INVAL;
+	*fps_num = (uint32_t)actual;
+	*fps_den = 1;
+	return RSS_OK;
+}
+
 /* ── Audio ── */
 
 static int mock_audio_init(void *ctx, const rss_audio_config_t *cfg)
@@ -770,7 +812,7 @@ static const rss_hal_ops_t mock_ops = {
 	.isp_set_hflip = (void *)mock_ok,
 	.isp_set_vflip = (void *)mock_ok,
 	.isp_set_running_mode = (void *)mock_ok,
-	.isp_set_sensor_fps = (void *)mock_ok,
+	.isp_set_sensor_fps = mock_isp_set_sensor_fps,
 	.isp_set_antiflicker = (void *)mock_ok,
 	.isp_set_bypass = (void *)mock_ok,
 	.isp_set_sinter_strength = (void *)mock_ok,
@@ -797,6 +839,7 @@ static const rss_hal_ops_t mock_ops = {
 	.isp_get_ae_comp = mock_isp_get_ae_comp,
 	.isp_get_max_again = (void *)mock_isp_get_u32,
 	.isp_get_max_dgain = (void *)mock_isp_get_u32,
+	.isp_get_sensor_fps = mock_isp_get_sensor_fps,
 	.isp_get_sinter_strength = (void *)mock_isp_get_u8,
 	.isp_get_temper_strength = (void *)mock_isp_get_u8,
 	.isp_get_dpc_strength = (void *)mock_isp_get_u8,
