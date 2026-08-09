@@ -1050,6 +1050,77 @@ fi
 kill $ZOMBIE_PID 2>/dev/null || true
 wait $ZOMBIE_PID 2>/dev/null || true
 
+# ── Sensor rate on a platform that will not set it ──
+# A backend that leaves isp_set_sensor_fps out, or refuses it outright,
+# is behaving as specified, so rvd reports the rate in force instead of
+# repeating the number that was dropped. Which answer is honest depends
+# on what can be read back, hence three arms; the mock's two knobs pick
+# which platform it imitates. No [sensor] fps in the suite config and no
+# /proc/jz on the host, so rvd falls back to 25 -- the same case that
+# made the original line mislead.
+fps_arm() {
+    arm_name="$1"
+    arm_want="$2"
+    shift 2
+    pkill -f "$OUT/rvd" 2>/dev/null || true
+    sleep 1
+    start_daemon rvd env "$@" "$OUT/rvd" -c "$CONFIG" -f -d
+    sleep 2
+    if grep -q "$arm_want" "$LOG_DIR/rvd.log" 2>/dev/null; then
+        pass "$arm_name"
+    else
+        fail "$arm_name" "expected '$arm_want' in rvd log"
+        [ "$VERBOSE" = "1" ] && grep -i "sensor0 fps\|isp_set_sensor_fps" "$LOG_DIR/rvd.log"
+    fi
+    # Whichever arm fired, a documented refusal is not a fault: no
+    # warning about the call, and the arm's own line is not raised to one
+    if grep -q "isp_set_sensor_fps failed" "$LOG_DIR/rvd.log" 2>/dev/null ||
+        grep "sensor0 fps" "$LOG_DIR/rvd.log" 2>/dev/null | grep -q "WARN"; then
+        fail "$arm_name is not a fault" "a documented NOTSUP was reported as one"
+    else
+        pass "$arm_name is not a fault"
+    fi
+}
+
+echo ""
+echo "=== Sensor rate diagnostics ==="
+
+fps_arm "unsettable and unreadable names no rate as the sensor's" \
+    "no source confirmed" RSS_MOCK_SENSOR_FPS_SET=notsup
+fps_arm "unsettable but readable names the rate in force over the request" \
+    "sensor runs at 30, not the 25 asked for" \
+    RSS_MOCK_SENSOR_FPS_SET=notsup RSS_MOCK_SENSOR_FPS_ACTUAL=30
+fps_arm "unsettable and already at the requested rate says so plainly" \
+    "not settable on this platform; the sensor runs at 25" \
+    RSS_MOCK_SENSOR_FPS_SET=notsup RSS_MOCK_SENSOR_FPS_ACTUAL=25
+
+# A setter that fails for a real reason is still a fault: the three
+# arms above must not have swallowed the warning path with them
+pkill -f "$OUT/rvd" 2>/dev/null || true
+sleep 1
+start_daemon rvd env RSS_MOCK_SENSOR_FPS_SET=error "$OUT/rvd" -c "$CONFIG" -f -d
+sleep 2
+if grep -q "isp_set_sensor_fps failed" "$LOG_DIR/rvd.log" 2>/dev/null &&
+    ! grep -q "not settable on this platform\|no source confirmed" "$LOG_DIR/rvd.log" 2>/dev/null; then
+    pass "a setter that fails outright is still reported as a failure"
+else
+    fail "a setter that fails outright is still reported as a failure" \
+        "expected 'isp_set_sensor_fps failed' and none of the unsupported-platform lines"
+fi
+
+# Default mock: the setter works, so none of the three arms may appear
+pkill -f "$OUT/rvd" 2>/dev/null || true
+sleep 1
+start_daemon rvd "$OUT/rvd" -c "$CONFIG" -f -d
+sleep 2
+if grep -q "sensor0 fps: 25$" "$LOG_DIR/rvd.log" 2>/dev/null &&
+    ! grep -q "not settable on this platform\|no source confirmed" "$LOG_DIR/rvd.log" 2>/dev/null; then
+    pass "a settable sensor still reports the rate it was given"
+else
+    fail "a settable sensor still reports the rate it was given" \
+        "expected a plain 'sensor0 fps: 25' and no unsupported-platform line"
+fi
+
 if [ "$KEEP" = "1" ]; then
     echo ""
     echo "=== Keeping daemons running (Ctrl-C to stop) ==="

@@ -499,7 +499,47 @@ int rvd_pipeline_init(rvd_state_t *st)
 			sensor_fps = 25;
 		/* Sensor 0 FPS via legacy ops */
 		ret = RSS_HAL_CALL(st->ops, isp_set_sensor_fps, st->hal_ctx, sensor_fps, 1);
-		if (ret != RSS_OK)
+		if (ret == RSS_ERR_NOTSUP) {
+			/*
+			 * Not a fault, so not a warning. An op a backend leaves out
+			 * answers NOTSUP through the RSS_HAL_CALL NULL guard, and a
+			 * backend may return it outright; either way the daemon is
+			 * expected to carry on (docs 10-hal-api.md 9.3). On some SoCs
+			 * the sensor rate is fixed when the mode is selected during
+			 * bring-up and cannot be changed afterwards -- the encoder
+			 * framerate is what varies there.
+			 *
+			 * Report the rate the sensor actually runs at rather than the
+			 * one that was refused. The refused number describes nothing,
+			 * and printing it invites the conclusion that the pipeline is
+			 * running at it.
+			 */
+			uint32_t num = 0, den = 0;
+			int actual = 0;
+
+			if (RSS_HAL_CALL(st->ops, isp_get_sensor_fps, st->hal_ctx, &num, &den) ==
+				    RSS_OK &&
+			    num && den)
+				actual = (int)((num + den / 2) / den);
+
+			if (!actual)
+				/* Nothing can report the rate, and sensor_fps may be the
+				 * 25 fallback rather than anything measured, so do not
+				 * present it as the sensor's. */
+				RSS_INFO("sensor0 fps: neither settable nor readable on this "
+					 "platform -- streams are configured against %d, which "
+					 "no source confirmed",
+					 sensor_fps);
+			else if (actual != sensor_fps)
+				RSS_INFO("sensor0 fps: not settable on this platform -- the "
+					 "sensor runs at %d, not the %d asked for, and streams "
+					 "are paced down from it",
+					 actual, sensor_fps);
+			else
+				RSS_INFO("sensor0 fps: not settable on this platform; the "
+					 "sensor runs at %d",
+					 actual);
+		} else if (ret != RSS_OK)
 			RSS_WARN("isp_set_sensor_fps failed: %d (non-fatal)", ret);
 		else
 			RSS_INFO("sensor0 fps: %d", sensor_fps);
