@@ -44,10 +44,12 @@ void rsd555_shared_frame_unref(rsd555_shared_frame_t *sf)
 
 /* ── Queue ── */
 
-int rsd555_queue_init(rsd555_frame_queue_t *q, int max_frames)
+int rsd555_queue_init(rsd555_frame_queue_t *q, int max_frames, int key_gated)
 {
 	memset(q, 0, sizeof(*q));
 	q->max_count = max_frames;
+	q->key_gated = (uint8_t)key_gated;
+	q->waiting_key = (uint8_t)key_gated;
 	if (pthread_mutex_init(&q->lock, NULL) != 0)
 		return -1;
 	q->event_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
@@ -73,6 +75,18 @@ void rsd555_queue_destroy(rsd555_frame_queue_t *q)
 
 int rsd555_queue_push_ref(rsd555_frame_queue_t *q, rsd555_shared_frame_t *sf)
 {
+	/* Hold new and recovering clients at a keyframe. Orphan P-frames
+	 * reference pictures this client never received: live decoders
+	 * conceal them, but a recorder writes them into a file that then
+	 * decodes with missing refs on every playback. waiting_key is
+	 * only touched by the one reader thread that pushes to this
+	 * queue, so it needs no lock. */
+	if (q->waiting_key) {
+		if (!sf->is_key)
+			return 0;
+		q->waiting_key = 0;
+	}
+
 	rsd555_frame_t *f = malloc(sizeof(*f));
 	if (!f)
 		return -1;
@@ -82,6 +96,7 @@ int rsd555_queue_push_ref(rsd555_frame_queue_t *q, rsd555_shared_frame_t *sf)
 
 	pthread_mutex_lock(&q->lock);
 
+	int dropped = 0;
 	while (q->count >= q->max_count && q->head) {
 		rsd555_frame_t *old = q->head;
 		q->head = old->next;
@@ -90,6 +105,29 @@ int rsd555_queue_push_ref(rsd555_frame_queue_t *q, rsd555_shared_frame_t *sf)
 		q->count--;
 		rsd555_shared_frame_unref(old->shared);
 		free(old);
+		dropped = 1;
+	}
+
+	/* An overflow drop breaks the ref chain for every queued frame
+	 * after the drop point: purge up to the next queued keyframe and,
+	 * if none is left, re-arm the hold so the client resumes clean. */
+	if (dropped && q->key_gated) {
+		while (q->head && !q->head->shared->is_key) {
+			rsd555_frame_t *old = q->head;
+			q->head = old->next;
+			if (!q->head)
+				q->tail = NULL;
+			q->count--;
+			rsd555_shared_frame_unref(old->shared);
+			free(old);
+		}
+		if (!q->head && !sf->is_key) {
+			q->waiting_key = 1;
+			pthread_mutex_unlock(&q->lock);
+			rsd555_shared_frame_unref(sf);
+			free(f);
+			return 0;
+		}
 	}
 
 	if (q->tail)

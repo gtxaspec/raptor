@@ -30,7 +30,7 @@ RingVideoSource *RingVideoSource::createNew(UsageEnvironment &env, rsd555_video_
 RingVideoSource::RingVideoSource(UsageEnvironment &env, rsd555_video_ctx_t *ctx)
     : FramedSource(env), fCtx(ctx), fValid(false), fPendingFrame(NULL), fPendingOffset(0)
 {
-	if (rsd555_queue_init(&fQueue, 16) != 0) {
+	if (rsd555_queue_init(&fQueue, 16, 1) != 0) {
 		envir() << "RingVideoSource: queue init failed\n";
 		return;
 	}
@@ -168,7 +168,7 @@ RingAudioSource *RingAudioSource::createNew(UsageEnvironment &env, rsd555_audio_
 RingAudioSource::RingAudioSource(UsageEnvironment &env, rsd555_audio_ctx_t *ctx)
     : FramedSource(env), fCtx(ctx), fValid(false), fPTSInitialized(false)
 {
-	if (rsd555_queue_init(&fQueue, 32) != 0) {
+	if (rsd555_queue_init(&fQueue, 32, 0) != 0) {
 		envir() << "RingAudioSource: queue init failed\n";
 		return;
 	}

@@ -109,11 +109,13 @@ typedef struct {
 	rsd555_frame_t *tail;
 	int count;
 	int max_count;
+	uint8_t key_gated;   /* video queue: frames form a ref chain */
+	uint8_t waiting_key; /* drop frames until the next keyframe */
 	pthread_mutex_t lock;
 	int event_fd; /* signals live555 scheduler when frame arrives */
 } rsd555_frame_queue_t;
 
-int rsd555_queue_init(rsd555_frame_queue_t *q, int max_frames);
+int rsd555_queue_init(rsd555_frame_queue_t *q, int max_frames, int key_gated);
 void rsd555_queue_destroy(rsd555_frame_queue_t *q);
 int rsd555_queue_push_ref(rsd555_frame_queue_t *q, rsd555_shared_frame_t *sf);
 rsd555_frame_t *rsd555_queue_pop(rsd555_frame_queue_t *q);
