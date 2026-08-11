@@ -127,6 +127,8 @@ typedef struct rsd_client {
 	uint32_t audio_ts_offset;
 	uint32_t audio_ts_rand;
 	bool audio_ts_base_set;
+	uint32_t last_audio_client_ts; /* per-client monotonic enforcement */
+	bool has_last_audio_client_ts;
 	bool is_tcp;
 	int stream_idx;	      /* RSD_STREAM_MAIN or RSD_STREAM_SUB */
 	uint32_t video_codec; /* RSS_CODEC_H264 or RSS_CODEC_H265 */

@@ -556,7 +556,6 @@ void *rsd_video_reader_thread(void *arg)
 					} else {
 						c->waiting_keyframe = true;
 						c->video_ts_base_set = false;
-						c->audio_ts_base_set = false;
 					}
 				}
 			}
@@ -748,7 +747,6 @@ void *rsd_video_reader_thread(void *arg)
 					total_pushed++;
 				else if (qret == RSD_SENDQ_DROPPED) {
 					c->waiting_keyframe = (c->video.jpeg == NULL);
-					c->audio_ts_base_set = false;
 					rsd_maybe_request_idr(rctx->ring, &last_idr_req_us);
 				}
 			}
@@ -1024,6 +1022,11 @@ void *rsd_audio_reader_thread(void *arg)
 					c->audio_ts_base_set = true;
 				}
 				uint32_t client_ts = rtp_ts - c->audio_ts_offset + c->audio_ts_rand;
+				if (c->has_last_audio_client_ts &&
+				    (int32_t)(client_ts - c->last_audio_client_ts) <= 0)
+					client_ts = c->last_audio_client_ts + frame_samples;
+				c->last_audio_client_ts = client_ts;
+				c->has_last_audio_client_ts = true;
 				rsd_sendq_push_audio(&c->sendq, audio_codec, audio_buf, length,
 						     client_ts);
 			}
