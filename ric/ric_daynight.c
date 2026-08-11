@@ -20,6 +20,10 @@
 #define RIC_DAY_LOCKOUT_FIRST 30
 #define RIC_DAY_LOCKOUT_MAX   300
 
+/* Polls to let AE settle after an IR-off ambient probe lifts the
+ * LEDs, before the luma reading is believed. */
+#define RIC_PROBE_SETTLE_POLLS 3
+
 /* ── ADC via kernel device nodes ── */
 
 static int adc_fd = -1;
@@ -530,8 +534,23 @@ void ric_poll_exposure(ric_state_t *st)
 		want_night = (have_luma && ae_luma < (uint32_t)st->settings.night_luma) ||
 			     (have_gain && total_gain > (uint32_t)st->settings.night_gain);
 
+		/* Luma is trustworthy for the day direction only while no
+		 * IR bank pours light into the scene: none configured or
+		 * enabled, or a probe has lifted them. On a board with lit
+		 * IR a luma day test is an oscillator, not a fallback: IR
+		 * lifts luma over the threshold, day mode cuts the LEDs,
+		 * the scene goes dark again, and the filter clicks all
+		 * night. */
+		bool ir_banks = (st->settings.gpio_irled >= 0 && st->settings.ir850_enabled) ||
+				(st->settings.gpio_irled2 >= 0 && st->settings.ir940_enabled);
+		bool ir_lit = ir_banks && st->current_mode == RIC_MODE_NIGHT && !st->probe_active;
+
 		if (have_gain && st->night_gain_baseline > 0) {
-			if (st->current_mode == RIC_MODE_NIGHT &&
+			/* The running max must not learn from a probe: with
+			 * the IR lifted a dark room reads ceiling gain, and
+			 * adopting it would both wreck the ratio and re-arm
+			 * the dip trigger into a blink loop. */
+			if (st->current_mode == RIC_MODE_NIGHT && !st->probe_active &&
 			    total_gain > st->night_gain_baseline) {
 				RSS_DEBUG("night baseline raised %u -> %u (scene showed its "
 					  "real dark reading)",
@@ -541,23 +560,71 @@ void ric_poll_exposure(ric_state_t *st)
 			uint32_t day_thr =
 				st->night_gain_baseline * (uint32_t)st->settings.day_gain_pct / 100;
 			want_day = (total_gain < day_thr);
-		} else if (!have_gain) {
-			/* No gain means no baseline and so no ratio; the
-			 * inverse of the day→night test is all that is left.
-			 * On a board that lights IR LEDs at night that test
-			 * is an oscillator, not a fallback: IR lifts luma
-			 * over the threshold, day mode cuts the LEDs, the
-			 * scene goes dark again, and the filter clicks all
-			 * night. Recover on luma only when no IR bank is
-			 * active; with one, holding night is the lesser
-			 * failure. */
-			bool ir_lit =
-				(st->settings.gpio_irled >= 0 && st->settings.ir850_enabled) ||
-				(st->settings.gpio_irled2 >= 0 && st->settings.ir940_enabled);
-			want_day = !ir_lit && have_luma &&
-				   ae_luma >= (uint32_t)st->settings.night_luma;
-		} else {
-			want_day = false;
+		}
+		if (!ir_lit && have_luma && ae_luma >= (uint32_t)st->settings.night_luma)
+			want_day = true;
+
+		/* IR-off ambient probe: compressed-gain sensors (T20 class)
+		 * floor total_gain in a lit scene long before the ratio can
+		 * fire -- measured on a Wyze V2: night baseline 1299 with
+		 * IR, lights-on 1024, ratio floor 324. The dip below the
+		 * baseline is still a reliable brightness hint, so lift the
+		 * LEDs and let the now-trustworthy luma decide. A truly
+		 * dark night sits at its baseline and never probes; a probe
+		 * that finds darkness restores the LEDs and backs off. */
+		if (st->probe_active && st->current_mode != RIC_MODE_NIGHT) {
+			/* The probe ended in a day switch; LEDs already
+			 * match day mode. */
+			st->probe_active = false;
+		}
+		if (st->current_mode == RIC_MODE_NIGHT && ir_banks &&
+		    st->settings.probe_gain_pct > 0 && st->night_gain_baseline > 0 &&
+		    st->day_lockout_polls == 0) {
+			int hyst_polls = st->settings.hysteresis_sec;
+			if (!st->probe_active) {
+				uint32_t dip_thr = st->night_gain_baseline *
+						   (uint32_t)st->settings.probe_gain_pct / 100;
+				if (st->probe_holdoff_polls > 0) {
+					st->probe_holdoff_polls--;
+				} else if (have_gain && total_gain < dip_thr) {
+					if (st->settings.ir850_enabled)
+						ric_irled_drive(st, false, false);
+					if (st->settings.ir940_enabled)
+						ric_irled_drive(st, true, false);
+					st->probe_active = true;
+					/* Decremented before the compare below, so
+					 * +3 yields exactly SETTLE suppressed polls
+					 * and hyst+2 evaluation polls. */
+					st->probe_polls_left =
+						RIC_PROBE_SETTLE_POLLS + hyst_polls + 3;
+					RSS_INFO("gain %u dipped under %d%% of night baseline "
+						 "%u: IR off for an ambient probe",
+						 total_gain, st->settings.probe_gain_pct,
+						 st->night_gain_baseline);
+				}
+			} else if (st->probe_polls_left > 0) {
+				st->probe_polls_left--;
+				if (st->probe_polls_left > hyst_polls + 2) {
+					/* AE still settling without IR */
+					want_day = false;
+					want_night = false;
+				} else if (st->probe_polls_left == 0) {
+					if (st->settings.ir850_enabled)
+						ric_irled_drive(st, false, true);
+					if (st->settings.ir940_enabled)
+						ric_irled_drive(st, true, true);
+					st->probe_active = false;
+					st->probe_holdoff_polls = st->settings.probe_holdoff_sec *
+								  1000 /
+								  st->settings.poll_interval_ms;
+					/* Cooldown resamples the baseline once the
+					 * restored IR settles. */
+					st->cooldown_remaining = 3;
+					RSS_INFO("probe found darkness; IR restored, next "
+						 "probe in %ds",
+						 st->settings.probe_holdoff_sec);
+				}
+			}
 		}
 
 		if (st->day_lockout_polls > 0) {
@@ -565,9 +632,10 @@ void ric_poll_exposure(ric_state_t *st)
 			want_day = false;
 		}
 
-		snprintf(why, sizeof(why), "luma=%u/%d gain=%u/%d night baseline=%u x %d%%",
+		snprintf(why, sizeof(why), "luma=%u/%d gain=%u/%d night baseline=%u x %d%%%s",
 			 ae_luma, st->settings.night_luma, total_gain, st->settings.night_gain,
-			 st->night_gain_baseline, st->settings.day_gain_pct);
+			 st->night_gain_baseline, st->settings.day_gain_pct,
+			 st->probe_active ? " (probing)" : "");
 	} else if (st->settings.trigger == RIC_TRIGGER_ADC) {
 		/*
 		 * ADC mode: read photoresistor via SU_ADC.

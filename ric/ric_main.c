@@ -61,6 +61,12 @@ static void load_config(ric_state_t *st)
 	c->night_luma = rss_config_get_int(cfg, "ircut", "night_luma", 20);
 	c->night_gain = rss_config_get_int(cfg, "ircut", "night_gain", 80000);
 	c->day_gain_pct = rss_config_get_int(cfg, "ircut", "day_gain_pct", 25);
+	c->probe_gain_pct = rss_config_get_int(cfg, "ircut", "probe_gain_pct", 90);
+	if (c->probe_gain_pct < 0 || c->probe_gain_pct > 99)
+		c->probe_gain_pct = 90;
+	c->probe_holdoff_sec = rss_config_get_int(cfg, "ircut", "probe_holdoff_sec", 60);
+	if (c->probe_holdoff_sec < 1)
+		c->probe_holdoff_sec = 60;
 
 	/* ADC thresholds (trigger=adc) */
 	c->adc_channel = rss_config_get_int(cfg, "ircut", "adc_channel", 0);

@@ -625,6 +625,127 @@ def scenario_baseline_refresh(stub, watch):
     ric.stop()
 
 
+def scenario_probe_dawn(stub, watch):
+    """T20-class compressed gain: a lit scene under IR floors total_gain
+    far above the day ratio (Wyze V2 bench: night baseline 1300 with IR,
+    lights-on 1024 = 79%, ratio floor 325 unreachable). The dip below
+    probe_gain_pct of the baseline lifts the IR LEDs; true ambient luma
+    then decides day, and the LEDs stay off through the switch."""
+    stub.set_scene(luma=70, gain=4500, ev=1200000)
+    ric = Ric("probedawn", LUMA_CONF)
+    if not ric.wait_running():
+        result(False, "probe dawn: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    time.sleep(0.5)
+
+    mm = stub.mark()
+    stub.set_scene(luma=6, gain=8192, ev=50000000)  # dark, gain at ceiling
+    if not wait_for(lambda: "night" in stub.modes_since(mm), 4):
+        result(False, "probe dawn: night entry", str(stub.modes_since(mm)))
+        ric.stop()
+        return
+    # IR bounce lights the scene: AE re-locks luma, gain settles low
+    stub.set_scene(luma=72, gain=1300, ev=370000)
+    time.sleep((3 + 2) * POLL_MS / 1000.0)  # cooldown -> baseline 1300
+
+    gm, mm = watch.mark(), stub.mark()
+    # lab lights on: gain dips to 79% of baseline, luma still AE-locked
+    stub.set_scene(luma=73, gain=1024, ev=290000)
+    ok = wait_for(lambda: last_value(watch.since(gm), IRLED) == "0", 3)
+    result(ok, "probe dawn: gain dip lifts IR for an ambient sample",
+           str(watch.since(gm)))
+    # without IR the scene reads bright
+    stub.set_scene(luma=95, gain=2500, ev=800000)
+    ok = wait_for(lambda: "day" in stub.modes_since(mm), 4)
+    result(ok, "probe dawn: ambient luma switches to day",
+           ric.read_log()[-300:])
+    result(last_value(watch.since(gm), IRLED) == "0",
+           "probe dawn: IR stays off through the day switch",
+           str(watch.since(gm)))
+    ric.stop()
+
+
+def scenario_probe_dark_restore(stub, watch):
+    """A probe that finds real darkness restores the IR LEDs, stays in
+    night mode, and holds off instead of blinking every poll."""
+    stub.set_scene(luma=70, gain=4500, ev=1200000)
+    ric = Ric("probedark", LUMA_CONF)
+    if not ric.wait_running():
+        result(False, "probe dark: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    time.sleep(0.5)
+
+    mm = stub.mark()
+    stub.set_scene(luma=6, gain=8192, ev=50000000)
+    if not wait_for(lambda: "night" in stub.modes_since(mm), 4):
+        result(False, "probe dark: night entry", str(stub.modes_since(mm)))
+        ric.stop()
+        return
+    stub.set_scene(luma=72, gain=1300, ev=370000)
+    time.sleep((3 + 2) * POLL_MS / 1000.0)  # cooldown -> baseline 1300
+
+    gm = watch.mark()
+    # IR bounce shifted (camera re-aimed): gain dips, room still dark
+    stub.set_scene(luma=72, gain=1024, ev=300000)
+    ok = wait_for(lambda: last_value(watch.since(gm), IRLED) == "0", 3)
+    result(ok, "probe dark: dip lifts IR", str(watch.since(gm)))
+
+    rm = watch.mark()
+    stub.set_scene(luma=4, gain=8192, ev=50000000)  # truly dark without IR
+    ok = wait_for(lambda: last_value(watch.since(rm), IRLED) == "1", 3)
+    result(ok, "probe dark: darkness restores IR", str(watch.since(rm)))
+
+    # IR-lit scene returns brighter than before; the resampled baseline
+    # (cooldown after restore) makes 1024 a fresh dip, but the holdoff
+    # must keep the LEDs from blinking again.
+    stub.set_scene(luma=72, gain=1300, ev=370000)
+    time.sleep((3 + 1) * POLL_MS / 1000.0)
+    rm2 = watch.mark()
+    stub.set_scene(luma=72, gain=1024, ev=300000)
+    time.sleep(8 * POLL_MS / 1000.0)
+    result(last_value(watch.since(rm2), IRLED) != "0",
+           "probe dark: holdoff suppresses an immediate re-probe",
+           str(watch.since(rm2)))
+    st = ric_status()
+    result(st.get("state") == "night", "probe dark: still night", str(st))
+    ric.stop()
+
+
+def scenario_noir_luma_dawn(stub, watch):
+    """With no IR bank enabled nothing pollutes luma at night, so dawn
+    may ride luma directly even when the gain ratio cannot fire: a
+    compressed-gain sensor sits at 56% of its pinned night baseline in
+    a lit room, far above the 25% ratio floor."""
+    conf = LUMA_CONF + "ir850 = false\nir940 = false\n"
+    stub.set_scene(luma=70, gain=4500, ev=1200000)
+    ric = Ric("noirdawn", conf)
+    if not ric.wait_running():
+        result(False, "no-IR dawn: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    time.sleep(0.5)
+
+    gm, mm = watch.mark(), stub.mark()
+    stub.set_scene(luma=6, gain=8192, ev=50000000)
+    if not wait_for(lambda: "night" in stub.modes_since(mm), 4):
+        result(False, "no-IR dawn: night entry", str(stub.modes_since(mm)))
+        ric.stop()
+        return
+    result(last_value(watch.since(gm), IRLED) != "1",
+           "no-IR dawn: disabled banks stay dark at night",
+           str(watch.since(gm)))
+    time.sleep((3 + 2) * POLL_MS / 1000.0)  # cooldown -> baseline 8192
+
+    mm2 = stub.mark()
+    stub.set_scene(luma=70, gain=4564, ev=1280000)  # lit: 56% of baseline
+    ok = wait_for(lambda: "day" in stub.modes_since(mm2), 4)
+    result(ok, "no-IR dawn: luma alone returns to day",
+           ric.read_log()[-300:])
+    ric.stop()
+
+
 def scenario_ctrl(stub, watch):
     """Forced modes actuate regardless of the scene; auto resumes."""
     stub.set_scene(luma=120, gain=500, ev=4000)
@@ -1627,6 +1748,9 @@ def main():
         scenario_cooldown,
         scenario_covered_lens_baseline,
         scenario_baseline_refresh,
+        scenario_probe_dawn,
+        scenario_probe_dark_restore,
+        scenario_noir_luma_dawn,
         scenario_ctrl,
         scenario_ctrl_extras,
         scenario_manual_gpio,

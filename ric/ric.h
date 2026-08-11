@@ -136,9 +136,12 @@ typedef struct {
 	ric_trigger_t trigger;
 
 	/* Luma trigger thresholds */
-	int night_luma;	  /* ae_luma below this → night (default 20, 0-255) */
-	int night_gain;	  /* gain above this → night regardless of luma (default 80000) */
-	int day_gain_pct; /* night→day: gain below this % of baseline → day (default 25) */
+	int night_luma;	       /* ae_luma below this → night (default 20, 0-255) */
+	int night_gain;	       /* gain above this → night regardless of luma (default 80000) */
+	int day_gain_pct;      /* night→day: gain below this % of baseline → day (default 25) */
+	int probe_gain_pct;    /* night: gain dip below this % of baseline lifts the IR
+				* LEDs for an ambient luma probe (default 90, 0 = off) */
+	int probe_holdoff_sec; /* minimum spacing between failed probes (default 60) */
 
 	/* Gain trigger thresholds (legacy, trigger=gain only) */
 	int night_threshold; /* gain above this → night */
@@ -181,6 +184,14 @@ typedef struct {
 	bool day_verify_pending;
 	int day_lockout_polls; /* suppress day attempts while > 0 */
 	int day_lockout_next;  /* doubling backoff, 0 = start over */
+
+	/* IR-off ambient probe (night, luma trigger): compressed-gain
+	 * sensors floor total_gain in a lit scene long before the day
+	 * ratio can fire; the dip below the baseline is the hint, the
+	 * probe lifts the LEDs so luma becomes trustworthy. */
+	bool probe_active;
+	int probe_polls_left;	 /* settle + evaluation window countdown */
+	int probe_holdoff_polls; /* suppress probes while > 0 */
 
 	/* Photo mode state */
 	ric_photo_state_t photo;
