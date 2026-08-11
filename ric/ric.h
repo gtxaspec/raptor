@@ -73,6 +73,8 @@ typedef struct {
 	/* AWB baseline auto-calibration */
 	bool calibrated;
 	uint8_t cal_count;
+	uint32_t cal_first_ev; /* EV of the window's first sample: the whole
+				* window must agree with it to +-13% */
 	uint32_t cal_rgain_sum;
 	uint32_t cal_bgain_sum;
 	uint16_t rgain_base;

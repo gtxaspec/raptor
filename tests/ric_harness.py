@@ -1116,6 +1116,52 @@ def scenario_gain_trigger(stub, watch):
     ric.stop()
 
 
+def scenario_photo_night_boot(stub, watch):
+    """A camera that powers up in darkness must reach night mode at
+    production speed: with no AWB baseline neither spectral path can
+    confirm, so the EV-only boot path (stock behavior) must fire on
+    the ev_night counter alone -- not minutes later on the drift
+    fallback. Calibration itself must wait for day mode: on
+    short-throw scenes the IR LEDs pull EV below ev_day, and a
+    baseline learned under IR poisons every deviation check."""
+    conf = GPIO_CONF + "trigger = photo\n"
+    stub.set_scene(luma=5, gain=30000, ev=200000, rgain=170, bgain=150)
+    ric = Ric("photoboot", conf, poll_ms=10)
+    if not ric.wait_running():
+        result(False, "photo boot: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    mm = stub.mark()
+    # settle(7) + NIGHT_EV_TRIGGER(23) = 30 polls; at 10ms that is
+    # 0.3s. 3s is generous headroom and far below the ~2000 polls the
+    # drift fallback would need -- a pass proves the fast path fired.
+    ok = wait_for(lambda: "night" in stub.modes_since(mm), 3)
+    result(ok, "photo boot: dark boot reaches night on EV alone, fast",
+           ric.read_log()[-300:])
+    if not ok:
+        ric.stop()
+        return
+    log = ric.read_log()
+    result("photo AWB calibrated" not in log,
+           "photo boot: no AWB baseline learned in the dark", log[-200:])
+
+    # Bright scene: day must come back uncalibrated via the ratio path,
+    # and only then may calibration sample (day mode, IR off).
+    mm2 = stub.mark()
+    stub.set_scene(luma=100, gain=500, ev=3000, rgain=140, bgain=140)
+    ok = wait_for(lambda: "day" in stub.modes_since(mm2), 10)
+    result(ok, "photo boot: uncalibrated day return via ratio path",
+           ric.read_log()[-300:])
+    ok = wait_for(lambda: "photo AWB calibrated" in ric.read_log(), 6)
+    log = ric.read_log()
+    day_pos = log.rfind("switched to DAY")
+    cal_pos = log.rfind("photo AWB calibrated")
+    result(ok and day_pos >= 0 and cal_pos > day_pos,
+           "photo boot: calibration waits for day mode",
+           "day@%d cal@%d" % (day_pos, cal_pos))
+    ric.stop()
+
+
 def scenario_photo(stub, watch):
     """Photo trigger: AWB auto-calibration from bright samples, night via
     EV + R-gain spectral shift (path 1), day via the fixed-EV drift
@@ -1761,6 +1807,7 @@ def main():
         scenario_pulse_width,
         scenario_gain_trigger,
         scenario_photo,
+        scenario_photo_night_boot,
         scenario_photo_day_ratio,
         scenario_photo_interference,
         scenario_photo_no_ev,
