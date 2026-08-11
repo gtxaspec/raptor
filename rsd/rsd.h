@@ -66,7 +66,7 @@ typedef struct {
  * waiting for any send thread to finish. The memcpy cost is small
  * next to the send-latency hit we'd otherwise take from a barrier
  * wait, especially on slow single-core SoCs. */
-#define RSD_SENDQ_SLOTS	  8
+#define RSD_SENDQ_SLOTS	  32
 #define RSD_FRAME_VIDEO	  0
 #define RSD_FRAME_AUDIO	  1
 #define RSD_SENDQ_OK	  0
@@ -95,9 +95,11 @@ typedef struct {
 	 * Discard accounting. One queue carries both streams, audio pushes at
 	 * 50/s against video's 30/s, and a single video entry can hold the send
 	 * thread for the length of an IDR's worth of blocking writes -- so
-	 * RSD_SENDQ_SLOTS is only about 100ms of stream and a slow client
-	 * overflows it. Without these counters an overflow is indistinguishable
-	 * from a capture fault, which is exactly the confusion that cost a
+	 * RSD_SENDQ_SLOTS is about 400ms of a 25fps video plus AAC stream. This
+	 * absorbs ordinary Wi-Fi scheduling stalls without growing the queue far
+	 * enough to hide a genuinely slow client. Without these counters an
+	 * overflow is indistinguishable from a capture fault, which is exactly
+	 * the confusion that cost a
 	 * round of board testing on the audio dropouts.
 	 */
 	uint32_t drop_audio; /* audio entries discarded to overflow */

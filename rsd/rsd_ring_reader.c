@@ -135,21 +135,38 @@ void rsd_sendq_destroy(rsd_sendq_t *q)
 	pthread_mutex_destroy(&q->lock);
 }
 
-/* Only reached from the video overflow path, so the discards are accounted
- * here rather than at the call site. */
-static void sendq_flush_locked(rsd_sendq_t *q)
+/*
+ * Drop queued video after the client falls behind, but retain audio. The
+ * caller will hold video at the next keyframe; keeping independently
+ * decodable audio here avoids turning the video recovery into a sound gap.
+ * Caller holds q->lock.
+ */
+static void sendq_drop_video_locked(rsd_sendq_t *q)
 {
+	rsd_sendq_entry_t audio[RSD_SENDQ_SLOTS];
+	int audio_count = 0;
+
 	while (q->count > 0) {
-		if (q->entries[q->tail].type == RSD_FRAME_AUDIO)
-			q->drop_audio++;
-		else
-			q->drop_video++;
-		sendq_release_entry(&q->entries[q->tail]);
+		rsd_sendq_entry_t entry = q->entries[q->tail];
+		q->entries[q->tail].data = NULL;
 		q->tail = (q->tail + 1) % RSD_SENDQ_SLOTS;
 		q->count--;
+
+		if (entry.type == RSD_FRAME_AUDIO) {
+			audio[audio_count++] = entry;
+		} else {
+			q->drop_video++;
+			sendq_release_entry(&entry);
+		}
 	}
+
 	q->head = 0;
 	q->tail = 0;
+	for (int i = 0; i < audio_count; i++) {
+		q->entries[q->head] = audio[i];
+		q->head = (q->head + 1) % RSD_SENDQ_SLOTS;
+		q->count++;
+	}
 }
 
 /*
@@ -246,11 +263,13 @@ static int rsd_sendq_push_video(rsd_sendq_t *q, const uint8_t *data, uint32_t le
 		return -1;
 	}
 
-	bool dropped = false;
 	if (q->count >= RSD_SENDQ_SLOTS) {
 		q->overflows++;
-		sendq_flush_locked(q);
-		dropped = true;
+		sendq_drop_video_locked(q);
+		q->drop_video++; /* incoming pre-keyframe frame */
+		pthread_mutex_unlock(&q->lock);
+		free(copy);
+		return RSD_SENDQ_DROPPED;
 	}
 
 	rsd_sendq_entry_t *slot = &q->entries[q->head];
@@ -265,7 +284,7 @@ static int rsd_sendq_push_video(rsd_sendq_t *q, const uint8_t *data, uint32_t le
 
 	pthread_cond_signal(&q->cond);
 	pthread_mutex_unlock(&q->lock);
-	return dropped ? RSD_SENDQ_DROPPED : RSD_SENDQ_OK;
+	return RSD_SENDQ_OK;
 }
 
 static int rsd_sendq_push_audio(rsd_sendq_t *q, uint32_t codec, const uint8_t *data, uint32_t len,
@@ -288,7 +307,7 @@ static int rsd_sendq_push_audio(rsd_sendq_t *q, uint32_t codec, const uint8_t *d
 	 * policy -- a decoder that has lost frames wants the next IDR, not the
 	 * frames in between -- and the wrong one for audio, where every chunk
 	 * is independently useful: it discards up to RSD_SENDQ_SLOTS entries,
-	 * a ~100ms hole in the sound, to make room for 20ms of it. Worse, it
+	 * a noticeable hole in the sound, to make room for 20ms of it. Worse, it
 	 * takes the queued video with it.
 	 *
 	 * Drop the oldest audio chunk instead. That bounds the loss at one
@@ -308,7 +327,7 @@ static int rsd_sendq_push_audio(rsd_sendq_t *q, uint32_t codec, const uint8_t *d
 			free(copy);
 			return RSD_SENDQ_DROPPED;
 		}
-		/* Freed under the lock, as sendq_flush_locked does: releasing it
+		/* Freed under the lock, as sendq_drop_video_locked does: releasing it
 		 * to free() would let another push refill the queue before the
 		 * slot below is written. */
 		sendq_release_entry(&victim);
