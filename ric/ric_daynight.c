@@ -313,6 +313,24 @@ static void ric_set_gpio(ric_state_t *st, ric_mode_t mode)
 		ric_irled_drive(st, true, night);
 }
 
+/*
+ * A forced mode (raptorctl ric mode day|night) is an explicit hardware
+ * assertion, not a state-machine hint. Bench verbs (ircut/ir850/ir940)
+ * move rails without touching current_mode, so a force that matches the
+ * bookkept state must still drive the hardware -- found on a Wyze V3 as
+ * "day" with lit IR LEDs after ircut/LED verbs, because the equality
+ * short-circuit below made the force a silent no-op.
+ */
+void ric_force_mode(ric_state_t *st, ric_mode_t mode)
+{
+	if (mode == st->current_mode) {
+		ric_set_gpio(st, mode);
+		ric_set_isp_mode(mode);
+		return;
+	}
+	ric_set_mode(st, mode);
+}
+
 void ric_set_mode(ric_state_t *st, ric_mode_t mode)
 {
 	if (mode == st->current_mode)

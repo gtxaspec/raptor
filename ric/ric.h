@@ -222,6 +222,7 @@ typedef struct {
 /* ric_daynight.c */
 void ric_gpio_init(ric_state_t *st);
 void ric_set_mode(ric_state_t *st, ric_mode_t mode);
+void ric_force_mode(ric_state_t *st, ric_mode_t mode);
 void ric_set_isp_mode(ric_mode_t mode);
 int ric_ircut_drive(ric_state_t *st, ric_mode_t pos);
 int ric_irled_drive(ric_state_t *st, bool bank940, bool on);

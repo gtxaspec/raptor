@@ -1390,6 +1390,56 @@ def scenario_ir940_only_board(stub, watch):
             f.write(orig)
 
 
+def scenario_mode_reassert(stub, watch):
+    """Forcing a mode is an explicit hardware assertion, not a
+    state-machine hint: after bench verbs perturb the rails (ircut
+    night, ir850 on) while the daemon believes day, `mode day` must
+    still cut the LEDs and re-pulse the filter -- found on a Wyze V3
+    as day mode with lit IR LEDs, because a matching current_mode
+    made the force a silent no-op."""
+    stub.set_scene(luma=120, gain=500, ev=4000)
+    ric = Ric("modereassert", LUMA_CONF)
+    if not ric.wait_running():
+        result(False, "mode-reassert: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    time.sleep(0.5)
+
+    gm = watch.mark()
+    ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "ircut", "value": "night"})
+    ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "ir850", "value": "on"})
+    if not wait_last(watch, gm, IRLED, "1"):
+        result(False, "mode-reassert: bench perturbation", str(watch.since(gm)))
+        ric.stop()
+        return
+
+    gm = watch.mark()
+    r = ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "mode", "value": "day"})
+    ok = r is not None and r.get("state") == "day"
+    led = wait_last(watch, gm, IRLED, "0")
+    result(ok and led, "mode-reassert: forced day cuts perturbed IR",
+           "resp=%s events=%s" % (r, watch.since(gm)))
+    w = wait_pulse(watch, gm, IRCUT1, IRCUT2)
+    result(w is not None,
+           "mode-reassert: forced day re-pulses the filter day-ward",
+           str(watch.since(gm)))
+
+    # Symmetric: perturb day-ward while forced night, re-assert night
+    ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "mode", "value": "night"})
+    time.sleep(0.3)
+    gm = watch.mark()
+    ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "ir850", "value": "off"})
+    ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "ircut", "value": "day"})
+    time.sleep(0.3)
+    gm = watch.mark()
+    ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "mode", "value": "night"})
+    ok = wait_last(watch, gm, IRLED, "1")
+    result(ok, "mode-reassert: forced night relights perturbed IR",
+           str(watch.since(gm)))
+    ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "mode", "value": "auto"})
+    ric.stop()
+
+
 def scenario_manual_gpio(stub, watch):
     """raptorctl-level manual hardware control: ircut, ir850 and ir940
     each drive their piece alone -- no ISP call, no mode change. The
@@ -1800,6 +1850,7 @@ def main():
         scenario_ctrl,
         scenario_ctrl_extras,
         scenario_manual_gpio,
+        scenario_mode_reassert,
         scenario_single_gpio,
         scenario_ir_combos,
         scenario_ir940_only_board,

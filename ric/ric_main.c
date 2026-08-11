@@ -193,10 +193,10 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		if (rss_json_get_str(cmd_json, "value", val, sizeof(val)) == 0) {
 			if (strcmp(val, "day") == 0) {
 				st->settings.opmode = RIC_FORCE_DAY;
-				ric_set_mode(st, RIC_MODE_DAY);
+				ric_force_mode(st, RIC_MODE_DAY);
 			} else if (strcmp(val, "night") == 0) {
 				st->settings.opmode = RIC_FORCE_NIGHT;
-				ric_set_mode(st, RIC_MODE_NIGHT);
+				ric_force_mode(st, RIC_MODE_NIGHT);
 			} else {
 				st->settings.opmode = RIC_AUTO;
 			}
