@@ -346,8 +346,14 @@ void ric_set_mode(ric_state_t *st, ric_mode_t mode)
 
 	/* Cooldown: wait 3 polls for IR LEDs / ISP to stabilize before
 	 * evaluating transitions. After cooldown in night mode, the gain
-	 * baseline is sampled for the night→day transition algorithm. */
+	 * baseline is sampled for the night→day transition algorithm; the
+	 * sampling itself extends while AE is still walking (see the
+	 * cooldown block in ric_poll_exposure). */
 	st->cooldown_remaining = 3;
+	st->settle_prev_gain = 0;
+	st->settle_agree_run = 0;
+	st->settle_extend_left = 17;
+	st->probe_recheck_polls = 0; /* re-armed when the baseline lands */
 	if (mode == RIC_MODE_DAY)
 		st->night_gain_baseline = 0;
 }
@@ -503,27 +509,52 @@ void ric_poll_exposure(ric_state_t *st)
 			}
 		}
 		if (st->cooldown_remaining == 0 && st->current_mode == RIC_MODE_NIGHT) {
-			/* A baseline far below the gain that triggered night is
-			 * self-contradictory (night through the IR reading
-			 * brighter than the darkness that caused it) -- the IR
-			 * LED bouncing off a covered lens or a point-blank
-			 * surface crashes AE during this window and would make
-			 * the day trigger unreachable. */
-			uint32_t floor_gain = st->night_detect_gain / 10;
-			if (total_gain < floor_gain) {
-				RSS_WARN("night baseline %u is under 10%% of the gain that "
-					 "triggered night (%u) -- IR reflection off a covered "
-					 "lens? clamped to %u",
-					 total_gain, st->night_detect_gain, floor_gain);
-				st->night_gain_baseline = floor_gain;
-			} else {
-				st->night_gain_baseline = total_gain;
+			/* The baseline must reflect a SETTLED reading: gc2053-class
+			 * AE walks for many seconds after the IR lights the scene
+			 * (measured on a Wyze V3: ceiling 45000 falling to 306,
+			 * with 4502 sampled at the old fixed cooldown -- the
+			 * settled gain then read as a permanent probe dip and the
+			 * IR blinked at every holdoff). AE walks step and can
+			 * hold a value briefly, so one quiet pair is not settled:
+			 * adopt only after three consecutive polls agree within
+			 * 10%, and give up at a hard cap rather than wait
+			 * forever. */
+			bool within =
+				st->settle_prev_gain > 0 && total_gain > 0 &&
+				total_gain <= st->settle_prev_gain + st->settle_prev_gain / 10 &&
+				total_gain >= st->settle_prev_gain - st->settle_prev_gain / 10;
+			st->settle_agree_run = within ? st->settle_agree_run + 1 : 0;
+			/* No gain reported (ADC-only platforms) = nothing to
+			 * settle: adopt immediately, the baseline stays absent. */
+			if (have_gain && st->settle_agree_run < 2 && st->settle_extend_left > 0) {
+				st->settle_extend_left--;
+				st->settle_prev_gain = total_gain;
+				st->cooldown_remaining = 1;
+				return;
 			}
-			RSS_DEBUG("night baseline: gain=%u (day trigger < %u)",
-				  st->night_gain_baseline,
+			/* Adopt the settled reading as-is. The old 10%-of-trigger
+			 * floor clamp assumed a far-below-trigger baseline meant
+			 * IR bouncing off a covered lens; a Wyze V3 disproved it
+			 * (starlight gc2053 + strong IR settles at 0.7% of the
+			 * trigger in a small room) and the clamp then manufactured
+			 * a false ratio-day at every dusk. A genuinely covered
+			 * lens now simply holds night on its own settled
+			 * baseline: no dip, no probe, no blinking, and the
+			 * day-verify latch still guards every real day attempt. */
+			st->night_gain_baseline = total_gain;
+			st->night_ev_baseline = ev;
+			st->probe_recheck_polls =
+				st->settings.probe_recheck_sec * 1000 /
+				(st->settings.poll_interval_ms > 0 ? st->settings.poll_interval_ms
+								   : 1000);
+			RSS_DEBUG("night baseline: gain=%u ev=%u (day trigger < %u)",
+				  st->night_gain_baseline, st->night_ev_baseline,
 				  st->night_gain_baseline * (uint32_t)st->settings.day_gain_pct /
 					  100);
 		}
+		/* Every cooldown poll seeds the settling comparison above,
+		 * so the first evaluation has a real predecessor. */
+		st->settle_prev_gain = total_gain;
 		return;
 	}
 
@@ -574,6 +605,7 @@ void ric_poll_exposure(ric_state_t *st)
 					  "real dark reading)",
 					  st->night_gain_baseline, total_gain);
 				st->night_gain_baseline = total_gain;
+				st->night_ev_baseline = ev;
 			}
 			uint32_t day_thr =
 				st->night_gain_baseline * (uint32_t)st->settings.day_gain_pct / 100;
@@ -591,20 +623,53 @@ void ric_poll_exposure(ric_state_t *st)
 		 * dark night sits at its baseline and never probes; a probe
 		 * that finds darkness restores the LEDs and backs off. */
 		if (st->probe_active && st->current_mode != RIC_MODE_NIGHT) {
-			/* The probe ended in a day switch; LEDs already
-			 * match day mode. */
+			/* The probe ended in a day switch; LEDs already match
+			 * day mode. Arm the holdoff anyway: if day verification
+			 * reverts this switch, an immediate re-probe would blink
+			 * the IR again. */
 			st->probe_active = false;
+			st->probe_holdoff_polls = st->settings.probe_holdoff_sec * 1000 /
+						  st->settings.poll_interval_ms;
 		}
 		if (st->current_mode == RIC_MODE_NIGHT && ir_banks &&
 		    st->settings.probe_gain_pct > 0 && st->night_gain_baseline > 0 &&
 		    st->day_lockout_polls == 0) {
 			int hyst_polls = st->settings.hysteresis_sec;
 			if (!st->probe_active) {
-				uint32_t dip_thr = st->night_gain_baseline *
-						   (uint32_t)st->settings.probe_gain_pct / 100;
-				if (st->probe_holdoff_polls > 0) {
+				/* AE can answer new light with exposure alone while
+				 * gain sits pinned at its floor (Wyze V3: night+IR
+				 * gain 306 = near-minimum, lights-on moves only the
+				 * exposure time). EV carries both dimensions, so the
+				 * dip watches EV where the platform reports it. */
+				bool use_ev = have_ev && st->night_ev_baseline > 0;
+				uint32_t dip_val = use_ev ? ev : total_gain;
+				bool dip_have = use_ev || have_gain;
+				uint32_t dip_thr =
+					(use_ev ? st->night_ev_baseline : st->night_gain_baseline) *
+					(uint32_t)st->settings.probe_gain_pct / 100;
+				/* The interval recheck is its own clock: IR wash
+				 * can hide ambient light from every AE metric
+				 * (Wyze V3: lit reads 91% of the dark EV), so a
+				 * long quiet night earns a probe regardless of
+				 * dips. It ticks through dip holdoffs but not
+				 * through an active probe. */
+				bool recheck_due = false;
+				if (st->settings.probe_recheck_sec > 0 &&
+				    st->probe_recheck_polls > 0) {
+					st->probe_recheck_polls--;
+					recheck_due = st->probe_recheck_polls == 0;
+				}
+				if (st->probe_holdoff_polls > 0 && !recheck_due) {
 					st->probe_holdoff_polls--;
-				} else if (have_gain && total_gain < dip_thr) {
+				} else if (!recheck_due && (!dip_have || dip_val >= dip_thr)) {
+					/* Not dipping (or no reading): the run
+					 * must not accumulate across gaps. */
+					st->probe_dip_run = 0;
+				} else if (/* The dip must persist: a single low
+					    * poll can be an AE transient. The
+					    * interval recheck fires outright. */
+					   recheck_due || ++st->probe_dip_run >= 3) {
+					st->probe_dip_run = 0;
 					if (st->settings.ir850_enabled)
 						ric_irled_drive(st, false, false);
 					if (st->settings.ir940_enabled)
@@ -615,10 +680,19 @@ void ric_poll_exposure(ric_state_t *st)
 					 * and hyst+2 evaluation polls. */
 					st->probe_polls_left =
 						RIC_PROBE_SETTLE_POLLS + hyst_polls + 3;
-					RSS_INFO("gain %u dipped under %d%% of night baseline "
-						 "%u: IR off for an ambient probe",
-						 total_gain, st->settings.probe_gain_pct,
-						 st->night_gain_baseline);
+					if (recheck_due)
+						RSS_INFO("interval recheck after %ds of quiet "
+							 "night: IR off for an ambient probe",
+							 st->settings.probe_recheck_sec);
+					else
+						RSS_INFO("%s %u dipped under %d%% of night "
+							 "baseline %u: IR off for an ambient "
+							 "probe",
+							 use_ev ? "ev" : "gain", dip_val,
+							 st->settings.probe_gain_pct,
+							 dip_thr * 100 /
+								 (uint32_t)st->settings
+									 .probe_gain_pct);
 				}
 			} else if (st->probe_polls_left > 0) {
 				st->probe_polls_left--;

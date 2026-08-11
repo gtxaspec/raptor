@@ -521,12 +521,14 @@ def scenario_cooldown(stub, watch):
 def scenario_covered_lens_baseline(stub, watch):
     """The covered-lens test every user runs, modeled with IR-dependent
     optics: covering goes dark -> night; the IR LED bounces off the
-    cover so the scene reads bright (gain 459 vs 45025 at detection);
-    when a false day switches the IR off, the covered lens goes dark
-    again. Brightness cannot separate this from a real bright scene
-    (459 vs 377 in the field), so ric must verify a ratio-triggered
-    day after the IR drops: a night-dark verdict reverts with backoff
-    instead of oscillating, and a real uncover verifies and sticks."""
+    cover so the scene reads bright (gain 459 vs 45025 at detection).
+    The settled bounce IS the baseline now (no 10%-of-trigger clamp:
+    a starlight sensor legitimately settles below 1% of its trigger),
+    so a covered lens holds night with no day attempt, no probe and
+    no IR blinking. Uncovering into a bright room reads the same
+    brightness (377 vs 459 -- level cannot separate them), lands as a
+    sustained dip below the settled baseline, and the probe resolves
+    it with the emitter off: real ambient light, verified day."""
     stub.set_scene(luma=120, gain=400, ev=500)
     ric = Ric("covered", LUMA_CONF)
     if not ric.wait_running():
@@ -541,51 +543,39 @@ def scenario_covered_lens_baseline(stub, watch):
         result(False, "covered-lens: night entry", str(stub.modes_since(mm)))
         ric.stop()
         return
-    # IR on, reflecting off the cover: bright to every metric.
+    # IR on, reflecting off the cover: bright to every metric, and the
+    # settled reading becomes the honest night baseline.
     stub.set_scene(luma=50, gain=459, ev=2600)
+    time.sleep(10 * POLL_MS / 1000.0)
 
-    # The reflection crosses the clamped trigger and a day attempt
-    # happens; the moment it does, the IR is off and the cover reads
-    # dark again. Feed that back like the physics would.
-    mm2 = stub.mark()
-    if not wait_for(lambda: "day" in stub.modes_since(mm2), 10):
-        result(False, "covered-lens: expected a day attempt off the reflection",
-               str(stub.modes_since(mm2)))
-        ric.stop()
-        return
-    stub.set_scene(luma=8, gain=44002, ev=242354)  # IR off, still covered
+    gm, mm2 = watch.mark(), stub.mark()
+    time.sleep(25 * POLL_MS / 1000.0)
+    led_vals = [c for _, p, _, c in watch.since(gm) if p == IRLED]
+    result("day" not in stub.modes_since(mm2) and "0" not in led_vals,
+           "covered-lens: covered scene holds night, no day attempt, no blink",
+           "modes=%s leds=%s" % (stub.modes_since(mm2), led_vals))
+    result("day verification failed" not in ric.read_log(),
+           "covered-lens: no verify churn while covered", ric.read_log()[-200:])
 
-    ok = wait_for(lambda: "night" in stub.modes_since(mm2), 6)
-    result(ok, "covered-lens: false day reverts to night",
-           str(stub.modes_since(mm2)))
-    verified_warn = "day verification failed" in ric.read_log()
-    result(verified_warn, "covered-lens: false day diagnosed",
+    # Uncover into a bright room: same brightness level as the bounce,
+    # but it dips below the settled baseline -> probe -> honest luma.
+    gm, mm3 = watch.mark(), stub.mark()
+    stub.set_scene(luma=50, gain=377, ev=1900)
+    ok = wait_for(lambda: last_value(watch.since(gm), IRLED) == "0", 4)
+    result(ok, "covered-lens: uncover dips the baseline and probes",
+           str(watch.since(gm)))
+    stub.set_scene(luma=90, gain=300, ev=2000)  # true ambient, no IR
+    ok = wait_for(lambda: "day" in stub.modes_since(mm3), 5)
+    result(ok, "covered-lens: probe verifies real day and sticks",
            ric.read_log()[-300:])
+    result(last_value(watch.since(gm), IRLED) == "0",
+           "covered-lens: IR stays off in verified day", str(watch.since(gm)))
 
-    # Back in night: reflection again. The backoff must hold -- no
-    # second day attempt in the lockout window (the old behavior
-    # flapped once per cooldown+hysteresis).
-    stub.set_scene(luma=50, gain=459, ev=2600)
-    mm3 = stub.mark()
-    time.sleep(20 * POLL_MS / 1000.0)
-    result("day" not in stub.modes_since(mm3),
-           "covered-lens: backoff holds night against the reflection",
-           str(stub.modes_since(mm3)))
-
-    # Uncover with a bright light: identical brightness to the
-    # reflection, but now the scene stays bright when the IR drops.
-    # The next attempt verifies and day sticks.
-    stub.set_scene(luma=51, gain=377, ev=521)
+    # Re-cover: dark again, normal dusk returns night.
     mm4 = stub.mark()
-    ok = wait_for(lambda: "day" in stub.modes_since(mm4), 45 * POLL_MS / 1000.0 + 8)
-    result(ok, "covered-lens: real uncover verifies day after backoff",
-           str(stub.modes_since(mm4)))
-    if ok:
-        time.sleep((3 + 3) * POLL_MS / 1000.0)
-        post = stub.modes_since(mm4)
-        result("night" not in post,
-               "covered-lens: verified day is stable",
-               str(post))
+    stub.set_scene(luma=8, gain=44002, ev=242354)
+    ok = wait_for(lambda: "night" in stub.modes_since(mm4), 5)
+    result(ok, "covered-lens: re-cover returns to night", str(stub.modes_since(mm4)))
     ric.stop()
 
 
@@ -710,6 +700,147 @@ def scenario_probe_dark_restore(stub, watch):
            str(watch.since(rm2)))
     st = ric_status()
     result(st.get("state") == "night", "probe dark: still night", str(st))
+    ric.stop()
+
+
+def scenario_probe_slow_ae(stub, watch):
+    """gc2053-class AE settles over many seconds after the IR lights the
+    scene: the night baseline must wait for the walk to stand still
+    instead of adopting a mid-swing value 15x above the settled gain,
+    and the walk itself must not read as a probe-worthy dip (Wyze V3:
+    baseline 4502 sampled mid-walk, settled 306, IR blinking at every
+    probe holdoff all night). A real dip below the settled baseline
+    must still probe."""
+    stub.set_scene(luma=70, gain=4500, ev=1200000)
+    ric = Ric("probeslowae", LUMA_CONF)
+    if not ric.wait_running():
+        result(False, "slow-AE: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    time.sleep(0.5)
+
+    gm, mm = watch.mark(), stub.mark()
+    stub.set_scene(luma=6, gain=45000, ev=50000000)  # dark, gain at ceiling
+    if not wait_for(lambda: "night" in stub.modes_since(mm), 4):
+        result(False, "slow-AE: night entry", str(stub.modes_since(mm)))
+        ric.stop()
+        return
+    # AE walks down over many polls once IR lights the scene, then holds
+    for g in (20000, 9000, 4500, 1500, 700, 306):
+        stub.set_scene(luma=72, gain=g, ev=300000)
+        time.sleep(2 * POLL_MS / 1000.0)
+    time.sleep(26 * POLL_MS / 1000.0)
+    led_vals = [c for _, p, _, c in watch.since(gm) if p == IRLED and c in ("0", "1")]
+    result("0" not in led_vals,
+           "slow-AE: neither the walk nor the settled gain false-probes",
+           str(watch.since(gm)))
+    st = ric_status()
+    if not st or st.get("state") != "night":
+        result(False, "slow-AE: still night after the walk", str(st))
+        ric.stop()
+        return
+    result(True, "slow-AE: still night after the walk")
+
+    # lights on: a real dip below the settled baseline still probes;
+    # react to the lifted LEDs with the true bright ambient
+    gm = watch.mark()
+    stub.set_scene(luma=72, gain=240, ev=250000)
+    ok = wait_for(lambda: last_value(watch.since(gm), IRLED) == "0", 5)
+    result(ok, "slow-AE: a real dip below the settled baseline probes",
+           str(watch.since(gm)))
+    if ok:
+        stub.set_scene(luma=95, gain=200, ev=200000)
+        ok = wait_for(lambda: "day" in stub.modes_since(mm), 5)
+        result(ok, "slow-AE: the probe completes into day",
+               ric.read_log()[-200:])
+    ric.stop()
+
+
+def scenario_probe_recheck(stub, watch):
+    """IR wash can hide ambient light entirely: on a Wyze V3 the IR-lit
+    scene reads EV 637 lit vs ~700 dark -- a 9% perturbation no dip
+    threshold can catch. The periodic recheck probes anyway after
+    probe_recheck_sec without a dip, bounding dawn latency on
+    wash-dominated scenes; a dark recheck restores, re-arms, and fires
+    again an interval later."""
+    conf = LUMA_CONF + "probe_recheck_sec = 2\n"
+    stub.set_scene(luma=70, gain=4500, ev=1200000)
+    ric = Ric("procheck", conf)
+    if not ric.wait_running():
+        result(False, "recheck: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    time.sleep(0.5)
+
+    mm = stub.mark()
+    stub.set_scene(luma=6, gain=8192, ev=50000000)
+    if not wait_for(lambda: "night" in stub.modes_since(mm), 4):
+        result(False, "recheck: night entry", str(stub.modes_since(mm)))
+        ric.stop()
+        return
+    # IR-lit scene, rock stable: no dip ever
+    stub.set_scene(luma=72, gain=1300, ev=370000)
+    time.sleep((3 + 3) * POLL_MS / 1000.0)
+
+    # a recheck probe must fire within ~2s even with nothing dipping
+    gm = watch.mark()
+    ok = wait_for(lambda: last_value(watch.since(gm), IRLED) == "0", 4)
+    result(ok, "recheck: stable night still probes on the interval",
+           str(watch.since(gm)))
+    # the room is genuinely dark without IR: restore and hold night
+    stub.set_scene(luma=4, gain=8192, ev=50000000)
+    ok = wait_for(lambda: last_value(watch.since(gm), IRLED) == "1", 4)
+    result(ok, "recheck: dark recheck restores IR", str(watch.since(gm)))
+    st = ric_status()
+    result(st is not None and st.get("state") == "night",
+           "recheck: still night", str(st))
+
+    # back to the stable IR-lit scene; the interval must re-arm and a
+    # second recheck fire (holdoff applies to failed DIP probes, the
+    # recheck cadence is its own clock)
+    stub.set_scene(luma=72, gain=1300, ev=370000)
+    time.sleep(3 * POLL_MS / 1000.0)
+    gm2 = watch.mark()
+    ok = wait_for(lambda: last_value(watch.since(gm2), IRLED) == "0", 6)
+    result(ok, "recheck: the interval re-arms after a dark recheck",
+           str(watch.since(gm2)))
+    stub.set_scene(luma=95, gain=2500, ev=800000)  # honest bright ambient
+    ok = wait_for(lambda: "day" in stub.modes_since(mm), 5)
+    result(ok, "recheck: a lit recheck completes into day",
+           ric.read_log()[-200:])
+    ric.stop()
+
+
+def scenario_recheck_rearm(stub, watch):
+    """Shortening probe_recheck_sec at runtime must re-arm the running
+    countdown: the bench sets a short interval mid-night to bound its
+    dawn legs, and a countdown still holding the old ten-minute value
+    would ignore it until the next night entry."""
+    conf = LUMA_CONF + "probe_recheck_sec = 3600\n"
+    stub.set_scene(luma=70, gain=4500, ev=1200000)
+    ric = Ric("rearm", conf)
+    if not ric.wait_running():
+        result(False, "recheck-rearm: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    time.sleep(0.5)
+    mm = stub.mark()
+    stub.set_scene(luma=6, gain=8192, ev=50000000)
+    if not wait_for(lambda: "night" in stub.modes_since(mm), 4):
+        result(False, "recheck-rearm: night entry", str(stub.modes_since(mm)))
+        ric.stop()
+        return
+    stub.set_scene(luma=72, gain=1300, ev=370000)
+    time.sleep((3 + 3) * POLL_MS / 1000.0)
+
+    gm = watch.mark()
+    r = ctrl_cmd(RUN_DIR + "/ric.sock",
+                 {"cmd": "set-threshold", "key": "probe_recheck_sec", "value": 1})
+    ok = r is not None and r.get("status") == "ok"
+    probed = wait_for(lambda: last_value(watch.since(gm), IRLED) == "0", 4)
+    result(ok and probed,
+           "recheck-rearm: shortening the interval re-arms the countdown",
+           "resp=%s events=%s" % (r, watch.since(gm)))
     ric.stop()
 
 
@@ -1847,6 +1978,9 @@ def main():
         scenario_probe_dawn,
         scenario_probe_dark_restore,
         scenario_noir_luma_dawn,
+        scenario_probe_slow_ae,
+        scenario_probe_recheck,
+        scenario_recheck_rearm,
         scenario_ctrl,
         scenario_ctrl_extras,
         scenario_manual_gpio,
@@ -1872,6 +2006,9 @@ def main():
         scenario_disabled,
         scenario_json_discovery,
     ]
+    only = os.environ.get("RIC_SCENARIO", "")
+    if only:
+        scenarios = [sc for sc in scenarios if only in sc.__name__]
     for sc in scenarios:
         print("== %s" % sc.__name__, flush=True)
         try:

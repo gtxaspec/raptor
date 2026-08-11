@@ -67,6 +67,9 @@ static void load_config(ric_state_t *st)
 	c->probe_holdoff_sec = rss_config_get_int(cfg, "ircut", "probe_holdoff_sec", 60);
 	if (c->probe_holdoff_sec < 1)
 		c->probe_holdoff_sec = 60;
+	c->probe_recheck_sec = rss_config_get_int(cfg, "ircut", "probe_recheck_sec", 600);
+	if (c->probe_recheck_sec < 0)
+		c->probe_recheck_sec = 600;
 
 	/* ADC thresholds (trigger=adc) */
 	c->adc_channel = rss_config_get_int(cfg, "ircut", "adc_channel", 0);
@@ -258,6 +261,30 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 							   "range 50-10000");
 			c->poll_interval_ms = val;
 			cfg_key = "poll_interval_ms";
+		} else if (strcmp(key, "probe_gain_pct") == 0) {
+			if (val < 0 || val > 99)
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size, "range 0-99");
+			c->probe_gain_pct = val;
+			cfg_key = "probe_gain_pct";
+		} else if (strcmp(key, "probe_holdoff_sec") == 0) {
+			if (val < 1)
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size, "must be >= 1");
+			c->probe_holdoff_sec = val;
+			cfg_key = "probe_holdoff_sec";
+		} else if (strcmp(key, "probe_recheck_sec") == 0) {
+			if (val < 0)
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size, "must be >= 0");
+			c->probe_recheck_sec = val;
+			/* Take effect now: a countdown armed with the old
+			 * interval would ignore a shorter one until the next
+			 * night entry. */
+			{
+				int polls = val * 1000 /
+					    (c->poll_interval_ms > 0 ? c->poll_interval_ms : 1000);
+				if (st->probe_recheck_polls > polls)
+					st->probe_recheck_polls = polls;
+			}
+			cfg_key = "probe_recheck_sec";
 		} else if (strcmp(key, "photo_ev_night") == 0) {
 			if (val < 0)
 				return rss_ctrl_resp_error(resp_buf, resp_buf_size, "must be >= 0");
