@@ -814,6 +814,12 @@ echo "=== Timelapse ==="
 # with playback-spaced timestamps -- a real-time-spaced file would mean
 # the synthetic DTS path broke -- and carries the same SEI timecodes
 # and signature chain as every other recording.
+# test-logs persists across runs and the storage path splits by DATE:
+# a run that straddles midnight (or follows an earlier run) leaves
+# stale files whose date directory can sort ahead of today's, and
+# `find | head -1` then probes a 1-frame leftover instead of this
+# run's file. Start from an empty tree.
+rm -rf "$LOG_DIR/rec/timelapse"
 check_contains "timelapse initially off" '"enabled":[[:space:]]*false' \
     "$OUT/raptorctl" rmr timelapse-status
 check_contains "timelapse-enable" "ok" "$OUT/raptorctl" rmr timelapse-enable
