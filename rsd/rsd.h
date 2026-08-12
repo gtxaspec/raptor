@@ -190,7 +190,15 @@ typedef struct rsd_server {
 	rsd_ring_ctx_t video[RSD_STREAM_COUNT];
 
 	/* Audio ring — same cross-thread access pattern as video ring pointers */
+	/* Owned by the audio reader thread: it opens, closes and reopens
+	 * the ring as rad restarts. Sessions must never dereference it --
+	 * the SDP-relevant fields are cached in the atomics below, written
+	 * by the reader at each (re)open (a SETUP racing a reopen once
+	 * read a freed header). */
 	rss_ring_t *ring_audio;
+	_Atomic uint32_t audio_sdp_codec;
+	_Atomic uint32_t audio_sdp_clock;
+	_Atomic uint32_t audio_sdp_aot; /* ring header "profile": AAC object type */
 	uint64_t audio_read_seq;
 	bool has_audio;
 

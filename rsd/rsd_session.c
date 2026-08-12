@@ -476,9 +476,10 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 	}
 
 	if (self->srv->has_audio) {
-		const rss_ring_header_t *ahdr = rss_ring_get_header(self->srv->ring_audio);
-		uint32_t codec = ahdr->codec;
-		int aclk = ahdr->fps_num; /* fps_num holds sample_rate */
+		/* Reader-owned ring: use the cached SDP fields, never the
+		 * header (a reopen frees it under a racing DESCRIBE). */
+		uint32_t codec = atomic_load(&self->srv->audio_sdp_codec);
+		int aclk = (int)atomic_load(&self->srv->audio_sdp_clock);
 
 		/* Same contract as video: advertise the configured rate.
 		 * Defaults mirror rad's codec plugins. G.711 stays at its
@@ -502,7 +503,8 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 			 * producer declares the object type in the ring
 			 * header; the RTP clock is the full (extension)
 			 * rate either way. */
-			int aot = (ahdr->profile == 5) ? RSS_AAC_AOT_SBR : RSS_AAC_AOT_LC;
+			int aot = (atomic_load(&self->srv->audio_sdp_aot) == 5) ? RSS_AAC_AOT_SBR
+										: RSS_AAC_AOT_LC;
 			uint8_t asc[RSS_AAC_ASC_MAX];
 			int asc_len = rss_aac_asc(aot, aclk, 1, asc);
 			if (asc_len < 0) {
@@ -782,13 +784,14 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 			compy_respond(ctx, COMPY_STATUS_NOT_FOUND, "Audio not available");
 			return;
 		}
-		/* Determine PT and clock from ring metadata */
+		/* Determine PT and clock from the reader's cached fields */
 		int apt = 0;
 		int aclk = 8000;
-		if (self->srv->ring_audio) {
-			const rss_ring_header_t *ahdr = rss_ring_get_header(self->srv->ring_audio);
-			aclk = ahdr->fps_num;
-			switch (ahdr->codec) {
+		{
+			uint32_t acodec = atomic_load(&self->srv->audio_sdp_codec);
+			if (atomic_load(&self->srv->audio_sdp_clock))
+				aclk = (int)atomic_load(&self->srv->audio_sdp_clock);
+			switch (acodec) {
 			case RSD_CODEC_PCMU:
 				apt = 0;
 				break;

@@ -634,6 +634,9 @@ void *rsd_audio_reader_thread(void *arg)
 		rtp_clock = (audio_codec == RSD_CODEC_OPUS) ? 48000 : audio_clock;
 		ring_frame_samples = ahdr->width; /* producer-declared samples/frame */
 		srv->audio_read_seq = ahdr->write_seq;
+		atomic_store(&srv->audio_sdp_codec, audio_codec);
+		atomic_store(&srv->audio_sdp_clock, audio_clock);
+		atomic_store(&srv->audio_sdp_aot, ahdr->profile);
 		RSS_DEBUG("audio codec=%u clock=%u rtp_clock=%u frame_samples=%u", audio_codec,
 			  audio_clock, rtp_clock, ring_frame_samples);
 	}
@@ -653,6 +656,9 @@ void *rsd_audio_reader_thread(void *arg)
 			rtp_clock = (audio_codec == RSD_CODEC_OPUS) ? 48000 : audio_clock;
 			ring_frame_samples = ahdr->width;
 			srv->audio_read_seq = ahdr->write_seq;
+			atomic_store(&srv->audio_sdp_codec, audio_codec);
+			atomic_store(&srv->audio_sdp_clock, audio_clock);
+			atomic_store(&srv->audio_sdp_aot, ahdr->profile);
 			audio_ts_epoch = 0;
 			last_audio_rtp_ts = 0;
 			has_last_audio_rtp_ts = false;

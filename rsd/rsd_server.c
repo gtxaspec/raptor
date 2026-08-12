@@ -344,6 +344,12 @@ int rsd_server_init(rsd_server_t *srv)
 	if (srv->ring_audio) {
 		srv->has_audio = true;
 		rss_ring_check_version(srv->ring_audio, "audio");
+		/* Seed the SDP cache before any client can DESCRIBE; the
+		 * reader thread republishes on every reopen. */
+		const rss_ring_header_t *ahdr = rss_ring_get_header(srv->ring_audio);
+		atomic_store(&srv->audio_sdp_codec, ahdr->codec);
+		atomic_store(&srv->audio_sdp_clock, ahdr->fps_num);
+		atomic_store(&srv->audio_sdp_aot, ahdr->profile);
 		RSS_INFO("audio ring available");
 	}
 
@@ -688,6 +694,11 @@ void rsd_server_run(rsd_server_t *srv)
 			audio_retry_count = 0;
 			srv->ring_audio = rss_ring_open("audio");
 			if (srv->ring_audio) {
+				const rss_ring_header_t *ahdr =
+					rss_ring_get_header(srv->ring_audio);
+				atomic_store(&srv->audio_sdp_codec, ahdr->codec);
+				atomic_store(&srv->audio_sdp_clock, ahdr->fps_num);
+				atomic_store(&srv->audio_sdp_aot, ahdr->profile);
 				pthread_attr_t a_attr;
 				pthread_attr_init(&a_attr);
 				pthread_attr_setstacksize(&a_attr, 128 * 1024);
