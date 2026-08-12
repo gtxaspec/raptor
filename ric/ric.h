@@ -111,9 +111,6 @@ typedef struct {
 	uint8_t fixed_check_count;
 
 	/* Anti-flap */
-	bool anti_flap;
-	uint8_t anti_flap_count;
-	uint32_t anti_flap_ticks;
 
 	/* Pending mode change */
 	bool change_pending;

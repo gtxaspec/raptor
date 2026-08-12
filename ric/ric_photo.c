@@ -40,9 +40,6 @@
 #define FIXED_CHECK_INTERVAL	200
 #define FIXED_CHECK_DRIFT_LIMIT 200
 
-/* Anti-flap */
-#define ANTI_FLAP_SETTLE 150
-
 void ric_photo_reset(ric_photo_state_t *ps, ric_photo_phase_t phase)
 {
 	bool was_calibrated = ps->calibrated;
@@ -516,17 +513,6 @@ void ric_photo_poll(ric_state_t *st, uint32_t ev, uint16_t rgain, uint16_t bgain
 	 * instead of freezing in day until dawn. */
 	if (!ps->calibrated && st->current_mode == RIC_MODE_DAY)
 		photo_calibrate(st);
-
-	/* Anti-flap: after mode transitions, wait for ISP to settle */
-	if (ps->anti_flap) {
-		ps->anti_flap_ticks++;
-		if (ps->anti_flap_ticks > ANTI_FLAP_SETTLE) {
-			ps->anti_flap = false;
-			ps->anti_flap_ticks = 0;
-			ps->anti_flap_count = 0;
-		}
-		return;
-	}
 
 	if (poll_count % 10 == 0) {
 		RSS_DEBUG("photo [%s] ev=%u rg=%u bg=%u (base=%u/%u) | "
