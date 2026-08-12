@@ -619,6 +619,7 @@ void *rsd_audio_reader_thread(void *arg)
 	int64_t audio_ts_epoch = 0;
 	uint32_t last_audio_rtp_ts = 0;
 	bool has_last_audio_rtp_ts = false;
+	int32_t audio_err_ewma = 0;
 	uint64_t last_write_seq = 0;
 	int idle_count = 0;
 	int64_t last_drop_report = rss_timestamp_us();
@@ -738,17 +739,20 @@ void *rsd_audio_reader_thread(void *arg)
 			 * clock). A free-running counter drifts with the
 			 * source clock and silently absorbs ring-overflow
 			 * gaps into a permanent A/V offset; raw ring times
-			 * carry 20ms chunk quantization that clients read as
-			 * an unstable rate. Steering keeps exact spacing on
-			 * the wire while the ring clock governs the long-run
-			 * rate: snap forward on real gaps (>4 frames, clients
-			 * render a gap), re-anchor the mapping if ring time
-			 * regresses (rad restart — never send backward RTP
-			 * time), nudge 1ms once drift exceeds a frame. Ring
-			 * times carry per-frame arrival quantization, so the
-			 * nudge deadband must be at least one frame wide or
-			 * the cadence bang-bangs ±1ms on every frame (seen
-			 * at 16kHz: 64ms quantization vs 16-unit nudge). */
+			 * carry per-frame arrival quantization that clients
+			 * read as an unstable rate. Steering keeps exact
+			 * spacing on the wire while the ring clock governs
+			 * the long-run rate: snap forward on real gaps (>4
+			 * frames, clients render a gap), re-anchor the
+			 * mapping if ring time regresses (rad restart --
+			 * never send backward RTP time), and slew
+			 * proportionally on a filtered error. The filter
+			 * absorbs the arrival quantization that once forced
+			 * a deadband a full frame wide -- and that deadband
+			 * let the wire wander a frame off the ring clock and
+			 * walk back in 1ms steps, a sawtooth every RTCP
+			 * sender report faithfully republished as ~15ms
+			 * timeline corrections (measured on a T31 at 8kHz). */
 			if (audio_ts_epoch == 0)
 				audio_ts_epoch = (int64_t)meta.timestamp;
 			uint32_t ring_rtp = (uint32_t)((uint64_t)(meta.timestamp - audio_ts_epoch) *
@@ -759,21 +763,24 @@ void *rsd_audio_reader_thread(void *arg)
 			} else {
 				rtp_ts = last_audio_rtp_ts + frame_samples;
 				int32_t err = (int32_t)(ring_rtp - rtp_ts);
-				int32_t nudge = (int32_t)(rtp_clock / 1000); /* 1ms */
-				int32_t band = (int32_t)frame_samples;
-				if (band < nudge)
-					band = nudge;
 				if (rtp_clock == 0) {
 					/* degenerate ring header: plain cadence */
 				} else if (err > (int32_t)frame_samples * 4) {
 					rtp_ts = ring_rtp;
+					audio_err_ewma = 0;
 				} else if (err < -(int32_t)frame_samples * 4) {
 					audio_ts_epoch = (int64_t)meta.timestamp -
 							 (int64_t)rtp_ts * 1000000 / rtp_clock;
-				} else if (err > band) {
-					rtp_ts += nudge;
-				} else if (err < -band) {
-					rtp_ts -= nudge;
+					audio_err_ewma = 0;
+				} else {
+					audio_err_ewma += (err - audio_err_ewma) / 16;
+					int32_t slew = audio_err_ewma / 16;
+					int32_t max_slew = (int32_t)(rtp_clock / 1000); /* 1ms */
+					if (slew > max_slew)
+						slew = max_slew;
+					else if (slew < -max_slew)
+						slew = -max_slew;
+					rtp_ts += slew;
 				}
 			}
 			last_audio_rtp_ts = rtp_ts;
