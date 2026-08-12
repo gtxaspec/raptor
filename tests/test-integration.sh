@@ -146,6 +146,9 @@ codec = l16
 [rtsp]
 backchannel = true
 port = 15554
+# Bounded like a real device: multi-MB autotuned sndbufs absorb client
+# stalls silently and the recovery-invariants leg's fault never fires.
+tcp_sndbuf = 65536
 
 [http]
 port = 18080
@@ -1034,6 +1037,7 @@ sleep 3
 pkill -f "$OUT/rvd" 2>/dev/null || true
 sleep 2
 start_daemon rvd "$OUT/rvd" -c "$CONFIG" -f -d
+start_daemon rad "$OUT/rad" -c "$CONFIG" -f -d
 sleep 3
 
 if timeout -k 3 15 ffprobe -v error -rtsp_transport tcp \
@@ -1053,6 +1057,37 @@ if [ "$KEEP" = "1" ]; then
     echo "  RSD: rtsp://127.0.0.1:15554/stream0"
     echo "  raptorctl: $OUT/raptorctl"
     wait
+fi
+
+# ── Recovery invariants: RTP through disturbances ──
+# The slow-client legs above prove the server SURVIVES a stall; this
+# one proves the streams stay CORRECT through it: both tracks' RTP
+# timestamps monotonic across a send-queue overflow (client stall) and
+# a producer restart, and video re-enters on a keyframe, never an
+# orphan P. This is the seam a field bug (PR #27) shipped through:
+# fault injection asserted only coarse recovery while timestamp
+# analysis only ever saw undisturbed streams. Runs last: the rvd
+# restart disturbs everything after it.
+echo ""
+echo "=== Recovery invariants ==="
+if command -v python3 > /dev/null 2>&1; then
+    RTPINV_LOG="$LOG_DIR/rtp_invariants.out"
+    python3 "$RAPTOR_DIR/tests/rtp_invariants.py" \
+        "rtsp://127.0.0.1:15554/stream0" 3 4 15 > "$RTPINV_LOG" 2>&1 &
+    RTPINV_PID=$!
+    sleep 9
+    pkill -f "$OUT/rvd -c" 2>/dev/null || true
+    sleep 1
+    start_daemon rvd "$OUT/rvd" -c "$CONFIG" -f -d
+    RTPINV_RC=0
+    wait $RTPINV_PID || RTPINV_RC=$?
+    if [ "$RTPINV_RC" -eq 0 ]; then
+        pass "recovery invariants ($(tail -1 "$RTPINV_LOG" | cut -c1-120))"
+    else
+        fail "recovery invariants" "$(tail -3 "$RTPINV_LOG" | tr '\n' ' ' | cut -c1-220)"
+    fi
+else
+    skip "recovery invariants" "python3 not installed"
 fi
 
 # Shutdown happens in trap
