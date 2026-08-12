@@ -5,11 +5,11 @@
 #ifndef RIC_H
 #define RIC_H
 
-#include <rss_ipc.h>
-#include <rss_common.h>
-
 #include <stdbool.h>
 #include <stdint.h>
+
+#include <rss_ipc.h>
+#include <rss_common.h>
 
 /* Day/night state */
 typedef enum {
@@ -87,8 +87,10 @@ typedef struct {
 	uint8_t ev_night_count;
 	uint8_t ev_deep_count;
 
-	/* Day detection (phase == DAY_DETECT) */
-	uint8_t day_ring_idx;
+	/* Day detection (phase == DAY_DETECT). The index counts on past
+	 * ring-full so it must not wrap back under the size and replay
+	 * the seeding return. */
+	uint32_t day_ring_idx;
 	uint32_t day_ring[PHOTO_DAY_RING_SIZE];
 	uint32_t day_ref_ev;
 	uint8_t day_trigger_count;
@@ -110,11 +112,6 @@ typedef struct {
 	uint32_t fixed_check_ev;
 	uint8_t fixed_check_count;
 
-	/* Anti-flap */
-
-	/* Pending mode change */
-	bool change_pending;
-	uint32_t max_dgain;
 } ric_photo_state_t;
 
 /* Config from [ircut] section */

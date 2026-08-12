@@ -236,8 +236,6 @@ ev_checks:
 	if (reason > 0) {
 		RSS_DEBUG("photo night trigger (reason=%d ev=%u rg=%u bg=%u base=%u/%u)", reason,
 			  ev, rg, bg, ps->rgain_base, ps->bgain_base);
-		ps->change_pending = true;
-		ps->max_dgain = 0;
 		ric_set_mode(st, RIC_MODE_NIGHT);
 		ric_photo_reset(ps, PHOTO_PHASE_DAY_DETECT);
 		return;
@@ -257,8 +255,6 @@ ev_checks:
 		if (ps->fixed_check_count >= FIXED_DRIFT_TRIGGER) {
 			if (ev >= thr->ev_deep) {
 				RSS_DEBUG("photo fixed-ev night (ev=%u)", ev);
-				ps->change_pending = true;
-				ps->max_dgain = 0;
 				ric_set_mode(st, RIC_MODE_NIGHT);
 				ric_photo_reset(ps, PHOTO_PHASE_DAY_DETECT);
 			}
@@ -286,7 +282,7 @@ static void photo_day_control(ric_state_t *st)
 		return;
 	}
 
-	uint8_t idx = ps->day_ring_idx;
+	uint32_t idx = ps->day_ring_idx;
 	ps->day_ring[idx % PHOTO_DAY_RING_SIZE] = ps->ev;
 	idx++;
 	ps->day_ring_idx = idx;
@@ -335,15 +331,11 @@ static void photo_day_control(ric_state_t *st)
 		if (ps->day_trigger_count < 3) {
 			RSS_DEBUG("photo day approach (%d/3 ev=%u ref=%u)", ps->day_trigger_count,
 				  sample, ps->day_ref_ev);
-			ps->max_dgain = 1000000;
-			ps->change_pending = true;
 			return;
 		}
 
 		RSS_DEBUG("photo day trigger (ev=%u ref=%u rg=%u bg=%u)", ps->ev, ps->day_ref_ev,
 			  ps->rgain, ps->bgain);
-		ps->change_pending = true;
-		ps->max_dgain = 100000;
 		ric_set_mode(st, RIC_MODE_DAY);
 		ric_photo_reset(ps, PHOTO_PHASE_INTERFERE);
 		return;
@@ -404,14 +396,10 @@ static void photo_interfere_control(ric_state_t *st)
 		if (ps->interf_rise_count > INTERF_RISE_TRIGGER) {
 			RSS_DEBUG("photo interfere: false day (ev=%u ref=%u)", ps->ev,
 				  ps->interf_ref_ev);
-			ps->change_pending = true;
-			ps->max_dgain = 100000;
 			ric_set_mode(st, RIC_MODE_NIGHT);
 			ric_photo_reset(ps, PHOTO_PHASE_NIGHT_DETECT);
 			return;
 		}
-		if (current < ref * INTERF_RATIO_LOW)
-			ps->interf_fall_count = 0;
 		return;
 	}
 
@@ -480,7 +468,6 @@ static void photo_fixed_control(ric_state_t *st)
 		RSS_DEBUG("photo fixed drift: day detected (ev=%u ref=%u)", ps->ev,
 			  ps->fixed_ref_ev);
 		ps->fixed_drift_count = 0;
-		ps->change_pending = true;
 		ric_set_mode(st, RIC_MODE_DAY);
 		ric_photo_reset(ps, PHOTO_PHASE_NIGHT_DETECT);
 	}
