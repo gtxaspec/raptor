@@ -149,7 +149,7 @@ static uint32_t first_vcl_offset(const uint8_t *data, uint32_t len, bool is_h265
  * before the first VCL NAL, after any in-band SPS/PPS.
  */
 int rsd_sendq_push_video(rsd_sendq_t *q, const uint8_t *data, uint32_t len, uint32_t rtp_ts,
-			 const uint8_t *sei, uint32_t sei_len, bool is_h265)
+			 uint64_t clock_us, const uint8_t *sei, uint32_t sei_len, bool is_h265)
 {
 	uint8_t *copy = malloc((size_t)len + sei_len);
 	if (!copy)
@@ -184,6 +184,7 @@ int rsd_sendq_push_video(rsd_sendq_t *q, const uint8_t *data, uint32_t len, uint
 	slot->data = copy;
 	slot->len = len;
 	slot->rtp_ts = rtp_ts;
+	slot->clock_us = clock_us;
 	slot->type = RSD_FRAME_VIDEO;
 	slot->codec = 0;
 
@@ -196,7 +197,7 @@ int rsd_sendq_push_video(rsd_sendq_t *q, const uint8_t *data, uint32_t len, uint
 }
 
 int rsd_sendq_push_audio(rsd_sendq_t *q, uint32_t codec, const uint8_t *data, uint32_t len,
-			 uint32_t rtp_ts)
+			 uint32_t rtp_ts, uint64_t clock_us)
 {
 	uint8_t *copy = malloc(len);
 	if (!copy)
@@ -245,6 +246,7 @@ int rsd_sendq_push_audio(rsd_sendq_t *q, uint32_t codec, const uint8_t *data, ui
 	slot->data = copy;
 	slot->len = len;
 	slot->rtp_ts = rtp_ts;
+	slot->clock_us = clock_us;
 	slot->type = RSD_FRAME_AUDIO;
 	slot->codec = codec;
 	slot->zerocopy = false; /* unused, kept for ABI compat */

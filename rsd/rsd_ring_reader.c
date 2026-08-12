@@ -13,12 +13,13 @@
 #include <pthread.h>
 
 #include "rsd.h"
+#include "rsd_media_clock.h"
 
 /* Forward declarations — called by send thread, defined below */
 static void rsd_send_audio_frame(rsd_client_t *c, uint32_t codec, const uint8_t *data, uint32_t len,
-				 uint32_t rtp_ts);
+				 uint32_t rtp_ts, uint64_t clock_us);
 static void rsd_send_jpeg_frame(rsd_client_t *c, const uint8_t *data, uint32_t len,
-				uint32_t rtp_ts);
+				uint32_t rtp_ts, uint64_t clock_us);
 
 /*
  * Minimum interval between IDR requests from the reader's lag-recovery
@@ -118,7 +119,8 @@ static void sendq_drain_audio(rsd_client_t *c)
 
 	if (got) {
 		pthread_mutex_lock(&c->write_lock);
-		rsd_send_audio_frame(c, audio.codec, audio.data, audio.len, audio.rtp_ts);
+		rsd_send_audio_frame(c, audio.codec, audio.data, audio.len, audio.rtp_ts,
+				     audio.clock_us);
 		pthread_mutex_unlock(&c->write_lock);
 		rsd_sendq_release_entry(&audio);
 	}
@@ -130,7 +132,7 @@ static void sendq_drain_audio(rsd_client_t *c)
  * large IDR frames from starving audio delivery.
  */
 static void rsd_send_video_interleaved(rsd_client_t *c, const uint8_t *data, uint32_t len,
-				       uint32_t rtp_ts)
+				       uint32_t rtp_ts, uint64_t clock_us)
 {
 	if (!c->video.nal || !c->video.playing)
 		return;
@@ -193,6 +195,9 @@ static void rsd_send_video_interleaved(rsd_client_t *c, const uint8_t *data, uin
 			sendq_drain_audio(c);
 	}
 
+	if (nalu_count > 0)
+		Compy_RtpTransport_set_clock_reference(c->video.rtp, rtp_ts, clock_us);
+
 	if (c->srv->rtcp_sr) {
 		int64_t now = rss_timestamp_us();
 		if (c->video.rtcp && now - c->video.last_rtcp > RSD_SR_INTERVAL_US) {
@@ -228,12 +233,15 @@ void *rsd_client_send_thread(void *arg)
 
 		if (entry.type == RSD_FRAME_VIDEO) {
 			if (c->video.jpeg)
-				rsd_send_jpeg_frame(c, entry.data, entry.len, entry.rtp_ts);
+				rsd_send_jpeg_frame(c, entry.data, entry.len, entry.rtp_ts,
+						    entry.clock_us);
 			else
-				rsd_send_video_interleaved(c, entry.data, entry.len, entry.rtp_ts);
+				rsd_send_video_interleaved(c, entry.data, entry.len, entry.rtp_ts,
+						   entry.clock_us);
 		} else {
 			pthread_mutex_lock(&c->write_lock);
-			rsd_send_audio_frame(c, entry.codec, entry.data, entry.len, entry.rtp_ts);
+			rsd_send_audio_frame(c, entry.codec, entry.data, entry.len, entry.rtp_ts,
+					     entry.clock_us);
 			pthread_mutex_unlock(&c->write_lock);
 		}
 
@@ -255,6 +263,7 @@ void *rsd_video_reader_thread(void *arg)
 	int64_t video_ts_epoch = 0;
 	uint32_t last_rtp_ts = 0; /* enforce monotonic RTP timestamps */
 	bool has_last_rtp_ts = false;
+	rsd_media_clock_t video_media_clock = { 0 };
 	uint64_t last_write_seq = 0;
 	int idle_count = 0;
 
@@ -298,6 +307,7 @@ void *rsd_video_reader_thread(void *arg)
 			video_ts_epoch = 0;
 			last_rtp_ts = 0;
 			has_last_rtp_ts = false;
+			rsd_media_clock_reset(&video_media_clock);
 			atomic_store_explicit(&rctx->vps_len, 0, memory_order_relaxed);
 			atomic_store_explicit(&rctx->sps_len, 0, memory_order_relaxed);
 			atomic_store_explicit(&rctx->pps_len, 0, memory_order_relaxed);
@@ -455,6 +465,8 @@ void *rsd_video_reader_thread(void *arg)
 
 			if (has_last_rtp_ts && (int32_t)(rtp_ts - last_rtp_ts) <= 0)
 				rtp_ts = last_rtp_ts + frame_dur;
+			uint64_t media_clock_us =
+				rsd_media_clock_update(&video_media_clock, rtp_ts, 90000, meta.timestamp);
 			last_rtp_ts = rtp_ts;
 			has_last_rtp_ts = true;
 
@@ -516,7 +528,8 @@ void *rsd_video_reader_thread(void *arg)
 
 				int qret;
 				qret = rsd_sendq_push_video(&c->sendq, frame_data, length,
-							    client_ts, sei, sei_len, is_h265);
+							    client_ts, media_clock_us, sei, sei_len,
+							    is_h265);
 				if (qret == RSD_SENDQ_OK)
 					total_pushed++;
 				else if (qret == RSD_SENDQ_DROPPED) {
@@ -543,7 +556,8 @@ void *rsd_video_reader_thread(void *arg)
 
 /* ── JPEG send path (RFC 2435) ── */
 
-static void rsd_send_jpeg_frame(rsd_client_t *c, const uint8_t *data, uint32_t len, uint32_t rtp_ts)
+static void rsd_send_jpeg_frame(rsd_client_t *c, const uint8_t *data, uint32_t len, uint32_t rtp_ts,
+				uint64_t clock_us)
 {
 	if (!c->video.jpeg || !c->video.playing)
 		return;
@@ -551,6 +565,7 @@ static void rsd_send_jpeg_frame(rsd_client_t *c, const uint8_t *data, uint32_t l
 	pthread_mutex_lock(&c->write_lock);
 	(void)!Compy_JpegTransport_send_frame(c->video.jpeg, Compy_RtpTimestamp_Raw(rtp_ts),
 					      U8Slice99_new((uint8_t *)data, len));
+	Compy_RtpTransport_set_clock_reference(c->video.rtp, rtp_ts, clock_us);
 	pthread_mutex_unlock(&c->write_lock);
 
 	if (c->srv->rtcp_sr) {
@@ -567,7 +582,7 @@ static void rsd_send_jpeg_frame(rsd_client_t *c, const uint8_t *data, uint32_t l
 /* ── Audio ring reader thread ── */
 
 static void rsd_send_audio_frame(rsd_client_t *c, uint32_t codec, const uint8_t *data, uint32_t len,
-				 uint32_t rtp_ts)
+				 uint32_t rtp_ts, uint64_t clock_us)
 {
 	if (!c->audio.rtp || !c->audio.playing)
 		return;
@@ -595,8 +610,10 @@ static void rsd_send_audio_frame(rsd_client_t *c, uint32_t codec, const uint8_t 
 		marker = true;
 	}
 
-	(void)!Compy_RtpTransport_send_packet(c->audio.rtp, Compy_RtpTimestamp_Raw(rtp_ts), marker,
-					      payload_hdr, U8Slice99_new((uint8_t *)data, len));
+	int ret = Compy_RtpTransport_send_packet(c->audio.rtp, Compy_RtpTimestamp_Raw(rtp_ts), marker,
+					 payload_hdr, U8Slice99_new((uint8_t *)data, len));
+	if (ret != -1)
+		Compy_RtpTransport_set_clock_reference(c->audio.rtp, rtp_ts, clock_us);
 
 	if (c->srv->rtcp_sr) {
 		int64_t now = rss_timestamp_us();
@@ -619,6 +636,7 @@ void *rsd_audio_reader_thread(void *arg)
 	int64_t audio_ts_epoch = 0;
 	uint32_t last_audio_rtp_ts = 0;
 	bool has_last_audio_rtp_ts = false;
+	rsd_media_clock_t audio_media_clock = { 0 };
 	uint64_t last_write_seq = 0;
 	int idle_count = 0;
 	int64_t last_drop_report = rss_timestamp_us();
@@ -655,6 +673,7 @@ void *rsd_audio_reader_thread(void *arg)
 			audio_ts_epoch = 0;
 			last_audio_rtp_ts = 0;
 			has_last_audio_rtp_ts = false;
+			rsd_media_clock_reset(&audio_media_clock);
 			last_write_seq = 0;
 			idle_count = 0;
 
@@ -776,6 +795,15 @@ void *rsd_audio_reader_thread(void *arg)
 					rtp_ts -= nudge;
 				}
 			}
+			/* RTCP needs the sampling instant corresponding to this exact
+			 * RTP timestamp. AAC output is produced from 20ms capture chunks
+			 * but advances in 1024-sample access units, so meta.timestamp is
+			 * deliberately quantized at a different cadence. Advance a
+			 * continuous media clock from the RTP deltas instead; the 64-bit
+			 * accumulator also stays continuous through 32-bit RTP wrap. */
+			uint64_t media_clock_us = rsd_media_clock_update(
+				&audio_media_clock, rtp_ts, rtp_clock, meta.timestamp);
+
 			last_audio_rtp_ts = rtp_ts;
 			has_last_audio_rtp_ts = true;
 
@@ -802,7 +830,7 @@ void *rsd_audio_reader_thread(void *arg)
 				c->last_audio_client_ts = client_ts;
 				c->has_last_audio_client_ts = true;
 				rsd_sendq_push_audio(&c->sendq, audio_codec, audio_buf, length,
-						     client_ts);
+						     client_ts, media_clock_us);
 			}
 			pthread_mutex_unlock(&srv->clients_lock);
 		}

@@ -28,6 +28,7 @@ typedef struct {
 	const uint8_t *data; /* malloc'd copy or rmem pointer (zerocopy) */
 	uint32_t len;
 	uint32_t rtp_ts;
+	uint64_t clock_us; /* CLOCK_MONOTONIC media sampling instant */
 	uint8_t type;	  /* RSD_FRAME_VIDEO or RSD_FRAME_AUDIO */
 	uint32_t codec;	  /* audio codec (RSD_FRAME_AUDIO only) */
 	bool zerocopy;	  /* true = rmem pointer, don't free */
@@ -65,8 +66,8 @@ void rsd_sendq_release_entry(rsd_sendq_entry_t *e);
 /* Caller holds q->lock. */
 bool rsd_sendq_take_audio_locked(rsd_sendq_t *q, rsd_sendq_entry_t *out);
 int rsd_sendq_push_video(rsd_sendq_t *q, const uint8_t *data, uint32_t len, uint32_t rtp_ts,
-			 const uint8_t *sei, uint32_t sei_len, bool is_h265);
+			 uint64_t clock_us, const uint8_t *sei, uint32_t sei_len, bool is_h265);
 int rsd_sendq_push_audio(rsd_sendq_t *q, uint32_t codec, const uint8_t *data, uint32_t len,
-			 uint32_t rtp_ts);
+			 uint32_t rtp_ts, uint64_t clock_us);
 
 #endif /* RSD_SENDQ_H */

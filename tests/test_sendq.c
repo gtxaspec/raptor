@@ -13,18 +13,20 @@
 #include <string.h>
 
 #include "greatest.h"
+#include "../rsd/rsd_media_clock.h"
 #include "../rsd/rsd_sendq.h"
 
 static uint8_t payload[16] = { 0xaa, 0xbb, 0xcc, 0xdd };
 
 static int push_a(rsd_sendq_t *q, uint32_t ts)
 {
-	return rsd_sendq_push_audio(q, 8, payload, sizeof(payload), ts);
+	return rsd_sendq_push_audio(q, 8, payload, sizeof(payload), ts, 1000000u + ts);
 }
 
 static int push_v(rsd_sendq_t *q, uint32_t ts)
 {
-	return rsd_sendq_push_video(q, payload, sizeof(payload), ts, NULL, 0, false);
+	return rsd_sendq_push_video(q, payload, sizeof(payload), ts, 1000000u + ts, NULL, 0,
+				    false);
 }
 
 /* Walk the queue oldest-first, collecting (type, ts) into arrays. */
@@ -55,6 +57,7 @@ TEST push_pop_order_preserved(void)
 	ASSERT_EQ(4, snapshot(&q, types, ts, 8));
 	ASSERT_EQ(RSD_FRAME_VIDEO, types[0]);
 	ASSERT_EQ(100u, ts[0]);
+	ASSERT_EQ(1000100u, q.entries[q.tail].clock_us);
 	ASSERT_EQ(RSD_FRAME_AUDIO, types[1]);
 	ASSERT_EQ(101u, ts[1]);
 	ASSERT_EQ(RSD_FRAME_VIDEO, types[2]);
@@ -229,11 +232,13 @@ TEST sei_spliced_before_first_vcl(void)
 	static const uint8_t sei[] = { 0, 0, 0, 1, 0x06, 0x05, 0x02, 0xde, 0xad };
 
 	ASSERT_EQ(RSD_SENDQ_OK,
-		  rsd_sendq_push_video(&q, frame, sizeof(frame), 77, sei, sizeof(sei), false));
+		  rsd_sendq_push_video(&q, frame, sizeof(frame), 77, 1234567, sei, sizeof(sei),
+				   false));
 	ASSERT_EQ(1, q.count);
 
 	const rsd_sendq_entry_t *e = &q.entries[q.tail];
 	ASSERT_EQ(sizeof(frame) + sizeof(sei), e->len);
+	ASSERT_EQ(1234567, e->clock_us);
 	/* SPS first (start code + 2 bytes), then the SEI, then the IDR. */
 	ASSERT_EQ(0, memcmp(e->data, frame, 6));
 	ASSERT_EQ(0, memcmp(e->data + 6, sei, sizeof(sei)));
@@ -268,6 +273,32 @@ TEST destroy_frees_pending_entries(void)
 	PASS();
 }
 
+TEST media_clock_follows_rtp_not_aac_chunk_phase(void)
+{
+	rsd_media_clock_t clock = { 0 };
+	const uint64_t base = 10000000;
+
+	ASSERT_EQ(base, rsd_media_clock_update(&clock, 5000, 48000, base));
+	/* AAC is fed by 20ms chunks but each access unit is 1024 samples. The
+	 * media reference must advance by 21.333ms, not by the ring phase. */
+	ASSERT_EQ(base + 21333,
+		  rsd_media_clock_update(&clock, 6024, 48000, base + 20000));
+	ASSERT_EQ(base + 42666,
+		  rsd_media_clock_update(&clock, 7048, 48000, base + 40000));
+	PASS();
+}
+
+TEST media_clock_extends_rtp_wrap(void)
+{
+	rsd_media_clock_t clock = { 0 };
+	const uint64_t base = 20000000;
+
+	ASSERT_EQ(base, rsd_media_clock_update(&clock, 0xfffffc00u, 48000, base));
+	ASSERT_EQ(base + 42666,
+		  rsd_media_clock_update(&clock, 0x00000400u, 48000, base + 42666));
+	PASS();
+}
+
 SUITE(sendq_suite)
 {
 	RUN_TEST(push_pop_order_preserved);
@@ -279,4 +310,6 @@ SUITE(sendq_suite)
 	RUN_TEST(sei_spliced_before_first_vcl);
 	RUN_TEST(shutdown_rejects_pushes);
 	RUN_TEST(destroy_frees_pending_entries);
+	RUN_TEST(media_clock_follows_rtp_not_aac_chunk_phase);
+	RUN_TEST(media_clock_extends_rtp_wrap);
 }
