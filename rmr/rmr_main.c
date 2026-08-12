@@ -1038,12 +1038,17 @@ static void record_loop(rmr_state_t *st)
 			 * On keyframe: also check segment rotation. */
 			if (st->mux) {
 				st->frames_since_flush++;
-				/* Ask the encoder for an IDR just before the
-				 * wall-clock boundary so the split lands within
-				 * a frame of :00 instead of a GOP late. */
+				/* Ask the encoder for an IDR on the first frame
+				 * past the wall-clock boundary so the split lands
+				 * within a frame or two of :00 instead of a GOP
+				 * late. Requesting BEFORE the boundary is a trap:
+				 * the forced key arrives before the boundary too,
+				 * cannot rotate, and restarts the GOP, pushing
+				 * the first eligible key a full GOP past :00
+				 * (constant +2s segments on 20fps HEVC). */
 				int64_t now_rt = rss_wallclock_us();
-				if (!st->segment_idr_requested &&
-				    st->segment_boundary_rt_us - now_rt <= 1000000LL) {
+				if (!st->segment_idr_requested && !meta.is_key &&
+				    now_rt >= st->segment_boundary_rt_us) {
 					rss_ring_request_idr(st->video_ring);
 					st->segment_idr_requested = true;
 				}
