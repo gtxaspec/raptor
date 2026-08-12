@@ -1303,23 +1303,30 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 					rvd_level_idc(s->enc_cfg.width, s->enc_cfg.height));
 
 				bool jpeg_codec = (s->enc_cfg.codec == RSS_CODEC_JPEG);
+				/* Declare the ring's ref capacity at the tracking
+				 * maximum, not the encoder's nominal buffer count:
+				 * after RequestIDR+Flush the T41 encoder emits IDR
+				 * AUs from a buffer beyond max_stream_cnt, and a
+				 * buf_idx past the declared count makes publish_ref
+				 * reject exactly the keyframes (every later joiner
+				 * then starves in the keyframe hold). The stride
+				 * still describes the real per-buffer size. */
 				if (!jpeg_codec && st->refmode && st->refmode_shm &&
 				    st->enc_shm_size[idx] > 0) {
 					uint8_t cnt = s->enc_cfg.max_stream_cnt;
 					if (!cnt)
 						cnt = 2;
 					rss_ring_enable_refmode(s->ring, st->enc_shm_size[idx], 0,
-								cnt, st->enc_shm_size[idx] / cnt);
+								RSS_RING_MAX_REF_BUFS,
+								st->enc_shm_size[idx] / cnt);
 				} else if (!jpeg_codec && st->refmode && !st->refmode_shm &&
 					   st->rmem_size > 0) {
 					uint32_t actual_stride = 0;
-					uint8_t actual_cnt = s->enc_cfg.max_stream_cnt;
 					RSS_HAL_CALL(st->ops, enc_get_stream_buf_size, st->hal_ctx,
 						     s->chn, &actual_stride);
-					if (!actual_cnt)
-						actual_cnt = 2;
 					rss_ring_enable_refmode(s->ring, st->rmem_size,
-								st->rmem_mmap_offset, actual_cnt,
+								st->rmem_mmap_offset,
+								RSS_RING_MAX_REF_BUFS,
 								actual_stride);
 				}
 			}

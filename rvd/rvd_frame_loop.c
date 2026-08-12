@@ -69,6 +69,7 @@ void *rvd_encoder_thread(void *arg)
 		  s->enc_cfg.height);
 
 	uint64_t frame_count = 0;
+	int64_t last_pub_warn_us = 0;
 	int poll_errors = 0;
 	int64_t last_stats = rss_timestamp_us();
 	int64_t last_reap = last_stats;
@@ -218,11 +219,14 @@ void *rvd_encoder_thread(void *arg)
 			 * vaddr < ref_base prevents vaddr - ref_base wrap. */
 			if (!ref_base || total_len64 > ref_size || vaddr < ref_base ||
 			    vaddr - ref_base > ref_size - total_len64) {
-				if (frame_count == 0)
+				int64_t now_us = rss_timestamp_us();
+				if (now_us - last_pub_warn_us > 5000000) {
+					last_pub_warn_us = now_us;
 					RSS_WARN("stream%d: vaddr 0x%lx outside ref region "
 						 "[0x%lx..0x%lx], embedded fallback",
 						 idx, (unsigned long)vaddr, (unsigned long)ref_base,
 						 (unsigned long)(ref_base + ref_size));
+				}
 				goto embedded_publish;
 			}
 
@@ -253,9 +257,22 @@ void *rvd_encoder_thread(void *arg)
 			}
 		found_buf:
 
-			rss_ring_publish_ref(s->ring, rmem_off, (uint32_t)total_len64,
-					     frame.timestamp, primary_nal_type(&frame),
-					     frame.is_key ? 1 : 0, buf_idx);
+			ret = rss_ring_publish_ref(s->ring, rmem_off, (uint32_t)total_len64,
+						   frame.timestamp, primary_nal_type(&frame),
+						   frame.is_key ? 1 : 0, buf_idx);
+			if (ret != 0) {
+				/* A rejected publish is a dropped frame the ring
+				 * never saw; if it is a keyframe, every client in
+				 * the keyframe hold starves until the next one. */
+				int64_t now_us = rss_timestamp_us();
+				if (now_us - last_pub_warn_us > 5000000) {
+					last_pub_warn_us = now_us;
+					RSS_WARN("stream%d: publish_ref failed (%d), "
+						 "buf_idx=%u key=%d len=%llu",
+						 idx, ret, buf_idx, frame.is_key ? 1 : 0,
+						 (unsigned long long)total_len64);
+				}
+			}
 		} else {
 		embedded_publish:
 			/* Embedded mode: copy NALs into ring via scatter-gather */
@@ -269,8 +286,16 @@ void *rvd_encoder_thread(void *arg)
 				iov[n].data = frame.nals[n].data;
 				iov[n].length = frame.nals[n].length;
 			}
-			rss_ring_publish_iov(s->ring, iov, cnt, frame.timestamp,
-					     primary_nal_type(&frame), frame.is_key ? 1 : 0);
+			ret = rss_ring_publish_iov(s->ring, iov, cnt, frame.timestamp,
+						   primary_nal_type(&frame), frame.is_key ? 1 : 0);
+			if (ret != 0) {
+				int64_t now_us = rss_timestamp_us();
+				if (now_us - last_pub_warn_us > 5000000) {
+					last_pub_warn_us = now_us;
+					RSS_WARN("stream%d: publish_iov failed (%d), key=%d",
+						 idx, ret, frame.is_key ? 1 : 0);
+				}
+			}
 		}
 
 		RSS_HAL_CALL(st->ops, enc_release_frame, st->hal_ctx, s->chn, &frame);
