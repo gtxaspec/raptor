@@ -19,7 +19,7 @@ static uint8_t payload[16] = { 0xaa, 0xbb, 0xcc, 0xdd };
 
 static int push_a(rsd_sendq_t *q, uint32_t ts)
 {
-	return rsd_sendq_push_audio(q, 8, payload, sizeof(payload), ts);
+	return rsd_sendq_push_audio(q, 8, payload, sizeof(payload), ts, (int64_t)ts * 100);
 }
 
 static int push_v(rsd_sendq_t *q, uint32_t ts)

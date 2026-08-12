@@ -196,7 +196,7 @@ int rsd_sendq_push_video(rsd_sendq_t *q, const uint8_t *data, uint32_t len, uint
 }
 
 int rsd_sendq_push_audio(rsd_sendq_t *q, uint32_t codec, const uint8_t *data, uint32_t len,
-			 uint32_t rtp_ts)
+			 uint32_t rtp_ts, int64_t capture_us)
 {
 	uint8_t *copy = malloc(len);
 	if (!copy)
@@ -245,6 +245,7 @@ int rsd_sendq_push_audio(rsd_sendq_t *q, uint32_t codec, const uint8_t *data, ui
 	slot->data = copy;
 	slot->len = len;
 	slot->rtp_ts = rtp_ts;
+	slot->capture_us = capture_us;
 	slot->type = RSD_FRAME_AUDIO;
 	slot->codec = codec;
 	slot->zerocopy = false; /* unused, kept for ABI compat */

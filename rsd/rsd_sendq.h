@@ -28,11 +28,12 @@ typedef struct {
 	const uint8_t *data; /* malloc'd copy or rmem pointer (zerocopy) */
 	uint32_t len;
 	uint32_t rtp_ts;
-	uint8_t type;	  /* RSD_FRAME_VIDEO or RSD_FRAME_AUDIO */
-	uint32_t codec;	  /* audio codec (RSD_FRAME_AUDIO only) */
-	bool zerocopy;	  /* true = rmem pointer, don't free */
-	uint8_t buf_idx;  /* refmode: encoder buffer index */
-	uint32_t buf_gen; /* refmode: generation at peek time */
+	int64_t capture_us; /* ring capture instant (SR media-clock ref; audio only) */
+	uint8_t type;	    /* RSD_FRAME_VIDEO or RSD_FRAME_AUDIO */
+	uint32_t codec;	    /* audio codec (RSD_FRAME_AUDIO only) */
+	bool zerocopy;	    /* true = rmem pointer, don't free */
+	uint8_t buf_idx;    /* refmode: encoder buffer index */
+	uint32_t buf_gen;   /* refmode: generation at peek time */
 } rsd_sendq_entry_t;
 
 typedef struct {
@@ -67,6 +68,6 @@ bool rsd_sendq_take_audio_locked(rsd_sendq_t *q, rsd_sendq_entry_t *out);
 int rsd_sendq_push_video(rsd_sendq_t *q, const uint8_t *data, uint32_t len, uint32_t rtp_ts,
 			 const uint8_t *sei, uint32_t sei_len, bool is_h265);
 int rsd_sendq_push_audio(rsd_sendq_t *q, uint32_t codec, const uint8_t *data, uint32_t len,
-			 uint32_t rtp_ts);
+			 uint32_t rtp_ts, int64_t capture_us);
 
 #endif /* RSD_SENDQ_H */

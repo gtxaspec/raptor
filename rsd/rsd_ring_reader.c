@@ -16,7 +16,7 @@
 
 /* Forward declarations — called by send thread, defined below */
 static void rsd_send_audio_frame(rsd_client_t *c, uint32_t codec, const uint8_t *data, uint32_t len,
-				 uint32_t rtp_ts);
+				 uint32_t rtp_ts, int64_t capture_us);
 static void rsd_send_jpeg_frame(rsd_client_t *c, const uint8_t *data, uint32_t len,
 				uint32_t rtp_ts);
 
@@ -118,7 +118,8 @@ static void sendq_drain_audio(rsd_client_t *c)
 
 	if (got) {
 		pthread_mutex_lock(&c->write_lock);
-		rsd_send_audio_frame(c, audio.codec, audio.data, audio.len, audio.rtp_ts);
+		rsd_send_audio_frame(c, audio.codec, audio.data, audio.len, audio.rtp_ts,
+				     audio.capture_us);
 		pthread_mutex_unlock(&c->write_lock);
 		rsd_sendq_release_entry(&audio);
 	}
@@ -233,7 +234,8 @@ void *rsd_client_send_thread(void *arg)
 				rsd_send_video_interleaved(c, entry.data, entry.len, entry.rtp_ts);
 		} else {
 			pthread_mutex_lock(&c->write_lock);
-			rsd_send_audio_frame(c, entry.codec, entry.data, entry.len, entry.rtp_ts);
+			rsd_send_audio_frame(c, entry.codec, entry.data, entry.len, entry.rtp_ts,
+					     entry.capture_us);
 			pthread_mutex_unlock(&c->write_lock);
 		}
 
@@ -567,7 +569,7 @@ static void rsd_send_jpeg_frame(rsd_client_t *c, const uint8_t *data, uint32_t l
 /* ── Audio ring reader thread ── */
 
 static void rsd_send_audio_frame(rsd_client_t *c, uint32_t codec, const uint8_t *data, uint32_t len,
-				 uint32_t rtp_ts)
+				 uint32_t rtp_ts, int64_t capture_us)
 {
 	if (!c->audio.rtp || !c->audio.playing)
 		return;
@@ -597,6 +599,13 @@ static void rsd_send_audio_frame(rsd_client_t *c, uint32_t codec, const uint8_t 
 
 	(void)!Compy_RtpTransport_send_packet(c->audio.rtp, Compy_RtpTimestamp_Raw(rtp_ts), marker,
 					      payload_hdr, U8Slice99_new((uint8_t *)data, len));
+
+	/* Media-clock reference for sender reports (RFC 3550 6.4.1): pair
+	 * this frame's wire timestamp with its ring capture instant, so the
+	 * SR maps the timeline the receiver actually gets instead of
+	 * sampling send scheduling -- AAC frames become available on the
+	 * 20ms chunk grid and a send-time anchor weaves a frame's worth. */
+	Compy_RtpTransport_set_clock_reference(c->audio.rtp, rtp_ts, (uint64_t)capture_us);
 
 	if (c->srv->rtcp_sr) {
 		int64_t now = rss_timestamp_us();
@@ -815,7 +824,7 @@ void *rsd_audio_reader_thread(void *arg)
 				c->last_audio_client_ts = client_ts;
 				c->has_last_audio_client_ts = true;
 				rsd_sendq_push_audio(&c->sendq, audio_codec, audio_buf, length,
-						     client_ts);
+						     client_ts, (int64_t)meta.timestamp);
 			}
 			pthread_mutex_unlock(&srv->clients_lock);
 		}
