@@ -186,6 +186,11 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	 * enable flags on purpose: those gate automatic behavior, while a
 	 * manual command is explicit intent (lighting a disabled bank from
 	 * the shell is exactly what bench debugging needs).
+	 *
+	 * These handlers knowingly block the ctrl socket: an ircut move
+	 * holds the coil for pulse_ms (capped 1s) and a forced mode adds
+	 * an ISP call with a 2s timeout. Worst case sits inside the 5s
+	 * send budget, and the hardware pulse cannot be shortened.
 	 */
 	if (strcmp(cmd, "ircut") == 0) {
 		char val[8];
@@ -448,6 +453,7 @@ int main(int argc, char **argv)
 	if (ret != 0)
 		return ret < 0 ? 1 : 0;
 	ric_state_t st = {0};
+	st.adc_fd = -1;
 	int epoll_fd = -1;
 
 	if (!rss_config_get_bool(ctx.cfg, "ircut", "enabled", true)) {
@@ -513,7 +519,7 @@ int main(int argc, char **argv)
 	}
 
 	/* Apply initial mode -- force GPIOs to known state at startup */
-	st.current_mode = -1;
+	st.current_mode = RIC_MODE_UNSET;
 	if (st.settings.opmode == RIC_FORCE_DAY)
 		ric_set_mode(&st, RIC_MODE_DAY);
 	else if (st.settings.opmode == RIC_FORCE_NIGHT)

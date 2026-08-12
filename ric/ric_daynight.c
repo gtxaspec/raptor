@@ -31,8 +31,6 @@
 #define ADC_IOC_ENABLE	0
 #define ADC_IOC_DISABLE 1
 
-static int adc_fd = -1;
-
 static int adc_open_channel(int channel)
 {
 	char path[64];
@@ -50,16 +48,16 @@ bool ric_adc_start(ric_state_t *st)
 {
 	int channel = st->settings.adc_channel;
 
-	adc_fd = adc_open_channel(channel);
-	if (adc_fd < 0) {
+	st->adc_fd = adc_open_channel(channel);
+	if (st->adc_fd < 0) {
 		RSS_WARN("ADC: no device for channel %d", channel);
 		return false;
 	}
 
-	if (ioctl(adc_fd, ADC_IOC_ENABLE) < 0) {
+	if (ioctl(st->adc_fd, ADC_IOC_ENABLE) < 0) {
 		RSS_WARN("ADC: enable channel %d failed: %s", channel, strerror(errno));
-		close(adc_fd);
-		adc_fd = -1;
+		close(st->adc_fd);
+		st->adc_fd = -1;
 		return false;
 	}
 
@@ -67,13 +65,12 @@ bool ric_adc_start(ric_state_t *st)
 	return true;
 }
 
-static int adc_read(int channel)
+static int adc_read(ric_state_t *st)
 {
-	(void)channel;
-	if (adc_fd < 0)
+	if (st->adc_fd < 0)
 		return -1;
 	int value;
-	return (read(adc_fd, &value, sizeof(value)) == sizeof(value)) ? value : -1;
+	return (read(st->adc_fd, &value, sizeof(value)) == sizeof(value)) ? value : -1;
 }
 
 /*
@@ -164,10 +161,10 @@ static void rvd_note_good_query(ric_state_t *st)
 
 void ric_adc_cleanup(ric_state_t *st)
 {
-	if (adc_fd >= 0) {
-		ioctl(adc_fd, ADC_IOC_DISABLE);
-		close(adc_fd);
-		adc_fd = -1;
+	if (st->adc_fd >= 0) {
+		ioctl(st->adc_fd, ADC_IOC_DISABLE);
+		close(st->adc_fd);
+		st->adc_fd = -1;
 	}
 	st->adc_initialized = false;
 }
@@ -744,7 +741,7 @@ void ric_poll_exposure(ric_state_t *st)
 		 * or camera sensor. No flip-flop, no calibration needed.
 		 * High ADC value = bright, low = dark.
 		 */
-		int adc_val = adc_read(st->settings.adc_channel);
+		int adc_val = adc_read(st);
 		if (adc_val < 0) {
 			adc_note_failed_read(st);
 			return;

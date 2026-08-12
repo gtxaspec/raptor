@@ -13,6 +13,7 @@
 
 /* Day/night state */
 typedef enum {
+	RIC_MODE_UNSET = -1, /* startup only: forces the first set through */
 	RIC_MODE_DAY = 0,
 	RIC_MODE_NIGHT = 1,
 } ric_mode_t;
@@ -211,6 +212,7 @@ typedef struct {
 	ric_photo_state_t photo;
 
 	/* ADC state */
+	int adc_fd;
 	bool adc_initialized;
 	int adc_fail_run;     /* consecutive failed reads, 0 while healthy */
 	bool adc_fail_warned; /* a warning has fired for the current run */
