@@ -26,6 +26,11 @@
 
 /* ── ADC via kernel device nodes ── */
 
+/* jz_adc_aux ioctl contract: cmd 0 enables the channel, cmd 1
+ * disables it. Vendor ABI, no header ships the names. */
+#define ADC_IOC_ENABLE	0
+#define ADC_IOC_DISABLE 1
+
 static int adc_fd = -1;
 
 static int adc_open_channel(int channel)
@@ -51,7 +56,7 @@ bool ric_adc_start(ric_state_t *st)
 		return false;
 	}
 
-	if (ioctl(adc_fd, 0) < 0) {
+	if (ioctl(adc_fd, ADC_IOC_ENABLE) < 0) {
 		RSS_WARN("ADC: enable channel %d failed: %s", channel, strerror(errno));
 		close(adc_fd);
 		adc_fd = -1;
@@ -160,7 +165,7 @@ static void rvd_note_good_query(ric_state_t *st)
 void ric_adc_cleanup(ric_state_t *st)
 {
 	if (adc_fd >= 0) {
-		ioctl(adc_fd, 1);
+		ioctl(adc_fd, ADC_IOC_DISABLE);
 		close(adc_fd);
 		adc_fd = -1;
 	}
@@ -231,11 +236,18 @@ void ric_gpio_init(ric_state_t *st)
 void ric_set_isp_mode(ric_mode_t mode)
 {
 	char resp[128];
-	rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock",
-			      mode == RIC_MODE_NIGHT
-				      ? "{\"cmd\":\"set-running-mode\",\"value\":\"night\"}"
-				      : "{\"cmd\":\"set-running-mode\",\"value\":\"day\"}",
-			      resp, sizeof(resp), 2000);
+	int ret = rss_ctrl_send_command(
+		RSS_RUN_DIR "/rvd.sock",
+		mode == RIC_MODE_NIGHT ? "{\"cmd\":\"set-running-mode\",\"value\":\"night\"}"
+				       : "{\"cmd\":\"set-running-mode\",\"value\":\"day\"}",
+		resp, sizeof(resp), 2000);
+	/* The filter and LEDs have already moved; a failure here is a
+	 * half-finished transition (color at night or B/W in day) that
+	 * otherwise heals only at the next switch. */
+	if (ret < 0)
+		RSS_WARN("ISP %s mode not applied (rvd unreachable) -- image stays in the old "
+			 "mode until the next transition",
+			 mode == RIC_MODE_NIGHT ? "night" : "day");
 }
 
 /*
@@ -396,10 +408,6 @@ static void ric_debounce(ric_state_t *st, bool want_night, bool want_day, uint32
 	}
 }
 
-/*
- * Poll ISP exposure and decide day/night transition.
- * Uses total_gain with hysteresis debounce.
- */
 /* Extract unsigned integer from parsed cJSON object */
 static uint32_t json_get_uint(const cJSON *root, const char *key)
 {
@@ -407,6 +415,7 @@ static uint32_t json_get_uint(const cJSON *root, const char *key)
 	return cJSON_IsNumber(item) ? (uint32_t)item->valuedouble : 0;
 }
 
+/* Poll ISP exposure once and decide the day/night transition. */
 void ric_poll_exposure(ric_state_t *st)
 {
 	if (st->settings.opmode != RIC_AUTO)

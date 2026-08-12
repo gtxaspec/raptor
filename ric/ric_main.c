@@ -9,6 +9,7 @@
  */
 
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +19,25 @@
 
 #include "ric.h"
 #include "ric_json.h"
+
+/*
+ * The config file is a system boundary like the ctrl socket: the same
+ * ranges set-threshold enforces apply here, clamped to the nearest
+ * bound (the pulse_ms precedent). One line names what changed --
+ * a silently corrected config is a debugging session.
+ */
+static char clamped_keys[128];
+
+static int cfg_clamp(const char *key, int val, int lo, int hi)
+{
+	int out = val < lo ? lo : (val > hi ? hi : val);
+	if (out != val) {
+		size_t len = strlen(clamped_keys);
+		snprintf(clamped_keys + len, sizeof(clamped_keys) - len, "%s%s", len ? ", " : "",
+			 key);
+	}
+	return out;
+}
 
 static void load_config(ric_state_t *st)
 {
@@ -58,18 +78,20 @@ static void load_config(ric_state_t *st)
 		c->trigger = RIC_TRIGGER_LUMA;
 
 	/* Luma trigger thresholds */
-	c->night_luma = rss_config_get_int(cfg, "ircut", "night_luma", 20);
-	c->night_gain = rss_config_get_int(cfg, "ircut", "night_gain", 80000);
-	c->day_gain_pct = rss_config_get_int(cfg, "ircut", "day_gain_pct", 25);
-	c->probe_gain_pct = rss_config_get_int(cfg, "ircut", "probe_gain_pct", 90);
-	if (c->probe_gain_pct < 0 || c->probe_gain_pct > 99)
-		c->probe_gain_pct = 90;
-	c->probe_holdoff_sec = rss_config_get_int(cfg, "ircut", "probe_holdoff_sec", 60);
-	if (c->probe_holdoff_sec < 1)
-		c->probe_holdoff_sec = 60;
-	c->probe_recheck_sec = rss_config_get_int(cfg, "ircut", "probe_recheck_sec", 600);
-	if (c->probe_recheck_sec < 0)
-		c->probe_recheck_sec = 600;
+	c->night_luma =
+		cfg_clamp("night_luma", rss_config_get_int(cfg, "ircut", "night_luma", 20), 0, 255);
+	c->night_gain = cfg_clamp(
+		"night_gain", rss_config_get_int(cfg, "ircut", "night_gain", 80000), 0, INT_MAX);
+	c->day_gain_pct = cfg_clamp("day_gain_pct",
+				    rss_config_get_int(cfg, "ircut", "day_gain_pct", 25), 1, 100);
+	c->probe_gain_pct = cfg_clamp(
+		"probe_gain_pct", rss_config_get_int(cfg, "ircut", "probe_gain_pct", 90), 0, 99);
+	c->probe_holdoff_sec =
+		cfg_clamp("probe_holdoff_sec",
+			  rss_config_get_int(cfg, "ircut", "probe_holdoff_sec", 60), 1, 86400);
+	c->probe_recheck_sec =
+		cfg_clamp("probe_recheck_sec",
+			  rss_config_get_int(cfg, "ircut", "probe_recheck_sec", 600), 0, 86400);
 
 	/* ADC thresholds (trigger=adc) */
 	c->adc_channel = rss_config_get_int(cfg, "ircut", "adc_channel", 0);
@@ -84,23 +106,38 @@ static void load_config(ric_state_t *st)
 	c->photo.bgain_rec = (uint16_t)rss_config_get_int(cfg, "ircut", "photo_bgain_rec", 0);
 
 	/* Gain thresholds (legacy, only used when trigger=gain) */
-	c->night_threshold = rss_config_get_int(cfg, "ircut", "night_threshold", 40000);
-	c->day_threshold = rss_config_get_int(cfg, "ircut", "day_threshold", 25000);
+	c->night_threshold =
+		cfg_clamp("night_threshold",
+			  rss_config_get_int(cfg, "ircut", "night_threshold", 40000), 0, INT_MAX);
+	c->day_threshold =
+		cfg_clamp("day_threshold", rss_config_get_int(cfg, "ircut", "day_threshold", 25000),
+			  0, INT_MAX);
 
-	c->hysteresis_sec = rss_config_get_int(cfg, "ircut", "hysteresis_sec", 5);
+	c->hysteresis_sec = cfg_clamp(
+		"hysteresis_sec", rss_config_get_int(cfg, "ircut", "hysteresis_sec", 5), 1, 300);
 	int default_poll = (c->trigger == RIC_TRIGGER_PHOTO) ? 100 : 1000;
-	c->poll_interval_ms = rss_config_get_int(cfg, "ircut", "poll_interval_ms", default_poll);
+	c->poll_interval_ms = cfg_clamp(
+		"poll_interval_ms",
+		rss_config_get_int(cfg, "ircut", "poll_interval_ms", default_poll), 50, 10000);
 
 	/* Dual-GPIO coil pulse. 10ms is what the thingino ircut script has
 	 * driven the whole fleet with since thingino-daynight existed; both
 	 * 10ms and 100ms measured 20/20 reliable on a dual-GPIO Wyze Cam3,
 	 * so the default follows the fleet. Clamped: a zero pulse moves no
 	 * filter, and holding the coil for seconds is a heater. */
-	c->pulse_ms = rss_config_get_int(cfg, "ircut", "pulse_ms", 10);
-	if (c->pulse_ms < 1)
-		c->pulse_ms = 1;
-	if (c->pulse_ms > 1000)
-		c->pulse_ms = 1000;
+	c->pulse_ms =
+		cfg_clamp("pulse_ms", rss_config_get_int(cfg, "ircut", "pulse_ms", 10), 1, 1000);
+
+	if (clamped_keys[0])
+		RSS_WARN("config values out of range, clamped: %s", clamped_keys);
+
+	/* The photo state machine assumes bright < dark < very dark;
+	 * inverted thresholds silently break the deep-count logic. */
+	if (c->trigger == RIC_TRIGGER_PHOTO &&
+	    (c->photo.ev_day >= c->photo.ev_night || c->photo.ev_night >= c->photo.ev_deep))
+		RSS_WARN("photo thresholds out of order (need ev_day %u < ev_night %u < ev_deep "
+			 "%u) -- detection will misbehave",
+			 c->photo.ev_day, c->photo.ev_night, c->photo.ev_deep);
 }
 
 /* Pins may also be auto-discovered from the thingino device file
@@ -200,8 +237,11 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			} else if (strcmp(val, "night") == 0) {
 				st->settings.opmode = RIC_FORCE_NIGHT;
 				ric_force_mode(st, RIC_MODE_NIGHT);
-			} else {
+			} else if (strcmp(val, "auto") == 0) {
 				st->settings.opmode = RIC_AUTO;
+			} else {
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+							   "need value auto|day|night");
 			}
 			rss_config_set_str(st->cfg, "ircut", "mode", val);
 		}
@@ -267,13 +307,15 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			c->probe_gain_pct = val;
 			cfg_key = "probe_gain_pct";
 		} else if (strcmp(key, "probe_holdoff_sec") == 0) {
-			if (val < 1)
-				return rss_ctrl_resp_error(resp_buf, resp_buf_size, "must be >= 1");
+			if (val < 1 || val > 86400)
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+							   "range 1-86400");
 			c->probe_holdoff_sec = val;
 			cfg_key = "probe_holdoff_sec";
 		} else if (strcmp(key, "probe_recheck_sec") == 0) {
-			if (val < 0)
-				return rss_ctrl_resp_error(resp_buf, resp_buf_size, "must be >= 0");
+			if (val < 0 || val > 86400)
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+							   "range 0-86400");
 			c->probe_recheck_sec = val;
 			/* Take effect now: a countdown armed with the old
 			 * interval would ignore a shorter one until the next
@@ -376,21 +418,25 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 	}
 
-	/* Default: status */
-	char exp_resp[256] = {0};
-	rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", "{\"cmd\":\"get-exposure\"}", exp_resp,
-			      sizeof(exp_resp), 1000);
-	cJSON *r = cJSON_CreateObject();
-	cJSON_AddStringToObject(r, "status", "ok");
-	cJSON_AddStringToObject(r, "mode",
-				st->settings.opmode == RIC_AUTO	       ? "auto"
-				: st->settings.opmode == RIC_FORCE_DAY ? "day"
-								       : "night");
-	cJSON_AddStringToObject(r, "state", st->current_mode == RIC_MODE_DAY ? "day" : "night");
-	cJSON *sub = exp_resp[0] ? cJSON_Parse(exp_resp) : NULL;
-	if (sub)
-		cJSON_AddItemToObject(r, "exposure", sub);
-	return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
+	if (strcmp(cmd, "status") == 0) {
+		char exp_resp[256] = {0};
+		rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", "{\"cmd\":\"get-exposure\"}",
+				      exp_resp, sizeof(exp_resp), 1000);
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddStringToObject(r, "status", "ok");
+		cJSON_AddStringToObject(r, "mode",
+					st->settings.opmode == RIC_AUTO	       ? "auto"
+					: st->settings.opmode == RIC_FORCE_DAY ? "day"
+									       : "night");
+		cJSON_AddStringToObject(r, "state",
+					st->current_mode == RIC_MODE_DAY ? "day" : "night");
+		cJSON *sub = exp_resp[0] ? cJSON_Parse(exp_resp) : NULL;
+		if (sub)
+			cJSON_AddItemToObject(r, "exposure", sub);
+		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
+	}
+
+	return rss_ctrl_resp_error(resp_buf, resp_buf_size, "unknown command");
 }
 
 /* ── Entry point ── */

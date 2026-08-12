@@ -1932,6 +1932,95 @@ def scenario_disabled(stub, watch):
            str(watch.since(gm)))
 
 
+def scenario_hostile_config(stub, watch):
+    """Config-file values outside every documented range must clamp, not
+    crash: poll_interval_ms = 0 divided two probe-path expressions
+    before load_config clamped it, so a typo'd config took ric down
+    with SIGFPE the first time a probe armed."""
+    conf = (GPIO_CONF
+            + "trigger = luma\nnight_luma = 300\nnight_gain = 80000\n"
+            + "day_gain_pct = -5\nhysteresis_sec = 0\npulse_ms = 100\n"
+            + "poll_interval_ms = 0\nprobe_gain_pct = 90\n"
+            + "probe_holdoff_sec = 999999999\nprobe_recheck_sec = 999999999\n")
+    stub.set_scene(luma=120, gain=500, ev=4000)
+    ric = Ric("hostile", conf)
+    if not ric.wait_running():
+        result(False, "hostile config: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    result("clamped" in ric.read_log(),
+           "hostile config: out-of-range keys named in the log",
+           ric.read_log()[-300:])
+
+    mm = stub.mark()
+    stub.set_scene(luma=5, gain=90000, ev=200000)
+    if not wait_for(lambda: "night" in stub.modes_since(mm), 8):
+        result(False, "hostile config: reaches night", str(stub.modes_since(mm)))
+        ric.stop()
+        return
+    # Baseline settles, then a dip arms the probe; pre-fix the probe's
+    # holdoff arithmetic divided by the raw poll_interval_ms = 0.
+    time.sleep(2.5)
+    stub.set_scene(luma=5, gain=30000, ev=60000)
+    ok = wait_for(lambda: "ambient probe" in ric.read_log(), 10)
+    result(ok, "hostile config: probe arms", ric.read_log()[-200:])
+    ok = wait_for(lambda: "probe found darkness" in ric.read_log(), 10)
+    result(ok, "hostile config: probe completes without SIGFPE",
+           ric.read_log()[-200:])
+    r = ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "status"})
+    result(r is not None and r.get("status") == "ok",
+           "hostile config: ric alive after the probe", str(r))
+    ric.stop()
+
+
+def scenario_ctrl_contract(stub, watch):
+    """The ctrl surface validates at the boundary like every other
+    daemon: a mode outside auto|day|night is an error (and never
+    persisted), status is an explicit verb, and an unknown command
+    is an error instead of a status alias."""
+    stub.set_scene(luma=120, gain=500, ev=4000)
+    ric = Ric("ctrlc", LUMA_CONF)
+    if not ric.wait_running():
+        result(False, "ctrl-contract: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    time.sleep(0.3)
+
+    r = ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "mode", "value": "banana"})
+    ok = r is not None and r.get("status") == "error"
+    result(ok, "ctrl-contract: mode banana rejected", str(r))
+    r = ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "mode"})
+    ok = r is not None and r.get("mode") == "auto"
+    result(ok, "ctrl-contract: mode unchanged after rejection", str(r))
+
+    r = ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "status"})
+    ok = (r is not None and r.get("status") == "ok" and "mode" in r
+          and "state" in r)
+    result(ok, "ctrl-contract: explicit status carries mode and state", str(r))
+
+    r = ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "bogus-cmd"})
+    ok = r is not None and r.get("status") == "error"
+    result(ok, "ctrl-contract: unknown command is an error", str(r))
+    ric.stop()
+
+
+def scenario_photo_threshold_order(stub, watch):
+    """Inverted photo thresholds (ev_deep under ev_night) break the
+    deep-count logic silently; the load must say so."""
+    conf = (GPIO_CONF + "trigger = photo\nphoto_ev_night = 50000\n"
+            + "photo_ev_deep = 10000\n")
+    stub.set_scene(luma=100, gain=500, ev=3000, rgain=140, bgain=140)
+    ric = Ric("photoorder", conf, poll_ms=100)
+    if not ric.wait_running():
+        result(False, "photo-order: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    ok = wait_for(lambda: "photo thresholds out of order" in ric.read_log(), 3)
+    result(ok, "photo-order: inverted thresholds warned at load",
+           ric.read_log()[-300:])
+    ric.stop()
+
+
 def scenario_json_discovery(stub, watch):
     """No pins in the config: they come from /etc/thingino.json (the
     sandbox owns that file via an overlay)."""
@@ -2005,6 +2094,9 @@ def main():
         scenario_gpio_failure,
         scenario_disabled,
         scenario_json_discovery,
+        scenario_hostile_config,
+        scenario_ctrl_contract,
+        scenario_photo_threshold_order,
     ]
     only = os.environ.get("RIC_SCENARIO", "")
     if only:
