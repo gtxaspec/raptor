@@ -29,7 +29,8 @@ typedef struct {
 	int frame_fill;	     /* samples fed into the current encoder frame */
 	int frame_samples;   /* samples per AAC frame */
 	uint32_t max_output; /* max encoded bytes per frame */
-	int64_t frame_ts;    /* timestamp of first chunk in current frame */
+	int64_t frame_ts;    /* capture time of the current frame's first sample */
+	int sample_rate;
 } aac_state_t;
 
 static int aac_init(rad_codec_ctx_t *ctx, rss_config_t *cfg, int sample_rate)
@@ -93,6 +94,7 @@ static int aac_init(rad_codec_ctx_t *ctx, rss_config_t *cfg, int sample_rate)
 	}
 
 	st->frame_samples = (int)info.frame_samples; /* mono: total == per channel */
+	st->sample_rate = sample_rate;
 	st->max_output = info.max_output_bytes;
 
 	ctx->priv = st;
@@ -136,9 +138,16 @@ static int aac_encode(rad_codec_ctx_t *ctx, const int16_t *pcm, int samples, uin
 		st->frame_fill += chunk;
 		if (st->frame_fill >= st->frame_samples) {
 			st->frame_fill -= st->frame_samples;
-			/* tail of this chunk started the next encoder frame */
+			/* The tail of this chunk started the next encoder
+			 * frame. Its first sample sits (chunk - tail) samples
+			 * into the chunk, so stamp it there -- stamping the
+			 * chunk start quantizes every frame to the 20ms chunk
+			 * grid, and the weave (four 60ms intervals then one
+			 * 80ms at 16kHz) rode through every consumer into the
+			 * recordings and the RTCP sender reports. */
 			if (st->frame_fill > 0)
-				st->frame_ts = timestamp;
+				st->frame_ts = timestamp + (int64_t)(chunk - st->frame_fill) *
+								   1000000 / st->sample_rate;
 		}
 
 		if (len > 0 && ctx->ring)

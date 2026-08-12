@@ -354,8 +354,108 @@ TEST opus_rtp_clock(void)
 	PASS();
 }
 
+
+/*
+ * Mirror of the AAC accumulator's frame timestamping (rad_codec_aac.c
+ * aac_encode): each published frame must be stamped where its first
+ * sample was captured, not on the chunk grid. Chunk-grid stamps gave
+ * four 60ms intervals then one 80ms at 16kHz -- a weave that rode
+ * through the ring into recordings and sender reports. Keep this in
+ * lockstep with the codec; the integration suite checks the real
+ * binary end to end.
+ */
+typedef struct {
+	int fill;
+	int64_t frame_ts;
+} aac_stamp_state_t;
+
+static int aac_stamp_chunk(aac_stamp_state_t *st, int chunk, int frame_samples, int rate,
+			   int64_t timestamp, int64_t *out_ts)
+{
+	int emitted = 0;
+	if (st->fill == 0)
+		st->frame_ts = timestamp;
+	*out_ts = st->frame_ts;
+	st->fill += chunk;
+	if (st->fill >= frame_samples) {
+		emitted = 1;
+		st->fill -= frame_samples;
+		if (st->fill > 0)
+			st->frame_ts = timestamp +
+				       (int64_t)(chunk - st->fill) * 1000000 / rate;
+	}
+	return emitted;
+}
+
+static int aac_stamp_run(int rate, int frame_samples, int chunks, int64_t *max_dev_us)
+{
+	aac_stamp_state_t st = {0};
+	int chunk = rate / 50;
+	int64_t prev = -1;
+	int64_t max_dev = 0;
+	int frames = 0;
+	double ideal = (double)frame_samples * 1000000.0 / rate;
+
+	for (int i = 0; i < chunks; i++) {
+		int64_t ts;
+		if (!aac_stamp_chunk(&st, chunk, frame_samples, rate, (int64_t)i * 20000, &ts))
+			continue;
+		if (prev >= 0) {
+			double dev = (double)(ts - prev) - ideal;
+			if (dev < 0)
+				dev = -dev;
+			if ((int64_t)dev > max_dev)
+				max_dev = (int64_t)dev;
+		}
+		prev = ts;
+		frames++;
+	}
+	*max_dev_us = max_dev;
+	return frames;
+}
+
+TEST aac_stamps_on_the_sample_grid_16k(void)
+{
+	int64_t dev;
+	int frames = aac_stamp_run(16000, 1024, 320, &dev);
+	ASSERT(frames > 90);
+	ASSERT_LT(dev, 2); /* was 16000us: the 60/60/60/60/80 weave */
+	PASS();
+}
+
+TEST aac_stamps_on_the_sample_grid_48k(void)
+{
+	int64_t dev;
+	int frames = aac_stamp_run(48000, 1024, 320, &dev);
+	ASSERT(frames > 250);
+	ASSERT_LT(dev, 2); /* was 1333us stretching to 20000us at cycle end */
+	PASS();
+}
+
+TEST aac_stamps_on_the_sample_grid_8k(void)
+{
+	int64_t dev;
+	int frames = aac_stamp_run(8000, 1024, 640, &dev);
+	ASSERT(frames > 90);
+	ASSERT_LT(dev, 2);
+	PASS();
+}
+
+TEST aac_stamps_on_the_sample_grid_he48k(void)
+{
+	int64_t dev;
+	int frames = aac_stamp_run(48000, 2048, 640, &dev);
+	ASSERT(frames > 250);
+	ASSERT_LT(dev, 2);
+	PASS();
+}
+
 SUITE(codec_suite)
 {
+	RUN_TEST(aac_stamps_on_the_sample_grid_16k);
+	RUN_TEST(aac_stamps_on_the_sample_grid_48k);
+	RUN_TEST(aac_stamps_on_the_sample_grid_8k);
+	RUN_TEST(aac_stamps_on_the_sample_grid_he48k);
 	RUN_TEST(ulaw_silence);
 	RUN_TEST(ulaw_max_positive);
 	RUN_TEST(ulaw_max_negative);

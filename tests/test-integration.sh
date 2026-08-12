@@ -1050,6 +1050,39 @@ fi
 kill $ZOMBIE_PID 2>/dev/null || true
 wait $ZOMBIE_PID 2>/dev/null || true
 
+
+# ── Audio ring cadence: AAC frames stamp on the sample grid ──
+# The AAC accumulator publishes 1024-sample frames built from 20ms
+# chunks; stamping them on the chunk grid gave four 60ms intervals
+# then one 80ms at 16kHz, and the weave rode into recordings and
+# sender reports. The real codec runs here (x86 libfaac): restart rad
+# on an AAC config and require every ring interval to be the exact
+# frame duration.
+AAC_CONF="$LOG_DIR/test-aac.conf"
+sed 's/^codec = l16/codec = aac/' "$CONFIG" > "$AAC_CONF"
+pkill -f "$OUT/rad" 2>/dev/null || true
+sleep 1
+start_daemon rad "$OUT/rad" -c "$AAC_CONF" -f -d
+sleep 4
+AAC_DTS=$("$OUT/ringdump" audio -f -n 25 2>&1 | sed -n 's/.*dt=\([0-9]*\).*/\1/p' | tail -20)
+if [ -n "$AAC_DTS" ] && python3 - <<PYEOF2
+import sys
+dts = [int(x) for x in """$AAC_DTS""".split()]
+ideal = 1024 * 1000000 // 16000
+bad = [d for d in dts if abs(d - ideal) > 1500]
+print(f"aac ring: {len(dts)} intervals, ideal {ideal}us, off-grid: {bad}")
+sys.exit(1 if bad or len(dts) < 10 else 0)
+PYEOF2
+then
+    pass "aac ring intervals sit on the 1024-sample grid"
+else
+    fail "aac ring intervals sit on the 1024-sample grid" "chunk-grid weave (60/60/80ms) or no frames"
+fi
+pkill -f "$OUT/rad" 2>/dev/null || true
+sleep 1
+start_daemon rad "$OUT/rad" -c "$CONFIG" -f -d
+sleep 1
+
 # ── Sensor rate on a platform that will not set it ──
 # A backend that leaves isp_set_sensor_fps out, or refuses it outright,
 # is behaving as specified, so rvd reports the rate in force instead of
