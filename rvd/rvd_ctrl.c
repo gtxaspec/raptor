@@ -142,6 +142,26 @@ static int rvd_apply_sensor_fps(rvd_state_t *st, uint32_t num, uint32_t den)
 	return 0;
 }
 
+/*
+ * Which config key persists this encoder setting for this stream, or NULL if
+ * this stream has nowhere to write it.
+ *
+ * A JPEG snapshot channel shares its parent video stream's section but not its
+ * keys: what it takes from there is jpeg_-prefixed. The H.26x rate-control keys
+ * have no snapshot counterpart at all, so those changes apply to the running
+ * encoder and are deliberately not written down -- persisting them under the
+ * parent's plain key would retune the video stream at the next boot, from a
+ * command that never mentioned it.
+ */
+static const char *rvd_persist_key(const rvd_stream_t *s, const char *key)
+{
+	if (!s->is_jpeg)
+		return key;
+	if (strcmp(key, "fps") == 0)
+		return "jpeg_fps";
+	return NULL;
+}
+
 /* ── Encoder commands ── */
 
 static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st, char *resp,
@@ -207,10 +227,12 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 				bitrate = (uint32_t)br;
 			int ret = RSS_HAL_CALL(st->ops, enc_set_rc_mode, st->hal_ctx,
 					       st->streams[chn].chn, mode, bitrate);
+			const char *key = rvd_persist_key(&st->streams[chn], "rc_mode");
 			if (ret == 0) {
 				st->streams[chn].enc_cfg.rc_mode = mode;
-				rss_config_set_str(st->cfg, st->streams[chn].cfg_sect, "rc_mode",
-						   mode_str);
+				if (key)
+					rss_config_set_str(st->cfg, st->streams[chn].cfg_sect, key,
+							   mode_str);
 			}
 			cJSON *r = cJSON_CreateObject();
 			cJSON_AddStringToObject(r, "status", ret == 0 ? "ok" : "error");
@@ -227,10 +249,12 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 		    chn < st->stream_count) {
 			int ret = RSS_HAL_CALL(st->ops, enc_set_bitrate, st->hal_ctx,
 					       st->streams[chn].chn, val);
+			const char *key = rvd_persist_key(&st->streams[chn], "bitrate");
 			if (ret == 0) {
 				st->streams[chn].enc_cfg.bitrate = val;
-				rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, "bitrate",
-						   val);
+				if (key)
+					rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, key,
+							   val);
 			}
 			return fmt_hal_result(resp, resp_size, ret);
 		}
@@ -243,9 +267,12 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 		    chn < st->stream_count) {
 			int ret = RSS_HAL_CALL(st->ops, enc_set_gop, st->hal_ctx,
 					       st->streams[chn].chn, val);
+			const char *key = rvd_persist_key(&st->streams[chn], "gop");
 			if (ret == 0) {
 				st->streams[chn].enc_cfg.gop_length = val;
-				rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, "gop", val);
+				if (key)
+					rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, key,
+							   val);
 			}
 			return fmt_hal_result(resp, resp_size, ret);
 		}
@@ -258,6 +285,7 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 		    chn < st->stream_count) {
 			int ret = RSS_HAL_CALL(st->ops, enc_set_fps, st->hal_ctx,
 					       st->streams[chn].chn, val, 1);
+			const char *key = rvd_persist_key(&st->streams[chn], "fps");
 			if (ret == 0) {
 				st->streams[chn].enc_cfg.fps_num = val;
 				st->streams[chn].enc_cfg.fps_den = 1;
@@ -265,7 +293,9 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 				 * transient sensor-rate override on this stream. */
 				st->streams[chn].active_fps_num = 0;
 				st->streams[chn].active_fps_den = 0;
-				rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, "fps", val);
+				if (key)
+					rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, key,
+							   val);
 				rvd_stream_publish_info(st, chn);
 			}
 			return fmt_hal_result(resp, resp_size, ret);
@@ -280,13 +310,17 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 		    chn < st->stream_count) {
 			int ret = RSS_HAL_CALL(st->ops, enc_set_qp_bounds, st->hal_ctx,
 					       st->streams[chn].chn, val, val2);
+			const char *min_key = rvd_persist_key(&st->streams[chn], "min_qp");
+			const char *max_key = rvd_persist_key(&st->streams[chn], "max_qp");
 			if (ret == 0) {
 				st->streams[chn].enc_cfg.min_qp = val;
 				st->streams[chn].enc_cfg.max_qp = val2;
-				rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, "min_qp",
-						   val);
-				rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, "max_qp",
-						   val2);
+				if (min_key)
+					rss_config_set_int(st->cfg, st->streams[chn].cfg_sect,
+							   min_key, val);
+				if (max_key)
+					rss_config_set_int(st->cfg, st->streams[chn].cfg_sect,
+							   max_key, val2);
 			}
 			return fmt_hal_result(resp, resp_size, ret);
 		}

@@ -956,6 +956,15 @@ int rvd_pipeline_init(rvd_state_t *st)
 			st->streams[ji].fs_chn = st->streams[v].fs_chn;
 			st->streams[ji].chn = jpeg_chn;
 			st->streams[ji].sensor_idx = st->streams[v].sensor_idx;
+			/* Snapshot channels have no section of their own: they are
+			 * configured from the parent stream's, under jpeg_-prefixed
+			 * keys (jpeg_quality and jpeg_fps, read just above). Carrying
+			 * that section here is what lets a runtime change be written
+			 * back to the place it was read from -- left empty, a
+			 * persisted key lands sectionless at the top of the file,
+			 * where nothing reads it again. */
+			rss_strlcpy(st->streams[ji].cfg_sect, sect,
+				    sizeof(st->streams[ji].cfg_sect));
 			st->streams[ji].is_jpeg = true;
 			st->streams[ji].jpeg_idle = rss_config_get_bool(cfg, "jpeg", "idle", true);
 			st->streams[ji].enc_cfg.init_qp = quality;
