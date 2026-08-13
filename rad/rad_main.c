@@ -28,6 +28,7 @@
 
 #include "rad.h"
 #include "rad_clock.h"
+#include "rad_resync.h"
 
 /* Synthetic audio clock: sample-count advance slewed toward
  * CLOCK_MONOTONIC. Control law and its history live in rad_clock.c. */
@@ -1258,6 +1259,7 @@ int main(int argc, char **argv)
 
 	rad_clock_t synth_clock;
 	rad_clock_init(&synth_clock, rss_timestamp_us());
+	rad_resync_log_t resync_log = {0};
 
 	ctrl_ctx = (rad_ctrl_ctx_t){
 		.cfg = dctx.cfg,
@@ -1340,11 +1342,11 @@ int main(int argc, char **argv)
 		 * timestamps share the encoder's clock source; the control
 		 * law slewing them toward CLOCK_MONOTONIC lives in
 		 * rad_clock.c together with the history that shaped it. */
-		int64_t ts = rad_clock_stamp(&synth_clock, samples, ctrl_ctx.sample_rate,
-					     rss_timestamp_us());
+		int64_t now_us = rss_timestamp_us();
+		int64_t ts = rad_clock_stamp(&synth_clock, samples, ctrl_ctx.sample_rate, now_us);
+		rad_resync_tick(&resync_log, now_us);
 		if (synth_clock.resync_us)
-			RSS_WARN("audio clock resync %+lldms (lost samples or stall)",
-				 (long long)(synth_clock.resync_us / 1000));
+			rad_resync_note(&resync_log, now_us, synth_clock.resync_us);
 
 		const int16_t *pcm = frame.data;
 		int out_len = 0;

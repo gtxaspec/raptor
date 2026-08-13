@@ -1,4 +1,4 @@
-SRCS := rad_main.c rad_codec.c rad_codec_g711.c rad_codec_l16.c rad_codec_aac.c rad_codec_opus.c rad_clock.c
+SRCS := rad_main.c rad_codec.c rad_codec_g711.c rad_codec_l16.c rad_codec_aac.c rad_codec_opus.c rad_clock.c rad_resync.c
 OBJS := $(SRCS:.c=.o)
 BIN  := rad
 
