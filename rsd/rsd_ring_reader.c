@@ -104,6 +104,43 @@ static void rsd_cache_params(rsd_ring_ctx_t *rctx, const uint8_t *data, uint32_t
 	}
 }
 
+static const char *rsd_codec_name(uint32_t codec)
+{
+	switch (codec) {
+	case 0:
+		return "H.264";
+	case 1:
+		return "H.265";
+	default:
+		return "JPEG";
+	}
+}
+
+/*
+ * Drop every playing client on a stream whose SDP has stopped being true.
+ *
+ * Codec and picture size are both answered in the SDP — sprop-parameter-sets
+ * carries the SPS, and the SPS carries the dimensions — and RTSP has no way to
+ * renegotiate that mid-session. A client left in place is told 2560x1920 while
+ * being sent 1280x720: some players re-read the in-band SPS and recover, others
+ * show corruption or freeze, and a recorder writes a file that disagrees with
+ * its own header. Disconnecting makes the client re-DESCRIBE, which is the only
+ * transition RTSP actually defines.
+ */
+static void rsd_drop_stream_clients(rsd_server_t *srv, int stream_idx, const char *what)
+{
+	pthread_mutex_lock(&srv->clients_lock);
+	for (int i = 0; i < srv->client_count; i++) {
+		rsd_client_t *c = srv->clients[i];
+		if (c && c->stream_idx == stream_idx && c->video.playing) {
+			shutdown(c->fd, SHUT_RDWR);
+			RSS_INFO("disconnecting client on stream %d (%s changed)", stream_idx,
+				 what);
+		}
+	}
+	pthread_mutex_unlock(&srv->clients_lock);
+}
+
 /* Try to pop and send one audio entry from the sendq.
  * Called between video NALUs to interleave audio with large IDR frames. */
 static void sendq_drain_audio(rsd_client_t *c)
@@ -307,7 +344,11 @@ void *rsd_video_reader_thread(void *arg)
 			/* Cache all SDP-relevant fields so the session thread
 			 * never needs to dereference the ring pointer. */
 			const rss_ring_header_t *new_hdr = rss_ring_get_header(rctx->ring);
+			/* Both comparisons read what the old ring advertised, so
+			 * they have to happen before the cache is overwritten. */
 			bool codec_changed = (new_hdr->codec != rctx->last_codec);
+			bool geometry_changed = (new_hdr->width != rctx->last_width ||
+						 new_hdr->height != rctx->last_height);
 			rctx->last_codec = new_hdr->codec;
 			rctx->last_width = new_hdr->width;
 			rctx->last_height = new_hdr->height;
@@ -317,28 +358,32 @@ void *rsd_video_reader_thread(void *arg)
 			rctx->last_level = new_hdr->level;
 
 			/* Ring reconnected — reset all clients on this stream
-			 * so they re-sync from the next keyframe. If codec changed,
-			 * disconnect existing clients (RTSP can't renegotiate SDP
-			 * mid-session — clients must reconnect for new codec). */
-			pthread_mutex_lock(&srv->clients_lock);
-			for (int i = 0; i < srv->client_count; i++) {
-				rsd_client_t *c = srv->clients[i];
-				if (c && c->stream_idx == stream_idx && c->video.playing) {
-					if (codec_changed) {
-						shutdown(c->fd, SHUT_RDWR);
-						RSS_INFO("disconnecting client on stream %d (codec "
-							 "changed)",
-							 stream_idx);
-					} else {
+			 * so they re-sync from the next keyframe, unless what the
+			 * SDP promised them has changed, in which case they are
+			 * dropped instead (see rsd_drop_stream_clients).
+			 *
+			 * A client can only be playing video if last_width was
+			 * already nonzero -- SETUP refuses the stream otherwise
+			 * (rsd_session.c) -- so the first open of a ring cannot
+			 * disconnect anyone through the 0 -> real transition. */
+			if (codec_changed || geometry_changed) {
+				rsd_drop_stream_clients(srv, stream_idx,
+							codec_changed ? "codec" : "resolution");
+			} else {
+				pthread_mutex_lock(&srv->clients_lock);
+				for (int i = 0; i < srv->client_count; i++) {
+					rsd_client_t *c = srv->clients[i];
+					if (c && c->stream_idx == stream_idx && c->video.playing) {
 						c->waiting_keyframe = true;
 						c->video_ts_base_set = false;
 					}
 				}
+				pthread_mutex_unlock(&srv->clients_lock);
 			}
-			pthread_mutex_unlock(&srv->clients_lock);
 
-			RSS_INFO("video reader[%d] reconnected (%s%s)", stream_idx, rctx->ring_name,
-				 codec_changed ? ", codec changed" : "");
+			RSS_INFO("video reader[%d] reconnected (%s%s%s)", stream_idx,
+				 rctx->ring_name, codec_changed ? ", codec changed" : "",
+				 geometry_changed ? ", resolution changed" : "");
 		}
 
 		int ret = rss_ring_wait(rctx->ring, 100);
@@ -412,19 +457,49 @@ void *rsd_video_reader_thread(void *arg)
 		uint32_t frame_dur = 90000 / fps;
 
 		/*
-		 * The session thread builds a=framerate from the cache below, and
-		 * a rate change reaches the header in place -- the ring is not
-		 * reopened and nobody is woken -- so the reconnect path above
-		 * never sees it. Refresh it here, where the header is already in
-		 * hand for the pacing above. Rate only: a codec or geometry
-		 * change has to reset clients, which stays the reconnect path's
-		 * job.
+		 * The session thread builds the SDP from the cache below, and a
+		 * reconfigure reaches the header in place -- rvd reuses the ring
+		 * across an encoder restart and rewrites its stream info
+		 * (rvd_pipeline.c), so nothing is closed, nothing is reopened,
+		 * and the reconnect path above never runs. Refresh here, where
+		 * the header is already in hand for the pacing above.
+		 *
+		 * Rate is a cache update and nothing more: a=framerate is
+		 * advisory and every client keeps playing. Codec and geometry
+		 * are not -- they are what the SPS in the SDP says, so the
+		 * clients holding the old answer have to go, and the cached
+		 * parameter sets with them: dropping the lengths makes the next
+		 * keyframe re-cache (see the sps_len test in the read loop),
+		 * which is what a re-DESCRIBE will then be answered with.
 		 */
 		if (rhdr->fps_num != rctx->last_fps_num || rhdr->fps_den != rctx->last_fps_den) {
 			RSS_INFO("ring[%d]: rate now %u/%u fps", rctx->idx, rhdr->fps_num,
 				 rhdr->fps_den);
 			rctx->last_fps_num = rhdr->fps_num;
 			rctx->last_fps_den = rhdr->fps_den;
+		}
+
+		if (rhdr->codec != rctx->last_codec || rhdr->width != rctx->last_width ||
+		    rhdr->height != rctx->last_height) {
+			bool codec_changed = (rhdr->codec != rctx->last_codec);
+
+			RSS_INFO("ring[%d]: stream is now %s %ux%u (was %s %ux%u)", rctx->idx,
+				 rsd_codec_name(rhdr->codec), rhdr->width, rhdr->height,
+				 rsd_codec_name(rctx->last_codec), (unsigned)rctx->last_width,
+				 (unsigned)rctx->last_height);
+
+			rctx->last_codec = rhdr->codec;
+			rctx->last_width = rhdr->width;
+			rctx->last_height = rhdr->height;
+			rctx->last_profile = rhdr->profile;
+			rctx->last_level = rhdr->level;
+
+			atomic_store_explicit(&rctx->vps_len, 0, memory_order_relaxed);
+			atomic_store_explicit(&rctx->sps_len, 0, memory_order_relaxed);
+			atomic_store_explicit(&rctx->pps_len, 0, memory_order_relaxed);
+
+			rsd_drop_stream_clients(srv, stream_idx,
+						codec_changed ? "codec" : "resolution");
 		}
 
 		for (int burst = 0; burst < 8; burst++) {

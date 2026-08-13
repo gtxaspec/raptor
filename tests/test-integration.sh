@@ -1915,6 +1915,125 @@ if [ "$KEEP" = "1" ]; then
     wait
 fi
 
+# ── A geometry change drops the clients holding the old SDP ──
+# The picture size is answered in the SDP -- the SPS rides in
+# sprop-parameter-sets and carries the dimensions -- and RTSP cannot
+# renegotiate it mid-session, so a client left in place is told one size
+# while being sent another. rvd reuses the ring across an encoder restart
+# and rewrites its stream info in place: nothing is closed, nothing is
+# reopened, and no reconnect event carries the news, so the reader has to
+# see it on the live header. A rate change in the same session is the
+# control: a framerate is advisory, and refreshing it must disconnect
+# nobody. Runs late, beside the recovery legs, because set-resolution
+# rebuilds the encoder and the legs above are entitled to a stream that
+# has not been restarted under them.
+GEO_OUT=$(python3 - "$OUT/raptorctl" <<'GEO_EOF'
+import socket, subprocess, sys, time
+
+def req(sock, buf, method, url, cseq, extra=""):
+    sock.sendall(f"{method} {url} RTSP/1.0\r\nCSeq: {cseq}\r\n{extra}\r\n".encode())
+    while b"\r\n\r\n" not in buf[0]:
+        d = sock.recv(4096)
+        if not d:
+            return ""
+        buf[0] += d
+    head, _, rest = buf[0].partition(b"\r\n\r\n")
+    headers = head.decode(errors="replace")
+    clen = 0
+    for line in headers.split("\r\n"):
+        if line.lower().startswith("content-length:"):
+            clen = int(line.split(":", 1)[1])
+    while len(rest) < clen:
+        rest += sock.recv(4096)
+    buf[0] = rest[clen:]
+    return headers
+
+def ctl(*args):
+    r = subprocess.run([sys.argv[1]] + list(args), capture_output=True,
+                       text=True, timeout=20)
+    return r.stdout
+
+def media(sock, seconds):
+    """Interleaved bytes read inside the window, or None once the server closes."""
+    end = time.time() + seconds
+    got = 0
+    while True:
+        left = end - time.time()
+        if left <= 0:
+            return got
+        sock.settimeout(left)
+        try:
+            d = sock.recv(65536)
+        except socket.timeout:
+            return got
+        if not d:
+            return None
+        got += len(d)
+
+base = "rtsp://127.0.0.1:15554/stream0"
+s = socket.create_connection(("127.0.0.1", 15554), timeout=5)
+buf = [b""]
+req(s, buf, "DESCRIBE", base, 1, "Accept: application/sdp\r\n")
+setup = req(s, buf, "SETUP", base + "/video", 2,
+            "Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n")
+sid = ""
+for line in setup.split("\r\n"):
+    if line.lower().startswith("session:"):
+        sid = line.split(":", 1)[1].split(";")[0].strip()
+sess = f"Session: {sid}\r\n"
+play = req(s, buf, "PLAY", base, 3, sess + "Range: npt=0.000-\r\n")
+if " 200 " not in play.split("\r\n")[0] + " ":
+    print("PLAY_FAILED")
+    sys.exit(0)
+if not media(s, 3.0):
+    print("NO_MEDIA")
+    sys.exit(0)
+
+# Control: the rate is a cache refresh, and every client plays on.
+ctl("rvd", "set-fps", "0", "12")
+print("FPS_KEPT=" + ("1" if media(s, 3.0) else "0"))
+ctl("rvd", "set-fps", "0", "25")
+
+res = ctl("rvd", "set-resolution", "0", "1280", "720")
+print("SETRES_OK=" + ("1" if '"ok"' in res else "0"))
+print("DROPPED=" + ("1" if media(s, 10.0) is None else "0"))
+s.close()
+
+# Hand the following legs back the geometry they had, and prove the
+# server survived the disconnect it just made.
+ctl("rvd", "set-resolution", "0", "1920", "1080")
+time.sleep(2)
+s2 = socket.create_connection(("127.0.0.1", 15554), timeout=5)
+alive = req(s2, [b""], "DESCRIBE", base, 1, "Accept: application/sdp\r\n")
+print("ALIVE=" + ("1" if " 200 " in alive.split("\r\n")[0] + " " else "0"))
+s2.close()
+GEO_EOF
+)
+if echo "$GEO_OUT" | grep -qE "PLAY_FAILED|NO_MEDIA"; then
+    skip "resolution change disconnects the stream's clients" \
+        "no playing session to test ($GEO_OUT)"
+elif echo "$GEO_OUT" | grep -q "SETRES_OK=0"; then
+    skip "resolution change disconnects the stream's clients" "set-resolution was refused"
+else
+    if echo "$GEO_OUT" | grep -q "FPS_KEPT=1"; then
+        pass "a rate change leaves playing clients alone"
+    else
+        fail "a rate change leaves playing clients alone" \
+            "the client stopped receiving after set-fps"
+    fi
+    if echo "$GEO_OUT" | grep -q "DROPPED=1"; then
+        pass "resolution change disconnects the stream's clients"
+    else
+        fail "resolution change disconnects the stream's clients" \
+            "still connected 10s after set-resolution"
+    fi
+    if echo "$GEO_OUT" | grep -q "ALIVE=1"; then
+        pass "rsd answers DESCRIBE after dropping a client"
+    else
+        fail "rsd answers DESCRIBE after dropping a client" "$GEO_OUT"
+    fi
+fi
+
 # ── Recovery invariants: RTP through disturbances ──
 # The slow-client legs above prove the server SURVIVES a stall; this
 # one proves the streams stay CORRECT through it: both tracks' RTP
