@@ -1,0 +1,66 @@
+name: Format
+
+# Gates only the lines a change touches (git-clang-format against the
+# merge base), so pre-existing drift in untouched files never blocks a
+# PR. Tightening this to a full-tree check requires formatting the
+# whole tree first.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check-format:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install clang-format-19
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+          echo "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-19 main" | sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update && sudo apt-get install -y clang-format-19
+
+      - name: Clone
+        run: git clone --no-tags "https://github.com/$GITHUB_REPOSITORY" .
+
+      - name: Resolve diff range
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.event.after }}
+        run: |
+          if [ "$EVENT" = "pull_request" ]; then
+            git fetch origin "pull/$PR_NUMBER/head"
+            HEAD_SHA=$(git rev-parse FETCH_HEAD)
+            BASE_SHA=$(git merge-base "origin/$BASE_REF" "$HEAD_SHA")
+          else
+            BASE_SHA="$PUSH_BEFORE"
+            HEAD_SHA="$PUSH_AFTER"
+          fi
+          echo "BASE_SHA=$BASE_SHA" >> "$GITHUB_ENV"
+          echo "HEAD_SHA=$HEAD_SHA" >> "$GITHUB_ENV"
+
+      - name: Changed lines are clang-format clean
+        run: |
+          if [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            echo "no prior commit to diff against, skipping"
+            exit 0
+          fi
+          if ! git cat-file -e "$BASE_SHA^{commit}" 2> /dev/null; then
+            echo "base $BASE_SHA unreachable (force push?), skipping"
+            exit 0
+          fi
+          if out=$(git-clang-format-19 --binary "$(command -v clang-format-19)" \
+                   --extensions c,h,cpp,hpp --diff "$BASE_SHA" "$HEAD_SHA" \
+                   -- . ':(exclude)tests/greatest.h'); then
+            printf '%s\n' "$out"
+          else
+            printf '%s\n' "$out"
+            echo "::error::changed lines are not formatted; run: git clang-format $BASE_SHA"
+            exit 1
+          fi
