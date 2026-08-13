@@ -909,6 +909,40 @@ else
         "expected 'running config saved' in rvd log"
 fi
 
+# ── A snapshot channel's settings land in a section that is read back ──
+# A JPEG channel is built from its parent video stream and has no
+# section of its own. Given an empty one, a persisted key is written
+# above every [section] header, where no loader will ever read it
+# again -- the file still parses, the daemon still answers ok, and the
+# setting is gone at the next boot. So this goes through the file:
+# set-jpeg-quality is the one command that only accepts a JPEG channel,
+# and the channel index is discovered rather than assumed, since it
+# depends on how many video streams the config declares.
+JQ_CHN=""
+for c in 0 1 2 3 4 5; do
+    if "$OUT/raptorctl" rvd set-jpeg-quality "$c" 60 2>/dev/null | grep -q '"ok"'; then
+        JQ_CHN="$c"
+        break
+    fi
+done
+if [ -z "$JQ_CHN" ]; then
+    skip "jpeg quality persists into a real section" "no JPEG channel accepted set-jpeg-quality"
+else
+    "$OUT/raptorctl" config save > /dev/null 2>&1
+    sleep 1
+    FIRST_SECT=$(grep -n '^\[' "$CONFIG" | head -1 | cut -d: -f1)
+    ORPHANS=$(head -n "$((FIRST_SECT - 1))" "$CONFIG" | grep -c '^[a-z_][a-z_]* *=' || true)
+    if [ "${ORPHANS:-0}" -ne 0 ]; then
+        fail "jpeg quality persists into a real section" \
+            "$ORPHANS key(s) written above the first [section] header"
+    elif sed -n "/^\[stream0\]/,/^\[/p" "$CONFIG" | grep -q '^jpeg_quality *= *60'; then
+        pass "jpeg quality persists into a real section (chn $JQ_CHN -> [stream0])"
+    else
+        fail "jpeg quality persists into a real section" \
+            "jpeg_quality = 60 is not in [stream0]"
+    fi
+fi
+
 echo ""
 echo "=== SRT PSI cadence ==="
 
