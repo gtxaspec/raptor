@@ -15,7 +15,7 @@
 #include "greatest.h"
 #include "../rsd/rsd_sendq.h"
 
-static uint8_t payload[16] = { 0xaa, 0xbb, 0xcc, 0xdd };
+static uint8_t payload[16] = {0xaa, 0xbb, 0xcc, 0xdd};
 
 static int push_a(rsd_sendq_t *q, uint32_t ts)
 {
@@ -225,8 +225,8 @@ TEST sei_spliced_before_first_vcl(void)
 	ASSERT_EQ(0, rsd_sendq_init(&q));
 
 	/* Annex B: SPS (0x67) then IDR (0x65). */
-	static const uint8_t frame[] = { 0, 0, 0, 1, 0x67, 0x42, 0, 0, 0, 1, 0x65, 0x88 };
-	static const uint8_t sei[] = { 0, 0, 0, 1, 0x06, 0x05, 0x02, 0xde, 0xad };
+	static const uint8_t frame[] = {0, 0, 0, 1, 0x67, 0x42, 0, 0, 0, 1, 0x65, 0x88};
+	static const uint8_t sei[] = {0, 0, 0, 1, 0x06, 0x05, 0x02, 0xde, 0xad};
 
 	ASSERT_EQ(RSD_SENDQ_OK,
 		  rsd_sendq_push_video(&q, frame, sizeof(frame), 77, sei, sizeof(sei), false));

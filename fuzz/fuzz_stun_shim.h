@@ -28,7 +28,7 @@
 #define STUN_ATTR_FINGERPRINT	    0x8028
 #define STUN_FINGERPRINT_XOR	    0x5354554E
 
-#define RWD_MAX_VERIFIED_ADDRS 4
+#define RWD_MAX_VERIFIED_ADDRS	    4
 
 typedef struct rwd_client rwd_client_t;
 typedef struct rwd_server rwd_server_t;

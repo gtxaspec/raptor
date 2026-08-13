@@ -292,8 +292,8 @@ void *rvd_encoder_thread(void *arg)
 				int64_t now_us = rss_timestamp_us();
 				if (now_us - last_pub_warn_us > 5000000) {
 					last_pub_warn_us = now_us;
-					RSS_WARN("stream%d: publish_iov failed (%d), key=%d",
-						 idx, ret, frame.is_key ? 1 : 0);
+					RSS_WARN("stream%d: publish_iov failed (%d), key=%d", idx,
+						 ret, frame.is_key ? 1 : 0);
 				}
 			}
 		}

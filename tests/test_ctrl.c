@@ -369,8 +369,8 @@ static void setup(void)
 	snprintf(st.streams[2].cfg_sect, sizeof(st.streams[2].cfg_sect), "jpeg0");
 
 	/* WB initial state */
-	wb_state = (rss_wb_config_t){
-		.mode = RSS_WB_AUTO, .r_gain = 256, .g_gain = 256, .b_gain = 256};
+	wb_state =
+		(rss_wb_config_t){.mode = RSS_WB_AUTO, .r_gain = 256, .g_gain = 256, .b_gain = 256};
 	rec.brightness_stored = 128;
 }
 

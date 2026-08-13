@@ -354,7 +354,6 @@ TEST opus_rtp_clock(void)
 	PASS();
 }
 
-
 /*
  * Mirror of the AAC accumulator's frame timestamping (rad_codec_aac.c
  * aac_encode): each published frame must be stamped where its first
@@ -381,8 +380,7 @@ static int aac_stamp_chunk(aac_stamp_state_t *st, int chunk, int frame_samples, 
 		emitted = 1;
 		st->fill -= frame_samples;
 		if (st->fill > 0)
-			st->frame_ts = timestamp +
-				       (int64_t)(chunk - st->fill) * 1000000 / rate;
+			st->frame_ts = timestamp + (int64_t)(chunk - st->fill) * 1000000 / rate;
 	}
 	return emitted;
 }

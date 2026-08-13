@@ -278,8 +278,8 @@ int main(int argc, char **argv)
 			/* Frame larger than the advertised max: read_seq already
 			 * advanced past it. Say so — a silent skip once hid the
 			 * shape of a keyframe-drop bug. */
-			fprintf(stderr, "[SKIP] frame of %u bytes exceeds %u byte buffer\n",
-				length, buf_size);
+			fprintf(stderr, "[SKIP] frame of %u bytes exceeds %u byte buffer\n", length,
+				buf_size);
 			continue;
 		}
 		if (ret != 0)

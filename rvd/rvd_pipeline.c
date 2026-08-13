@@ -1383,10 +1383,9 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 					uint32_t actual_stride = 0;
 					RSS_HAL_CALL(st->ops, enc_get_stream_buf_size, st->hal_ctx,
 						     s->chn, &actual_stride);
-					rss_ring_enable_refmode(s->ring, st->rmem_size,
-								st->rmem_mmap_offset,
-								RSS_RING_MAX_REF_BUFS,
-								actual_stride);
+					rss_ring_enable_refmode(
+						s->ring, st->rmem_size, st->rmem_mmap_offset,
+						RSS_RING_MAX_REF_BUFS, actual_stride);
 				}
 			}
 		}
