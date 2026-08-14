@@ -1284,7 +1284,23 @@ if aac_aus:
     print(f"SENT_AAC={len(aac_aus)}")
 else:
     print("AAC_SKIP")
-time.sleep(6.0)
+# rsd owes the sender a receiver report on the interleaved RTCP
+# channel (RFC 3550): scan the incoming stream for a PT 201 frame.
+s.settimeout(2.0)
+got = b""
+deadline = time.time() + 7.0
+while time.time() < deadline:
+    try:
+        d = s.recv(4096)
+    except socket.timeout:
+        continue
+    if not d:
+        break
+    got += d
+    i = got.find(b"\x24\x05")
+    if i >= 0 and len(got) >= i + 6 and got[i + 5] == 201:
+        print("RR_TCP_OK")
+        break
 s.close()
 BC2_EOF
 BC2_PID=$!
@@ -1309,6 +1325,10 @@ elif grep -q "backchannel: receiving AAC" "$LOG_DIR/rsd.log"; then
 else
     fail "backchannel AAC decode" "no 'receiving AAC' in rsd.log"
 fi
+
+echo "$BC2_OUT" | grep -q "RR_TCP_OK" \
+    && pass "backchannel receiver report arrives on the interleaved RTCP channel" \
+    || fail "backchannel TCP receiver report" "no PT 201 frame seen"
 
 # ── Backchannel over UDP: its own socket pair, actually read ──
 # Regression shape: the backchannel SETUP used to borrow the VIDEO
@@ -1384,7 +1404,15 @@ for _ in range(30):
     seq += 1; ts += 160
     time.sleep(0.005)
 print("UDP_SENT=30", flush=True)
-time.sleep(6.0)
+# The receiver report comes back on the backchannel RTCP pair.
+b_rtcp.settimeout(8.0)
+try:
+    rr, _ = b_rtcp.recvfrom(2048)
+    if len(rr) >= 8 and rr[1] == 201:
+        print("RR_UDP_OK")
+except socket.timeout:
+    pass
+time.sleep(2.0)
 s.close()
 BC3_EOF
 BC3_PID=$!
@@ -1407,6 +1435,10 @@ if [ "${BC3_SEQ:-0}" -gt "${BC3_BEFORE:-0}" ] 2>/dev/null; then
 else
     fail "backchannel UDP receive" "write_seq stuck at ${BC3_SEQ:-none} (before=${BC3_BEFORE:-none})"
 fi
+
+echo "$BC3_OUT" | grep -q "RR_UDP_OK" \
+    && pass "backchannel receiver report arrives on the UDP RTCP pair" \
+    || fail "backchannel UDP receiver report" "no PT 201 datagram on client rtcp port"
 
 # ── Producer restart under a lingering client ──
 # A playing client whose media goes unread (stalled player, dead NVR

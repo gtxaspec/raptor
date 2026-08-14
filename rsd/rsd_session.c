@@ -624,6 +624,10 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 			rsd_bc_dec_deinit(&self->bc_recv->dec);
 		free(self->bc_recv);
 		self->bc_recv = NULL;
+		if (self->bc_has_rtcp_t) {
+			VCALL_SUPER(self->bc_rtcp_t, Compy_Droppable, drop);
+			self->bc_has_rtcp_t = false;
+		}
 	} else if (is_audio) {
 		if (self->audio.rtp) {
 			VCALL(DYN(Compy_RtpTransport, Compy_Droppable, self->audio.rtp), drop);
@@ -804,6 +808,13 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 		self->bc_recv = recv;
 		self->backchannel = Compy_Backchannel_new(
 			bc_cfg, DYN(rsd_bc_recv_t, Compy_AudioReceiver, recv));
+		/* Keep the RTCP transport for the receiver reports we owe
+		 * the client's sender; the RTP-direction one has no use on
+		 * a receive-only track (both leaked here before). */
+		self->bc_rtcp_t = rtcp_t;
+		self->bc_has_rtcp_t = true;
+		self->bc_last_rr = rss_timestamp_us();
+		VCALL_SUPER(rtp_t, Compy_Droppable, drop);
 		RSS_INFO("client SETUP: backchannel ready (PCMU/PCMA"
 #ifdef RAPTOR_OPUS
 			 "/opus"
@@ -1076,15 +1087,16 @@ void rsd_handle_rtsp_data(rsd_client_t *client, const char *data, size_t len)
 			Compy_Rtcp_handle_incoming(client->audio.rtcp, (const uint8_t *)data + 4,
 						   frame_len);
 
-		/* Backchannel data */
+		/* Backchannel data. Arrival instants drive the jitter and
+		 * DLSR fields of the receiver reports rsd sends back. */
 		if (client->backchannel) {
 			Compy_RtpReceiver *recv =
 				Compy_Backchannel_get_receiver(client->backchannel);
 			if (recv) {
 				uint8_t ch_type =
 					(channel & 1) ? COMPY_CHANNEL_RTCP : COMPY_CHANNEL_RTP;
-				Compy_RtpReceiver_feed(recv, ch_type, (const uint8_t *)data + 4,
-						       frame_len);
+				Compy_RtpReceiver_feed_at(recv, ch_type, (const uint8_t *)data + 4,
+							  frame_len, rss_timestamp_us());
 			}
 		}
 

@@ -105,6 +105,11 @@ typedef struct rsd_client {
 	Compy_Backchannel *backchannel;
 	rss_ring_t *speaker_ring; /* created on first backchannel packet */
 	rsd_bc_recv_t *bc_recv;	  /* kept alive for the compy callback */
+	/* RTCP transport for the receiver reports rsd owes the client's
+	 * sender (RFC 3550 §6.4.2), valid while bc_has_rtcp_t. */
+	Compy_Transport bc_rtcp_t;
+	bool bc_has_rtcp_t;
+	int64_t bc_last_rr; /* last RR instant, armed at SETUP */
 
 	/* TCP interleaved channel numbers (for RTCP routing) */
 	uint8_t video_rtcp_ch; /* RTCP channel for video (default 1) */

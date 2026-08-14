@@ -139,6 +139,10 @@ static void remove_client(rsd_server_t *srv, rsd_client_t *client)
 		rsd_bc_dec_deinit(&client->bc_recv->dec);
 	free(client->bc_recv);
 	client->bc_recv = NULL;
+	if (client->bc_has_rtcp_t) {
+		VCALL_SUPER(client->bc_rtcp_t, Compy_Droppable, drop);
+		client->bc_has_rtcp_t = false;
+	}
 	if (client->speaker_ring) {
 		rss_ring_destroy(client->speaker_ring);
 		client->speaker_ring = NULL;
@@ -656,8 +660,9 @@ void rsd_server_run(rsd_server_t *srv)
 								Compy_Backchannel_get_receiver(
 									bc->backchannel);
 							if (rcv)
-								Compy_RtpReceiver_feed(rcv, ch, pkt,
-										       (size_t)rn);
+								Compy_RtpReceiver_feed_at(
+									rcv, ch, pkt, (size_t)rn,
+									rss_timestamp_us());
 						}
 						/* A talking client is alive even
 						 * if it never PLAYs. */
@@ -728,6 +733,34 @@ void rsd_server_run(rsd_server_t *srv)
 					      &bc_ev) == 0)
 					c->bc_rtcp_in_epoll = true;
 			}
+		}
+
+		/* Receiver reports for backchannel audio (RFC 3550 §6.4.2),
+		 * on the SR cadence. The client is the sender on that track,
+		 * so the reporting duty lands here; the write_lock is the
+		 * same discipline every RTCP send on the connection takes. */
+		int64_t rr_now = rss_timestamp_us();
+		for (int i = 0; i < srv->client_count; i++) {
+			rsd_client_t *c = srv->clients[i];
+			if (!c || !c->backchannel || !c->bc_has_rtcp_t)
+				continue;
+			if (rr_now - c->bc_last_rr < RSD_SR_INTERVAL_US)
+				continue;
+			c->bc_last_rr = rr_now;
+			Compy_RtpReceiver *rcv = Compy_Backchannel_get_receiver(c->backchannel);
+			if (!rcv)
+				continue;
+			uint8_t rr_buf[96];
+			ssize_t rr_len = Compy_RtpReceiver_write_rr(
+				rcv, (uint32_t)c->session_id ^ 0x52534452u, rr_now, "raptor-rsd",
+				rr_buf, sizeof(rr_buf));
+			if (rr_len <= 0)
+				continue; /* nothing received yet */
+			struct iovec rr_iov[1] = {{.iov_base = rr_buf, .iov_len = (size_t)rr_len}};
+			pthread_mutex_lock(&c->write_lock);
+			VCALL(c->bc_rtcp_t, transmit,
+			      (Compy_IoVecSlice)Slice99_typed_from_array(rr_iov));
+			pthread_mutex_unlock(&c->write_lock);
 		}
 
 		/* Idle timeout sweep — disconnect clients with no activity.
