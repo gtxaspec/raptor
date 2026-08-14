@@ -43,22 +43,8 @@ static int b64_encode(const uint8_t *src, int len, char *dst, int dst_size)
 	return o;
 }
 
-/* ── Backchannel audio receiver (separate type for interface99) ── */
-
-typedef struct {
-	rss_ring_t **speaker_ring_ptr; /* points to client->speaker_ring */
-} rsd_bc_recv_t;
-
-static int16_t ulaw_decode(uint8_t ulaw)
-{
-	ulaw = ~ulaw;
-	int sign = (ulaw & 0x80);
-	int exponent = (ulaw >> 4) & 0x07;
-	int mantissa = ulaw & 0x0f;
-	int magnitude = ((mantissa << 3) + 0x84) << exponent;
-	magnitude -= 0x84;
-	return (int16_t)(sign ? -magnitude : magnitude);
-}
+/* ── Backchannel audio receiver (type lives in rsd.h; decode in
+ * rsd_backchannel.c -- this glue only bridges the compy callback) ── */
 
 static void rsd_bc_recv_t_on_audio(VSelf, uint8_t payload_type, uint32_t timestamp, uint32_t ssrc,
 				   U8Slice99 payload)
@@ -82,28 +68,11 @@ static void rsd_bc_recv_t_on_audio(VSelf, uint8_t payload_type, uint32_t timesta
 			RSS_WARN("backchannel: failed to create speaker ring");
 			return;
 		}
-		rss_ring_set_stream_info(*ring_ptr, 0x11, 0, 0, 0, 16000, 1, 0, 0);
+		rss_ring_set_stream_info(*ring_ptr, 0x11, 0, 0, 0, RSD_BC_RING_RATE, 1, 0, 0);
 		RSS_INFO("backchannel: speaker ring ready");
 	}
 
-	if (payload_type == 0) {
-		/* PCMU/8000 — decode to PCM16 and upsample 8kHz→16kHz.
-		 * Simple 2x interpolation: duplicate each sample.
-		 * Max 480 input samples (60ms ptime) keeps stack under 2KB. */
-		int16_t pcm[960]; /* 480 input samples * 2 */
-		int n = (int)payload.len;
-		if (n > 480)
-			n = 480;
-		for (int i = 0; i < n; i++) {
-			int16_t s = ulaw_decode(payload.ptr[i]);
-			pcm[i * 2] = s;
-			pcm[i * 2 + 1] = s;
-		}
-		rss_ring_publish(*ring_ptr, (const uint8_t *)pcm, n * 4, rss_timestamp_us(), 0, 0);
-	} else {
-		rss_ring_publish(*ring_ptr, payload.ptr, (uint32_t)payload.len, rss_timestamp_us(),
-				 payload_type, 0);
-	}
+	rsd_bc_handle(&self->dec, *ring_ptr, payload_type, payload.ptr, payload.len);
 }
 
 static void rsd_bc_recv_t_drop(VSelf)
@@ -355,7 +324,10 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 		return;
 	}
 
-	char sdp[2048] = {0};
+	/* Worst case stacks H.265 sprop-vps/sps/pps (~600 base64 bytes)
+	 * on the AAC fmtp and the multi-codec backchannel block; the
+	 * string writer does not bound itself, so the headroom must. */
+	char sdp[3072] = {0};
 	Compy_Writer sdp_w = compy_string_writer(sdp);
 	ssize_t ret = 0;
 
@@ -554,10 +526,32 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 	if (rss_config_get_bool(self->srv->cfg, "rtsp", "backchannel", false) &&
 	    compy_require_has_tag(&req->header_map,
 				  CharSlice99_from_str("www.onvif.org/ver20/backchannel"))) {
-		COMPY_SDP_DESCRIBE(ret, sdp_w, (COMPY_SDP_MEDIA, "audio 0 RTP/AVP 0"),
+		/* One m-line, several payload types (RFC 8866 §5.14): RTSP
+		 * has no SDP answer, so the client signals its pick by just
+		 * sending it and the decoder dispatches on the RTP PT.
+		 * PCMU stays first -- it is ONVIF Profile T's baseline. */
+		char bc_pts[32];
+		int bn = snprintf(bc_pts, sizeof(bc_pts), "0 8");
+#ifdef RAPTOR_OPUS
+		bn += snprintf(bc_pts + bn, sizeof(bc_pts) - bn, " %d", RSD_BC_PT_OPUS);
+#endif
+		snprintf(bc_pts + bn, sizeof(bc_pts) - bn, " %d", RSD_BC_PT_L16);
+		COMPY_SDP_DESCRIBE(ret, sdp_w, (COMPY_SDP_MEDIA, "audio 0 RTP/AVP %s", bc_pts),
 				   (COMPY_SDP_ATTR, "control:backchannel"),
 				   (COMPY_SDP_ATTR, "rtpmap:0 PCMU/8000"),
-				   (COMPY_SDP_ATTR, "sendonly"));
+				   (COMPY_SDP_ATTR, "rtpmap:8 PCMA/8000"));
+#ifdef RAPTOR_OPUS
+		/* RFC 7587 §7: the rtpmap always reads 48000/2 no matter
+		 * what is actually coded; the fmtp names what this side can
+		 * play so the sender may encode narrower. */
+		COMPY_SDP_DESCRIBE(
+			ret, sdp_w, (COMPY_SDP_ATTR, "rtpmap:%d opus/48000/2", RSD_BC_PT_OPUS),
+			(COMPY_SDP_ATTR, "fmtp:%d maxplaybackrate=16000;stereo=0", RSD_BC_PT_OPUS));
+#endif
+		COMPY_SDP_DESCRIBE(
+			ret, sdp_w,
+			(COMPY_SDP_ATTR, "rtpmap:%d L16/%d/1", RSD_BC_PT_L16, RSD_BC_RING_RATE),
+			(COMPY_SDP_ATTR, "sendonly"));
 	}
 
 	(void)ret;
@@ -611,6 +605,8 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 	if (is_backchannel && self->backchannel) {
 		VCALL(DYN(Compy_Backchannel, Compy_Droppable, self->backchannel), drop);
 		self->backchannel = NULL;
+		if (self->bc_recv)
+			rsd_bc_dec_deinit(&self->bc_recv->dec);
 		free(self->bc_recv);
 		self->bc_recv = NULL;
 	} else if (is_audio) {
@@ -775,10 +771,15 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 			return;
 		}
 		recv->speaker_ring_ptr = &self->speaker_ring;
+		rsd_bc_dec_init(&recv->dec);
 		self->bc_recv = recv;
 		self->backchannel = Compy_Backchannel_new(
 			bc_cfg, DYN(rsd_bc_recv_t, Compy_AudioReceiver, recv));
-		RSS_INFO("client SETUP: backchannel PCMU/8000");
+		RSS_INFO("client SETUP: backchannel ready (PCMU/PCMA"
+#ifdef RAPTOR_OPUS
+			 "/opus"
+#endif
+			 "/L16 offered)");
 	} else if (is_audio) {
 		if (!self->srv->has_audio) {
 			compy_respond(ctx, COMPY_STATUS_NOT_FOUND, "Audio not available");

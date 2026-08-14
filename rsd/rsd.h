@@ -7,6 +7,7 @@
 
 #include <compy.h>
 
+#include "rsd_backchannel.h"
 #include "rsd_sendq.h"
 #include <rss_ipc.h>
 #include <rss_common.h>
@@ -39,11 +40,11 @@
 #define RSD_CODEC_AAC  97
 #define RSD_CODEC_OPUS 111
 
-/* RTP payload types for audio */
-#define RSD_AUDIO_PT_L16   98  /* dynamic PT for L16 */
-#define RSD_AUDIO_PT_AAC   97  /* dynamic PT for AAC (RFC 3640) */
-#define RSD_AUDIO_PT_OPUS  111 /* dynamic PT for Opus (RFC 7587) */
-#define RSD_BACKCHANNEL_PT 110 /* backchannel audio PT (PCMU default) */
+/* RTP payload types for audio. Backchannel PTs live in
+ * rsd_backchannel.h next to their decoders. */
+#define RSD_AUDIO_PT_L16  98  /* dynamic PT for L16 */
+#define RSD_AUDIO_PT_AAC  97  /* dynamic PT for AAC (RFC 3640) */
+#define RSD_AUDIO_PT_OPUS 111 /* dynamic PT for Opus (RFC 7587) */
 
 /* Stream index for per-ring state */
 #define RSD_STREAM_MAIN	    0
@@ -51,6 +52,14 @@
 #define RSD_STREAM_JPEG	    6
 #define RSD_STREAM_JPEG_SUB 7
 #define RSD_STREAM_COUNT    8 /* main+sub per sensor (6) + jpeg main+sub (2) */
+
+/* Backchannel audio receiver (rsd_session.c implements the
+ * Compy_AudioReceiver interface on it; decode state lives in the
+ * embedded rsd_bc_dec_t so every teardown path can deinit it). */
+typedef struct {
+	rss_ring_t **speaker_ring_ptr; /* points to client->speaker_ring */
+	rsd_bc_dec_t dec;
+} rsd_bc_recv_t;
 
 /* Per-client stream state */
 typedef struct {
@@ -95,7 +104,7 @@ typedef struct rsd_client {
 	/* Backchannel (client → server audio) */
 	Compy_Backchannel *backchannel;
 	rss_ring_t *speaker_ring; /* created on first backchannel packet */
-	void *bc_recv;		  /* rsd_bc_recv_t, kept alive for callback */
+	rsd_bc_recv_t *bc_recv;	  /* kept alive for the compy callback */
 
 	/* TCP interleaved channel numbers (for RTCP routing) */
 	uint8_t video_rtcp_ch; /* RTCP channel for video (default 1) */

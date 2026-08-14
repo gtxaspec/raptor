@@ -1,4 +1,4 @@
-SRCS := rsd_main.c rsd_server.c rsd_session.c rsd_ring_reader.c rsd_sendq.c
+SRCS := rsd_main.c rsd_server.c rsd_session.c rsd_ring_reader.c rsd_sendq.c rsd_backchannel.c
 OBJS := $(SRCS:.c=.o)
 BIN  := rsd
 

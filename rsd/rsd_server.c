@@ -125,6 +125,8 @@ static void remove_client(rsd_server_t *srv, rsd_client_t *client)
 		VCALL(DYN(Compy_Backchannel, Compy_Droppable, client->backchannel), drop);
 		client->backchannel = NULL;
 	}
+	if (client->bc_recv)
+		rsd_bc_dec_deinit(&client->bc_recv->dec);
 	free(client->bc_recv);
 	client->bc_recv = NULL;
 	if (client->speaker_ring) {
