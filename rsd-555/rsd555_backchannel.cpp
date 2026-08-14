@@ -5,6 +5,15 @@
  * direction (receive RTP from client). Creates SimpleRTPSource +
  * BackchannelSink per client session. Decoded PCMU audio is
  * upsampled 8kHz→16kHz and published to the "speaker" ring.
+ *
+ * Deliberately PCMU-only where rsd offers five codecs on this track:
+ * MultiFramedRTPSource discards any packet whose PT differs from the
+ * source's single configured format (a non-virtual check), so a
+ * multi-PT offer here would mean surgery on vendored live555 -- the
+ * wrong trade for the alternate server, whose value is being a small
+ * independent reference. PCMU is ONVIF Profile T's baseline, so every
+ * conforming client still works. RRs for the received stream come
+ * from live555's own RTCPInstance.
  */
 
 #include "rsd555_backchannel.h"
