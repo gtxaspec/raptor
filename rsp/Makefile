@@ -1,4 +1,4 @@
-SRCS := rsp_main.c rsp_rtmp.c rsp_audio.c
+SRCS := rsp_main.c rsp_rtmp.c rsp_audio.c rsp_net.c
 OBJS := $(SRCS:.c=.o) rmr_nal.o
 BIN  := rsp
 

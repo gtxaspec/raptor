@@ -74,7 +74,7 @@ buffers at runtime, gracefully skipping any that don't exist.
    |     \            +--> [RMR] fragmented MP4 recording + timelapse
    |      \           +--> [RWD] WebRTC/WHIP server (DTLS-SRTP)
    |       \          +--> [RWC] USB webcam (UVC + UAC1)
-   |       \          +--> [RSP] RTMP/RTMPS push (YouTube, Twitch)
+   |       \          +--> [RSP] RTMP/RTMPS + RTP/UDP push
    |       \          +--> [RSR] SRT listener (MPEG-TS)
    |        `--osd shm <-- [ROD] OSD text / logo renderer
    |        `--ivs ------> [RMD] motion detection → triggers RMR
@@ -100,7 +100,7 @@ buffers at runtime, gracefully skipping any that don't exist.
 | RWD  | `rwd`  | WebRTC Daemon. Live H.264 + Opus to browsers and go2rtc via WHIP with sub-second latency: ICE-lite, DTLS-SRTP, two-way audio (browser mic to camera speaker). Embedded player at `/webrtc`; optional WebTorrent sharing for external viewing without port forwarding. |
 | RWC  | `rwc`  | USB Webcam Daemon. Presents the camera as a standard UVC + UAC1 USB webcam (MJPEG or H.264 at 1080p/720p/360p, 16kHz mono mic) through the kernel gadget. Bulk video endpoint, so it works through USB hubs. |
 | RFS  | `rfs`  | File Source Daemon. Plays MP4/MOV or raw Annex B H.264/H.265 files into the rings at real-time rate, replacing RVD+RAD where there is no ISP (A1, x86 testing). Zero-copy MP4 demux, B-frame reorder, audio passthrough or transcode. Pause/resume/seek via control socket. |
-| RSP  | `rsp`  | Stream Push Daemon. Pushes video + audio to RTMP/RTMPS endpoints (YouTube Live, Twitch, custom) with its own RTMP client; H.264 via standard FLV, H.265 via Enhanced RTMP FourCC. Ring audio is transcoded to AAC-LC as needed, native AAC passes through. Auto-reconnect with backoff. |
+| RSP  | `rsp`  | Stream Push Daemon. Pushes video + audio to RTMP/RTMPS endpoints (YouTube Live, Twitch, custom) with its own RTMP client; H.264 via standard FLV, H.265 via Enhanced RTMP FourCC. Ring audio is transcoded to AAC-LC as needed, native AAC passes through. Auto-reconnect with backoff. `udp://host:port` instead sends video as raw RTP datagrams with no session, for relays and custom receivers; never queues, drops instead, so the receiver always holds the freshest frame. |
 | RSR  | `rsr`  | SRT Listener Daemon. Live video + audio as MPEG-TS over SRT: multi-client, stream selection via STREAMID, AES encryption. Audio must be AAC or Opus (G.711/L16 do not exist in MPEG-TS). Works with ffplay, VLC, OBS, go2rtc, and SRT-capable NVRs. |
 
 Feature-to-build-flag mapping (`TLS=1`, `AAC=1`, `OPUS=1`, `WEBTORRENT=1`) is

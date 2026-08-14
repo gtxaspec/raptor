@@ -54,11 +54,30 @@ static int rsp_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		if (rss_json_get_str(cmd_json, "value", url, sizeof(url)) != 0 || !url[0])
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value");
 
+		/* The scheme picks the whole send path at startup, so a
+		 * live change may move host and port but not mode. */
+		bool url_is_udp = strncmp(url, "udp://", 6) == 0;
+		if (url_is_udp != st->net_mode)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+						   "scheme change needs a restart");
+
 		char host[256];
 		char app[256];
 		char key[512];
 		int port;
 		bool tls;
+		if (st->net_mode) {
+			if (rsp_net_parse_url(url, host, sizeof(host), &port) < 0)
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+							   "invalid UDP URL");
+			rss_strlcpy(st->url, url, sizeof(st->url));
+			rss_strlcpy(st->host, host, sizeof(st->host));
+			st->port = port;
+			rss_config_set_str(st->cfg, "push", "url", url);
+			atomic_store(&st->net_reopen, true);
+			RSS_INFO("URL changed to udp %s:%d", host, port);
+			return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+		}
 		if (rsp_rtmp_parse_url(url, host, sizeof(host), &port, app, sizeof(app), key,
 				       sizeof(key), &tls) < 0)
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "invalid RTMP URL");
@@ -81,11 +100,19 @@ static int rsp_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	if (strcmp(cmd, "status") == 0) {
 		cJSON *r = cJSON_CreateObject();
 		cJSON_AddBoolToObject(r, "pushing", atomic_load(&st->pushing));
-		cJSON_AddStringToObject(r, "state",
-					st->rtmp.state == RSP_STATE_PUBLISHING	   ? "publishing"
-					: st->rtmp.state == RSP_STATE_CONNECTED	   ? "connected"
-					: st->rtmp.state == RSP_STATE_DISCONNECTED ? "disconnected"
-										   : "connecting");
+		cJSON_AddStringToObject(r, "mode", st->net_mode ? "udp" : "rtmp");
+		if (st->net_mode) {
+			cJSON_AddStringToObject(r, "state",
+						st->net.fd >= 0 ? "sending" : "disconnected");
+			cJSON_AddNumberToObject(r, "send_errors", (double)st->net.send_errors);
+		} else {
+			cJSON_AddStringToObject(
+				r, "state",
+				st->rtmp.state == RSP_STATE_PUBLISHING	   ? "publishing"
+				: st->rtmp.state == RSP_STATE_CONNECTED	   ? "connected"
+				: st->rtmp.state == RSP_STATE_DISCONNECTED ? "disconnected"
+									   : "connecting");
+		}
 		cJSON_AddStringToObject(r, "url", st->url);
 		cJSON_AddNumberToObject(r, "video_frames", (double)st->frames_sent);
 		cJSON_AddNumberToObject(r, "audio_frames", (double)st->audio_frames_sent);
@@ -131,7 +158,10 @@ static int rsp_connect(rsp_state_t *st)
 
 static void rsp_disconnect(rsp_state_t *st)
 {
-	rsp_rtmp_disconnect(&st->rtmp);
+	if (st->net_mode)
+		rsp_net_close(&st->net);
+	else
+		rsp_rtmp_disconnect(&st->rtmp);
 	st->header_sent = false;
 	st->connect_time_us = 0;
 }
@@ -220,7 +250,23 @@ static void push_loop(rsp_state_t *st)
 		}
 
 		/* Connect if needed */
-		if (st->rtmp.state < RSP_STATE_PUBLISHING) {
+		if (st->net_mode) {
+			if (atomic_exchange(&st->net_reopen, false))
+				rsp_net_close(&st->net);
+			if (st->net.fd < 0) {
+				if (rsp_net_open(&st->net, st->host, st->port) < 0) {
+					reconnect_wait = st->reconnect_delay;
+					RSS_WARN("retrying in %d ms", reconnect_wait);
+					continue;
+				}
+				st->connect_time_us = rss_timestamp_us();
+				was_pushing = true;
+				/* Let a listening receiver lock immediately
+				 * instead of waiting out the GOP. */
+				if (st->video_ring)
+					rss_ring_request_idr(st->video_ring);
+			}
+		} else if (st->rtmp.state < RSP_STATE_PUBLISHING) {
 			if (rsp_connect(st) < 0) {
 				reconnect_wait = st->reconnect_delay;
 				RSS_WARN("reconnecting in %d ms", reconnect_wait);
@@ -298,6 +344,12 @@ static void push_loop(rsp_state_t *st)
 				st->header_sent = false;
 				video_idle = 0;
 				last_video_ws = 0;
+				if (st->net_mode) {
+					/* New producer, new GOP phase: rejoin
+					 * on a keyframe. */
+					st->net.wait_key = true;
+					rss_ring_request_idr(st->video_ring);
+				}
 				RSS_DEBUG("video ring reconnected (%s%s)", st->video_ring_name,
 					  st->use_zerocopy ? ", zero-copy" : "");
 			} else {
@@ -349,6 +401,27 @@ static void push_loop(rsp_state_t *st)
 		if (ret != 0)
 			continue;
 		video_idle = 0;
+
+		/* UDP mode sends the Annex B frame as-is: SPS/PPS ride
+		 * in-band on every IDR, so there is no header handshake
+		 * and no AVCC conversion. Sent under the peek -- the
+		 * datagrams are on the wire before the slot is released. */
+		if (st->net_mode) {
+			int nals = rsp_net_send_video(&st->net, frame_data, length, meta.timestamp,
+						      meta.is_key, st->video_codec);
+			if (peeked)
+				rss_ring_peek_done(st->video_ring, &meta);
+			if (nals > 0) {
+				st->frames_sent++;
+				st->bytes_sent += length;
+				if ((st->frames_sent % 250) == 0)
+					RSS_DEBUG("stats: v=%" PRIu64 " drop=%" PRIu64
+						  " err=%" PRIu64 " bytes=%" PRIu64,
+						  st->frames_sent, st->frames_dropped,
+						  st->net.send_errors, st->bytes_sent);
+			}
+			continue;
+		}
 
 		/* Extract codec params from keyframe */
 		if (meta.is_key && !st->params.ready)
@@ -507,16 +580,29 @@ int main(int argc, char **argv)
 	}
 	rss_strlcpy(st.url, url, sizeof(st.url));
 
-	if (rsp_rtmp_parse_url(st.url, st.host, sizeof(st.host), &st.port, st.app, sizeof(st.app),
-			       st.stream_key, sizeof(st.stream_key), &st.use_tls) < 0) {
+	st.net_mode = strncmp(st.url, "udp://", 6) == 0;
+	st.net.fd = -1;
+	if (st.net_mode) {
+		if (rsp_net_parse_url(st.url, st.host, sizeof(st.host), &st.port) < 0) {
+			RSS_FATAL("invalid push URL: %s", st.url);
+			goto cleanup;
+		}
+		RSS_INFO("target: udp %s:%d (RTP, video only)", st.host, st.port);
+	} else if (rsp_rtmp_parse_url(st.url, st.host, sizeof(st.host), &st.port, st.app,
+				      sizeof(st.app), st.stream_key, sizeof(st.stream_key),
+				      &st.use_tls) < 0) {
 		RSS_FATAL("invalid push URL: %s", st.url);
 		goto cleanup;
+	} else {
+		RSS_INFO("target: %s:%d app=%s tls=%d", st.host, st.port, st.app, st.use_tls);
 	}
-
-	RSS_INFO("target: %s:%d app=%s tls=%d", st.host, st.port, st.app, st.use_tls);
 
 	st.stream_idx = rss_config_get_int(dctx.cfg, "push", "stream", 0);
 	st.audio_enabled = rss_config_get_bool(dctx.cfg, "push", "audio", true);
+	if (st.net_mode && st.audio_enabled) {
+		RSS_DEBUG("udp push is video only, ignoring [push] audio");
+		st.audio_enabled = false;
+	}
 	st.reconnect_delay = rss_config_get_int(dctx.cfg, "push", "reconnect_ms", 5000);
 	if (st.reconnect_delay < 1000)
 		st.reconnect_delay = 1000;

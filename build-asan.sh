@@ -347,11 +347,12 @@ $CC -o "$OUT/rmr" "$OUT"/rmr_main.o "$OUT"/rmr_mux.o "$OUT"/rmr_nal.o "$OUT"/rmr
 echo "  -> rmr"
 
 echo "=== RSP ==="
-RSP_CFLAGS="$TLS_CFLAGS -I$RAPTOR_DIR/rmr"
+RSP_CFLAGS="$TLS_CFLAGS $COMPY_CFLAGS -I$RAPTOR_DIR/rmr"
 $CC $CFLAGS $RSP_CFLAGS -c "$RAPTOR_DIR/rsp/rsp_main.c" -o "$OUT/rsp_main.o"
 $CC $CFLAGS $RSP_CFLAGS -c "$RAPTOR_DIR/rsp/rsp_rtmp.c" -o "$OUT/rsp_rtmp.o"
 $CC $CFLAGS $RSP_CFLAGS -c "$RAPTOR_DIR/rsp/rsp_audio.c" -o "$OUT/rsp_audio.o"
-$CC -o "$OUT/rsp" "$OUT"/rsp_main.o "$OUT"/rsp_rtmp.o "$OUT"/rsp_audio.o "$OUT"/rmr_nal.o $LIBS $LIBS_TLS $LDFLAGS
+$CC $CFLAGS $RSP_CFLAGS -c "$RAPTOR_DIR/rsp/rsp_net.c" -o "$OUT/rsp_net.o"
+$CC -o "$OUT/rsp" "$OUT"/rsp_main.o "$OUT"/rsp_rtmp.o "$OUT"/rsp_audio.o "$OUT"/rsp_net.o "$OUT"/rmr_nal.o $LIBS "$COMPY_BUILD/libcompy.a" $MBEDTLS_LIBS $LIBS_TLS $LDFLAGS
 echo "  -> rsp"
 
 echo "=== RSR ==="

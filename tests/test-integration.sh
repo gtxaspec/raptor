@@ -454,6 +454,147 @@ if [ -n "$FPS_SDP_BEFORE" ]; then
     sleep 1
 fi
 
+# ── RTP over UDP push (rsp net mode) ──
+# [push] url=udp:// sends ring video as RTP datagrams with no session
+# and no handshake: bind a receiver, point rsp at it, and judge the
+# wire. The receiver reassembles fragmented and aggregated NALs, so
+# this pins the packetization (version, PT, a single SSRC, contiguous
+# sequence numbers on loopback) and the keyframe-first join: the full
+# parameter set and an IDR must be the first thing a fresh receiver
+# can decode. Both codecs run, because the NAL walk branches on the
+# header size and each branch deserves its own wire proof.
+cat > "$LOG_DIR/udp-push-listen.py" << 'PYEOF'
+import socket
+import sys
+import time
+
+verdict_path, port, codec = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.bind(("127.0.0.1", port))
+sock.settimeout(1.0)
+
+pkts = []
+start = time.time()
+first = None
+while True:
+    now = time.time()
+    if first is not None and now - first > 4.0:
+        break
+    if now - start > 12.0:
+        break
+    try:
+        data, _ = sock.recvfrom(65536)
+    except socket.timeout:
+        continue
+    if first is None:
+        first = time.time()
+    pkts.append(data)
+
+verdict = "FAIL no packets received"
+if pkts:
+    ssrcs = set()
+    seqs = []
+    types = set()
+    bad = 0
+    for p in pkts:
+        if len(p) < 13 or (p[0] >> 6) != 2 or (p[1] & 0x7F) != 96:
+            bad += 1
+            continue
+        ssrcs.add(p[8:12])
+        seqs.append((p[2] << 8) | p[3])
+        b = p[12:]
+        if codec == "h265":
+            t = (b[0] >> 1) & 0x3F
+            if t < 48:
+                types.add(t)
+            elif t == 48:  # aggregation packet
+                i = 2
+                while i + 2 <= len(b):
+                    ln = (b[i] << 8) | b[i + 1]
+                    if i + 2 + ln > len(b) or ln == 0:
+                        break
+                    types.add((b[i + 2] >> 1) & 0x3F)
+                    i += 2 + ln
+            elif t == 49:  # fragmentation unit
+                if len(b) >= 3 and (b[2] & 0x80):
+                    types.add(b[2] & 0x3F)
+        else:
+            t = b[0] & 0x1F
+            if 1 <= t <= 23:
+                types.add(t)
+            elif t == 24:  # STAP-A aggregate
+                i = 1
+                while i + 2 <= len(b):
+                    ln = (b[i] << 8) | b[i + 1]
+                    if i + 2 + ln > len(b) or ln == 0:
+                        break
+                    types.add(b[i + 2] & 0x1F)
+                    i += 2 + ln
+            elif t == 28:  # FU-A fragment
+                if len(b) >= 2 and (b[1] & 0x80):
+                    types.add(b[1] & 0x1F)
+    lost = 0
+    for a, c in zip(seqs, seqs[1:]):
+        lost += ((c - a) & 0xFFFF) - 1
+    # h264: SPS, PPS, IDR. h265: VPS, SPS, PPS (IDR arrives with them
+    # but its exact type varies, 19 or 20, so the params are the pin).
+    need = {32, 33, 34} if codec == "h265" else {7, 8, 5}
+    missing = sorted(need - types)
+    if bad:
+        verdict = f"FAIL {bad}/{len(pkts)} packets not RTP v2 PT96"
+    elif len(ssrcs) != 1:
+        verdict = f"FAIL {len(ssrcs)} SSRCs on one stream"
+    elif lost:
+        verdict = f"FAIL {lost} sequence gaps on loopback"
+    elif len(pkts) < 100:
+        verdict = f"FAIL only {len(pkts)} packets in the window"
+    elif missing:
+        verdict = f"FAIL NAL types missing from join: {missing} (saw {sorted(types)})"
+    else:
+        verdict = (f"PASS {len(pkts)} pkts, 0 lost, one ssrc, "
+                   f"nal types {sorted(types)}")
+with open(verdict_path, "w") as f:
+    f.write(verdict)
+PYEOF
+
+udp_push_leg() {
+    UPL_CODEC="$1"
+    UPL_STREAM="$2"
+    UPL_PORT="$3"
+    UPL_CONF="$LOG_DIR/test-push-$UPL_CODEC.conf"
+    cp "$CONFIG" "$UPL_CONF"
+    {
+        echo ""
+        echo "[push]"
+        echo "enabled = true"
+        echo "url = udp://127.0.0.1:$UPL_PORT"
+        echo "stream = $UPL_STREAM"
+        echo "audio = false"
+        echo "autostart = true"
+    } >> "$UPL_CONF"
+    python3 "$LOG_DIR/udp-push-listen.py" "$LOG_DIR/udp-$UPL_CODEC.verdict" \
+        "$UPL_PORT" "$UPL_CODEC" > "$LOG_DIR/udp-$UPL_CODEC.log" 2>&1 &
+    UPL_LISTEN_PID=$!
+    sleep 0.5
+    start_daemon "rsp-$UPL_CODEC" "$OUT/rsp" -c "$UPL_CONF" -f -d
+    wait "$UPL_LISTEN_PID"
+    UPL_VERDICT=$(cat "$LOG_DIR/udp-$UPL_CODEC.verdict" 2>/dev/null)
+    case "$UPL_VERDICT" in
+        PASS*)
+            pass "udp push $UPL_CODEC delivers decodable RTP from the join (${UPL_VERDICT#PASS })"
+            ;;
+        *)
+            fail "udp push $UPL_CODEC delivers decodable RTP from the join" \
+                "${UPL_VERDICT:-listener wrote no verdict}"
+            ;;
+    esac
+    pkill -f "$OUT/rsp" 2>/dev/null || true
+    sleep 0.5
+}
+
+udp_push_leg h264 0 15998
+udp_push_leg h265 1 15996
+
 # ffprobe (if available — best RTSP test tool)
 if command -v ffprobe > /dev/null 2>&1; then
     # ffprobe with timeout — exit 124 (timeout) means it connected and received data
