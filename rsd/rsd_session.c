@@ -50,7 +50,6 @@ static void rsd_bc_recv_t_on_audio(VSelf, uint8_t payload_type, uint32_t timesta
 				   U8Slice99 payload)
 {
 	VSELF(rsd_bc_recv_t);
-	(void)timestamp;
 	(void)ssrc;
 
 	rss_ring_t **ring_ptr = self->speaker_ring_ptr;
@@ -72,7 +71,7 @@ static void rsd_bc_recv_t_on_audio(VSelf, uint8_t payload_type, uint32_t timesta
 		RSS_INFO("backchannel: speaker ring ready");
 	}
 
-	rsd_bc_handle(&self->dec, *ring_ptr, payload_type, payload.ptr, payload.len);
+	rsd_bc_handle(&self->dec, *ring_ptr, payload_type, timestamp, payload.ptr, payload.len);
 }
 
 static void rsd_bc_recv_t_drop(VSelf)
@@ -535,6 +534,9 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 #ifdef RAPTOR_OPUS
 		bn += snprintf(bc_pts + bn, sizeof(bc_pts) - bn, " %d", RSD_BC_PT_OPUS);
 #endif
+#ifdef RAPTOR_AAC
+		bn += snprintf(bc_pts + bn, sizeof(bc_pts) - bn, " %d", RSD_BC_PT_AAC);
+#endif
 		snprintf(bc_pts + bn, sizeof(bc_pts) - bn, " %d", RSD_BC_PT_L16);
 		COMPY_SDP_DESCRIBE(ret, sdp_w, (COMPY_SDP_MEDIA, "audio 0 RTP/AVP %s", bc_pts),
 				   (COMPY_SDP_ATTR, "control:backchannel"),
@@ -547,6 +549,19 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 		COMPY_SDP_DESCRIBE(
 			ret, sdp_w, (COMPY_SDP_ATTR, "rtpmap:%d opus/48000/2", RSD_BC_PT_OPUS),
 			(COMPY_SDP_ATTR, "fmtp:%d maxplaybackrate=16000;stereo=0", RSD_BC_PT_OPUS));
+#endif
+#ifdef RAPTOR_AAC
+		/* config=1408 is the AudioSpecificConfig for AAC-LC at the
+		 * 16 kHz ring rate, mono -- senders must encode what the
+		 * raw-block decoder was told to expect. */
+		COMPY_SDP_DESCRIBE(ret, sdp_w,
+				   (COMPY_SDP_ATTR, "rtpmap:%d MPEG4-GENERIC/%d/1", RSD_BC_PT_AAC,
+				    RSD_BC_RING_RATE),
+				   (COMPY_SDP_ATTR,
+				    "fmtp:%d streamtype=5; profile-level-id=1; mode=AAC-hbr; "
+				    "config=1408; sizeLength=13; indexLength=3; "
+				    "indexDeltaLength=3",
+				    RSD_BC_PT_AAC));
 #endif
 		COMPY_SDP_DESCRIBE(
 			ret, sdp_w,
@@ -778,6 +793,9 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 		RSS_INFO("client SETUP: backchannel ready (PCMU/PCMA"
 #ifdef RAPTOR_OPUS
 			 "/opus"
+#endif
+#ifdef RAPTOR_AAC
+			 "/AAC"
 #endif
 			 "/L16 offered)");
 	} else if (is_audio) {

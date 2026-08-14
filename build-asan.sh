@@ -136,6 +136,7 @@ find_or_clone raptor-hal    https://github.com/gtxaspec/raptor-hal.git    HAL_DI
 find_or_clone compy         https://github.com/gtxaspec/compy.git         COMPY_DIR
 find_or_clone libschrift    https://github.com/tomolt/libschrift.git      SCHRIFT_DIR
 find_or_clone faac          https://github.com/knik0/faac.git             FAAC_DIR
+find_or_clone ESP8266Audio  https://github.com/earlephilhower/ESP8266Audio.git ESP8266AUDIO_DIR
 
 # Build mbedTLS from source with DTLS-SRTP enabled
 MBEDTLS_VER="3.6.6"
@@ -287,13 +288,38 @@ $CC -o "$OUT/rhd" "$OUT/rhd_main.o" "$OUT/rhd_http.o" "$OUT/rhd_audio.o" $LIBS $
 echo "  -> rhd"
 
 echo "=== RSD ==="
-$CC $CFLAGS $COMPY_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_main.c" -o "$OUT/rsd_main.o"
-$CC $CFLAGS $COMPY_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_server.c" -o "$OUT/rsd_server.o"
-$CC $CFLAGS $COMPY_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_session.c" -o "$OUT/rsd_session.o"
-$CC $CFLAGS $COMPY_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_ring_reader.c" -o "$OUT/rsd_ring_reader.o"
-$CC $CFLAGS $COMPY_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_sendq.c" -o "$OUT/rsd_sendq.o"
-$CC $CFLAGS $COMPY_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_backchannel.c" -o "$OUT/rsd_backchannel.o"
-$CC -o "$OUT/rsd" "$OUT"/rsd_main.o "$OUT"/rsd_server.o "$OUT"/rsd_session.o "$OUT"/rsd_ring_reader.o "$OUT"/rsd_sendq.o "$OUT"/rsd_backchannel.o $LIBS "$COMPY_BUILD/libcompy.a" $MBEDTLS_LIBS -lopus $LDFLAGS
+# Helix AAC decoder (vendored inside ESP8266Audio) for the backchannel
+# AAC path. Same from-clone treatment as libfaac below; the Arduino
+# headers it expects are stubbed away, and it compiles under the
+# sanitizers on purpose -- this decoder eats network data.
+HELIX_AAC_DIR="$ESP8266AUDIO_DIR/src/libhelix-aac"
+HELIX_BUILD="$OUT/helix-aac-build"
+if [ ! -f "$HELIX_BUILD/libhelix-aac.a" ]; then
+    echo "=== libhelix-aac (from clone) ==="
+    mkdir -p "$HELIX_BUILD/stubs"
+    printf '%s\n' '#ifndef PGMSPACE_H' '#define PGMSPACE_H' '#include <stdint.h>' \
+        '#include <string.h>' '#define PROGMEM' '#define PGM_P const char *' \
+        '#define pgm_read_byte(x) (*(const uint8_t *)(x))' \
+        '#define pgm_read_word(x) (*(const uint16_t *)(x))' \
+        '#define pgm_read_dword(x) (*(const uint32_t *)(x))' \
+        '#define memcpy_P memcpy' '#endif' > "$HELIX_BUILD/stubs/pgmspace.h"
+    printf '%s\n' '#ifndef ARDUINO_H' '#define ARDUINO_H' '#include <stdint.h>' \
+        '#include "pgmspace.h"' '#endif' > "$HELIX_BUILD/stubs/Arduino.h"
+    for f in "$HELIX_AAC_DIR"/*.c; do
+        $CC $CFLAGS -w -DUSE_DEFAULT_STDLIB -I"$HELIX_BUILD/stubs" -I"$HELIX_AAC_DIR" -fPIC \
+            -c "$f" -o "$HELIX_BUILD/$(basename "${f%.c}").o"
+    done
+    ar rcs "$HELIX_BUILD/libhelix-aac.a" "$HELIX_BUILD"/*.o
+    echo "  -> libhelix-aac.a"
+fi
+RSD_CODEC_CFLAGS="-DRAPTOR_OPUS -DRAPTOR_AAC -I$HELIX_AAC_DIR"
+$CC $CFLAGS $COMPY_CFLAGS $RSD_CODEC_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_main.c" -o "$OUT/rsd_main.o"
+$CC $CFLAGS $COMPY_CFLAGS $RSD_CODEC_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_server.c" -o "$OUT/rsd_server.o"
+$CC $CFLAGS $COMPY_CFLAGS $RSD_CODEC_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_session.c" -o "$OUT/rsd_session.o"
+$CC $CFLAGS $COMPY_CFLAGS $RSD_CODEC_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_ring_reader.c" -o "$OUT/rsd_ring_reader.o"
+$CC $CFLAGS $COMPY_CFLAGS $RSD_CODEC_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_sendq.c" -o "$OUT/rsd_sendq.o"
+$CC $CFLAGS $COMPY_CFLAGS $RSD_CODEC_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_backchannel.c" -o "$OUT/rsd_backchannel.o"
+$CC -o "$OUT/rsd" "$OUT"/rsd_main.o "$OUT"/rsd_server.o "$OUT"/rsd_session.o "$OUT"/rsd_ring_reader.o "$OUT"/rsd_sendq.o "$OUT"/rsd_backchannel.o $LIBS "$COMPY_BUILD/libcompy.a" $MBEDTLS_LIBS -lopus "$HELIX_BUILD/libhelix-aac.a" $LDFLAGS
 echo "  -> rsd"
 
 echo "=== RIC ==="

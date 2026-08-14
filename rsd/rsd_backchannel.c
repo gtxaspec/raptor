@@ -12,6 +12,11 @@
 #ifdef RAPTOR_OPUS
 #include <opus/opus.h>
 #endif
+#ifdef RAPTOR_AAC
+#include <aacdec.h>
+#endif
+
+#include <string.h>
 
 #include "rsd_backchannel.h"
 
@@ -64,7 +69,63 @@ void rsd_bc_dec_deinit(rsd_bc_dec_t *d)
 		d->opus = NULL;
 	}
 #endif
+#ifdef RAPTOR_AAC
+	if (d->aac) {
+		AACFreeDecoder((HAACDecoder)d->aac);
+		d->aac = NULL;
+	}
+#endif
 	(void)d;
+}
+
+/*
+ * RFC 3640 AAC-hbr: a 16-bit AU-headers-length (in bits) fronts a run
+ * of 16-bit AU headers -- size(13) | index or indexDelta(3) -- then
+ * the AU data back to back. The offer carries no `interleaving', so a
+ * nonzero index/indexDelta is a contract violation, and a fragmented
+ * AU must be alone in its packet with the header naming the FULL size.
+ */
+int rsd_bc_aac_parse(const uint8_t *p, size_t len, rsd_bc_au_t *aus, int max_aus,
+		     size_t *frag_total)
+{
+	*frag_total = 0;
+	if (len < 4)
+		return -1;
+
+	uint32_t hdr_bits = ((uint32_t)p[0] << 8) | p[1];
+	if (hdr_bits == 0 || hdr_bits % 16 != 0)
+		return -1;
+	uint32_t n_aus = hdr_bits / 16;
+	size_t hdr_bytes = 2 + hdr_bits / 8;
+	if (n_aus > (uint32_t)max_aus || hdr_bytes >= len)
+		return -1;
+
+	const uint8_t *data = p + hdr_bytes;
+	size_t data_len = len - hdr_bytes;
+	size_t off = 0;
+
+	for (uint32_t i = 0; i < n_aus; i++) {
+		uint16_t h = (uint16_t)(((uint16_t)p[2 + i * 2] << 8) | p[3 + i * 2]);
+		size_t au_size = h >> 3;
+		if ((h & 0x7) != 0 || au_size == 0)
+			return -1;
+		if (off + au_size > data_len) {
+			/* Short data is legal only as a lone fragmented AU. */
+			if (n_aus == 1 && off == 0) {
+				aus[0].ptr = data;
+				aus[0].len = data_len;
+				*frag_total = au_size;
+				return 0;
+			}
+			return -1;
+		}
+		aus[i].ptr = data + off;
+		aus[i].len = au_size;
+		off += au_size;
+	}
+	if (off != data_len)
+		return -1; /* trailing bytes the headers never named */
+	return (int)n_aus;
 }
 
 static const char *bc_pt_name(uint8_t pt)
@@ -180,9 +241,117 @@ static void bc_handle_opus(rsd_bc_dec_t *d, rss_ring_t *ring, const uint8_t *pay
 }
 #endif /* RAPTOR_OPUS */
 
-void rsd_bc_handle(rsd_bc_dec_t *d, rss_ring_t *ring, uint8_t pt, const uint8_t *payload,
-		   size_t len)
+#ifdef RAPTOR_AAC
+static void bc_aac_frag_reset(rsd_bc_dec_t *d)
 {
+	d->aac_frag_expect = 0;
+	d->aac_frag_len = 0;
+}
+
+static void bc_aac_decode_au(rsd_bc_dec_t *d, rss_ring_t *ring, const uint8_t *au, size_t au_len)
+{
+	if (d->aac_dead)
+		return;
+	if (!d->aac) {
+		d->aac = AACInitDecoder();
+		if (!d->aac) {
+			RSS_WARN("backchannel: AAC decoder init failed");
+			d->aac_dead = true;
+			return;
+		}
+		/* RFC 3640 AUs are raw data blocks; the stream properties
+		 * come from the fmtp config WE advertised (AAC-LC, ring
+		 * rate, mono), so nonconforming input decodes as the error
+		 * it is rather than being guessed at. */
+		AACFrameInfo fi = {0};
+		fi.nChans = 1;
+		fi.sampRateCore = RSD_BC_RING_RATE;
+		fi.profile = AAC_PROFILE_LC;
+		int err = AACSetRawBlockParams((HAACDecoder)d->aac, 0, &fi);
+		if (err != 0) {
+			RSS_WARN("backchannel: AAC raw params rejected (%d)", err);
+			AACFreeDecoder((HAACDecoder)d->aac);
+			d->aac = NULL;
+			d->aac_dead = true;
+			return;
+		}
+	}
+
+	int16_t pcm[AAC_MAX_NSAMPS * AAC_MAX_NCHANS];
+	unsigned char *inp = (unsigned char *)au;
+	int left = (int)au_len;
+	int err = AACDecode((HAACDecoder)d->aac, &inp, &left, pcm);
+	if (err != 0) {
+		if (bc_warn_due(d))
+			RSS_WARN("backchannel: AAC decode failed (%d)", err);
+		return;
+	}
+	AACFrameInfo info;
+	AACGetLastFrameInfo((HAACDecoder)d->aac, &info);
+	int samples = info.outputSamps;
+	if (info.nChans == 2) {
+		samples /= 2;
+		for (int i = 0; i < samples; i++)
+			pcm[i] = (int16_t)((pcm[i * 2] + pcm[i * 2 + 1]) / 2);
+	}
+	if (samples <= 0)
+		return;
+	bc_note_codec(d, RSD_BC_PT_AAC);
+	rss_ring_publish(ring, (const uint8_t *)pcm, (uint32_t)(samples * 2), rss_timestamp_us(), 0,
+			 0);
+}
+
+static void bc_handle_aac(rsd_bc_dec_t *d, rss_ring_t *ring, uint32_t rtp_ts,
+			  const uint8_t *payload, size_t len)
+{
+	rsd_bc_au_t aus[RSD_BC_AAC_MAX_AUS];
+	size_t frag_total = 0;
+	int n = rsd_bc_aac_parse(payload, len, aus, RSD_BC_AAC_MAX_AUS, &frag_total);
+	if (n < 0) {
+		bc_aac_frag_reset(d);
+		if (bc_warn_due(d))
+			RSS_WARN("backchannel: malformed AAC-hbr payload (%zu bytes)", len);
+		return;
+	}
+	if (n == 0) {
+		/* Fragment piece. Every piece repeats the full AU size and
+		 * shares the AU's timestamp; a mismatch means the previous
+		 * AU died in transit, so start over on this one. */
+		if (frag_total > RSD_BC_AAC_MAX_AU) {
+			bc_aac_frag_reset(d);
+			if (bc_warn_due(d))
+				RSS_WARN("backchannel: AAC AU of %zu bytes exceeds the %d cap",
+					 frag_total, RSD_BC_AAC_MAX_AU);
+			return;
+		}
+		if (d->aac_frag_expect != frag_total || d->aac_frag_ts != rtp_ts)
+			bc_aac_frag_reset(d);
+		if (d->aac_frag_expect == 0) {
+			d->aac_frag_expect = frag_total;
+			d->aac_frag_ts = rtp_ts;
+		}
+		if (d->aac_frag_len + aus[0].len > d->aac_frag_expect) {
+			bc_aac_frag_reset(d);
+			return;
+		}
+		memcpy(d->aac_frag + d->aac_frag_len, aus[0].ptr, aus[0].len);
+		d->aac_frag_len += aus[0].len;
+		if (d->aac_frag_len == d->aac_frag_expect) {
+			bc_aac_decode_au(d, ring, d->aac_frag, d->aac_frag_len);
+			bc_aac_frag_reset(d);
+		}
+		return;
+	}
+	bc_aac_frag_reset(d); /* a complete packet supersedes a half AU */
+	for (int i = 0; i < n; i++)
+		bc_aac_decode_au(d, ring, aus[i].ptr, aus[i].len);
+}
+#endif /* RAPTOR_AAC */
+
+void rsd_bc_handle(rsd_bc_dec_t *d, rss_ring_t *ring, uint8_t pt, uint32_t rtp_ts,
+		   const uint8_t *payload, size_t len)
+{
+	(void)rtp_ts;
 	if (!ring || len == 0)
 		return;
 
@@ -197,6 +366,11 @@ void rsd_bc_handle(rsd_bc_dec_t *d, rss_ring_t *ring, uint8_t pt, const uint8_t 
 #ifdef RAPTOR_OPUS
 	case RSD_BC_PT_OPUS:
 		bc_handle_opus(d, ring, payload, len);
+		return;
+#endif
+#ifdef RAPTOR_AAC
+	case RSD_BC_PT_AAC:
+		bc_handle_aac(d, ring, rtp_ts, payload, len);
 		return;
 #endif
 	default:

@@ -30,6 +30,11 @@
  * converges on it so rad's AO path never resamples. */
 #define RSD_BC_RING_RATE 16000
 
+/* One AAC-LC access unit is bounded by the 6144-bit-per-channel bit
+ * reservoir; mono makes that 768 bytes. Doubled for headroom. */
+#define RSD_BC_AAC_MAX_AU  1536
+#define RSD_BC_AAC_MAX_AUS 16
+
 /* Per-client decoder state. Plain struct, embed and init/deinit. */
 typedef struct {
 	uint8_t last_pt; /* logs codec switches; valid when have_pt */
@@ -41,7 +46,32 @@ typedef struct {
 	 * layout never depends on codec flags. */
 	void *opus; /* OpusDecoder*, RAPTOR_OPUS builds */
 	bool opus_dead;
+	void *aac; /* HAACDecoder, RAPTOR_AAC builds */
+	bool aac_dead;
+	/* RFC 3640 fragmented-AU reassembly: fragments carry the full AU
+	 * size in every piece and share one RTP timestamp. */
+	uint32_t aac_frag_ts;
+	size_t aac_frag_expect; /* 0 = no fragment pending */
+	size_t aac_frag_len;
+	uint8_t aac_frag[RSD_BC_AAC_MAX_AU];
 } rsd_bc_dec_t;
+
+/* An access unit inside one RTP payload (parse result). */
+typedef struct {
+	const uint8_t *ptr;
+	size_t len;
+} rsd_bc_au_t;
+
+/*
+ * Parse an RFC 3640 AAC-hbr payload (sizeLength=13, indexLength=3,
+ * indexDeltaLength=3, no interleaving -- exactly what the SDP offers).
+ *
+ * Returns the number of complete AUs written to aus, 0 for a fragment
+ * (aus[0] holds the piece, *frag_total the full AU size), or -1 for a
+ * payload that does not follow the offered format.
+ */
+int rsd_bc_aac_parse(const uint8_t *p, size_t len, rsd_bc_au_t *aus, int max_aus,
+		     size_t *frag_total);
 
 void rsd_bc_dec_init(rsd_bc_dec_t *d);
 void rsd_bc_dec_deinit(rsd_bc_dec_t *d);
@@ -49,10 +79,11 @@ void rsd_bc_dec_deinit(rsd_bc_dec_t *d);
 /*
  * Decode one RTP payload and publish PCM16/16 kHz mono into the
  * speaker ring. Payload types outside the offered set are counted and
- * dropped (never published raw: rad plays this ring as PCM).
+ * dropped (never published raw: rad plays this ring as PCM). rtp_ts
+ * only matters to AAC, whose fragment reassembly keys on it.
  */
-void rsd_bc_handle(rsd_bc_dec_t *d, rss_ring_t *ring, uint8_t pt, const uint8_t *payload,
-		   size_t len);
+void rsd_bc_handle(rsd_bc_dec_t *d, rss_ring_t *ring, uint8_t pt, uint32_t rtp_ts,
+		   const uint8_t *payload, size_t len);
 
 /* G.711 expansion primitives, exported for the unit tests. */
 int16_t rsd_bc_ulaw_decode(uint8_t ulaw);

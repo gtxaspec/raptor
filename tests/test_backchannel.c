@@ -62,7 +62,7 @@ static int bc_feed_and_read(const char *ring_name, uint8_t pt, const uint8_t *pa
 
 	rsd_bc_dec_t dec;
 	rsd_bc_dec_init(&dec);
-	rsd_bc_handle(&dec, w, pt, payload, len);
+	rsd_bc_handle(&dec, w, pt, 0, payload, len);
 	if (unknown_count)
 		*unknown_count = dec.unknown_pt_count;
 	rsd_bc_dec_deinit(&dec);
@@ -145,6 +145,105 @@ TEST bc_dispatch_empty_payload_is_noop(void)
 	PASS();
 }
 
+/* Build an RFC 3640 AAC-hbr payload: AU-headers-length (bits), then
+ * 16-bit headers size(13)|index(3), then the AU bytes. */
+static size_t aac_hbr_build(uint8_t *out, size_t cap, const size_t *sizes, const uint8_t *idx3,
+			    int n_aus, size_t data_bytes)
+{
+	size_t need = 2 + (size_t)n_aus * 2 + data_bytes;
+	if (need > cap)
+		return 0;
+	uint16_t hdr_bits = (uint16_t)(n_aus * 16);
+	out[0] = (uint8_t)(hdr_bits >> 8);
+	out[1] = (uint8_t)hdr_bits;
+	for (int i = 0; i < n_aus; i++) {
+		uint16_t h = (uint16_t)((sizes[i] << 3) | (idx3 ? idx3[i] : 0));
+		out[2 + i * 2] = (uint8_t)(h >> 8);
+		out[3 + i * 2] = (uint8_t)h;
+	}
+	for (size_t i = 0; i < data_bytes; i++)
+		out[2 + (size_t)n_aus * 2 + i] = (uint8_t)i;
+	return need;
+}
+
+TEST bc_aac_parse_single_au(void)
+{
+	uint8_t buf[64];
+	const size_t sizes[] = {5};
+	size_t len = aac_hbr_build(buf, sizeof(buf), sizes, NULL, 1, 5);
+	ASSERT(len > 0);
+
+	rsd_bc_au_t aus[4];
+	size_t frag = 0;
+	ASSERT_EQ(1, rsd_bc_aac_parse(buf, len, aus, 4, &frag));
+	ASSERT_EQ(5, (int)aus[0].len);
+	ASSERT_EQ(0, memcmp(aus[0].ptr, "\x00\x01\x02\x03\x04", 5));
+	PASS();
+}
+
+TEST bc_aac_parse_multi_au(void)
+{
+	uint8_t buf[64];
+	const size_t sizes[] = {3, 4};
+	size_t len = aac_hbr_build(buf, sizeof(buf), sizes, NULL, 2, 7);
+	ASSERT(len > 0);
+
+	rsd_bc_au_t aus[4];
+	size_t frag = 0;
+	ASSERT_EQ(2, rsd_bc_aac_parse(buf, len, aus, 4, &frag));
+	ASSERT_EQ(3, (int)aus[0].len);
+	ASSERT_EQ(4, (int)aus[1].len);
+	ASSERT_EQ(3, (int)(aus[1].ptr - aus[0].ptr));
+	PASS();
+}
+
+TEST bc_aac_parse_fragment(void)
+{
+	uint8_t buf[64];
+	const size_t sizes[] = {600}; /* header names the FULL AU size */
+	size_t len = aac_hbr_build(buf, sizeof(buf), sizes, NULL, 1, 40);
+	ASSERT(len > 0);
+
+	rsd_bc_au_t aus[4];
+	size_t frag = 0;
+	ASSERT_EQ(0, rsd_bc_aac_parse(buf, len, aus, 4, &frag));
+	ASSERT_EQ(600, (int)frag);
+	ASSERT_EQ(40, (int)aus[0].len);
+	PASS();
+}
+
+TEST bc_aac_parse_malformed(void)
+{
+	rsd_bc_au_t aus[4];
+	size_t frag = 0;
+	uint8_t buf[64];
+
+	/* Too short for even the headers-length field. */
+	ASSERT_EQ(-1, rsd_bc_aac_parse((const uint8_t *)"\x00", 1, aus, 4, &frag));
+
+	/* Headers-length not a multiple of one 16-bit header. */
+	buf[0] = 0;
+	buf[1] = 8;
+	buf[2] = buf[3] = 0;
+	ASSERT_EQ(-1, rsd_bc_aac_parse(buf, 4, aus, 4, &frag));
+
+	/* Nonzero index: interleaving was never offered. */
+	const size_t sizes[] = {4};
+	const uint8_t idx[] = {1};
+	size_t len = aac_hbr_build(buf, sizeof(buf), sizes, idx, 1, 4);
+	ASSERT_EQ(-1, rsd_bc_aac_parse(buf, len, aus, 4, &frag));
+
+	/* Trailing bytes the headers never named. */
+	len = aac_hbr_build(buf, sizeof(buf), sizes, NULL, 1, 6);
+	ASSERT_EQ(-1, rsd_bc_aac_parse(buf, len, aus, 4, &frag));
+
+	/* Short data across TWO AUs is malformed, not a fragment. */
+	const size_t two[] = {5, 5};
+	len = aac_hbr_build(buf, sizeof(buf), two, NULL, 2, 7);
+	ASSERT_EQ(-1, rsd_bc_aac_parse(buf, len, aus, 4, &frag));
+	PASS();
+}
+
 SUITE(backchannel_suite)
 {
 	RUN_TEST(bc_ulaw_golden);
@@ -155,4 +254,8 @@ SUITE(backchannel_suite)
 	RUN_TEST(bc_dispatch_l16_swaps_network_order);
 	RUN_TEST(bc_dispatch_unknown_pt_drops);
 	RUN_TEST(bc_dispatch_empty_payload_is_noop);
+	RUN_TEST(bc_aac_parse_single_au);
+	RUN_TEST(bc_aac_parse_multi_au);
+	RUN_TEST(bc_aac_parse_fragment);
+	RUN_TEST(bc_aac_parse_malformed);
 }
