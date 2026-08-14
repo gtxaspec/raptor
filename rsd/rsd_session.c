@@ -825,6 +825,11 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 			 "/L16 offered)");
 	} else if (is_audio) {
 		if (!self->srv->has_audio) {
+			/* Built above, consumed by nothing on this return --
+			 * the wrapper pair leaked here whenever a client
+			 * raced rsd's lazy audio-ring attach. */
+			VCALL_SUPER(rtp_t, Compy_Droppable, drop);
+			VCALL_SUPER(rtcp_t, Compy_Droppable, drop);
 			compy_respond(ctx, COMPY_STATUS_NOT_FOUND, "Audio not available");
 			return;
 		}
@@ -859,6 +864,8 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 	} else {
 		/* Video SETUP — reject if this stream has no video */
 		if (!self->srv->video[self->stream_idx].last_width) {
+			VCALL_SUPER(rtp_t, Compy_Droppable, drop);
+			VCALL_SUPER(rtcp_t, Compy_Droppable, drop);
 			compy_respond(ctx, COMPY_STATUS_NOT_FOUND, "Video not available");
 			return;
 		}
