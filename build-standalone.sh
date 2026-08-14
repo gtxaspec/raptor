@@ -636,7 +636,11 @@ H
 
 build_helix_aac() {
     local src="$DEPS_DIR/ESP8266Audio/src/libhelix-aac"
-    local ext=so; [ "$OPT_STATIC" = 1 ] && ext=a
+    local ext=so other=a
+    if [ "$OPT_STATIC" = 1 ]; then ext=a; other=so; fi
+    # Same trap libschrift documents below: with both variants in the
+    # sysroot the linker prefers .so and quietly defeats --static.
+    rm -f "$SYSROOT_DIR/usr/lib/libhelix-aac.$other"
     [ -f "$SYSROOT_DIR/usr/lib/libhelix-aac.$ext" ] && return
 
     echo "Building libhelix-aac..."
@@ -657,7 +661,9 @@ build_helix_aac() {
 
 build_helix_mp3() {
     local src="$DEPS_DIR/ESP8266Audio/src/libhelix-mp3"
-    local ext=so; [ "$OPT_STATIC" = 1 ] && ext=a
+    local ext=so other=a
+    if [ "$OPT_STATIC" = 1 ]; then ext=a; other=so; fi
+    rm -f "$SYSROOT_DIR/usr/lib/libhelix-mp3.$other"
     [ -f "$SYSROOT_DIR/usr/lib/libhelix-mp3.$ext" ] && return
 
     echo "Building libhelix-mp3..."
