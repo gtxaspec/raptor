@@ -709,16 +709,26 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 			return;
 		}
 
-		/* Each track owns its UDP pair. A re-SETUP of the same
-		 * track replaces the sockets: close the previous pair
-		 * first, deregistering the RTCP fd from epoll. A leaked
-		 * connected UDP socket whose peer has vanished sits in
-		 * permanent EPOLLERR and spins the epoll loop; closing a
-		 * pair the other track still uses cross-wires the streams
-		 * once the fd numbers get reused. */
-		int *rtp_fd = is_audio ? &self->audio_udp_rtp_fd : &self->udp_rtp_fd;
-		int *rtcp_fd = is_audio ? &self->audio_udp_rtcp_fd : &self->udp_rtcp_fd;
-		bool *rtcp_reg = is_audio ? &self->audio_rtcp_in_epoll : &self->rtcp_in_epoll;
+		/* Each track owns its UDP pair -- the backchannel included,
+		 * which once borrowed the video pointers here and clobbered
+		 * a playing video transport. A re-SETUP of the same track
+		 * replaces the sockets: close the previous pair first,
+		 * deregistering any epoll-registered fd. A leaked connected
+		 * UDP socket whose peer has vanished sits in permanent
+		 * EPOLLERR and spins the epoll loop; closing a pair another
+		 * track still uses cross-wires the streams once the fd
+		 * numbers get reused. */
+		int *rtp_fd = is_backchannel ? &self->bc_udp_rtp_fd
+			      : is_audio     ? &self->audio_udp_rtp_fd
+					     : &self->udp_rtp_fd;
+		int *rtcp_fd = is_backchannel ? &self->bc_udp_rtcp_fd
+			       : is_audio     ? &self->audio_udp_rtcp_fd
+					      : &self->udp_rtcp_fd;
+		bool *rtcp_reg = is_backchannel ? &self->bc_rtcp_in_epoll
+				 : is_audio	? &self->audio_rtcp_in_epoll
+						: &self->rtcp_in_epoll;
+		/* Only the backchannel's RTP fd is a receive path in epoll. */
+		bool *rtp_reg = is_backchannel ? &self->bc_rtp_in_epoll : NULL;
 		if (*rtcp_fd >= 0) {
 			if (*rtcp_reg) {
 				epoll_ctl(self->srv->epoll_fd, EPOLL_CTL_DEL, *rtcp_fd, NULL);
@@ -728,6 +738,10 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 			*rtcp_fd = -1;
 		}
 		if (*rtp_fd >= 0) {
+			if (rtp_reg && *rtp_reg) {
+				epoll_ctl(self->srv->epoll_fd, EPOLL_CTL_DEL, *rtp_fd, NULL);
+				*rtp_reg = false;
+			}
 			close(*rtp_fd);
 			*rtp_fd = -1;
 		}

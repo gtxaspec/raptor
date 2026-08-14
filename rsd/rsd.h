@@ -117,6 +117,13 @@ typedef struct rsd_client {
 	int audio_udp_rtp_fd; /* audio track UDP pair (UDP transport only) */
 	int audio_udp_rtcp_fd;
 	bool audio_rtcp_in_epoll;
+	/* Backchannel UDP pair. Unlike the send-only pairs above, BOTH
+	 * fds are read: RTP carries the client's audio, RTCP its sender
+	 * reports. */
+	int bc_udp_rtp_fd;
+	int bc_udp_rtcp_fd;
+	bool bc_rtp_in_epoll;
+	bool bc_rtcp_in_epoll;
 
 	/* Deferred PLAY — set inside compy callback, applied after
 	 * write_lock is released to avoid lock-order inversion with

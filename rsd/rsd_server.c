@@ -42,6 +42,16 @@ static rsd_client_t *find_client_by_rtcp_fd(rsd_server_t *srv, int fd)
 	return NULL;
 }
 
+static rsd_client_t *find_client_by_bc_fd(rsd_server_t *srv, int fd)
+{
+	for (int i = 0; i < srv->client_count; i++) {
+		rsd_client_t *c = srv->clients[i];
+		if (c && (c->bc_udp_rtp_fd == fd || c->bc_udp_rtcp_fd == fd))
+			return c;
+	}
+	return NULL;
+}
+
 static void remove_client(rsd_server_t *srv, rsd_client_t *client)
 {
 	if (!client)
@@ -149,6 +159,16 @@ static void remove_client(rsd_server_t *srv, rsd_client_t *client)
 			epoll_ctl(srv->epoll_fd, EPOLL_CTL_DEL, client->audio_udp_rtcp_fd, NULL);
 		close(client->audio_udp_rtcp_fd);
 	}
+	if (client->bc_udp_rtp_fd >= 0) {
+		if (client->bc_rtp_in_epoll)
+			epoll_ctl(srv->epoll_fd, EPOLL_CTL_DEL, client->bc_udp_rtp_fd, NULL);
+		close(client->bc_udp_rtp_fd);
+	}
+	if (client->bc_udp_rtcp_fd >= 0) {
+		if (client->bc_rtcp_in_epoll)
+			epoll_ctl(srv->epoll_fd, EPOLL_CTL_DEL, client->bc_udp_rtcp_fd, NULL);
+		close(client->bc_udp_rtcp_fd);
+	}
 
 	/* TLS shutdown and cleanup */
 #ifdef COMPY_HAS_TLS
@@ -195,6 +215,8 @@ static void accept_client(rsd_server_t *srv)
 	client->udp_rtcp_fd = -1;
 	client->audio_udp_rtp_fd = -1;
 	client->audio_udp_rtcp_fd = -1;
+	client->bc_udp_rtp_fd = -1;
+	client->bc_udp_rtcp_fd = -1;
 	client->video_rtcp_ch = 0xFF; /* invalid until SETUP sets it */
 	client->audio_rtcp_ch = 0xFF;
 
@@ -620,6 +642,29 @@ void rsd_server_run(rsd_server_t *srv)
 			} else if (fd == ctrl_fd) {
 				rss_ctrl_accept_and_handle(srv->ctrl, rsd_ctrl_handler, srv);
 			} else {
+				/* Backchannel UDP: both fds of the pair are
+				 * receive paths into the compy demuxer. */
+				rsd_client_t *bc = find_client_by_bc_fd(srv, fd);
+				if (bc) {
+					uint8_t ch = (fd == bc->bc_udp_rtcp_fd) ? COMPY_CHANNEL_RTCP
+										: COMPY_CHANNEL_RTP;
+					uint8_t pkt[2048];
+					ssize_t rn;
+					while ((rn = recv(fd, pkt, sizeof(pkt), 0)) > 0) {
+						if (bc->backchannel) {
+							Compy_RtpReceiver *rcv =
+								Compy_Backchannel_get_receiver(
+									bc->backchannel);
+							if (rcv)
+								Compy_RtpReceiver_feed(rcv, ch, pkt,
+										       (size_t)rn);
+						}
+						/* A talking client is alive even
+						 * if it never PLAYs. */
+						bc->last_activity = rss_timestamp_us();
+					}
+					continue;
+				}
 				/* Check if this is a UDP RTCP fd */
 				rsd_client_t *rc = find_client_by_rtcp_fd(srv, fd);
 				if (rc) {
@@ -665,6 +710,24 @@ void rsd_server_run(rsd_server_t *srv)
 					      &rtcp_ev) == 0)
 					c->audio_rtcp_in_epoll = true;
 			}
+			if (c && c->bc_udp_rtp_fd >= 0 && !c->bc_rtp_in_epoll) {
+				fcntl(c->bc_udp_rtp_fd, F_SETFL,
+				      fcntl(c->bc_udp_rtp_fd, F_GETFL) | O_NONBLOCK);
+				struct epoll_event bc_ev = {.events = EPOLLIN,
+							    .data.fd = c->bc_udp_rtp_fd};
+				if (epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, c->bc_udp_rtp_fd,
+					      &bc_ev) == 0)
+					c->bc_rtp_in_epoll = true;
+			}
+			if (c && c->bc_udp_rtcp_fd >= 0 && !c->bc_rtcp_in_epoll) {
+				fcntl(c->bc_udp_rtcp_fd, F_SETFL,
+				      fcntl(c->bc_udp_rtcp_fd, F_GETFL) | O_NONBLOCK);
+				struct epoll_event bc_ev = {.events = EPOLLIN,
+							    .data.fd = c->bc_udp_rtcp_fd};
+				if (epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, c->bc_udp_rtcp_fd,
+					      &bc_ev) == 0)
+					c->bc_rtcp_in_epoll = true;
+			}
 		}
 
 		/* Idle timeout sweep — disconnect clients with no activity.
@@ -681,7 +744,8 @@ void rsd_server_run(rsd_server_t *srv)
 			if (!c)
 				continue;
 			bool playing = c->video.playing || c->audio.playing;
-			bool udp_media = c->udp_rtp_fd >= 0 || c->audio_udp_rtp_fd >= 0;
+			bool udp_media = c->udp_rtp_fd >= 0 || c->audio_udp_rtp_fd >= 0 ||
+					 c->bc_udp_rtp_fd >= 0;
 			if ((!playing || udp_media) && (now - c->last_activity) > timeout_us) {
 				char addr[INET6_ADDRSTRLEN];
 				RSS_WARN("idle timeout: %s:%u (%ds)",

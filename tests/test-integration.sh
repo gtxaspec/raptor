@@ -1183,6 +1183,231 @@ else
     fail "backchannel speaker ring" "rsd published nothing (write_seq=${BC_SEQ:-none})"
 fi
 
+# ── Backchannel multi-codec offer: every advertised PT must decode ──
+# One TCP session switches codecs mid-stream (legal per RFC 8866: the
+# client may change among the offered formats), and rsd's per-codec
+# "receiving X" line only fires after a SUCCESSFUL decode -- for opus
+# and AAC that is the real decoder speaking, not the depacketizer.
+python3 - > "$LOG_DIR/backchannel-codecs.out" 2>&1 <<'BC2_EOF' &
+import socket, struct, subprocess, sys, time
+
+def rsp(sock, buf):
+    while b"\r\n\r\n" not in buf[0]:
+        d = sock.recv(4096)
+        if not d:
+            return "", buf
+        buf[0] += d
+    head, _, rest = buf[0].partition(b"\r\n\r\n")
+    txt = head.decode(errors="replace")
+    clen = 0
+    for line in txt.split("\r\n"):
+        if line.lower().startswith("content-length:"):
+            clen = int(line.split(":", 1)[1])
+    while len(rest) < clen:
+        rest += sock.recv(4096)
+    body, buf[0] = rest[:clen], rest[clen:]
+    return txt + "\r\n\r\n" + body.decode(errors="replace"), buf
+
+REQ = "Require: www.onvif.org/ver20/backchannel\r\n"
+base = "rtsp://127.0.0.1:15554/stream0"
+s = socket.create_connection(("127.0.0.1", 15554), timeout=10)
+buf = [b""]
+s.sendall(f"DESCRIBE {base} RTSP/1.0\r\nCSeq: 1\r\nAccept: application/sdp\r\n{REQ}\r\n".encode())
+desc, buf = rsp(s, buf)
+bc_sec = next((sec for sec in desc.split("m=")[1:] if "a=sendonly" in sec), "")
+pts = bc_sec.split("\n")[0].split("RTP/AVP", 1)[-1].split()
+for want in ("0", "8", "112", "113", "114"):
+    if want not in pts:
+        print(f"OFFER_MISSING={want}"); sys.exit(0)
+print("OFFER_OK=" + " ".join(pts))
+
+s.sendall(f"SETUP {base}/video RTSP/1.0\r\nCSeq: 2\r\n"
+          f"Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n\r\n".encode())
+vs, buf = rsp(s, buf)
+sid = next((l.split(":", 1)[1].split(";")[0].strip()
+            for l in vs.split("\r\n") if l.lower().startswith("session:")), "")
+s.sendall(f"SETUP {base}/backchannel RTSP/1.0\r\nCSeq: 3\r\nSession: {sid}\r\n"
+          f"Transport: RTP/AVP/TCP;unicast;interleaved=4-5\r\n{REQ}\r\n".encode())
+bs, buf = rsp(s, buf)
+if " 200 " not in bs.split("\r\n")[0]:
+    print("SETUP_FAILED"); sys.exit(0)
+s.sendall(f"PLAY {base} RTSP/1.0\r\nCSeq: 4\r\nSession: {sid}\r\nRange: npt=0.000-\r\n\r\n".encode())
+rsp(s, buf)
+
+# AAC AUs from ffmpeg (ADTS stripped): AAC-LC, ring rate, mono, the
+# exact stream the fmtp config advertises.
+aac_aus = []
+try:
+    adts = subprocess.run(
+        ["ffmpeg", "-v", "quiet", "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+         "-ar", "16000", "-ac", "1", "-c:a", "aac", "-b:a", "24k", "-f", "adts", "-"],
+        capture_output=True, timeout=20).stdout
+    i = 0
+    while i + 7 <= len(adts) and len(aac_aus) < 12:
+        if adts[i] != 0xFF or (adts[i + 1] & 0xF0) != 0xF0:
+            break
+        flen = ((adts[i + 3] & 0x03) << 11) | (adts[i + 4] << 3) | (adts[i + 5] >> 5)
+        hdr = 7 if (adts[i + 1] & 0x01) else 9
+        if (adts[i + 2] >> 2) & 0xF == 8 and flen > hdr:
+            aac_aus.append(adts[i + hdr:i + flen])
+        i += flen
+except Exception:
+    aac_aus = []
+
+seq = 0
+ssrc = 0x22334455
+
+def send(pt, ts, payload):
+    global seq
+    rtp = struct.pack("!BBHII", 0x80, pt, seq & 0xFFFF, ts, ssrc) + payload
+    s.sendall(b"\x24" + struct.pack("!BH", 4, len(rtp)) + rtp)
+    seq += 1
+    time.sleep(0.005)
+
+ts = 0
+for _ in range(30):                      # PCMA, 20 ms @ 8 kHz
+    send(8, ts, b"\xd5" * 160); ts += 160
+print("SENT_PCMA=30")
+ts = 0
+for _ in range(30):                      # L16/16000, 10 ms
+    send(114, ts, struct.pack("!160h", *([1000] * 160))); ts += 160
+print("SENT_L16=30")
+ts = 0
+for _ in range(30):                      # opus: 1-byte TOC = 20 ms WB mono silence
+    send(112, ts, b"\x08"); ts += 960    # RFC 7587 clock is 48 kHz
+print("SENT_OPUS=30")
+if aac_aus:
+    ts = 0
+    for au in aac_aus:                   # AAC-hbr, one AU per packet
+        hbr = b"\x00\x10" + struct.pack("!H", len(au) << 3) + au
+        send(113, ts, hbr); ts += 1024
+    print(f"SENT_AAC={len(aac_aus)}")
+else:
+    print("AAC_SKIP")
+time.sleep(6.0)
+s.close()
+BC2_EOF
+BC2_PID=$!
+wait $BC2_PID 2>/dev/null
+BC2_OUT=$(cat "$LOG_DIR/backchannel-codecs.out" 2>/dev/null)
+
+echo "$BC2_OUT" | grep -q "OFFER_OK" \
+    && pass "backchannel offers PCMU/PCMA/opus/AAC/L16 ($(echo "$BC2_OUT" | sed -n 's/OFFER_OK=//p'))" \
+    || fail "backchannel multi-codec offer" "$(echo "$BC2_OUT" | head -1)"
+
+for codec in PCMA L16 opus; do
+    if grep -q "backchannel: receiving $codec" "$LOG_DIR/rsd.log"; then
+        pass "backchannel decodes $codec"
+    else
+        fail "backchannel $codec decode" "no 'receiving $codec' in rsd.log"
+    fi
+done
+if echo "$BC2_OUT" | grep -q "AAC_SKIP"; then
+    skip "backchannel AAC decode (ffmpeg produced no usable AUs)"
+elif grep -q "backchannel: receiving AAC" "$LOG_DIR/rsd.log"; then
+    pass "backchannel decodes AAC (real AUs via ffmpeg)"
+else
+    fail "backchannel AAC decode" "no 'receiving AAC' in rsd.log"
+fi
+
+# ── Backchannel over UDP: its own socket pair, actually read ──
+# Regression shape: the backchannel SETUP used to borrow the VIDEO
+# track's UDP fd slots, so with a video UDP SETUP in the same session
+# the backchannel audio landed on sockets nobody read. The write_seq
+# delta below is measured across ONLY this probe.
+BC3_BEFORE=$(timeout 5 "$OUT/ringdump" speaker 2>&1 |
+             sed -n 's/.*Write seq: *\([0-9]*\).*/\1/p' | head -1)
+python3 - > "$LOG_DIR/backchannel-udp.out" 2>&1 <<'BC3_EOF' &
+import socket, struct, sys, time
+
+def rsp(sock, buf):
+    while b"\r\n\r\n" not in buf[0]:
+        d = sock.recv(4096)
+        if not d:
+            return "", buf
+        buf[0] += d
+    head, _, rest = buf[0].partition(b"\r\n\r\n")
+    txt = head.decode(errors="replace")
+    clen = 0
+    for line in txt.split("\r\n"):
+        if line.lower().startswith("content-length:"):
+            clen = int(line.split(":", 1)[1])
+    while len(rest) < clen:
+        rest += sock.recv(4096)
+    body, buf[0] = rest[:clen], rest[clen:]
+    return txt + "\r\n\r\n" + body.decode(errors="replace"), buf
+
+REQ = "Require: www.onvif.org/ver20/backchannel\r\n"
+base = "rtsp://127.0.0.1:15554/stream0"
+s = socket.create_connection(("127.0.0.1", 15554), timeout=10)
+buf = [b""]
+s.sendall(f"DESCRIBE {base} RTSP/1.0\r\nCSeq: 1\r\nAccept: application/sdp\r\n{REQ}\r\n".encode())
+rsp(s, buf)
+
+def udp_pair():
+    a = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    b = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    a.bind(("127.0.0.1", 0)); b.bind(("127.0.0.1", 0))
+    return a, b, a.getsockname()[1], b.getsockname()[1]
+
+v_rtp, v_rtcp, vp1, vp2 = udp_pair()
+b_rtp, b_rtcp, bp1, bp2 = udp_pair()
+
+s.sendall(f"SETUP {base}/video RTSP/1.0\r\nCSeq: 2\r\n"
+          f"Transport: RTP/AVP;unicast;client_port={vp1}-{vp2}\r\n\r\n".encode())
+vs, buf = rsp(s, buf)
+if " 200 " not in vs.split("\r\n")[0]:
+    print("VIDEO_UDP_SETUP_FAILED"); sys.exit(0)
+sid = next((l.split(":", 1)[1].split(";")[0].strip()
+            for l in vs.split("\r\n") if l.lower().startswith("session:")), "")
+
+s.sendall(f"SETUP {base}/backchannel RTSP/1.0\r\nCSeq: 3\r\nSession: {sid}\r\n"
+          f"Transport: RTP/AVP;unicast;client_port={bp1}-{bp2}\r\n{REQ}\r\n".encode())
+bs, buf = rsp(s, buf)
+if " 200 " not in bs.split("\r\n")[0]:
+    print("BC_UDP_SETUP_FAILED"); sys.exit(0)
+srv_port = 0
+for line in bs.split("\r\n"):
+    if line.lower().startswith("transport:") and "server_port=" in line:
+        srv_port = int(line.split("server_port=")[1].split("-")[0].split(";")[0])
+if not srv_port:
+    print("NO_SERVER_PORT"); sys.exit(0)
+print(f"BC_UDP_SETUP_OK={srv_port}")
+
+s.sendall(f"PLAY {base} RTSP/1.0\r\nCSeq: 4\r\nSession: {sid}\r\nRange: npt=0.000-\r\n\r\n".encode())
+rsp(s, buf)
+
+seq = ts = 0
+for _ in range(30):
+    rtp = struct.pack("!BBHII", 0x80, 0, seq & 0xFFFF, ts, 0x778899AA) + b"\xff" * 160
+    b_rtp.sendto(rtp, ("127.0.0.1", srv_port))
+    seq += 1; ts += 160
+    time.sleep(0.005)
+print("UDP_SENT=30", flush=True)
+time.sleep(6.0)
+s.close()
+BC3_EOF
+BC3_PID=$!
+BC3_SEQ=0
+for _ in $(seq 1 40); do
+    BC3_SEQ=$(timeout 5 "$OUT/ringdump" speaker 2>&1 |
+              sed -n 's/.*Write seq: *\([0-9]*\).*/\1/p' | head -1)
+    [ "${BC3_SEQ:-0}" -gt "${BC3_BEFORE:-0}" ] 2>/dev/null && break
+    sleep 0.25
+done
+wait $BC3_PID 2>/dev/null
+BC3_OUT=$(cat "$LOG_DIR/backchannel-udp.out" 2>/dev/null)
+
+echo "$BC3_OUT" | grep -q "BC_UDP_SETUP_OK" \
+    && pass "backchannel UDP SETUP gets its own server port" \
+    || fail "backchannel UDP SETUP" "$(echo "$BC3_OUT" | head -1)"
+
+if [ "${BC3_SEQ:-0}" -gt "${BC3_BEFORE:-0}" ] 2>/dev/null; then
+    pass "backchannel UDP audio reaches the speaker ring ($((BC3_SEQ - BC3_BEFORE)) frames, video UDP pair intact)"
+else
+    fail "backchannel UDP receive" "write_seq stuck at ${BC3_SEQ:-none} (before=${BC3_BEFORE:-none})"
+fi
+
 # ── Producer restart under a lingering client ──
 # A playing client whose media goes unread (stalled player, dead NVR
 # that still ACKs) must not pin the ring reader to a dead producer's
