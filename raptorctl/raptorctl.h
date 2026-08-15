@@ -42,6 +42,7 @@ void jadd_auto(cJSON *j, const char *key, const char *val);
 void jadd_i(cJSON *j, const char *key, const char *val);
 void jstr(cJSON *j, char *buf, int size);
 int send_cmd(const char *daemon, const char *json);
+int send_cmd_verb(const char *daemon, const char *verb);
 int send_cmd_json(const char *daemon, const char *json, char *resp, int resp_size);
 int handle_json_mode(const char *input);
 

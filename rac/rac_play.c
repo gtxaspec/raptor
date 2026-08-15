@@ -157,22 +157,12 @@ static int publish_pcm(rss_ring_t *ring, rac_pacer_t *pacer, const int16_t *pcm,
 /* Ask RAD to drain the hardware pipeline: it consumes the ring tail and
  * blocks until the last sample has played (IMP_AO_FlushChnBuf), which is
  * what prevents end-of-playback cutoff. Falls back to a fixed sleep when
- * RAD is unreachable or answers with an error. The answer is parsed, not
- * substring-matched -- a check tied to the peer's JSON formatting is a
- * formatting accident away from always failing. */
+ * RAD is unreachable or answers with an error. */
 static void rad_drain_or_sleep(void)
 {
 	char resp[128];
-	int r = rss_ctrl_send_command(RSS_RUN_DIR "/rad.sock", "{\"cmd\":\"ao-drain\"}", resp,
-				      sizeof(resp), 4000);
-	bool ok = false;
-	if (r > 0) {
-		cJSON *parsed = cJSON_Parse(resp);
-		const cJSON *status = parsed ? cJSON_GetObjectItem(parsed, "status") : NULL;
-		ok = cJSON_IsString(status) && strcmp(status->valuestring, "ok") == 0;
-		cJSON_Delete(parsed);
-	}
-	if (!ok)
+	int r = rss_ctrl_cmd(RSS_RUN_DIR "/rad.sock", "ao-drain", resp, sizeof(resp), 4000);
+	if (r <= 0 || !rss_ctrl_resp_is_ok(resp))
 		usleep(100000);
 }
 
@@ -214,8 +204,7 @@ int cmd_play(const char *src, int sample_rate)
 	/* Tell RAD to flush stale hardware audio and prepare for new playback */
 	{
 		char resp[256];
-		rss_ctrl_send_command(RSS_RUN_DIR "/rad.sock", "{\"cmd\":\"ao-flush\"}", resp,
-				      sizeof(resp), 500);
+		rss_ctrl_cmd(RSS_RUN_DIR "/rad.sock", "ao-flush", resp, sizeof(resp), 500);
 	}
 
 	/* Create speaker ring */
@@ -620,8 +609,7 @@ int cmd_beep(int freq_hz, int duration_ms, int sample_rate)
 	 * speaker ring, give the AO thread a moment to attach. */
 	{
 		char resp[256];
-		rss_ctrl_send_command(RSS_RUN_DIR "/rad.sock", "{\"cmd\":\"ao-flush\"}", resp,
-				      sizeof(resp), 500);
+		rss_ctrl_cmd(RSS_RUN_DIR "/rad.sock", "ao-flush", resp, sizeof(resp), 500);
 	}
 	rss_ring_t *ring = rss_ring_create("speaker", 16, 64 * 1024);
 	if (!ring) {

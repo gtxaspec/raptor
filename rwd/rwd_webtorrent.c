@@ -450,36 +450,6 @@ static int ws_upgrade(wt_tls_t *tls, const char *host, const char *path)
 	return strncmp(resp, "HTTP/1.1 101", 12) == 0 ? 0 : -1;
 }
 
-/* ── JSON helpers (minimal, for tracker protocol) ── */
-
-static size_t json_escape(const char *in, char *out, size_t out_size)
-{
-	if (out_size == 0)
-		return 0;
-	size_t w = 0;
-	for (size_t i = 0; in[i]; i++) {
-		char c = in[i];
-		bool esc = (c == '"' || c == '\\' || c == '\r' || c == '\n');
-		size_t need = esc ? 2 : 1;
-		if (w + need >= out_size)
-			break;
-		if (c == '"' || c == '\\') {
-			out[w++] = '\\';
-			out[w++] = c;
-		} else if (c == '\r') {
-			out[w++] = '\\';
-			out[w++] = 'r';
-		} else if (c == '\n') {
-			out[w++] = '\\';
-			out[w++] = 'n';
-		} else {
-			out[w++] = c;
-		}
-	}
-	out[w] = '\0';
-	return w;
-}
-
 /* ── STUN client (discover server-reflexive address) ── */
 
 int rwd_stun_discover_srflx(int udp_fd, const char *server, int port, char *ip_out, size_t ip_size,
@@ -639,50 +609,55 @@ static void generate_random_id(char *out, size_t len)
 
 /* ── Tracker protocol ── */
 
+/* Serialize a tracker message and send it as one text frame. cJSON
+ * owns all escaping -- to_peer_id/offer_id arrive from the tracker
+ * (untrusted), the SDP carries CRLFs, and the old hand-rolled escaper
+ * passed control characters through raw, which strict JSON parsers
+ * reject. Takes ownership of the object. */
+static int wt_send_json(wt_tls_t *tls, cJSON *msg)
+{
+	char *text = msg ? cJSON_PrintUnformatted(msg) : NULL;
+	cJSON_Delete(msg);
+	if (!text)
+		return -1;
+	int ret = ws_send_text(tls, text, strlen(text));
+	free(text);
+	return ret;
+}
+
 static int wt_announce(wt_tls_t *tls, const char *info_hash, const char *peer_id)
 {
-	char msg[512];
-	snprintf(msg, sizeof(msg),
-		 "{\"action\":\"announce\",\"info_hash\":\"%s\",\"peer_id\":\"%s\","
-		 "\"numwant\":0,\"uploaded\":0,\"downloaded\":0,\"left\":0,"
-		 "\"event\":\"started\"}",
-		 info_hash, peer_id);
-	return ws_send_text(tls, msg, strlen(msg));
+	cJSON *msg = cJSON_CreateObject();
+	if (!msg)
+		return -1;
+	cJSON_AddStringToObject(msg, "action", "announce");
+	cJSON_AddStringToObject(msg, "info_hash", info_hash);
+	cJSON_AddStringToObject(msg, "peer_id", peer_id);
+	cJSON_AddNumberToObject(msg, "numwant", 0);
+	cJSON_AddNumberToObject(msg, "uploaded", 0);
+	cJSON_AddNumberToObject(msg, "downloaded", 0);
+	cJSON_AddNumberToObject(msg, "left", 0);
+	cJSON_AddStringToObject(msg, "event", "started");
+	return wt_send_json(tls, msg);
 }
 
 static int wt_send_answer(wt_tls_t *tls, const char *info_hash, const char *peer_id,
 			  const char *to_peer_id, const char *offer_id, const char *sdp_answer)
 {
-	/* Escape all strings that may contain special chars.
-	 * to_peer_id and offer_id come from the tracker (untrusted). */
-	char esc_to_peer[128], esc_offer_id[128];
-	json_escape(to_peer_id, esc_to_peer, sizeof(esc_to_peer));
-	json_escape(offer_id, esc_offer_id, sizeof(esc_offer_id));
-
-	/* Heap-allocate escaped SDP + message buffer together */
-	size_t sdp_len = strlen(sdp_answer);
-	size_t esc_sdp_size = sdp_len * 2 + 1;
-	char *esc_sdp = malloc(esc_sdp_size);
-	if (!esc_sdp)
+	cJSON *msg = cJSON_CreateObject();
+	if (!msg)
 		return -1;
-	json_escape(sdp_answer, esc_sdp, esc_sdp_size);
-
-	size_t msg_size = strlen(esc_sdp) + strlen(esc_to_peer) + strlen(esc_offer_id) + 512;
-	char *msg = malloc(msg_size);
-	if (!msg) {
-		free(esc_sdp);
-		return -1;
+	cJSON_AddStringToObject(msg, "action", "announce");
+	cJSON_AddStringToObject(msg, "info_hash", info_hash);
+	cJSON_AddStringToObject(msg, "peer_id", peer_id);
+	cJSON_AddStringToObject(msg, "to_peer_id", to_peer_id);
+	cJSON *answer = cJSON_AddObjectToObject(msg, "answer");
+	if (answer) {
+		cJSON_AddStringToObject(answer, "type", "answer");
+		cJSON_AddStringToObject(answer, "sdp", sdp_answer);
 	}
-
-	snprintf(msg, msg_size,
-		 "{\"action\":\"announce\",\"info_hash\":\"%s\",\"peer_id\":\"%s\","
-		 "\"to_peer_id\":\"%s\",\"answer\":{\"type\":\"answer\",\"sdp\":\"%s\"},"
-		 "\"offer_id\":\"%s\"}",
-		 info_hash, peer_id, esc_to_peer, esc_sdp, esc_offer_id);
-	int ret = ws_send_text(tls, msg, strlen(msg));
-	free(msg);
-	free(esc_sdp);
-	return ret;
+	cJSON_AddStringToObject(msg, "offer_id", offer_id);
+	return wt_send_json(tls, msg);
 }
 
 /* ── Handle incoming offer from tracker ── */

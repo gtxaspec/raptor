@@ -1272,9 +1272,8 @@ void rsd_handle_rtsp_data(rsd_client_t *client, const char *data, size_t len)
 				 * idr_on_join=false trades join latency (up to one
 				 * GOP) for undisturbed existing clients. */
 				char resp[128];
-				rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock",
-						      "{\"cmd\":\"request-idr\"}", resp,
-						      sizeof(resp), 1000);
+				rss_ctrl_cmd(RSS_RUN_DIR "/rvd.sock", "request-idr", resp,
+					     sizeof(resp), 1000);
 				RSS_DEBUG("client PLAY (IDR requested)");
 			}
 		}

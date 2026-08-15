@@ -2345,9 +2345,8 @@ static int handle_config_cmd(const char *cmd, const char *cmd_json, rvd_state_t 
 				any_privacy = true;
 		}
 		char rad_resp[64];
-		rss_ctrl_send_command(RSS_RUN_DIR "/rad.sock",
-				      any_privacy ? "{\"cmd\":\"mute\"}" : "{\"cmd\":\"unmute\"}",
-				      rad_resp, sizeof(rad_resp), 1000);
+		rss_ctrl_cmd(RSS_RUN_DIR "/rad.sock", any_privacy ? "mute" : "unmute", rad_resp,
+			     sizeof(rad_resp), 1000);
 
 		cJSON *r = cJSON_CreateObject();
 		cJSON_AddStringToObject(r, "status", "ok");

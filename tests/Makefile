@@ -29,7 +29,8 @@ LIB_SRCS = ../ric/ric_json.c ../rsd/rsd_sendq.c ../rsd/rsd_backchannel.c ../rad/
            ../../raptor-common/third_party/monocypher/monocypher.c \
            ../../raptor-common/third_party/monocypher/monocypher-ed25519.c
 CTRL_SRCS = ../rvd/rvd_ctrl.c mock_hal.c \
-            ../../raptor-common/src/rss_config.c ../../raptor-common/src/rss_ctrl_cmds.c
+            ../../raptor-common/src/rss_config.c ../../raptor-common/src/rss_ctrl_cmds.c \
+            ../../raptor-common/src/rss_ctrl_client.c
 IPC_SRCS = ../../raptor-ipc/src/rss_ring.c ../../raptor-ipc/src/rss_ctrl.c \
            ../../raptor-ipc/src/rss_osd_shm.c ../../raptor-ipc/src/rss_ipc_log.c
 

@@ -68,6 +68,33 @@ echo " raptor test suite ($SAN_MODE)"
 echo "========================================"
 echo ""
 
+# ── Stage 0: Hand-written JSON gate ──
+#
+# Structured formats are built by serializers, never string assembly:
+# a "%s" into a JSON literal is one edit away from injection, and the
+# safety of today's literal requires provenance reasoning no reviewer
+# should have to repeat. Production C carries exactly two documented
+# exemptions -- raptorctl_help.c prints example -j syntax (display
+# text, not construction) and raptor-ipc's transport error frame
+# (rss_ctrl.c, a dependency-free layer emitting a constant shape with
+# one integer). Anything else is a failure, not a style note.
+
+echo "=== Stage 0: Hand-written JSON gate ==="
+JSON_HITS=$(/usr/bin/grep -rn '{\\"' --include='*.c' --include='*.h' \
+    "$RAPTOR_DIR" "$RAPTOR_DIR/../raptor-common" "$RAPTOR_DIR/../raptor-ipc" \
+    "$RAPTOR_DIR/../raptor-hal" \
+    2>/dev/null |
+    grep -v '/tests/\|/fuzz/\|/\.deps/\|/build/\|/asan-out/' |
+    grep -v 'raptorctl_help\.c\|raptor-ipc/src/rss_ctrl\.c' || true)
+if [ -n "$JSON_HITS" ]; then
+    echo "$JSON_HITS"
+    stage_fail "hand-written JSON gate"
+    echo "Build JSON with cJSON (rss_ctrl_cmd*/rss_ctrl_resp_*), never by hand."
+    exit 1
+else
+    stage_pass "hand-written JSON gate"
+fi
+
 # ── Stage 1: Build ──
 
 echo "=== Stage 1: Build ($SAN_MODE) ==="

@@ -75,8 +75,7 @@ int handle_config(int argc, char **argv)
 			char sock_path[64];
 			char resp[2048];
 			snprintf(sock_path, sizeof(sock_path), RSS_SOCK_FMT, daemons[i]);
-			int ret = rss_ctrl_send_command(sock_path, "{\"cmd\":\"config-save\"}",
-							resp, sizeof(resp), 2000);
+			int ret = rss_ctrl_cmd(sock_path, "config-save", resp, sizeof(resp), 2000);
 			if (ret >= 0) {
 				printf("%s: %s\n", daemons[i], resp);
 				saved++;

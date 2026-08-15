@@ -68,8 +68,7 @@ static void rmd_apply_ivs_config(rmd_ctx_t *ctx)
 static bool rmd_poll_motion(rmd_ctx_t *ctx)
 {
 	char resp[256];
-	int ret = rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", "{\"cmd\":\"ivs-status\"}", resp,
-					sizeof(resp), 1000);
+	int ret = rss_ctrl_cmd(RSS_RUN_DIR "/rvd.sock", "ivs-status", resp, sizeof(resp), 1000);
 	if (ret < 0)
 		return false;
 
@@ -239,8 +238,8 @@ int main(int argc, char **argv)
 	RSS_INFO("waiting for RVD...");
 	for (int i = 0; i < 100 && *ctx.running; i++) {
 		char resp[128];
-		if (rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", "{\"cmd\":\"ivs-status\"}", resp,
-					  sizeof(resp), 500) >= 0) {
+		if (rss_ctrl_cmd(RSS_RUN_DIR "/rvd.sock", "ivs-status", resp, sizeof(resp), 500) >=
+		    0) {
 			cJSON *root = cJSON_Parse(resp);
 			if (root) {
 				bool active = cJSON_IsTrue(cJSON_GetObjectItem(root, "active"));

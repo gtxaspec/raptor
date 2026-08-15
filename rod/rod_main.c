@@ -71,8 +71,7 @@ static void render_image_element(rod_state_t *st, rod_element_t *e, int s)
 static void render_detections(rod_state_t *st, rod_element_t *e)
 {
 	char resp[2048];
-	int ret = rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", "{\"cmd\":\"ivs-detections\"}",
-					resp, sizeof(resp), 500);
+	int ret = rss_ctrl_cmd(RSS_RUN_DIR "/rvd.sock", "ivs-detections", resp, sizeof(resp), 500);
 	if (ret < 0)
 		return;
 

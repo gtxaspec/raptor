@@ -374,7 +374,10 @@ static int handle_enc_list(const char *daemon, int argc, char **argv)
 		jadd_i(j, "channel", argv[3]);
 		jstr(j, cmd_json, sizeof(cmd_json));
 	} else {
-		snprintf(cmd_json, sizeof(cmd_json), "{\"cmd\":\"enc-list\"}");
+		cJSON *j = jcmd("enc-list");
+		if (!j)
+			return 1;
+		jstr(j, cmd_json, sizeof(cmd_json));
 	}
 
 	char resp[4096];

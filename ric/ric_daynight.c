@@ -245,11 +245,9 @@ void ric_gpio_init(ric_state_t *st)
 void ric_set_isp_mode(ric_mode_t mode)
 {
 	char resp[128];
-	int ret = rss_ctrl_send_command(
-		RSS_RUN_DIR "/rvd.sock",
-		mode == RIC_MODE_NIGHT ? "{\"cmd\":\"set-running-mode\",\"value\":\"night\"}"
-				       : "{\"cmd\":\"set-running-mode\",\"value\":\"day\"}",
-		resp, sizeof(resp), 2000);
+	int ret = rss_ctrl_cmd_str(RSS_RUN_DIR "/rvd.sock", "set-running-mode", "value",
+				   mode == RIC_MODE_NIGHT ? "night" : "day", resp, sizeof(resp),
+				   2000);
 	/* The filter and LEDs have already moved; a failure here is a
 	 * half-finished transition (color at night or B/W in day) that
 	 * otherwise heals only at the next switch. */
@@ -349,21 +347,16 @@ void ric_apply_night_fps(ric_state_t *st, ric_mode_t mode)
 	if (st->settings.night_fps <= 0 || st->night_fps_unusable)
 		return;
 	int value = (mode == RIC_MODE_NIGHT) ? st->settings.night_fps : 0;
-	char cmd[64];
-	snprintf(cmd, sizeof(cmd), "{\"cmd\":\"set-sensor-fps\",\"value\":%d}", value);
 	char resp[512];
-	int ret = rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", cmd, resp, sizeof(resp), 2000);
+	int ret = rss_ctrl_cmd_int(RSS_RUN_DIR "/rvd.sock", "set-sensor-fps", "value", value, resp,
+				   sizeof(resp), 2000);
 	if (ret < 0) {
 		RSS_WARN("sensor rate %d not applied (rvd unreachable) -- retried on the "
 			 "next recovery or transition",
 			 value ? value : -1);
 		return;
 	}
-	cJSON *parsed = cJSON_Parse(resp);
-	const cJSON *status = parsed ? cJSON_GetObjectItem(parsed, "status") : NULL;
-	bool ok = cJSON_IsString(status) && strcmp(status->valuestring, "ok") == 0;
-	cJSON_Delete(parsed);
-	if (!ok) {
+	if (!rss_ctrl_resp_is_ok(resp)) {
 		st->night_fps_unusable = true;
 		RSS_WARN("night_fps disabled for this run: rvd cannot set the sensor rate "
 			 "(%.100s)",
@@ -477,8 +470,7 @@ void ric_poll_exposure(ric_state_t *st)
 	 * does, and skipping the query in forced modes would leave that
 	 * restart invisible. */
 	char resp[512];
-	int ret = rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", "{\"cmd\":\"get-exposure\"}", resp,
-					sizeof(resp), 1000);
+	int ret = rss_ctrl_cmd(RSS_RUN_DIR "/rvd.sock", "get-exposure", resp, sizeof(resp), 1000);
 	if (ret < 0) {
 		RSS_DEBUG("RVD query failed (%d)", ret);
 		rvd_note_failed_query(st);

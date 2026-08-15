@@ -81,12 +81,12 @@ int main(int argc, char **argv)
 			dur = 300;
 
 		printf("triggering motion clip for %d seconds...\n", dur);
-		int ret = send_cmd("rmr", "{\"cmd\":\"start\"}");
+		int ret = send_cmd_verb("rmr", "start");
 		if (ret != 0)
 			return ret;
 		sleep(dur);
 		printf("stopping motion clip...\n");
-		return send_cmd("rmr", "{\"cmd\":\"stop\"}");
+		return send_cmd_verb("rmr", "stop");
 	}
 
 	if (!is_daemon(argv[1])) {
@@ -152,7 +152,7 @@ int main(int argc, char **argv)
 			fprintf(stderr, "%s: not running\n", argv[1]);
 			return 1;
 		}
-		send_cmd(argv[1], "{\"cmd\":\"shutdown\"}");
+		send_cmd_verb(argv[1], "shutdown");
 		for (int i = 0; i < 20; i++) {
 			usleep(100000);
 			if (kill(pid, 0) != 0)

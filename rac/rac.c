@@ -29,11 +29,15 @@ static void sighandler(int sig)
 
 /* ── Status / control commands ── */
 
-int cmd_ctrl(const char *cmd_json)
+/* Send a verb (optionally one integer argument) to RAD and print the
+ * answer. The wire JSON is built by the serializer helpers; no call
+ * site carries JSON syntax. */
+static int cmd_ctrl_send(const char *verb, const char *key, long val, bool has_val)
 {
 	char resp[1024] = {0};
-	int ret =
-		rss_ctrl_send_command(RSS_RUN_DIR "/rad.sock", cmd_json, resp, sizeof(resp), 2000);
+	int ret = has_val ? rss_ctrl_cmd_int(RSS_RUN_DIR "/rad.sock", verb, key, (int)val, resp,
+					     sizeof(resp), 2000)
+			  : rss_ctrl_cmd(RSS_RUN_DIR "/rad.sock", verb, resp, sizeof(resp), 2000);
 	if (ret < 0) {
 		fprintf(stderr, "rac: failed to send to RAD: %s\n",
 			ret == -ECONNREFUSED ? "not running" : "connection failed");
@@ -41,6 +45,16 @@ int cmd_ctrl(const char *cmd_json)
 	}
 	printf("%s\n", resp);
 	return 0;
+}
+
+static int cmd_ctrl_verb(const char *verb)
+{
+	return cmd_ctrl_send(verb, NULL, 0, false);
+}
+
+static int cmd_ctrl_verb_int(const char *verb, long val)
+{
+	return cmd_ctrl_send(verb, "value", val, true);
 }
 
 /* ── Usage ── */
@@ -170,35 +184,21 @@ int main(int argc, char **argv)
 		return cmd_beep(freq, duration_ms, sample_rate);
 
 	} else if (strcmp(cmd, "status") == 0) {
-		return cmd_ctrl("{\"cmd\":\"status\"}");
+		return cmd_ctrl_verb("status");
 
 	} else if (strcmp(cmd, "ao-volume") == 0) {
 		if (argc < 3) {
 			fprintf(stderr, "Usage: rac ao-volume <value>\n");
 			return 1;
 		}
-		char json[128];
-		long val = strtol(argv[2], NULL, 10);
-		cJSON *j = cJSON_CreateObject();
-		cJSON_AddStringToObject(j, "cmd", "ao-set-volume");
-		cJSON_AddNumberToObject(j, "value", val);
-		cJSON_PrintPreallocated(j, json, sizeof(json), 0);
-		cJSON_Delete(j);
-		return cmd_ctrl(json);
+		return cmd_ctrl_verb_int("ao-set-volume", strtol(argv[2], NULL, 10));
 
 	} else if (strcmp(cmd, "ao-gain") == 0) {
 		if (argc < 3) {
 			fprintf(stderr, "Usage: rac ao-gain <value>\n");
 			return 1;
 		}
-		char json[128];
-		long val = strtol(argv[2], NULL, 10);
-		cJSON *j = cJSON_CreateObject();
-		cJSON_AddStringToObject(j, "cmd", "ao-set-gain");
-		cJSON_AddNumberToObject(j, "value", val);
-		cJSON_PrintPreallocated(j, json, sizeof(json), 0);
-		cJSON_Delete(j);
-		return cmd_ctrl(json);
+		return cmd_ctrl_verb_int("ao-set-gain", strtol(argv[2], NULL, 10));
 
 	} else if (strcmp(cmd, "-h") == 0 || strcmp(cmd, "help") == 0) {
 		usage();

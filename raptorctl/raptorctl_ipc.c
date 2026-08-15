@@ -10,6 +10,8 @@
 #include <rss_ipc.h>
 #include <rss_common.h>
 
+static cJSON *json_error(const char *reason);
+
 #include "raptorctl.h"
 
 int is_daemon(const char *name)
@@ -64,6 +66,20 @@ void jstr(cJSON *j, char *buf, int size)
 	cJSON_Delete(j);
 }
 
+/* Build {"cmd":verb} with the serializer and send it — for the
+ * fixed-verb call sites, which must not carry wire JSON themselves. */
+int send_cmd_verb(const char *daemon, const char *verb)
+{
+	char json[64];
+	cJSON *j = cJSON_CreateObject();
+	if (!j)
+		return 1;
+	cJSON_AddStringToObject(j, "cmd", verb);
+	int ok = cJSON_PrintPreallocated(j, json, sizeof(json), 0);
+	cJSON_Delete(j);
+	return ok ? send_cmd(daemon, json) : 1;
+}
+
 int send_cmd(const char *daemon, const char *json)
 {
 	char sock_path[64];
@@ -88,8 +104,10 @@ int send_cmd_json(const char *daemon, const char *json, char *resp, int resp_siz
 
 	int ret = rss_ctrl_send_command(sock_path, json, resp, resp_size, 5000);
 	if (ret < 0) {
-		snprintf(resp, (size_t)resp_size, "{\"status\":\"error\",\"reason\":\"%s\"}",
-			 ret == -2 ? "timeout" : "connection failed");
+		cJSON *e = json_error(ret == -2 ? "timeout" : "connection failed");
+		if (!e || !cJSON_PrintPreallocated(e, resp, resp_size, 0))
+			resp[0] = '\0';
+		cJSON_Delete(e);
 	}
 	return ret < 0 ? 1 : 0;
 }
