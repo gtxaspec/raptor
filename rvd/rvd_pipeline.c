@@ -518,13 +518,21 @@ int rvd_pipeline_init(rvd_state_t *st)
 
 	/* ── 3. OSD pool sizing — must be set before HAL init (SDK requirement).
 	 * Scan [osd.*] config sections to estimate total region bytes.
-	 * Pool cannot be resized after init, so we must get it right here. */
+	 * Pool cannot be resized after init, so we must get it right here.
+	 * The sensor resolution is unknowable at this point — the procfs
+	 * nodes under /proc/jz/sensor/sensorN/ are created by ISP init,
+	 * which this must precede (confirmed on a z55: a pre-init read
+	 * finds nothing once the previous instance has deinitialized) —
+	 * so unset stream dims fall back to a 4MP-class ceiling for POOL
+	 * sizing only. The streams themselves resolve their dims after
+	 * init from the sensor; the values stored by these reads are
+	 * display-only and never become configuration. */
 	{
 		int font_size = rss_config_get_int(cfg, "osd", "font_size", 24);
 		if (font_size < 10)
 			font_size = 10;
-		int main_w = rss_config_get_int(cfg, "stream0", "width", 1920);
-		int main_h = rss_config_get_int(cfg, "stream0", "height", 1080);
+		int main_w = rss_config_get_int(cfg, "stream0", "width", 2560);
+		int main_h = rss_config_get_int(cfg, "stream0", "height", 1440);
 		int sub_w = rss_config_get_int(cfg, "stream1", "width", 640);
 		int sub_h = rss_config_get_int(cfg, "stream1", "height", 360);
 		bool has_sub = rss_config_get_bool(cfg, "stream1", "enabled", true);
@@ -744,12 +752,14 @@ int rvd_pipeline_init(rvd_state_t *st)
 		RSS_HAL_CALL(st->ops, isp_set_custom_mode_n, st->hal_ctx, s, 0);
 	}
 
-	/* ── 3d. Read actual sensor resolution from /proc ── */
+	/* ── 3d. Read actual sensor resolution from /proc — the nodes are
+	 * created by ISP init, so this cannot run any earlier. With the
+	 * display-only getter defaults, the values resolved here (and the
+	 * sensor-derived stream fallbacks below) can no longer be shadowed
+	 * by the OSD estimate's earlier ceiling guesses. */
 	int sensor_w = 0, sensor_h = 0;
-	{
-		sensor_w = read_sensor_proc_int(0, "width", 10, 0);
-		sensor_h = read_sensor_proc_int(0, "height", 10, 0);
-	}
+	sensor_w = read_sensor_proc_int(0, "width", 10, 0);
+	sensor_h = read_sensor_proc_int(0, "height", 10, 0);
 	if (sensor_w > 0 && sensor_h > 0) {
 		RSS_INFO("sensor resolution: %dx%d", sensor_w, sensor_h);
 	} else {
