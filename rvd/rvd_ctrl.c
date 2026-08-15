@@ -150,6 +150,15 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 	int chn, val, val2;
 
 	if (strcmp(cmd, "request-idr") == 0) {
+		/* Thread contract: this runs on the ctrl thread while each
+		 * encoder thread sits in poll/get_frame on the same channel.
+		 * Serialization is delegated to the codec command layer
+		 * beneath -- the vendor SDK by long production tolerance,
+		 * the AL codec mailbox on the OpenIMP bridge -- so neither
+		 * branch takes a userspace lock. If IDR anomalies ever
+		 * surface, route the request through the encoder thread
+		 * with an atomic flag (the pending_pipeline_reinit
+		 * pattern) instead of adding locking here. */
 		int target = -1;
 		rss_json_get_int(cmd_json, "channel", &target);
 		for (int i = 0; i < st->stream_count; i++) {
