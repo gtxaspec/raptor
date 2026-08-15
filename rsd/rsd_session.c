@@ -1018,6 +1018,26 @@ static void rsd_client_t_teardown(VSelf, Compy_Context *ctx, const Compy_Request
 	if (self->audio.rtcp)
 		(void)!Compy_Rtcp_send_bye(self->audio.rtcp);
 
+	/* The RRs made this side a visible RTCP participant on the
+	 * backchannel too; announce the leave the way the sending tracks
+	 * do, ahead of the 200 where it cannot race the connection
+	 * close. Dispatch already holds write_lock. */
+	if (self->backchannel && self->bc_has_rtcp_t) {
+		Compy_RtpReceiver *rcv = Compy_Backchannel_get_receiver(self->backchannel);
+		if (rcv) {
+			uint8_t bye_buf[104];
+			ssize_t n = Compy_RtpReceiver_write_bye(
+				rcv, RSD_BC_REPORTER_SSRC(self->session_id), rss_timestamp_us(),
+				RSD_BC_CNAME, bye_buf, sizeof(bye_buf));
+			if (n > 0) {
+				struct iovec bye_iov[1] = {
+					{.iov_base = bye_buf, .iov_len = (size_t)n}};
+				VCALL(self->bc_rtcp_t, transmit,
+				      (Compy_IoVecSlice)Slice99_typed_from_array(bye_iov));
+			}
+		}
+	}
+
 	compy_respond_ok(ctx);
 	RSS_INFO("client TEARDOWN");
 }

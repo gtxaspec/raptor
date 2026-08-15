@@ -46,6 +46,12 @@
 #define RSD_AUDIO_PT_AAC  97  /* dynamic PT for AAC (RFC 3640) */
 #define RSD_AUDIO_PT_OPUS 111 /* dynamic PT for Opus (RFC 7587) */
 
+/* The RTCP identity rsd reports under on the backchannel. The RR
+ * cadence and the TEARDOWN leave compound must agree on both, or the
+ * BYE removes a participant nobody ever saw. */
+#define RSD_BC_REPORTER_SSRC(session_id) ((uint32_t)(session_id) ^ 0x52534452u)
+#define RSD_BC_CNAME			 "raptor-rsd"
+
 /* Stream index for per-ring state */
 #define RSD_STREAM_MAIN	    0
 #define RSD_STREAM_SUB	    1

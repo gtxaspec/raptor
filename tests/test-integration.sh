@@ -1301,6 +1301,53 @@ while time.time() < deadline:
     if i >= 0 and len(got) >= i + 6 and got[i + 5] == 201:
         print("RR_TCP_OK")
         break
+
+# The leave compound: TEARDOWN must be preceded on the wire by a BYE
+# for the reporter SSRC (same discipline as the sending tracks). The
+# stream also carries video frames, so a frame only counts when it
+# parses as a complete RTCP compound whose packets all bear RTCP PTs.
+def compound_has_bye(frame):
+    off, seen = 0, False
+    while off + 4 <= len(frame):
+        if (frame[off] >> 6) != 2 or frame[off + 1] not in (200, 201, 202, 203):
+            return False
+        if frame[off + 1] == 203:
+            seen = True
+        off += (((frame[off + 2] << 8) | frame[off + 3]) + 1) * 4
+    return seen and off == len(frame)
+
+s.sendall(f"TEARDOWN {base} RTSP/1.0\r\nCSeq: 5\r\nSession: {sid}\r\n\r\n".encode())
+got2 = got
+deadline = time.time() + 5.0
+bye_at = resp_at = -1
+while time.time() < deadline:
+    try:
+        d = s.recv(4096)
+    except socket.timeout:
+        break
+    if not d:
+        break
+    got2 += d
+    if bye_at < 0:
+        j = 0
+        while True:
+            j = got2.find(b"\x24\x05", j)
+            if j < 0 or len(got2) < j + 4:
+                break
+            ln = (got2[j + 2] << 8) | got2[j + 3]
+            if len(got2) >= j + 4 + ln and compound_has_bye(got2[j + 4:j + 4 + ln]):
+                bye_at = j
+                break
+            j += 2
+    resp_at = got2.rfind(b"RTSP/1.0 200")
+    if bye_at >= 0 and resp_at >= 0:
+        break
+if bye_at >= 0 and resp_at >= 0 and bye_at < resp_at:
+    print("BYE_TCP_OK")
+elif bye_at >= 0:
+    print("BYE_TCP_LATE")
+else:
+    print("BYE_TCP_MISSING")
 s.close()
 BC2_EOF
 BC2_PID=$!
@@ -1329,6 +1376,10 @@ fi
 echo "$BC2_OUT" | grep -q "RR_TCP_OK" \
     && pass "backchannel receiver report arrives on the interleaved RTCP channel" \
     || fail "backchannel TCP receiver report" "no PT 201 frame seen"
+
+echo "$BC2_OUT" | grep -q "BYE_TCP_OK" \
+    && pass "backchannel leave compound (RR+SDES+BYE) precedes the TEARDOWN 200" \
+    || fail "backchannel TEARDOWN BYE" "$(echo "$BC2_OUT" | grep BYE_TCP || echo none)"
 
 # ── Backchannel over UDP: its own socket pair, actually read ──
 # Regression shape: the backchannel SETUP used to borrow the VIDEO

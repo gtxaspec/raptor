@@ -752,7 +752,7 @@ void rsd_server_run(rsd_server_t *srv)
 				continue;
 			uint8_t rr_buf[96];
 			ssize_t rr_len = Compy_RtpReceiver_write_rr(
-				rcv, (uint32_t)c->session_id ^ 0x52534452u, rr_now, "raptor-rsd",
+				rcv, RSD_BC_REPORTER_SSRC(c->session_id), rr_now, RSD_BC_CNAME,
 				rr_buf, sizeof(rr_buf));
 			if (rr_len <= 0)
 				continue; /* nothing received yet */
