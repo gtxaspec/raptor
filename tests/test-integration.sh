@@ -1369,8 +1369,21 @@ while time.time() < deadline:
     if not d:
         break
     got += d
+    # The socket multiplexes video frames with the RTCP channel, so a
+    # \x24\x05 byte pair can occur INSIDE video payload. Walk every
+    # candidate and demand it actually look like RTCP (version bits +
+    # sane frame length) -- a single find() sticks on the first false
+    # positive forever and never examines the real report behind it.
+    found = False
     i = got.find(b"\x24\x05")
-    if i >= 0 and len(got) >= i + 6 and got[i + 5] == 201:
+    while i >= 0:
+        if len(got) >= i + 6:
+            flen = (got[i + 2] << 8) | got[i + 3]
+            if got[i + 5] == 201 and (got[i + 4] & 0xC0) == 0x80 and 8 <= flen <= 512:
+                found = True
+                break
+        i = got.find(b"\x24\x05", i + 1)
+    if found:
         print("RR_TCP_OK")
         break
 
