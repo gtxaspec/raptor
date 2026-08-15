@@ -869,8 +869,18 @@ static void *webtorrent_thread(void *arg)
 			if (n == 0)
 				continue; /* timeout */
 
-			if (strstr(buf, "\"offer\":"))
-				handle_tracker_offer(wt, &tls, buf);
+			/* The tracker multiplexes chatter (announce intervals,
+			 * stats) with viewer offers on one socket; only a
+			 * parsed "offer" member is worth the handler. A
+			 * substring probe would tie the decision to an
+			 * external peer's JSON formatting. */
+			cJSON *msg = cJSON_Parse(buf);
+			if (msg) {
+				bool has_offer = cJSON_GetObjectItem(msg, "offer") != NULL;
+				cJSON_Delete(msg);
+				if (has_offer)
+					handle_tracker_offer(wt, &tls, buf);
+			}
 		}
 
 		wt_tls_close(&tls);
