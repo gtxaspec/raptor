@@ -1,0 +1,13 @@
+#!/bin/bash
+# Conformity commit-msg: this project's history carries no trailers --
+# no Signed-off-by, no co-authors, no review tags. Commit messages
+# say what and why; attribution is the author field.
+set -u
+. "$(dirname "$0")/lib.sh"
+conf_has trailers || exit 0
+
+if HITS=$(/usr/bin/grep -nE "$CONF_TRAILER_PATTERN" "$1"); then
+    echo "$HITS" >&2
+    conf_fail "trailer lines in the commit message -- drop them"
+fi
+exit 0

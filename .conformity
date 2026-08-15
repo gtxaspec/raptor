@@ -1,0 +1,4 @@
+format json-gate trailers
+# Conformity policy for this repo -- checks run by the shared git
+# hooks engine in raptor/tools/conformity (see its README).
+# Activate once per clone: git config core.hooksPath tools/conformity/hooks

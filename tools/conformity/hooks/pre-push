@@ -1,0 +1,63 @@
+#!/bin/bash
+# Conformity pre-push: the outgoing RANGE gets exactly the checks CI
+# will run, so a push that passes here cannot fail those gates. This
+# is the check that would have caught the classic slip: a local
+# format check against an intermediate HEAD passing while the
+# push-range diff was dirty.
+set -u
+. "$(dirname "$0")/lib.sh"
+[ -n "$CONF_TOKENS" ] || exit 0
+cd "$CONF_TOP" || exit 0
+
+ZERO=0000000000000000000000000000000000000000
+
+while read -r _lref lsha _rref rsha; do
+    [ -n "${lsha:-}" ] || continue
+    [ "$lsha" = "$ZERO" ] && continue # deleting a remote ref
+    if [ "$rsha" = "$ZERO" ]; then
+        # New remote branch: diff against where it forked from what
+        # the remote already has; if that cannot be determined, let
+        # CI be the judge rather than guessing a base.
+        rsha=$(git merge-base "$lsha" origin/HEAD 2>/dev/null) || continue
+        [ -n "$rsha" ] || continue
+    fi
+
+    if conf_has format && conf_have_clang_format; then
+        if ! OUT=$(git-clang-format-19 --binary "$(command -v clang-format-19)" \
+            --extensions c,h,cpp,hpp --diff "$rsha" "$lsha" -- . \
+            "${CONF_FMT_EXCLUDES[@]}" 2>&1); then
+            printf '%s\n' "$OUT" >&2
+            conf_fail "outgoing range $rsha..$lsha is not clang-format clean"
+        fi
+    fi
+
+    CHANGED=$(git diff --name-only --diff-filter=ACMR "$rsha" "$lsha")
+
+    if conf_has json-gate && [ -n "$CHANGED" ]; then
+        # shellcheck disable=SC2086
+        if ! "$CONF_JSON_GATE" --files $CHANGED; then
+            conf_fail "hand-written JSON in outgoing range $rsha..$lsha"
+        fi
+    fi
+
+    if conf_has ips && [ -n "$CHANGED" ]; then
+        # Only files that still exist at the pushed tip.
+        EXISTING=""
+        for f in $CHANGED; do
+            [ -e "$f" ] && EXISTING="$EXISTING $f"
+        done
+        # shellcheck disable=SC2086
+        conf_ip_scan $EXISTING
+    fi
+
+    if conf_has trailers; then
+        BAD=$(git log --format='%h %s%n%b' "$rsha..$lsha" |
+            /usr/bin/grep -nE "$CONF_TRAILER_PATTERN" || true)
+        if [ -n "$BAD" ]; then
+            echo "$BAD" >&2
+            conf_fail "trailer lines in outgoing commit messages"
+        fi
+    fi
+done
+
+exit 0

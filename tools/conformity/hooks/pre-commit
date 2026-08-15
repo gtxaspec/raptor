@@ -1,0 +1,39 @@
+#!/bin/bash
+# Conformity pre-commit: staged-diff checks declared by the repo's
+# .conformity manifest. Sub-second by design -- anything slower
+# belongs in pre-push or CI.
+set -u
+. "$(dirname "$0")/lib.sh"
+[ -n "$CONF_TOKENS" ] || exit 0
+cd "$CONF_TOP" || exit 0
+
+if conf_has format; then
+    if ! git rev-parse -q --verify HEAD > /dev/null 2>&1; then
+        # Initial commit: git-clang-format has no base to diff against.
+        echo "conformity: no HEAD yet; format check skipped (CI still gates)" >&2
+    elif conf_have_clang_format; then
+        if ! OUT=$(git-clang-format-19 --binary "$(command -v clang-format-19)" \
+            --extensions c,h,cpp,hpp --diff --staged -- . "${CONF_FMT_EXCLUDES[@]}" 2>&1); then
+            printf '%s\n' "$OUT" >&2
+            conf_fail "staged lines are not clang-format clean"
+        fi
+    else
+        echo "conformity: clang-format-19 not found; format check skipped (CI still gates)" >&2
+    fi
+fi
+
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR)
+
+if conf_has json-gate && [ -n "$STAGED" ]; then
+    # shellcheck disable=SC2086
+    if ! "$CONF_JSON_GATE" --files $STAGED; then
+        conf_fail "hand-written JSON in staged C files"
+    fi
+fi
+
+if conf_has ips && [ -n "$STAGED" ]; then
+    # shellcheck disable=SC2086
+    conf_ip_scan $STAGED
+fi
+
+exit 0
