@@ -800,6 +800,8 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 		Compy_BackchannelConfig bc_cfg = {.payload_type = 0, .clock_rate = 8000};
 		rsd_bc_recv_t *recv = calloc(1, sizeof(rsd_bc_recv_t));
 		if (!recv) {
+			VCALL_SUPER(rtp_t, Compy_Droppable, drop);
+			VCALL_SUPER(rtcp_t, Compy_Droppable, drop);
 			compy_respond_internal_error(ctx);
 			return;
 		}

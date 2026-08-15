@@ -277,7 +277,12 @@ static void bc_aac_decode_au(rsd_bc_dec_t *d, rss_ring_t *ring, const uint8_t *a
 		}
 	}
 
-	int16_t pcm[AAC_MAX_NSAMPS * AAC_MAX_NCHANS];
+	/* Helix is built with SBR, and raw-block params do not stop a
+	 * hostile AU from carrying a CPE or an SBR extension: it decodes
+	 * what the bitstream says, up to 2048 samples per channel. The
+	 * buffer covers that worst case; conforming input (LC mono per
+	 * our fmtp) uses a quarter of it. */
+	int16_t pcm[AAC_MAX_NSAMPS * AAC_MAX_NCHANS * 2];
 	unsigned char *inp = (unsigned char *)au;
 	int left = (int)au_len;
 	int err = AACDecode((HAACDecoder)d->aac, &inp, &left, pcm);
