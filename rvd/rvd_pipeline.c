@@ -90,8 +90,13 @@ void rvd_stream_publish_info(rvd_state_t *st, int idx)
 					 RSS_CODEC_JPEG, s->enc_cfg.width, s->enc_cfg.height,
 					 s->enc_cfg.fps_num, s->enc_cfg.fps_den, 0, 0);
 	} else {
+		/* A sensor-rate override reflects the ACTUAL rate into the ring
+		 * header; rsd already tracks in-place header rate changes for
+		 * a=framerate and pacing, so downstream follows automatically. */
+		uint32_t fn = s->active_fps_num ? s->active_fps_num : s->enc_cfg.fps_num;
+		uint32_t fd = s->active_fps_num ? s->active_fps_den : s->enc_cfg.fps_den;
 		rss_ring_set_stream_info(s->ring, idx, s->enc_cfg.codec, s->enc_cfg.width,
-					 s->enc_cfg.height, s->enc_cfg.fps_num, s->enc_cfg.fps_den,
+					 s->enc_cfg.height, fn, fd,
 					 rvd_profile_idc(s->enc_cfg.profile),
 					 rvd_level_idc(s->enc_cfg.width, s->enc_cfg.height));
 	}
@@ -785,6 +790,22 @@ int rvd_pipeline_init(rvd_state_t *st)
 				RSS_WARN("could not determine sensor resolution");
 			}
 		}
+	}
+
+	/* Baseline sensor rate — the restore target for the transient
+	 * set-sensor-fps override. Queried here because the tuning API is
+	 * only answerable once the ISP is up. A backend without the getter
+	 * reports 0/0 and the override verb degrades to explicit rates. */
+	st->sensor_base_fps_num = 0;
+	st->sensor_base_fps_den = 0;
+	if (RSS_HAL_CALL(st->ops, isp_get_sensor_fps, st->hal_ctx, &st->sensor_base_fps_num,
+			 &st->sensor_base_fps_den) == 0 &&
+	    st->sensor_base_fps_num > 0 && st->sensor_base_fps_den > 0) {
+		RSS_INFO("sensor rate: %u/%u fps", st->sensor_base_fps_num,
+			 st->sensor_base_fps_den);
+	} else {
+		st->sensor_base_fps_num = 0;
+		st->sensor_base_fps_den = 0;
 	}
 
 	/* Low latency: encoder releases frames immediately (saves 40-120ms) */

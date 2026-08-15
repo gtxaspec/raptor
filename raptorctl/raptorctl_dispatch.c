@@ -153,6 +153,10 @@ static const struct cmd_def cmd_table[] = {
 	{"set-bitrate", NULL, 2, args_ch_val},
 	{"set-gop", NULL, 2, args_ch_val},
 	{"set-fps", NULL, 2, args_ch_val},
+
+	/* Sensor rate: transient override, whole pipeline (0 = base) */
+	{"set-sensor-fps", NULL, 1, args_val},
+	{"get-sensor-fps", NULL, 0, args_none},
 	{"timelapse-set", NULL, 2, args_key_val},
 	{"set-h264-trans", NULL, 2, args_ch_val},
 

@@ -28,6 +28,8 @@ const struct help_entry help_entries[] = {
 	{"rvd", "set-bitrate <ch> <bps>              Change bitrate"},
 	{"rvd", "set-gop <ch> <length>               Change GOP length"},
 	{"rvd", "set-fps <ch> <fps>                  Change frame rate"},
+	{"rvd", "set-sensor-fps <fps>                Sensor rate override, 0=base (transient)"},
+	{"rvd", "get-sensor-fps                      Show sensor rate and boot base"},
 	{"rvd", "set-qp-bounds <ch> <min> <max>      Change QP range"},
 	{"rvd", "set-qp-bounds-per-frame <ch> ...    Per-frame QP (iMin iMax pMin pMax)"},
 	{"rvd", "set-max-pic-size <ch> <iK> <pK>     Max I/P frame size (kbits)"},

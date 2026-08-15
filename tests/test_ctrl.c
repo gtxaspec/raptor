@@ -487,6 +487,134 @@ TEST set_fps_no_publish_on_hal_failure(void)
 	PASS();
 }
 
+/* ══════════════════════════════════════════════════════════════════
+ *  set-sensor-fps: transient whole-pipeline rate override
+ * ══════════════════════════════════════════════════════════════════ */
+
+static void sensor_fps_setup(void)
+{
+	setup();
+	st.streams[0].enabled = true;
+	st.streams[1].enabled = true;
+	st.streams[2].enabled = true; /* jpeg — must be skipped */
+	st.sensor_base_fps_num = 25;
+	st.sensor_base_fps_den = 1;
+}
+
+/* Sensor drops below both streams: each follows, GOP holds its seconds
+ * (stream1: 30 frames @ 15fps = 2s -> 24 frames @ 12fps), and neither
+ * enc_cfg nor the config learns anything -- the override is transient. */
+TEST sensor_fps_applies_min_rule_and_rescales_gop(void)
+{
+	sensor_fps_setup();
+	call("{\"cmd\":\"set-sensor-fps\",\"value\":12}");
+	ASSERT(strstr(resp, "\"status\":\"ok\"") != NULL);
+	/* last enc calls were stream1 (chn 3): jpeg was skipped */
+	ASSERT_EQ_FMT(3, rec.last_chn, "%d");
+	ASSERT_EQ(12, (int)rec.set_fps_num);
+	ASSERT_EQ(1, (int)rec.set_fps_den);
+	ASSERT_EQ(24, (int)rec.set_gop);
+	ASSERT_EQ(12, (int)st.streams[0].active_fps_num);
+	ASSERT_EQ(12, (int)st.streams[1].active_fps_num);
+	/* configured truth untouched, nothing dirty */
+	ASSERT_EQ(25, (int)st.streams[0].enc_cfg.fps_num);
+	ASSERT_EQ(15, (int)st.streams[1].enc_cfg.fps_num);
+	ASSERT_EQ(50, (int)st.streams[0].enc_cfg.gop_length);
+	ASSERT(!rss_config_has_dirty(st.cfg));
+	ASSERT_EQ(0, rss_config_get_int(st.cfg, "stream0", "fps", 0));
+	/* both video streams republished their ring headers */
+	ASSERT_EQ_FMT(2, rec.publish_count, "%d");
+	teardown();
+	PASS();
+}
+
+/* A substream configured slower than the sensor keeps its own rate. */
+TEST sensor_fps_decimated_substream_keeps_rate(void)
+{
+	sensor_fps_setup();
+	call("{\"cmd\":\"set-sensor-fps\",\"value\":20}");
+	ASSERT(strstr(resp, "\"status\":\"ok\"") != NULL);
+	ASSERT_EQ(20, (int)st.streams[0].active_fps_num);
+	/* stream1 not limited: override cleared, its own 15/30 re-applied */
+	ASSERT_EQ(0, (int)st.streams[1].active_fps_num);
+	ASSERT_EQ(15, (int)rec.set_fps_num);
+	ASSERT_EQ(30, (int)rec.set_gop);
+	teardown();
+	PASS();
+}
+
+/* value 0 = restore the boot base exactly; every stream lands back on
+ * its configured numbers and the overrides clear. */
+TEST sensor_fps_zero_restores_base(void)
+{
+	sensor_fps_setup();
+	call("{\"cmd\":\"set-sensor-fps\",\"value\":12}");
+	ASSERT_EQ(12, (int)st.streams[0].active_fps_num);
+	call("{\"cmd\":\"set-sensor-fps\",\"value\":0}");
+	ASSERT(strstr(resp, "\"status\":\"ok\"") != NULL);
+	ASSERT(strstr(resp, "\"fps_num\":25") != NULL);
+	ASSERT_EQ(0, (int)st.streams[0].active_fps_num);
+	ASSERT_EQ(0, (int)st.streams[1].active_fps_num);
+	ASSERT_EQ(30, (int)rec.set_gop); /* stream1 gop restored */
+	teardown();
+	PASS();
+}
+
+/* No baseline (backend can't report) -> restore is refused, loudly. */
+TEST sensor_fps_zero_without_base_errors(void)
+{
+	sensor_fps_setup();
+	st.sensor_base_fps_num = 0;
+	st.sensor_base_fps_den = 0;
+	call("{\"cmd\":\"set-sensor-fps\",\"value\":0}");
+	ASSERT(strstr(resp, "\"error\"") != NULL);
+	ASSERT_EQ_FMT(0, rec.call_count, "%d");
+	teardown();
+	PASS();
+}
+
+/* A driver that rejects the rate aborts the whole change: no encoder
+ * calls, no override marks, no republish -- nothing half-applied. */
+TEST sensor_fps_sensor_reject_aborts_everything(void)
+{
+	sensor_fps_setup();
+	setenv("RSS_MOCK_SENSOR_FPS_SET", "error", 1);
+	call("{\"cmd\":\"set-sensor-fps\",\"value\":12}");
+	unsetenv("RSS_MOCK_SENSOR_FPS_SET");
+	ASSERT(strstr(resp, "\"error\"") != NULL);
+	ASSERT_EQ_FMT(0, rec.call_count, "%d");
+	ASSERT_EQ(0, (int)st.streams[0].active_fps_num);
+	ASSERT_EQ_FMT(0, rec.publish_count, "%d");
+	teardown();
+	PASS();
+}
+
+/* An explicit user rate on a stream supersedes the transient override. */
+TEST set_fps_clears_active_override(void)
+{
+	sensor_fps_setup();
+	call("{\"cmd\":\"set-sensor-fps\",\"value\":12}");
+	ASSERT_EQ(12, (int)st.streams[0].active_fps_num);
+	call("{\"cmd\":\"set-fps\",\"channel\":0,\"value\":30}");
+	ASSERT_EQ(0, (int)st.streams[0].active_fps_num);
+	ASSERT_EQ(30, (int)st.streams[0].enc_cfg.fps_num);
+	teardown();
+	PASS();
+}
+
+/* get-sensor-fps reports the live rate beside the boot base. */
+TEST get_sensor_fps_reports_live_and_base(void)
+{
+	sensor_fps_setup();
+	setenv("RSS_MOCK_SENSOR_FPS_ACTUAL", "12", 1);
+	call("{\"cmd\":\"get-sensor-fps\"}");
+	unsetenv("RSS_MOCK_SENSOR_FPS_ACTUAL");
+	ASSERT(strstr(resp, "\"fps_num\":12") != NULL);
+	ASSERT(strstr(resp, "\"base_fps_num\":25") != NULL);
+	teardown();
+	PASS();
+}
+
 TEST set_qp_bounds_atomic_update(void)
 {
 	setup();
@@ -991,6 +1119,13 @@ SUITE(ctrl_suite)
 	RUN_TEST(set_fps_resets_a_fractional_den);
 	RUN_TEST(set_fps_publishes_the_channel_it_changed);
 	RUN_TEST(set_fps_no_publish_on_hal_failure);
+	RUN_TEST(sensor_fps_applies_min_rule_and_rescales_gop);
+	RUN_TEST(sensor_fps_decimated_substream_keeps_rate);
+	RUN_TEST(sensor_fps_zero_restores_base);
+	RUN_TEST(sensor_fps_zero_without_base_errors);
+	RUN_TEST(sensor_fps_sensor_reject_aborts_everything);
+	RUN_TEST(set_fps_clears_active_override);
+	RUN_TEST(get_sensor_fps_reports_live_and_base);
 	RUN_TEST(set_qp_bounds_atomic_update);
 	RUN_TEST(set_qp_bounds_neither_updated_on_failure);
 	RUN_TEST(set_rc_mode_stores_enum_not_string);

@@ -115,6 +115,13 @@ static void load_config(ric_state_t *st)
 
 	c->hysteresis_sec = cfg_clamp(
 		"hysteresis_sec", rss_config_get_int(cfg, "ircut", "hysteresis_sec", 5), 1, 300);
+
+	/* Night sensor rate: 0 = off (default). The clamp floor of 1 only
+	 * applies to enabled values; rvd validates the rate against the
+	 * driver, this only keeps nonsense out of the transition path. */
+	c->night_fps = rss_config_get_int(cfg, "ircut", "night_fps", 0);
+	if (c->night_fps != 0)
+		c->night_fps = cfg_clamp("night_fps", c->night_fps, 1, 120);
 	int default_poll = (c->trigger == RIC_TRIGGER_PHOTO) ? 100 : 1000;
 	c->poll_interval_ms = cfg_clamp(
 		"poll_interval_ms",
@@ -359,6 +366,26 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 							   "range 0-65535");
 			c->photo.bgain_rec = (uint16_t)val;
 			cfg_key = "photo_bgain_rec";
+		} else if (strcmp(key, "night_fps") == 0) {
+			if (val != 0 && (val < 1 || val > 120))
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+							   "range 0 (off) or 1-120");
+			/* Re-arm: the operator changing the knob is the
+			 * signal to try the backend again. */
+			st->night_fps_unusable = false;
+			/* Take effect now if the regime it governs is
+			 * active. Switching it off mid-night restores the
+			 * base rate before the knob forgets it was on. */
+			if (st->current_mode == RIC_MODE_NIGHT) {
+				if (val > 0) {
+					c->night_fps = val;
+					ric_apply_night_fps(st, RIC_MODE_NIGHT);
+				} else if (c->night_fps > 0) {
+					ric_apply_night_fps(st, RIC_MODE_DAY);
+				}
+			}
+			c->night_fps = val;
+			cfg_key = "night_fps";
 		} else {
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "unknown key");
 		}
@@ -388,6 +415,7 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		cJSON_AddNumberToObject(r, "day_threshold", c->day_threshold);
 		cJSON_AddNumberToObject(r, "hysteresis_sec", c->hysteresis_sec);
 		cJSON_AddNumberToObject(r, "poll_interval_ms", c->poll_interval_ms);
+		cJSON_AddNumberToObject(r, "night_fps", c->night_fps);
 		cJSON_AddNumberToObject(r, "photo_ev_night", c->photo.ev_night);
 		cJSON_AddNumberToObject(r, "photo_ev_deep", c->photo.ev_deep);
 		cJSON_AddNumberToObject(r, "photo_ev_day", c->photo.ev_day);

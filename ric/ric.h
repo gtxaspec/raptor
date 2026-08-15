@@ -157,6 +157,16 @@ typedef struct {
 
 	int hysteresis_sec; /* consecutive seconds before switching */
 
+	/* Night sensor rate (0 = off). Dropping the sensor rate at night
+	 * raises the exposure ceiling -- frame period bounds integration
+	 * time -- so AE trades gain (noise) for photons. Applied through
+	 * rvd's transient set-sensor-fps: never persisted, restored on
+	 * day. The luma trigger is rate-safe by construction (its night
+	 * baselines are sampled inside the night regime); the legacy gain
+	 * trigger's absolute day_threshold must be calibrated with this
+	 * enabled, since night readings then live at the night rate. */
+	int night_fps;
+
 	/* Sample interval */
 	int poll_interval_ms;
 
@@ -221,6 +231,11 @@ typedef struct {
 	int rvd_fail_run;
 	bool rvd_fail_warned;
 
+	/* night_fps found unusable at runtime (rvd backend cannot report
+	 * or set the sensor rate); warned once, feature parked until
+	 * restart so the transition path stops hammering a dead verb */
+	bool night_fps_unusable;
+
 	/* One-shot diagnostics: a missing signal is worth saying once, and
 	 * saying every poll instead is how a log stops being read. */
 	bool no_exposure_warned;
@@ -238,6 +253,7 @@ void ric_gpio_init(ric_state_t *st);
 void ric_set_mode(ric_state_t *st, ric_mode_t mode);
 void ric_force_mode(ric_state_t *st, ric_mode_t mode);
 void ric_set_isp_mode(ric_mode_t mode);
+void ric_apply_night_fps(ric_state_t *st, ric_mode_t mode);
 int ric_ircut_drive(ric_state_t *st, ric_mode_t pos);
 int ric_irled_drive(ric_state_t *st, bool bank940, bool on);
 void ric_poll_exposure(ric_state_t *st);

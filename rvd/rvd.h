@@ -109,6 +109,11 @@ typedef struct {
 	int64_t pulse_next_us;	    /* jpeg_pulse: earliest next RecvPic start */
 	uintptr_t enc_buf_addrs[8]; /* refmode: unique virAddr bases seen */
 	uint8_t enc_buf_count;	    /* refmode: number of unique buffers discovered */
+	uint32_t active_fps_num;    /* sensor-rate override in effect (0 = follow
+				     * enc_cfg). Transient: set-sensor-fps only,
+				     * never persisted, so the configured rate in
+				     * enc_cfg/config stays the camera's truth. */
+	uint32_t active_fps_den;
 } rvd_stream_t;
 
 /* Per-OSD-region state (dynamic, name-based) */
@@ -143,6 +148,11 @@ struct rvd_state {
 
 	/* Sensors */
 	int sensor_count;
+
+	/* Sensor frame rate at pipeline init — the restore target for the
+	 * transient set-sensor-fps override (0/0 = backend can't report). */
+	uint32_t sensor_base_fps_num;
+	uint32_t sensor_base_fps_den;
 
 	/* Streams */
 	rvd_stream_t streams[RVD_MAX_STREAMS];

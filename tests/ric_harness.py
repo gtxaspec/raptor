@@ -143,6 +143,8 @@ class StubRvd:
     def __init__(self):
         self.scene = {}
         self.modes = []  # (monotonic, "day"|"night")
+        self.fps_calls = []  # (monotonic, int value) from set-sensor-fps
+        self.fps_error = False  # answer set-sensor-fps with an error
         self.lock = threading.Lock()
         self.path = RUN_DIR + "/rvd.sock"
         self._bind()
@@ -179,6 +181,14 @@ class StubRvd:
         with self.lock:
             return [m for _, m in self.modes[mark:]]
 
+    def fps_mark(self):
+        with self.lock:
+            return len(self.fps_calls)
+
+    def fps_since(self, mark):
+        with self.lock:
+            return [v for _, v in self.fps_calls[mark:]]
+
     def _loop(self):
         srv = self.srv
         while True:
@@ -207,6 +217,21 @@ class StubRvd:
                     with self.lock:
                         self.modes.append((time.monotonic(), val))
                     resp = {"status": "ok", "mode": val}
+                elif cmd == "set-sensor-fps":
+                    val = json.loads(req).get("value", -1)
+                    with self.lock:
+                        err = self.fps_error
+                        if not err:
+                            self.fps_calls.append((time.monotonic(), val))
+                    if err:
+                        resp = {"status": "error",
+                                "reason": "not supported on this SoC"}
+                    else:
+                        resp = {"status": "ok", "fps_num": val or 25,
+                                "fps_den": 1, "streams": []}
+                elif cmd == "get-sensor-fps":
+                    resp = {"status": "ok", "fps_num": 25, "fps_den": 1,
+                            "base_fps_num": 25, "base_fps_den": 1}
                 else:
                     resp = {"status": "ok"}
                 send_msg(conn, json.dumps(resp).encode())
@@ -1794,6 +1819,101 @@ def scenario_rvd_lost(stub, watch):
     ric.stop()
 
 
+def scenario_night_fps(stub, watch):
+    """Optional night sensor rate. Policy lives in ric: entering night
+    sends rvd set-sensor-fps <night_fps>, entering day restores with 0,
+    startup restores too (heals a ric restart mid-night), the recovery
+    re-assert re-applies after an rvd restart, the runtime knob takes
+    effect in the regime it governs, and a backend that answers with an
+    error parks the feature for the run instead of hammering it."""
+    conf = LUMA_CONF + "night_fps = 12\n"
+    stub.set_scene(luma=120, gain=500, ev=4000)
+    fm = stub.fps_mark()
+    ric = Ric("nightfps", conf)
+    if not ric.wait_running():
+        result(False, "night-fps: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    # Startup forces day, which restores the base rate: a ric that
+    # died mid-night must not leave the sensor slow forever.
+    ok = wait_for(lambda: 0 in stub.fps_since(fm), 5)
+    result(ok, "night-fps: startup restores the base rate",
+           str(stub.fps_since(fm)))
+
+    fm = stub.fps_mark()
+    stub.set_scene(luma=5, gain=20000, ev=100000)
+    ok = wait_for(lambda: 12 in stub.fps_since(fm), 6)
+    result(ok, "night-fps: night entry applies the configured rate",
+           str(stub.fps_since(fm)))
+
+    # Wait out cooldown + settle so the baseline lands before dawn.
+    time.sleep((3 + 2) * POLL_MS / 1000.0)
+    fm = stub.fps_mark()
+    stub.set_scene(luma=120, gain=500, ev=4000)
+    ok = wait_for(lambda: 0 in stub.fps_since(fm), 8)
+    result(ok, "night-fps: day return restores the base rate",
+           str(stub.fps_since(fm)))
+
+    # Back to night, then an rvd restart: the recovery re-assert must
+    # re-apply the night rate -- a restarted rvd is at its boot rate.
+    fm = stub.fps_mark()
+    stub.set_scene(luma=5, gain=20000, ev=100000)
+    if not wait_for(lambda: 12 in stub.fps_since(fm), 6):
+        result(False, "night-fps: night re-entry", str(stub.fps_since(fm)))
+        ric.stop()
+        return
+    fm = stub.fps_mark()
+    stub.pause()
+    time.sleep(3)
+    stub.resume()
+    ok = wait_for(lambda: 12 in stub.fps_since(fm), 6)
+    result(ok, "night-fps: recovery re-asserts the night rate",
+           str(stub.fps_since(fm)))
+
+    # Runtime knob, active regime: a new rate applies now; switching it
+    # off mid-night restores the base rate before the knob forgets.
+    fm = stub.fps_mark()
+    ctrl_cmd(RUN_DIR + "/ric.sock",
+             {"cmd": "set-threshold", "key": "night_fps", "value": 15})
+    ok = wait_for(lambda: 15 in stub.fps_since(fm), 4)
+    result(ok, "night-fps: runtime change applies mid-night",
+           str(stub.fps_since(fm)))
+    fm = stub.fps_mark()
+    ctrl_cmd(RUN_DIR + "/ric.sock",
+             {"cmd": "set-threshold", "key": "night_fps", "value": 0})
+    ok = wait_for(lambda: 0 in stub.fps_since(fm), 4)
+    result(ok, "night-fps: switching off mid-night restores the base",
+           str(stub.fps_since(fm)))
+    # Off means off: the next transition moves no sensor rate.
+    time.sleep((3 + 2) * POLL_MS / 1000.0)
+    fm, mm = stub.fps_mark(), stub.mark()
+    stub.set_scene(luma=120, gain=500, ev=4000)
+    wait_for(lambda: "day" in stub.modes_since(mm), 8)
+    time.sleep(0.5)
+    result(stub.fps_since(fm) == [],
+           "night-fps: disabled sends no rate commands",
+           str(stub.fps_since(fm)))
+
+    # A backend that cannot do rates: the error answer parks the
+    # feature for the run, warned once, and stops the traffic.
+    stub.fps_error = True
+    ctrl_cmd(RUN_DIR + "/ric.sock",
+             {"cmd": "set-threshold", "key": "night_fps", "value": 12})
+    stub.set_scene(luma=5, gain=20000, ev=100000)
+    ok = wait_for(lambda: "night_fps disabled" in ric.read_log(), 8)
+    result(ok, "night-fps: an unsupported backend parks the feature",
+           ric.read_log()[-300:])
+    stub.fps_error = False
+    fm = stub.fps_mark()
+    time.sleep((3 + 2) * POLL_MS / 1000.0)
+    stub.set_scene(luma=120, gain=500, ev=4000)
+    time.sleep(2)
+    result(stub.fps_since(fm) == [],
+           "night-fps: parked means no further attempts",
+           str(stub.fps_since(fm)))
+    ric.stop()
+
+
 def scenario_photo_interference(stub, watch):
     """After a ratio-path day trigger the photo machine watches for a
     false day. A rise in ev (darker again) past the interference band
@@ -2117,6 +2237,7 @@ def main():
         scenario_adc,
         scenario_adc_dead,
         scenario_rvd_lost,
+        scenario_night_fps,
         scenario_default_topologies,
         scenario_gpio_failure,
         scenario_disabled,

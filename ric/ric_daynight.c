@@ -162,8 +162,10 @@ static void rvd_note_good_query(ric_state_t *st)
 		 * wrong colors under lit IR until the next transition --
 		 * potentially all night. Re-assert the current mode on
 		 * every recovery; the call is idempotent and recoveries
-		 * are rare. */
+		 * are rare. The night sensor rate rides along for the same
+		 * reason: a restarted rvd is back at its boot rate. */
 		ric_set_isp_mode(st->current_mode);
+		ric_apply_night_fps(st, st->current_mode);
 	}
 	st->rvd_fail_run = 0;
 	st->rvd_fail_warned = false;
@@ -333,6 +335,48 @@ static void ric_set_gpio(ric_state_t *st, ric_mode_t mode)
 }
 
 /*
+ * Optional night sensor rate: entering night applies the configured
+ * rate, entering day restores rvd's boot baseline (value 0). Policy
+ * lives here -- WHEN and TO WHAT -- while rvd's transient
+ * set-sensor-fps knows HOW to move sensor timing, encoder rate
+ * control and GOP together without persisting anything. An
+ * unreachable rvd is transient (the recovery re-assert retries); an
+ * error answer means the backend cannot do rates at all, which is
+ * permanent for this boot: warn once and park the feature.
+ */
+void ric_apply_night_fps(ric_state_t *st, ric_mode_t mode)
+{
+	if (st->settings.night_fps <= 0 || st->night_fps_unusable)
+		return;
+	int value = (mode == RIC_MODE_NIGHT) ? st->settings.night_fps : 0;
+	char cmd[64];
+	snprintf(cmd, sizeof(cmd), "{\"cmd\":\"set-sensor-fps\",\"value\":%d}", value);
+	char resp[512];
+	int ret = rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", cmd, resp, sizeof(resp), 2000);
+	if (ret < 0) {
+		RSS_WARN("sensor rate %d not applied (rvd unreachable) -- retried on the "
+			 "next recovery or transition",
+			 value ? value : -1);
+		return;
+	}
+	cJSON *parsed = cJSON_Parse(resp);
+	const cJSON *status = parsed ? cJSON_GetObjectItem(parsed, "status") : NULL;
+	bool ok = cJSON_IsString(status) && strcmp(status->valuestring, "ok") == 0;
+	cJSON_Delete(parsed);
+	if (!ok) {
+		st->night_fps_unusable = true;
+		RSS_WARN("night_fps disabled for this run: rvd cannot set the sensor rate "
+			 "(%.100s)",
+			 resp);
+		return;
+	}
+	if (value)
+		RSS_INFO("night sensor rate %d fps applied", value);
+	else
+		RSS_INFO("day sensor rate restored");
+}
+
+/*
  * A forced mode (raptorctl ric mode day|night) is an explicit hardware
  * assertion, not a state-machine hint. Bench verbs (ircut/ir850/ir940)
  * move rails without touching current_mode, so a force that matches the
@@ -345,6 +389,7 @@ void ric_force_mode(ric_state_t *st, ric_mode_t mode)
 	if (mode == st->current_mode) {
 		ric_set_gpio(st, mode);
 		ric_set_isp_mode(mode);
+		ric_apply_night_fps(st, mode);
 		return;
 	}
 	ric_set_mode(st, mode);
@@ -357,6 +402,7 @@ void ric_set_mode(ric_state_t *st, ric_mode_t mode)
 
 	ric_set_gpio(st, mode);
 	ric_set_isp_mode(mode);
+	ric_apply_night_fps(st, mode);
 	RSS_INFO("switched to %s mode", mode == RIC_MODE_NIGHT ? "NIGHT" : "DAY");
 
 	st->current_mode = mode;
