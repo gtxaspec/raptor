@@ -95,7 +95,7 @@ static void rsd_client_t_options(VSelf, Compy_Context *ctx, const Compy_Request 
 	(void)req;
 
 	compy_header(ctx, COMPY_HEADER_PUBLIC,
-		     "DESCRIBE, SETUP, PLAY, PAUSE, TEARDOWN, GET_PARAMETER");
+		     "DESCRIBE, SETUP, PLAY, PAUSE, TEARDOWN, GET_PARAMETER, SET_PARAMETER");
 	compy_respond_ok(ctx);
 }
 
@@ -1056,7 +1056,21 @@ static void rsd_client_t_unknown(VSelf, Compy_Context *ctx, const Compy_Request 
 {
 	VSELF(rsd_client_t);
 	(void)self;
-	(void)req;
+
+	/* SET_PARAMETER with no body is the standard keepalive; answer it
+	 * 200 like GET_PARAMETER, because a 501 here makes strict clients
+	 * drop the whole session. Actual parameters are another matter:
+	 * none are understood, and RFC 2326 §10.9 wants 451 for that, not
+	 * a silent 200 pretending they applied. */
+	Compy_Method set_parameter = COMPY_METHOD_SET_PARAMETER;
+	if (Compy_Method_eq(&req->start_line.method, &set_parameter)) {
+		if (CharSlice99_is_empty(req->body))
+			compy_respond_ok(ctx);
+		else
+			compy_respond(ctx, COMPY_STATUS_PARAMETER_NOT_UNDERSTOOD,
+				      "Parameter Not Understood");
+		return;
+	}
 
 	compy_respond(ctx, COMPY_STATUS_NOT_IMPLEMENTED, "Not implemented");
 }
@@ -1064,11 +1078,73 @@ static void rsd_client_t_unknown(VSelf, Compy_Context *ctx, const Compy_Request 
 static Compy_ControlFlow rsd_client_t_before(VSelf, Compy_Context *ctx, const Compy_Request *req)
 {
 	VSELF(rsd_client_t);
-	(void)self;
 
 	if (self->srv->auth) {
 		if (compy_auth_check(self->srv->auth, ctx, req) != 0)
 			return Compy_ControlFlow_Break;
+	}
+
+	/* RFC 2326 §12.32: a request whose Require names a feature this
+	 * server cannot honor MUST draw 551 with the unsupported tags in
+	 * an Unsupported header -- silently proceeding tells the client
+	 * its required feature is in effect when it is not. The only tag
+	 * honored here is the ONVIF backchannel, and only while the
+	 * config enables it (an ONVIF client answered 551 re-DESCRIBEs
+	 * without the tag, which is the documented fallback). */
+	CharSlice99 req_tags;
+	if (Compy_HeaderMap_find(&req->header_map, COMPY_HEADER_REQUIRE, &req_tags)) {
+		bool bc_on = rss_config_get_bool(self->srv->cfg, "rtsp", "backchannel", false);
+		bool have_unsup = false;
+		CharSlice99 first_unsup = CharSlice99_from_str("");
+		char unsup[256];
+		size_t un = 0;
+		size_t i = 0;
+		while (i < req_tags.len) {
+			while (i < req_tags.len &&
+			       (req_tags.ptr[i] == ' ' || req_tags.ptr[i] == '\t' ||
+				req_tags.ptr[i] == ','))
+				i++;
+			size_t start = i;
+			while (i < req_tags.len && req_tags.ptr[i] != ',')
+				i++;
+			size_t end = i;
+			while (end > start &&
+			       (req_tags.ptr[end - 1] == ' ' || req_tags.ptr[end - 1] == '\t'))
+				end--;
+			if (end == start)
+				continue;
+			CharSlice99 tag = CharSlice99_new(req_tags.ptr + start, end - start);
+			if (bc_on && CharSlice99_primitive_eq(tag, COMPY_REQUIRE_ONVIF_BACKCHANNEL))
+				continue;
+			if (!have_unsup) {
+				have_unsup = true;
+				first_unsup = tag;
+			}
+			/* Append only whole tags: a partial copy would put a
+			 * tag on the wire that the client never sent, and the
+			 * slice length must never exceed what was written. */
+			size_t sep = (un > 0) ? 2 : 0;
+			if (sep + tag.len <= sizeof(unsup) - un) {
+				if (sep) {
+					unsup[un] = ',';
+					unsup[un + 1] = ' ';
+				}
+				memcpy(unsup + un + sep, tag.ptr, tag.len);
+				un += sep + tag.len;
+			}
+		}
+		if (have_unsup) {
+			if (un == 0) {
+				/* Every unsupported tag was longer than the
+				 * buffer; name a prefix of the first rather
+				 * than sending an empty Unsupported header. */
+				un = first_unsup.len < sizeof(unsup) ? first_unsup.len
+								     : sizeof(unsup);
+				memcpy(unsup, first_unsup.ptr, un);
+			}
+			compy_respond_option_not_supported(ctx, CharSlice99_new(unsup, un));
+			return Compy_ControlFlow_Break;
+		}
 	}
 
 	return Compy_ControlFlow_Continue;

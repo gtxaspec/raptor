@@ -1531,6 +1531,117 @@ fi
 check_contains "codec selection restores to the full offer" '"backchannel_codecs":"pcmu,pcma,opus,aac,l16"' \
     "$OUT/raptorctl" rsd set-backchannel-codecs ""
 
+# ── RTSP option negotiation and SET_PARAMETER conformance ──
+# RFC 2326 §12.32: a Require tag the server cannot honor draws 551
+# naming the tags in Unsupported; §10.9: SET_PARAMETER with no body is
+# the standard keepalive, and parameters nobody understands draw 451.
+# The body case doubles as a framing check: its bytes must not desync
+# the connection for the request behind it.
+CONF_OUT=$(python3 - <<'CONF_EOF'
+import socket
+
+def txn(reqs):
+    s = socket.create_connection(("127.0.0.1", 15554), timeout=5)
+    out, buf = [], b""
+    for r in reqs:
+        s.sendall(r.encode())
+        while b"\r\n\r\n" not in buf:
+            d = s.recv(4096)
+            if not d:
+                break
+            buf += d
+        head, _, buf = buf.partition(b"\r\n\r\n")
+        out.append(head.decode(errors="replace"))
+    s.close()
+    return out
+
+base = "rtsp://127.0.0.1:15554/stream0"
+
+r = txn([f"DESCRIBE {base} RTSP/1.0\r\nCSeq: 1\r\n"
+         f"Require: org.example.fancy\r\n\r\n"])[0]
+print("R551=" + ("yes" if " 551 " in r.splitlines()[0]
+                 and "org.example.fancy" in r else "no"))
+
+r = txn([f"DESCRIBE {base} RTSP/1.0\r\nCSeq: 1\r\n"
+         f"Require: www.onvif.org/ver20/backchannel, org.example.fancy\r\n\r\n"])[0]
+uns = next((l for l in r.splitlines()
+            if l.lower().startswith("unsupported:")), "")
+print("RMIX=" + ("yes" if " 551 " in r.splitlines()[0]
+                 and "org.example.fancy" in uns
+                 and "backchannel" not in uns else "no"))
+
+r = txn([f"DESCRIBE {base} RTSP/1.0\r\nCSeq: 1\r\nAccept: application/sdp\r\n"
+         f"Require: www.onvif.org/ver20/backchannel\r\n\r\n"])[0]
+print("ROK=" + ("yes" if " 200 " in r.splitlines()[0] else "no"))
+
+body = "p: v\r\n"
+rs = txn([
+    f"SET_PARAMETER {base} RTSP/1.0\r\nCSeq: 2\r\n\r\n",
+    f"SET_PARAMETER {base} RTSP/1.0\r\nCSeq: 3\r\n"
+    f"Content-Type: text/parameters\r\n"
+    f"Content-Length: {len(body)}\r\n\r\n{body}",
+    f"OPTIONS {base} RTSP/1.0\r\nCSeq: 4\r\n\r\n",
+])
+print("SPKEEP=" + ("yes" if len(rs) > 0 and " 200 " in rs[0].splitlines()[0] else "no"))
+print("SP451=" + ("yes" if len(rs) > 1 and " 451 " in rs[1].splitlines()[0] else "no"))
+print("SPBODY=" + ("yes" if len(rs) > 2 and " 200 " in rs[2].splitlines()[0]
+                   and "CSeq: 4" in rs[2] else "no"))
+
+# A Require list longer than the server's Unsupported scratch buffer:
+# the 551 must carry only whole tags the client actually sent (never
+# a length that outruns what was written), and the connection must
+# stay usable for the request behind it.
+tags = ["org.example.longlist%02d" % n for n in range(40)]
+rs = txn([f"DESCRIBE {base} RTSP/1.0\r\nCSeq: 5\r\n"
+          f"Require: {', '.join(tags)}\r\n\r\n",
+          f"OPTIONS {base} RTSP/1.0\r\nCSeq: 6\r\n\r\n"])
+uns = next((l for l in rs[0].splitlines()
+            if l.lower().startswith("unsupported:")), "")
+listed = [t.strip() for t in uns.split(":", 1)[1].split(",")] if uns else []
+print("RLONG=" + ("yes" if " 551 " in rs[0].splitlines()[0]
+                  and listed and all(t in tags for t in listed)
+                  and len(rs) > 1 and " 200 " in rs[1].splitlines()[0]
+                  and "CSeq: 6" in rs[1] else "no"))
+
+# A single tag longer than the buffer: the header names a prefix of it
+# rather than arriving empty or with stack garbage.
+giant = "org.example." + "x" * 400
+rs = txn([f"DESCRIBE {base} RTSP/1.0\r\nCSeq: 7\r\n"
+          f"Require: {giant}\r\n\r\n",
+          f"OPTIONS {base} RTSP/1.0\r\nCSeq: 8\r\n\r\n"])
+uns = next((l for l in rs[0].splitlines()
+            if l.lower().startswith("unsupported:")), "")
+val = uns.split(":", 1)[1].strip() if uns else ""
+print("RGIANT=" + ("yes" if " 551 " in rs[0].splitlines()[0]
+                   and val and giant.startswith(val)
+                   and len(rs) > 1 and " 200 " in rs[1].splitlines()[0] else "no"))
+CONF_EOF
+)
+echo "$CONF_OUT" | grep -q "R551=yes" \
+    && pass "unknown Require tag draws 551 with Unsupported naming it" \
+    || fail "Require 551" "$(echo "$CONF_OUT" | grep R551)"
+echo "$CONF_OUT" | grep -q "RMIX=yes" \
+    && pass "mixed Require list 551s naming only the stranger" \
+    || fail "Require mixed list" "$(echo "$CONF_OUT" | grep RMIX)"
+echo "$CONF_OUT" | grep -q "ROK=yes" \
+    && pass "the supported Require tag alone still serves" \
+    || fail "Require supported tag" "$(echo "$CONF_OUT" | grep ROK)"
+echo "$CONF_OUT" | grep -q "SPKEEP=yes" \
+    && pass "SET_PARAMETER keepalive answers 200" \
+    || fail "SET_PARAMETER keepalive" "$(echo "$CONF_OUT" | grep SPKEEP)"
+echo "$CONF_OUT" | grep -q "SP451=yes" \
+    && pass "SET_PARAMETER with a parameter draws 451" \
+    || fail "SET_PARAMETER 451" "$(echo "$CONF_OUT" | grep SP451)"
+echo "$CONF_OUT" | grep -q "SPBODY=yes" \
+    && pass "a request body does not desync the connection (CSeq echoes through)" \
+    || fail "body framing" "$(echo "$CONF_OUT" | grep SPBODY)"
+echo "$CONF_OUT" | grep -q "RLONG=yes" \
+    && pass "overlong Require list 551s with only whole client-sent tags" \
+    || fail "Require overlong list" "$(echo "$CONF_OUT" | grep RLONG)"
+echo "$CONF_OUT" | grep -q "RGIANT=yes" \
+    && pass "oversized single Require tag 551s naming a prefix of it" \
+    || fail "Require oversized tag" "$(echo "$CONF_OUT" | grep RGIANT)"
+
 # ── Backchannel over UDP: its own socket pair, actually read ──
 # Regression shape: the backchannel SETUP used to borrow the VIDEO
 # track's UDP fd slots, so with a video UDP SETUP in the same session
