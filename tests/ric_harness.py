@@ -1730,6 +1730,7 @@ def scenario_rvd_lost(stub, watch):
         return
     time.sleep(0.5)
 
+    mm0 = stub.mark()
     stub.pause()
     time.sleep(3)  # a routine daemon restart is about this long
     stub.resume()
@@ -1737,12 +1738,19 @@ def scenario_rvd_lost(stub, watch):
     log = ric.read_log()
     result("not answered" not in log,
            "rvd-lost: a restart-sized gap stays quiet", log[-200:])
+    # Even a quiet gap can hide an rvd restart, and a restarted rvd
+    # boots its ISP in day mode: recovery must re-assert the current
+    # mode (idempotent here -- the camera is in day).
+    ok = wait_for(lambda: "day" in stub.modes_since(mm0), 4)
+    result(ok, "rvd-lost: even a quiet gap re-asserts the ISP mode",
+           str(stub.modes_since(mm0)))
     mm = stub.mark()
     stub.set_scene(luma=5, gain=20000, ev=100000)
     ok = wait_for(lambda: "night" in stub.modes_since(mm), 4)
     result(ok, "rvd-lost: transitions run after the gap",
            str(stub.modes_since(mm)))
 
+    mm2 = stub.mark()
     stub.pause()
     ok = wait_for(lambda: "not answered" in ric.read_log(), 16)
     result(ok, "rvd-lost: a sustained outage is reported",
@@ -1755,6 +1763,12 @@ def scenario_rvd_lost(stub, watch):
     stub.resume()
     ok = wait_for(lambda: "answering again" in ric.read_log(), 6)
     result(ok, "rvd-lost: recovery is reported", ric.read_log()[-300:])
+    # The camera sat in NIGHT through the outage; a restarted rvd would
+    # be streaming day-mode colors under lit IR. The recovery must put
+    # the ISP back where the filter and LEDs already are.
+    ok = wait_for(lambda: "night" in stub.modes_since(mm2), 4)
+    result(ok, "rvd-lost: recovery re-asserts the night ISP mode",
+           str(stub.modes_since(mm2)))
     # The outage froze the post-switch cooldown (failed polls return
     # before it decrements), so it finishes only now -- let the night
     # baseline sample from the still-dark scene before brightening.
@@ -1764,6 +1778,19 @@ def scenario_rvd_lost(stub, watch):
     ok = wait_for(lambda: "day" in stub.modes_since(mm), 6)
     result(ok, "rvd-lost: polling drives day/night again",
            str(stub.modes_since(mm)))
+
+    # Forced modes get the same treatment: the liveness probe and the
+    # recovery re-assert cannot depend on AUTO being in charge -- a
+    # forced-night camera whose rvd restarts is just as wrong.
+    ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "mode", "value": "night"})
+    time.sleep(0.5)
+    mmf = stub.mark()
+    stub.pause()
+    time.sleep(3)
+    stub.resume()
+    ok = wait_for(lambda: "night" in stub.modes_since(mmf), 6)
+    result(ok, "rvd-lost: a forced mode re-asserts after recovery too",
+           str(stub.modes_since(mmf)))
     ric.stop()
 
 

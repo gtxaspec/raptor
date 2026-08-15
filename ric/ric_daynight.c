@@ -153,8 +153,18 @@ static void rvd_note_failed_query(ric_state_t *st)
 
 static void rvd_note_good_query(ric_state_t *st)
 {
-	if (st->rvd_fail_warned)
-		RSS_INFO("rvd answering again after %ds", fail_secs(st, st->rvd_fail_run));
+	if (st->rvd_fail_run > 0) {
+		if (st->rvd_fail_warned)
+			RSS_INFO("rvd answering again after %ds", fail_secs(st, st->rvd_fail_run));
+		/* Any gap can hide an rvd restart, and the ISP running mode
+		 * lives in rvd: the GPIO half of a night camera survives a
+		 * restart, the ISP half boots back as day and streams
+		 * wrong colors under lit IR until the next transition --
+		 * potentially all night. Re-assert the current mode on
+		 * every recovery; the call is idempotent and recoveries
+		 * are rare. */
+		ric_set_isp_mode(st->current_mode);
+	}
 	st->rvd_fail_run = 0;
 	st->rvd_fail_warned = false;
 }
@@ -415,10 +425,11 @@ static uint32_t json_get_uint(const cJSON *root, const char *key)
 /* Poll ISP exposure once and decide the day/night transition. */
 void ric_poll_exposure(ric_state_t *st)
 {
-	if (st->settings.opmode != RIC_AUTO)
-		return;
-
-	/* Query RVD for ISP exposure data via control socket */
+	/* The rvd query doubles as the liveness probe, so it runs in
+	 * every operating mode: a forced-night camera whose rvd restarts
+	 * needs its ISP mode re-asserted exactly as an automatic one
+	 * does, and skipping the query in forced modes would leave that
+	 * restart invisible. */
 	char resp[512];
 	int ret = rss_ctrl_send_command(RSS_RUN_DIR "/rvd.sock", "{\"cmd\":\"get-exposure\"}", resp,
 					sizeof(resp), 1000);
@@ -428,6 +439,9 @@ void ric_poll_exposure(ric_state_t *st)
 		return;
 	}
 	rvd_note_good_query(st);
+
+	if (st->settings.opmode != RIC_AUTO)
+		return;
 
 	uint32_t total_gain = 0, ae_luma = 0;
 	uint32_t ev = 0;
