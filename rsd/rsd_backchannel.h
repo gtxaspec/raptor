@@ -30,6 +30,48 @@
  * converges on it so rad's AO path never resamples. */
 #define RSD_BC_RING_RATE 16000
 
+/* Codec selection bits for [rtsp] backchannel_codecs. */
+#define RSD_BC_CODEC_PCMU (1u << 0)
+#define RSD_BC_CODEC_PCMA (1u << 1)
+#define RSD_BC_CODEC_OPUS (1u << 2)
+#define RSD_BC_CODEC_AAC  (1u << 3)
+#define RSD_BC_CODEC_L16  (1u << 4)
+
+/* What this build can decode. */
+uint32_t rsd_bc_codecs_available(void);
+
+/*
+ * Parse a comma/space-separated codec list ("pcmu,opus", case
+ * folded). Unrecognized tokens are skipped; the first one is copied
+ * to `unknown` (empty string when all parsed) so boot-time validation
+ * can name it once. Returns the requested mask, 0 for an empty list.
+ */
+uint32_t rsd_bc_codecs_parse(const char *list, char *unknown, size_t unknown_cap);
+
+/*
+ * The mask that actually governs offer and dispatch: an empty request
+ * means everything, and the result is clamped to what the build can
+ * decode -- never 0, so a config of nothing-usable degrades to the
+ * full offer rather than a backchannel that negotiates and then eats
+ * every packet.
+ */
+uint32_t rsd_bc_codecs_effective(uint32_t requested);
+
+/* "0 8 112 113 114" for the m-line, subset per mask, canonical order.
+ * Returns the number of payload types written. */
+int rsd_bc_offer_pts(uint32_t mask, char *buf, size_t cap);
+
+/* "pcmu,pcma,..." for logs and status, subset per mask. */
+const char *rsd_bc_codec_names(uint32_t mask, char *buf, size_t cap);
+
+/* The governing mask from [rtsp] backchannel_codecs, read fresh so a
+ * live set-backchannel-codecs applies to the next session. */
+struct rss_config;
+uint32_t rsd_bc_enabled_mask(struct rss_config *cfg);
+
+/* Codec name for a backchannel payload type ("?" when unmapped). */
+const char *rsd_bc_pt_name(uint8_t pt);
+
 /* One AAC-LC access unit is bounded by the 6144-bit-per-channel bit
  * reservoir; mono makes that 768 bytes. Doubled for headroom. */
 #define RSD_BC_AAC_MAX_AU  1536
@@ -37,7 +79,8 @@
 
 /* Per-client decoder state. Plain struct, embed and init/deinit. */
 typedef struct {
-	uint8_t last_pt; /* logs codec switches; valid when have_pt */
+	uint32_t enabled; /* RSD_BC_CODEC_* mask this session offered */
+	uint8_t last_pt;  /* logs codec switches; valid when have_pt */
 	bool have_pt;
 	uint32_t unknown_pt_count;
 	int64_t last_warn_us; /* shared rate limit for drop/error warns */
@@ -73,7 +116,7 @@ typedef struct {
 int rsd_bc_aac_parse(const uint8_t *p, size_t len, rsd_bc_au_t *aus, int max_aus,
 		     size_t *frag_total);
 
-void rsd_bc_dec_init(rsd_bc_dec_t *d);
+void rsd_bc_dec_init(rsd_bc_dec_t *d, uint32_t enabled_mask);
 void rsd_bc_dec_deinit(rsd_bc_dec_t *d);
 
 /*

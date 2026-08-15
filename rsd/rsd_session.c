@@ -528,45 +528,50 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 		/* One m-line, several payload types (RFC 8866 §5.14): RTSP
 		 * has no SDP answer, so the client signals its pick by just
 		 * sending it and the decoder dispatches on the RTP PT.
-		 * PCMU stays first -- it is ONVIF Profile T's baseline. */
+		 * PCMU stays first -- it is ONVIF Profile T's baseline.
+		 * Which of the compiled codecs get offered is
+		 * [rtsp] backchannel_codecs, read per request like the
+		 * enable gate above so set-backchannel-codecs applies to
+		 * the next session without a restart. */
+		uint32_t bc_mask = rsd_bc_enabled_mask(self->srv->cfg);
 		char bc_pts[32];
-		int bn = snprintf(bc_pts, sizeof(bc_pts), "0 8");
-#ifdef RAPTOR_OPUS
-		bn += snprintf(bc_pts + bn, sizeof(bc_pts) - bn, " %d", RSD_BC_PT_OPUS);
-#endif
-#ifdef RAPTOR_AAC
-		bn += snprintf(bc_pts + bn, sizeof(bc_pts) - bn, " %d", RSD_BC_PT_AAC);
-#endif
-		snprintf(bc_pts + bn, sizeof(bc_pts) - bn, " %d", RSD_BC_PT_L16);
+		rsd_bc_offer_pts(bc_mask, bc_pts, sizeof(bc_pts));
 		COMPY_SDP_DESCRIBE(ret, sdp_w, (COMPY_SDP_MEDIA, "audio 0 RTP/AVP %s", bc_pts),
-				   (COMPY_SDP_ATTR, "control:backchannel"),
-				   (COMPY_SDP_ATTR, "rtpmap:0 PCMU/8000"),
-				   (COMPY_SDP_ATTR, "rtpmap:8 PCMA/8000"));
-#ifdef RAPTOR_OPUS
-		/* RFC 7587 §7: the rtpmap always reads 48000/2 no matter
-		 * what is actually coded; the fmtp names what this side can
-		 * play so the sender may encode narrower. */
-		COMPY_SDP_DESCRIBE(
-			ret, sdp_w, (COMPY_SDP_ATTR, "rtpmap:%d opus/48000/2", RSD_BC_PT_OPUS),
-			(COMPY_SDP_ATTR, "fmtp:%d maxplaybackrate=16000;stereo=0", RSD_BC_PT_OPUS));
-#endif
-#ifdef RAPTOR_AAC
-		/* config=1408 is the AudioSpecificConfig for AAC-LC at the
-		 * 16 kHz ring rate, mono -- senders must encode what the
-		 * raw-block decoder was told to expect. */
-		COMPY_SDP_DESCRIBE(ret, sdp_w,
-				   (COMPY_SDP_ATTR, "rtpmap:%d MPEG4-GENERIC/%d/1", RSD_BC_PT_AAC,
-				    RSD_BC_RING_RATE),
-				   (COMPY_SDP_ATTR,
-				    "fmtp:%d streamtype=5; profile-level-id=1; mode=AAC-hbr; "
-				    "config=1408; sizeLength=13; indexLength=3; "
-				    "indexDeltaLength=3",
-				    RSD_BC_PT_AAC));
-#endif
-		COMPY_SDP_DESCRIBE(
-			ret, sdp_w,
-			(COMPY_SDP_ATTR, "rtpmap:%d L16/%d/1", RSD_BC_PT_L16, RSD_BC_RING_RATE),
-			(COMPY_SDP_ATTR, "sendonly"));
+				   (COMPY_SDP_ATTR, "control:backchannel"));
+		if (bc_mask & RSD_BC_CODEC_PCMU)
+			COMPY_SDP_DESCRIBE(ret, sdp_w, (COMPY_SDP_ATTR, "rtpmap:0 PCMU/8000"));
+		if (bc_mask & RSD_BC_CODEC_PCMA)
+			COMPY_SDP_DESCRIBE(ret, sdp_w, (COMPY_SDP_ATTR, "rtpmap:8 PCMA/8000"));
+		if (bc_mask & RSD_BC_CODEC_OPUS) {
+			/* RFC 7587 §7: the rtpmap always reads 48000/2 no
+			 * matter what is actually coded; the fmtp names what
+			 * this side can play so the sender may encode
+			 * narrower. */
+			COMPY_SDP_DESCRIBE(
+				ret, sdp_w,
+				(COMPY_SDP_ATTR, "rtpmap:%d opus/48000/2", RSD_BC_PT_OPUS),
+				(COMPY_SDP_ATTR, "fmtp:%d maxplaybackrate=16000;stereo=0",
+				 RSD_BC_PT_OPUS));
+		}
+		if (bc_mask & RSD_BC_CODEC_AAC) {
+			/* config=1408 is the AudioSpecificConfig for AAC-LC
+			 * at the 16 kHz ring rate, mono -- senders must
+			 * encode what the raw-block decoder was told to
+			 * expect. */
+			COMPY_SDP_DESCRIBE(ret, sdp_w,
+					   (COMPY_SDP_ATTR, "rtpmap:%d MPEG4-GENERIC/%d/1",
+					    RSD_BC_PT_AAC, RSD_BC_RING_RATE),
+					   (COMPY_SDP_ATTR,
+					    "fmtp:%d streamtype=5; profile-level-id=1; "
+					    "mode=AAC-hbr; config=1408; sizeLength=13; "
+					    "indexLength=3; indexDeltaLength=3",
+					    RSD_BC_PT_AAC));
+		}
+		if (bc_mask & RSD_BC_CODEC_L16)
+			COMPY_SDP_DESCRIBE(ret, sdp_w,
+					   (COMPY_SDP_ATTR, "rtpmap:%d L16/%d/1", RSD_BC_PT_L16,
+					    RSD_BC_RING_RATE));
+		COMPY_SDP_DESCRIBE(ret, sdp_w, (COMPY_SDP_ATTR, "sendonly"));
 	}
 
 	(void)ret;
@@ -806,7 +811,7 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 			return;
 		}
 		recv->speaker_ring_ptr = &self->speaker_ring;
-		rsd_bc_dec_init(&recv->dec);
+		rsd_bc_dec_init(&recv->dec, rsd_bc_enabled_mask(self->srv->cfg));
 		self->bc_recv = recv;
 		self->backchannel = Compy_Backchannel_new(
 			bc_cfg, DYN(rsd_bc_recv_t, Compy_AudioReceiver, recv));
@@ -817,14 +822,9 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 		self->bc_has_rtcp_t = true;
 		self->bc_last_rr = rss_timestamp_us();
 		VCALL_SUPER(rtp_t, Compy_Droppable, drop);
-		RSS_INFO("client SETUP: backchannel ready (PCMU/PCMA"
-#ifdef RAPTOR_OPUS
-			 "/opus"
-#endif
-#ifdef RAPTOR_AAC
-			 "/AAC"
-#endif
-			 "/L16 offered)");
+		char bc_names[48];
+		RSS_INFO("client SETUP: backchannel ready (%s offered)",
+			 rsd_bc_codec_names(recv->dec.enabled, bc_names, sizeof(bc_names)));
 	} else if (is_audio) {
 		if (!self->srv->has_audio) {
 			/* Built above, consumed by nothing on this return --

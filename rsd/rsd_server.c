@@ -574,7 +574,23 @@ static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			cJSON_AddStringToObject(item, "transport", c->is_tcp ? "tcp" : "udp");
 			cJSON_AddBoolToObject(item, "video", c->video.playing);
 			cJSON_AddBoolToObject(item, "audio", c->audio.playing);
-			cJSON_AddBoolToObject(item, "backchannel", c->backchannel != NULL);
+			/* The client picks its backchannel codec by sending
+			 * it, so the decoder's last accepted PT is the only
+			 * truthful answer to "which one is in use". */
+			if (c->backchannel && c->bc_recv) {
+				cJSON *bc = cJSON_CreateObject();
+				if (c->bc_recv->dec.have_pt)
+					cJSON_AddStringToObject(
+						bc, "codec",
+						rsd_bc_pt_name(c->bc_recv->dec.last_pt));
+				else
+					cJSON_AddNullToObject(bc, "codec");
+				cJSON_AddNumberToObject(bc, "unknown_dropped",
+							c->bc_recv->dec.unknown_pt_count);
+				cJSON_AddItemToObject(item, "backchannel", bc);
+			} else {
+				cJSON_AddBoolToObject(item, "backchannel", false);
+			}
 			/* Include RTCP RR stats if available */
 			const Compy_RtcpReportBlock *rr = NULL;
 			if (c->video.rtcp)
@@ -591,6 +607,39 @@ static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 	}
 
+	if (strcmp(cmd, "set-backchannel-codecs") == 0) {
+		char val[96];
+		if (rss_json_get_str(cmd_json, "value", val, sizeof(val)) != 0)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+						   "need value, e.g. pcmu,opus (empty = all)");
+		char unknown[24];
+		uint32_t req = rsd_bc_codecs_parse(val, unknown, sizeof(unknown));
+		if (unknown[0]) {
+			char err[96];
+			snprintf(err, sizeof(err),
+				 "unknown codec \"%s\" (know: pcmu,pcma,opus,aac,l16)", unknown);
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, err);
+		}
+		if (val[0] && !(req & rsd_bc_codecs_available()))
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+						   "none of those codecs are in this build");
+		uint32_t eff = rsd_bc_codecs_effective(req);
+		/* The offer and dispatch read the config per session, so
+		 * this applies to the next SETUP without a restart;
+		 * connected backchannels keep the offer they negotiated. */
+		rss_config_set_str(srv->cfg, "rtsp", "backchannel_codecs", val);
+		char names[48];
+		rsd_bc_codec_names(eff, names, sizeof(names));
+		if (!(eff & RSD_BC_CODEC_PCMU))
+			RSS_WARN("backchannel_codecs excludes PCMU, the ONVIF Profile T "
+				 "baseline -- conforming ONVIF clients may fail to talk back");
+		RSS_INFO("backchannel codecs set to %s", names);
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddStringToObject(r, "status", "ok");
+		cJSON_AddStringToObject(r, "backchannel_codecs", names);
+		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
+	}
+
 	/* Default: status */
 	cJSON *r = cJSON_CreateObject();
 	cJSON_AddStringToObject(r, "status", "ok");
@@ -601,6 +650,12 @@ static int rsd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 #else
 	cJSON_AddBoolToObject(r, "tls", false);
 #endif
+	{
+		char names[48];
+		cJSON_AddStringToObject(
+			r, "backchannel_codecs",
+			rsd_bc_codec_names(rsd_bc_enabled_mask(srv->cfg), names, sizeof(names)));
+	}
 	return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 }
 

@@ -94,6 +94,8 @@ const struct help_entry help_entries[] = {
 	{"rvd", "get-isp                             Show all ISP settings"},
 	{"rvd", "get-exposure                        Show exposure info"},
 	{"rsd", "clients                             List connected clients"},
+	{"rsd", "set-backchannel-codecs <list>       Offered talk-back codecs, e.g. pcmu,opus"
+		" (\"\" = all)"},
 	{"rad", "set-codec <codec>                   Change audio codec (restart)"},
 	{"rad", "set-sample-rate <Hz>                Input sample rate (restarts pipeline)"},
 	{"rad", "set-volume <val>                    Input volume"},

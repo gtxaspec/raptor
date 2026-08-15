@@ -89,6 +89,33 @@ int main(int argc, char **argv)
 	srv.idr_on_join = rss_config_get_bool(dctx.cfg, "rtsp", "idr_on_join", true);
 	srv.jpeg_enabled = rss_config_get_bool(dctx.cfg, "rtsp", "jpeg", false);
 	srv.sei_timecode = rss_config_get_bool(dctx.cfg, "rtsp", "sei_timecode", true);
+
+	/* backchannel_codecs is consumed per request (so a live change
+	 * needs no restart); this pass only validates it once, because a
+	 * config that silently offers something else is a debugging
+	 * session. */
+	{
+		const char *bc_list =
+			rss_config_get_str(dctx.cfg, "rtsp", "backchannel_codecs", "");
+		char bc_unknown[24];
+		uint32_t bc_req = rsd_bc_codecs_parse(bc_list, bc_unknown, sizeof(bc_unknown));
+		uint32_t bc_eff = rsd_bc_codecs_effective(bc_req);
+		char bc_names[48];
+		if (bc_unknown[0])
+			RSS_WARN("backchannel_codecs: unknown codec \"%s\" ignored (know: "
+				 "pcmu,pcma,opus,aac,l16)",
+				 bc_unknown);
+		if (bc_req & ~rsd_bc_codecs_available())
+			RSS_WARN("backchannel_codecs: %s requested but not in this build; "
+				 "offering %s",
+				 bc_list, rsd_bc_codec_names(bc_eff, bc_names, sizeof(bc_names)));
+		else if (bc_list[0] && !bc_req)
+			RSS_WARN("backchannel_codecs: \"%s\" names nothing usable; offering %s",
+				 bc_list, rsd_bc_codec_names(bc_eff, bc_names, sizeof(bc_names)));
+		if (!(bc_eff & RSD_BC_CODEC_PCMU))
+			RSS_WARN("backchannel_codecs excludes PCMU, the ONVIF Profile T "
+				 "baseline -- conforming ONVIF clients may fail to talk back");
+	}
 	rsd_endpoints_load(&srv, dctx.cfg);
 	rss_strlcpy(srv.session_name,
 		    rss_config_get_str(dctx.cfg, "rtsp", "session_name", "Raptor Live"),

@@ -1381,6 +1381,84 @@ echo "$BC2_OUT" | grep -q "BYE_TCP_OK" \
     && pass "backchannel leave compound (RR+SDES+BYE) precedes the TEARDOWN 200" \
     || fail "backchannel TEARDOWN BYE" "$(echo "$BC2_OUT" | grep BYE_TCP || echo none)"
 
+# ── Backchannel codec selection: config governs offer AND dispatch ──
+# set-backchannel-codecs is read per session, so the flip needs no
+# restart; the restricted server must shrink its m-line and treat a
+# disabled codec's packets exactly like a payload type it never
+# offered.
+check_contains "backchannel codec selection applies live" '"backchannel_codecs":"pcmu,l16"' \
+    "$OUT/raptorctl" rsd set-backchannel-codecs "pcmu,l16"
+check_contains "status names the restricted offer" '"backchannel_codecs":"pcmu,l16"' \
+    "$OUT/raptorctl" rsd status
+check_contains "unknown codec is refused by name" 'g729' \
+    "$OUT/raptorctl" rsd set-backchannel-codecs "pcmu,g729"
+BC4_OUT=$(python3 - <<'BC4_EOF'
+import socket, struct, sys, time
+
+def rsp(sock, buf):
+    while b"\r\n\r\n" not in buf[0]:
+        d = sock.recv(4096)
+        if not d:
+            return "", buf
+        buf[0] += d
+    head, _, rest = buf[0].partition(b"\r\n\r\n")
+    txt = head.decode(errors="replace")
+    clen = 0
+    for line in txt.split("\r\n"):
+        if line.lower().startswith("content-length:"):
+            clen = int(line.split(":", 1)[1])
+    while len(rest) < clen:
+        rest += sock.recv(4096)
+    body, buf[0] = rest[:clen], rest[clen:]
+    return txt + "\r\n\r\n" + body.decode(errors="replace"), buf
+
+REQ = "Require: www.onvif.org/ver20/backchannel\r\n"
+base = "rtsp://127.0.0.1:15554/stream0"
+s = socket.create_connection(("127.0.0.1", 15554), timeout=10)
+buf = [b""]
+s.sendall(f"DESCRIBE {base} RTSP/1.0\r\nCSeq: 1\r\nAccept: application/sdp\r\n{REQ}\r\n".encode())
+desc, buf = rsp(s, buf)
+bc_sec = next((sec for sec in desc.split("m=")[1:] if "a=sendonly" in sec), "")
+pts = bc_sec.split("\n")[0].split("RTP/AVP", 1)[-1].split()
+print("RESTRICTED_OFFER=" + " ".join(pts))
+if pts != ["0", "114"]:
+    sys.exit(0)
+if "rtpmap:112" in bc_sec or "rtpmap:113" in bc_sec or "rtpmap:8 " in bc_sec:
+    print("STRAY_RTPMAP"); sys.exit(0)
+
+s.sendall(f"SETUP {base}/video RTSP/1.0\r\nCSeq: 2\r\n"
+          f"Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n\r\n".encode())
+vs, buf = rsp(s, buf)
+sid = next((l.split(":", 1)[1].split(";")[0].strip()
+            for l in vs.split("\r\n") if l.lower().startswith("session:")), "")
+s.sendall(f"SETUP {base}/backchannel RTSP/1.0\r\nCSeq: 3\r\nSession: {sid}\r\n"
+          f"Transport: RTP/AVP/TCP;unicast;interleaved=4-5\r\n{REQ}\r\n".encode())
+rsp(s, buf)
+s.sendall(f"PLAY {base} RTSP/1.0\r\nCSeq: 4\r\nSession: {sid}\r\nRange: npt=0.000-\r\n\r\n".encode())
+rsp(s, buf)
+seq = 0
+for _ in range(20):  # PCMA against a pcmu,l16 offer: must be dropped
+    rtp = struct.pack("!BBHII", 0x80, 8, seq & 0xFFFF, seq * 160, 0x11223344) + b"\xd5" * 160
+    s.sendall(b"\x24" + struct.pack("!BH", 4, len(rtp)) + rtp)
+    seq += 1
+    time.sleep(0.005)
+print("DISABLED_SENT=20", flush=True)
+time.sleep(1.0)
+s.close()
+BC4_EOF
+)
+echo "$BC4_OUT" | grep -q "RESTRICTED_OFFER=0 114" \
+    && pass "restricted offer carries exactly the configured payload types" \
+    || fail "restricted backchannel offer" "$(echo "$BC4_OUT" | head -1)"
+if echo "$BC4_OUT" | grep -q "DISABLED_SENT=20" \
+   && grep -q "backchannel: dropping payload type 8" "$LOG_DIR/rsd.log"; then
+    pass "disabled codec's packets are dropped like a never-offered payload type"
+else
+    fail "disabled codec dispatch" "no 'dropping payload type 8' in rsd.log"
+fi
+check_contains "codec selection restores to the full offer" '"backchannel_codecs":"pcmu,pcma,opus,aac,l16"' \
+    "$OUT/raptorctl" rsd set-backchannel-codecs ""
+
 # ── Backchannel over UDP: its own socket pair, actually read ──
 # Regression shape: the backchannel SETUP used to borrow the VIDEO
 # track's UDP fd slots, so with a video UDP SETUP in the same session

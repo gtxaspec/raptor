@@ -46,10 +46,11 @@ TEST bc_g711_sign_symmetry(void)
 	PASS();
 }
 
-/* One writer + one reader around a dispatch call; returns the read rc. */
-static int bc_feed_and_read(const char *ring_name, uint8_t pt, const uint8_t *payload, size_t len,
-			    uint8_t *out, uint32_t out_cap, uint32_t *out_len,
-			    uint32_t *unknown_count)
+/* One writer + one reader around a dispatch call; returns the read rc.
+ * mask 0 = the full effective offer. */
+static int bc_feed_and_read_mask(const char *ring_name, uint32_t mask, uint8_t pt,
+				 const uint8_t *payload, size_t len, uint8_t *out, uint32_t out_cap,
+				 uint32_t *out_len, uint32_t *unknown_count)
 {
 	rss_ring_t *w = rss_ring_create(ring_name, 4, 8192);
 	if (!w)
@@ -61,7 +62,7 @@ static int bc_feed_and_read(const char *ring_name, uint8_t pt, const uint8_t *pa
 	}
 
 	rsd_bc_dec_t dec;
-	rsd_bc_dec_init(&dec);
+	rsd_bc_dec_init(&dec, mask);
 	rsd_bc_handle(&dec, w, pt, 0, payload, len);
 	if (unknown_count)
 		*unknown_count = dec.unknown_pt_count;
@@ -83,8 +84,8 @@ TEST bc_dispatch_pcmu_publishes_doubled_pcm(void)
 	uint8_t out[4096];
 	uint32_t len = 0;
 
-	ASSERT_EQ(0,
-		  bc_feed_and_read("test_bc_u", 0, in, sizeof(in), out, sizeof(out), &len, NULL));
+	ASSERT_EQ(0, bc_feed_and_read_mask("test_bc_u", 0, 0, in, sizeof(in), out, sizeof(out),
+					   &len, NULL));
 	ASSERT_EQ(160 * 4, (int)len); /* 8k -> 16k doubling, 2 bytes/sample */
 	for (uint32_t i = 0; i < len; i++)
 		ASSERT_EQ(0, out[i]);
@@ -98,8 +99,8 @@ TEST bc_dispatch_pcma_publishes_doubled_pcm(void)
 	uint8_t out[4096];
 	uint32_t len = 0;
 
-	ASSERT_EQ(0,
-		  bc_feed_and_read("test_bc_a", 8, in, sizeof(in), out, sizeof(out), &len, NULL));
+	ASSERT_EQ(0, bc_feed_and_read_mask("test_bc_a", 0, 8, in, sizeof(in), out, sizeof(out),
+					   &len, NULL));
 	ASSERT_EQ(160 * 4, (int)len);
 	const int16_t *pcm = (const int16_t *)out;
 	for (uint32_t i = 0; i < len / 2; i++)
@@ -113,8 +114,8 @@ TEST bc_dispatch_l16_swaps_network_order(void)
 	uint8_t out[64];
 	uint32_t len = 0;
 
-	ASSERT_EQ(0, bc_feed_and_read("test_bc_l", RSD_BC_PT_L16, in, sizeof(in), out, sizeof(out),
-				      &len, NULL));
+	ASSERT_EQ(0, bc_feed_and_read_mask("test_bc_l", 0, RSD_BC_PT_L16, in, sizeof(in), out,
+					   sizeof(out), &len, NULL));
 	ASSERT_EQ(4, (int)len);
 	const int16_t *pcm = (const int16_t *)out;
 	ASSERT_EQ(0x1234, pcm[0]);
@@ -129,8 +130,8 @@ TEST bc_dispatch_unknown_pt_drops(void)
 	uint32_t len = 0;
 	uint32_t unknown = 0;
 
-	int rc =
-		bc_feed_and_read("test_bc_x", 99, in, sizeof(in), out, sizeof(out), &len, &unknown);
+	int rc = bc_feed_and_read_mask("test_bc_x", 0, 99, in, sizeof(in), out, sizeof(out), &len,
+				       &unknown);
 	ASSERT_EQ(-EAGAIN, rc); /* nothing published */
 	ASSERT_EQ(1, (int)unknown);
 	PASS();
@@ -141,7 +142,8 @@ TEST bc_dispatch_empty_payload_is_noop(void)
 	uint8_t out[64];
 	uint32_t len = 0;
 
-	ASSERT_EQ(-EAGAIN, bc_feed_and_read("test_bc_e", 0, NULL, 0, out, sizeof(out), &len, NULL));
+	ASSERT_EQ(-EAGAIN,
+		  bc_feed_and_read_mask("test_bc_e", 0, 0, NULL, 0, out, sizeof(out), &len, NULL));
 	PASS();
 }
 
@@ -244,6 +246,78 @@ TEST bc_aac_parse_malformed(void)
 	PASS();
 }
 
+TEST bc_codecs_parse_and_effective(void)
+{
+	char unk[24];
+
+	/* Full list, case folded, mixed separators. */
+	ASSERT_EQ(RSD_BC_CODEC_PCMU | RSD_BC_CODEC_PCMA | RSD_BC_CODEC_OPUS | RSD_BC_CODEC_AAC |
+			  RSD_BC_CODEC_L16,
+		  (int)rsd_bc_codecs_parse("PCMU, pcma opus\tAAC,l16", unk, sizeof(unk)));
+	ASSERT_STR_EQ("", unk);
+
+	/* Unknown token is skipped and named. */
+	ASSERT_EQ(RSD_BC_CODEC_PCMU, (int)rsd_bc_codecs_parse("pcmu,g729", unk, sizeof(unk)));
+	ASSERT_STR_EQ("g729", unk);
+
+	/* Empty and NULL request nothing. */
+	ASSERT_EQ(0, (int)rsd_bc_codecs_parse("", unk, sizeof(unk)));
+	ASSERT_EQ(0, (int)rsd_bc_codecs_parse(NULL, unk, sizeof(unk)));
+
+	/* Effective: empty means everything the build carries, and a
+	 * request naming only codecs this build lacks degrades to the
+	 * full offer instead of a backchannel that eats every packet.
+	 * The test binary compiles without opus or AAC. */
+	uint32_t avail = rsd_bc_codecs_available();
+	ASSERT_EQ(RSD_BC_CODEC_PCMU | RSD_BC_CODEC_PCMA | RSD_BC_CODEC_L16, (int)avail);
+	ASSERT_EQ((int)avail, (int)rsd_bc_codecs_effective(0));
+	ASSERT_EQ((int)avail, (int)rsd_bc_codecs_effective(RSD_BC_CODEC_OPUS));
+	ASSERT_EQ(RSD_BC_CODEC_PCMA,
+		  (int)rsd_bc_codecs_effective(RSD_BC_CODEC_PCMA | RSD_BC_CODEC_AAC));
+	PASS();
+}
+
+TEST bc_codecs_offer_and_names(void)
+{
+	char buf[48];
+
+	ASSERT_EQ(3, rsd_bc_offer_pts(rsd_bc_codecs_effective(0), buf, sizeof(buf)));
+	ASSERT_STR_EQ("0 8 114", buf);
+	ASSERT_EQ(2, rsd_bc_offer_pts(RSD_BC_CODEC_PCMU | RSD_BC_CODEC_L16, buf, sizeof(buf)));
+	ASSERT_STR_EQ("0 114", buf);
+	ASSERT_EQ(1, rsd_bc_offer_pts(RSD_BC_CODEC_PCMA, buf, sizeof(buf)));
+	ASSERT_STR_EQ("8", buf);
+
+	ASSERT_STR_EQ("pcmu,pcma",
+		      rsd_bc_codec_names(RSD_BC_CODEC_PCMU | RSD_BC_CODEC_PCMA, buf, sizeof(buf)));
+	ASSERT_STR_EQ("l16", rsd_bc_codec_names(RSD_BC_CODEC_L16, buf, sizeof(buf)));
+	PASS();
+}
+
+TEST bc_dispatch_disabled_codec_drops(void)
+{
+	uint8_t in[160];
+	memset(in, 0xD5, sizeof(in));
+	uint8_t out[4096];
+	uint32_t len = 0;
+	uint32_t unknown = 0;
+
+	/* PCMA arrives against a PCMU-only offer: same drop and counter
+	 * as a payload type that was never in the table. */
+	int rc = bc_feed_and_read_mask("test_bc_d", RSD_BC_CODEC_PCMU, 8, in, sizeof(in), out,
+				       sizeof(out), &len, &unknown);
+	ASSERT_EQ(-EAGAIN, rc);
+	ASSERT_EQ(1, (int)unknown);
+
+	/* And the codec the mask does carry still decodes. */
+	memset(in, 0xFF, sizeof(in));
+	ASSERT_EQ(0, bc_feed_and_read_mask("test_bc_d2", RSD_BC_CODEC_PCMU, 0, in, sizeof(in), out,
+					   sizeof(out), &len, &unknown));
+	ASSERT_EQ(160 * 4, (int)len);
+	ASSERT_EQ(0, (int)unknown);
+	PASS();
+}
+
 SUITE(backchannel_suite)
 {
 	RUN_TEST(bc_ulaw_golden);
@@ -258,4 +332,7 @@ SUITE(backchannel_suite)
 	RUN_TEST(bc_aac_parse_multi_au);
 	RUN_TEST(bc_aac_parse_fragment);
 	RUN_TEST(bc_aac_parse_malformed);
+	RUN_TEST(bc_codecs_parse_and_effective);
+	RUN_TEST(bc_codecs_offer_and_names);
+	RUN_TEST(bc_dispatch_disabled_codec_drops);
 }

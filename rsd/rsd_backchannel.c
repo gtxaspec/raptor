@@ -16,6 +16,8 @@
 #include <aacdec.h>
 #endif
 
+#include <ctype.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "rsd_backchannel.h"
@@ -30,6 +32,127 @@
 #define BC_L16_MAX_SAMPLES	    4096
 
 #define BC_UNKNOWN_WARN_INTERVAL_US 5000000
+
+/* Canonical order for offers and name lists; PCMU first because it is
+ * ONVIF Profile T's baseline. */
+static const struct {
+	uint32_t bit;
+	uint8_t pt;
+	const char *name;
+} bc_codec_tab[] = {
+	{RSD_BC_CODEC_PCMU, 0, "pcmu"},
+	{RSD_BC_CODEC_PCMA, 8, "pcma"},
+	{RSD_BC_CODEC_OPUS, RSD_BC_PT_OPUS, "opus"},
+	{RSD_BC_CODEC_AAC, RSD_BC_PT_AAC, "aac"},
+	{RSD_BC_CODEC_L16, RSD_BC_PT_L16, "l16"},
+};
+#define BC_CODEC_TAB_LEN (sizeof(bc_codec_tab) / sizeof(bc_codec_tab[0]))
+
+uint32_t rsd_bc_codecs_available(void)
+{
+	uint32_t m = RSD_BC_CODEC_PCMU | RSD_BC_CODEC_PCMA | RSD_BC_CODEC_L16;
+#ifdef RAPTOR_OPUS
+	m |= RSD_BC_CODEC_OPUS;
+#endif
+#ifdef RAPTOR_AAC
+	m |= RSD_BC_CODEC_AAC;
+#endif
+	return m;
+}
+
+uint32_t rsd_bc_codecs_parse(const char *list, char *unknown, size_t unknown_cap)
+{
+	if (unknown && unknown_cap)
+		unknown[0] = '\0';
+	if (!list)
+		return 0;
+
+	uint32_t mask = 0;
+	const char *p = list;
+	while (*p) {
+		while (*p == ',' || *p == ' ' || *p == '\t')
+			p++;
+		if (!*p)
+			break;
+		const char *tok = p;
+		while (*p && *p != ',' && *p != ' ' && *p != '\t')
+			p++;
+		size_t len = (size_t)(p - tok);
+
+		uint32_t hit = 0;
+		for (size_t i = 0; i < BC_CODEC_TAB_LEN; i++) {
+			const char *n = bc_codec_tab[i].name;
+			if (strlen(n) != len)
+				continue;
+			size_t j = 0;
+			while (j < len && (char)tolower((unsigned char)tok[j]) == n[j])
+				j++;
+			if (j == len) {
+				hit = bc_codec_tab[i].bit;
+				break;
+			}
+		}
+		if (hit) {
+			mask |= hit;
+		} else if (unknown && unknown_cap && unknown[0] == '\0') {
+			size_t c = len < unknown_cap - 1 ? len : unknown_cap - 1;
+			memcpy(unknown, tok, c);
+			unknown[c] = '\0';
+		}
+	}
+	return mask;
+}
+
+uint32_t rsd_bc_codecs_effective(uint32_t requested)
+{
+	uint32_t avail = rsd_bc_codecs_available();
+	uint32_t m = (requested ? requested : avail) & avail;
+	return m ? m : avail;
+}
+
+uint32_t rsd_bc_enabled_mask(struct rss_config *cfg)
+{
+	const char *list = rss_config_get_str(cfg, "rtsp", "backchannel_codecs", "");
+	return rsd_bc_codecs_effective(rsd_bc_codecs_parse(list, NULL, 0));
+}
+
+int rsd_bc_offer_pts(uint32_t mask, char *buf, size_t cap)
+{
+	int n = 0;
+	size_t off = 0;
+	if (cap)
+		buf[0] = '\0';
+	for (size_t i = 0; i < BC_CODEC_TAB_LEN; i++) {
+		if (!(mask & bc_codec_tab[i].bit))
+			continue;
+		int w = snprintf(buf + off, cap > off ? cap - off : 0, "%s%u", n ? " " : "",
+				 bc_codec_tab[i].pt);
+		if (w < 0)
+			break;
+		off += (size_t)w;
+		n++;
+	}
+	return n;
+}
+
+const char *rsd_bc_codec_names(uint32_t mask, char *buf, size_t cap)
+{
+	size_t off = 0;
+	int n = 0;
+	if (cap)
+		buf[0] = '\0';
+	for (size_t i = 0; i < BC_CODEC_TAB_LEN; i++) {
+		if (!(mask & bc_codec_tab[i].bit))
+			continue;
+		int w = snprintf(buf + off, cap > off ? cap - off : 0, "%s%s", n ? "," : "",
+				 bc_codec_tab[i].name);
+		if (w < 0)
+			break;
+		off += (size_t)w;
+		n++;
+	}
+	return buf;
+}
 
 int16_t rsd_bc_ulaw_decode(uint8_t ulaw)
 {
@@ -56,9 +179,10 @@ int16_t rsd_bc_alaw_decode(uint8_t alaw)
 	return (int16_t)((alaw & 0x80) ? magnitude : -magnitude);
 }
 
-void rsd_bc_dec_init(rsd_bc_dec_t *d)
+void rsd_bc_dec_init(rsd_bc_dec_t *d, uint32_t enabled_mask)
 {
 	*d = (rsd_bc_dec_t){0};
+	d->enabled = rsd_bc_codecs_effective(enabled_mask);
 }
 
 void rsd_bc_dec_deinit(rsd_bc_dec_t *d)
@@ -128,7 +252,7 @@ int rsd_bc_aac_parse(const uint8_t *p, size_t len, rsd_bc_au_t *aus, int max_aus
 	return (int)n_aus;
 }
 
-static const char *bc_pt_name(uint8_t pt)
+const char *rsd_bc_pt_name(uint8_t pt)
 {
 	switch (pt) {
 	case 0:
@@ -146,13 +270,21 @@ static const char *bc_pt_name(uint8_t pt)
 	}
 }
 
+static uint32_t bc_pt_bit(uint8_t pt)
+{
+	for (size_t i = 0; i < BC_CODEC_TAB_LEN; i++)
+		if (bc_codec_tab[i].pt == pt)
+			return bc_codec_tab[i].bit;
+	return 0;
+}
+
 static void bc_note_codec(rsd_bc_dec_t *d, uint8_t pt)
 {
 	if (d->have_pt && d->last_pt == pt)
 		return;
 	/* The client picks its codec by just sending it (RTSP has no SDP
 	 * answer), so this line is the only place the choice is visible. */
-	RSS_INFO("backchannel: receiving %s (payload type %u)", bc_pt_name(pt), pt);
+	RSS_INFO("backchannel: receiving %s (payload type %u)", rsd_bc_pt_name(pt), pt);
 	d->last_pt = pt;
 	d->have_pt = true;
 }
@@ -359,6 +491,14 @@ void rsd_bc_handle(rsd_bc_dec_t *d, rss_ring_t *ring, uint8_t pt, uint32_t rtp_t
 	(void)rtp_ts;
 	if (!ring || len == 0)
 		return;
+
+	/* A codec the config disabled is exactly a codec the SDP never
+	 * offered: same drop, same counter, same one-line account. */
+	uint32_t bit = bc_pt_bit(pt);
+	if (!bit || !(d->enabled & bit)) {
+		bc_note_unknown(d, pt);
+		return;
+	}
 
 	switch (pt) {
 	case 0:
