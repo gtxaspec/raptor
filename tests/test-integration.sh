@@ -198,6 +198,19 @@ mkdir -p "$LOG_DIR/rec"
 
 CONFIG="$LOG_DIR/test.conf"
 
+# Backend-selection variants. The base config intentionally omits [system],
+# exercising the established implicit IMP default.
+{
+    printf '[system]\nvideo_backend = imp\n\n'
+    cat "$CONFIG"
+} > "$LOG_DIR/test-imp.conf"
+{
+    printf '[system]\nvideo_backend = v4l2\nvideo_device = /dev/video0\n\n'
+    cat "$CONFIG"
+} > "$LOG_DIR/test-v4l2.conf"
+IMP_CONFIG="$LOG_DIR/test-imp.conf"
+V4L2_CONFIG="$LOG_DIR/test-v4l2.conf"
+
 # Clean stale state from previous runs
 mkdir -p /var/run/rss 2>/dev/null || { sudo mkdir -p /var/run/rss && sudo chmod 1777 /var/run/rss; }
 rm -f /var/run/rss/*.pid /var/run/rss/*.sock 2>/dev/null
@@ -221,6 +234,36 @@ if ! kill -0 "$RINGS_PID" 2>/dev/null; then
     cat "$LOG_DIR/rings.log"
     exit 1
 fi
+
+echo "=== Backend selection tests ==="
+if "$OUT/rvd" -c "$V4L2_CONFIG" -f -d > "$LOG_DIR/rvd-v4l2-disabled.log" 2>&1; then
+    fail "disabled V4L2 backend is rejected" "rvd unexpectedly exited successfully"
+elif grep -q "V4L2/OpenIMP backend requested but Raptor was built without V4L2_OPENIMP=1" \
+        "$LOG_DIR/rvd-v4l2-disabled.log"; then
+    pass "disabled V4L2 backend is rejected with an explicit message"
+else
+    fail "disabled V4L2 backend is rejected" "explicit diagnostic missing"
+fi
+
+# Start the explicit IMP form far enough to record its initialized topology,
+# then compare it with the normal omitted-key daemon below.
+"$OUT/rvd" -c "$IMP_CONFIG" -f -d > "$LOG_DIR/rvd-imp-explicit.log" 2>&1 &
+IMP_PID=$!
+IMP_PIPELINE=""
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    IMP_PIPELINE=$(sed -n 's/.*\(pipeline ready:.*\)/\1/p' \
+        "$LOG_DIR/rvd-imp-explicit.log" | tail -1)
+    [ -n "$IMP_PIPELINE" ] && break
+    kill -0 "$IMP_PID" 2>/dev/null || break
+    sleep 0.1
+done
+if [ -n "$IMP_PIPELINE" ] && kill -0 "$IMP_PID" 2>/dev/null; then
+    pass "explicit IMP backend initializes"
+else
+    fail "explicit IMP backend initializes" "pipeline did not become ready"
+fi
+kill "$IMP_PID" 2>/dev/null || true
+wait "$IMP_PID" 2>/dev/null || true
 
 echo "=== Starting daemons ==="
 
@@ -257,6 +300,14 @@ start_daemon rmr "$OUT/rmr" -c "$CONFIG" -f -d
 # Let daemons settle
 sleep 2
 
+DEFAULT_PIPELINE=$(sed -n 's/.*\(pipeline ready:.*\)/\1/p' "$LOG_DIR/rvd.log" | tail -1)
+if [ -n "$IMP_PIPELINE" ] && [ "$DEFAULT_PIPELINE" = "$IMP_PIPELINE" ]; then
+    pass "explicit IMP backend matches the omitted-key default"
+else
+    fail "explicit IMP backend matches the omitted-key default" \
+        "explicit='$IMP_PIPELINE' default='$DEFAULT_PIPELINE'"
+fi
+
 # ── Tests ──
 
 echo ""
@@ -281,6 +332,27 @@ check_contains "set-fps" "ok" "$OUT/raptorctl" rvd set-fps 0 30
 check_contains "set-qp-bounds" "ok" "$OUT/raptorctl" rvd set-qp-bounds 0 15 45
 check_contains "set-rc-mode" "ok" "$OUT/raptorctl" rvd set-rc-mode 0 cbr
 check_contains "request-idr" "ok" "$OUT/raptorctl" rvd request-idr
+
+# Pin keyframe truth across the full producer-to-ring path. RSD waits for this
+# bit before releasing a new client, so an IDR NAL marked non-key is a stream
+# outage rather than cosmetic metadata.
+timeout 5 "$OUT/ringdump" main -f -s -n 8 > "$LOG_DIR/keyframe-ring.log" 2>&1 &
+KEY_READER_PID=$!
+sleep 0.2
+"$OUT/ringdump" main -i > /dev/null 2>&1 || true
+wait "$KEY_READER_PID" 2>/dev/null || true
+if grep -q 'nal=H264_IDR.*key=1' "$LOG_DIR/keyframe-ring.log"; then
+    pass "requested H.264 IDR reaches the ring as a keyframe"
+else
+    fail "requested H.264 IDR reaches the ring as a keyframe" \
+        "no H264_IDR/key=1 frame observed"
+fi
+if grep -Eq 'nal=H264_IDR.*key=0|nal=H264_SLICE.*key=1' \
+        "$LOG_DIR/keyframe-ring.log"; then
+    fail "ring key flag agrees with H.264 NAL type" "mismatched frame metadata"
+else
+    pass "ring key flag agrees with H.264 NAL type"
+fi
 
 # Advanced encoder
 check_contains "enc-set gop_mode" "ok" "$OUT/raptorctl" rvd enc-set 0 gop_mode 0

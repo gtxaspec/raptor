@@ -165,6 +165,51 @@ static const char *rc_mode_str(rss_rc_mode_t m)
 	}
 }
 
+static void load_stream_config(rss_config_t *cfg, const char *section, rvd_stream_t *s,
+			       int default_w, int default_h, int default_fps, int default_br);
+
+static int rvd_pipeline_init_v4l2(rvd_state_t *st)
+{
+	rvd_stream_t *stream = &st->streams[0];
+	const char *device;
+	int ret;
+
+	device = rss_config_get_str(st->cfg, "system", "video_device", "/dev/video0");
+	rss_strlcpy(st->v4l2_device, device, sizeof(st->v4l2_device));
+	st->v4l2_backend = true;
+	st->sensor_count = 1;
+	st->stream_count = 1;
+	st->jpeg_count = 0;
+	st->refmode = false;
+	st->refmode_shm = false;
+	st->osd_enabled = false;
+	st->use_isp_osd = false;
+	st->ivs_enabled = false;
+	atomic_store(&st->ivs_active, false);
+
+	load_stream_config(st->cfg, "stream0", stream, 2560, 1440, 25, 8000000);
+	stream->fs_chn = 0;
+	stream->chn = 0;
+	stream->sensor_idx = 0;
+	rss_strlcpy(stream->cfg_sect, "stream0", sizeof(stream->cfg_sect));
+	if (stream->enc_cfg.codec != RSS_CODEC_H264) {
+		RSS_FATAL("V4L2 backend currently requires stream0 codec=h264");
+		return RSS_ERR_NOTSUP;
+	}
+	if (rss_config_get_bool(st->cfg, "stream1", "enabled", true) ||
+	    rss_config_get_bool(st->cfg, "jpeg", "enabled", true) ||
+	    rss_config_get_bool(st->cfg, "osd", "enabled", true) ||
+	    rss_config_get_bool(st->cfg, "motion", "enabled", false))
+		RSS_WARN("V4L2 backend exposes stream0 only; sub/JPEG/OSD/IVS are disabled");
+
+	ret = rvd_stream_init(st, 0);
+	if (ret != RSS_OK)
+		return ret;
+	st->pipeline_ready = true;
+	RSS_INFO("pipeline ready: V4L2 %s -> OpenIMP AVC -> main ring", st->v4l2_device);
+	return RSS_OK;
+}
+
 /* Load one stream's config from INI section */
 static void load_stream_config(rss_config_t *cfg, const char *section, rvd_stream_t *s,
 			       int default_w, int default_h, int default_fps, int default_br)
@@ -388,6 +433,14 @@ int rvd_pipeline_init(rvd_state_t *st)
 		return RSS_ERR;
 	}
 	st->ops = rss_hal_get_ops(st->hal_ctx);
+	if (strcasecmp(rss_config_get_str(cfg, "system", "video_backend", "imp"), "v4l2") == 0) {
+		if (!rvd_v4l2_h264_supported()) {
+			RSS_FATAL("V4L2/OpenIMP backend requested but Raptor was built without "
+				  "V4L2_OPENIMP=1");
+			return RSS_ERR_NOTSUP;
+		}
+		return rvd_pipeline_init_v4l2(st);
+	}
 
 	/* ── 2. Sensor config ── */
 	rss_multi_sensor_config_t multi_cfg = {0};
@@ -508,6 +561,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 		RSS_FATAL("HAL init failed: %d", ret);
 		return ret;
 	}
+	st->hal_initialized = true;
 
 	/* Log system info */
 	{
@@ -1062,6 +1116,17 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 	rvd_stream_t *s = &st->streams[idx];
 	rss_config_t *cfg = st->cfg;
 	int ret;
+
+	if (st->v4l2_backend) {
+		if (idx != 0)
+			return RSS_ERR_NOTSUP;
+		ret = rvd_v4l2_h264_create(&st->v4l2, st->v4l2_device, &s->enc_cfg);
+		if (ret != RSS_OK) {
+			RSS_ERROR("V4L2/OpenIMP backend create failed: %d", ret);
+			return ret;
+		}
+		goto create_ring;
+	}
 	/* ── Encoder group + channel ── */
 	if (s->is_jpeg) {
 		int video_grp = find_video_group(st, s->fs_chn);
@@ -1258,6 +1323,7 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 		RSS_DEBUG("stream%d bind: %d stages", idx, chain_len);
 	}
 
+create_ring:
 	/* ── Create ring (or reuse existing across encoder restart) ── */
 	if (s->ring) {
 		rvd_stream_publish_info(st, idx);
@@ -1402,6 +1468,11 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 
 	/* Rollback on failure */
 fail_ring:
+	if (st->v4l2_backend) {
+		rvd_v4l2_h264_destroy(st->v4l2);
+		st->v4l2 = NULL;
+		return ret;
+	}
 fail_bind:
 	if (st->osd_enabled && !s->is_jpeg) {
 		pthread_mutex_lock(&st->osd_lock);
@@ -1434,12 +1505,15 @@ void rvd_stream_stop(rvd_state_t *st, int idx)
 
 	/* Stop encoder */
 	if (s->enabled) {
-		RSS_HAL_CALL(st->ops, enc_stop, st->hal_ctx, s->chn);
+		if (st->v4l2_backend)
+			rvd_v4l2_h264_stop(st->v4l2);
+		else
+			RSS_HAL_CALL(st->ops, enc_stop, st->hal_ctx, s->chn);
 		s->enabled = false;
 	}
 
 	/* Disable framesource (JPEG shares FS, caller handles ordering) */
-	if (!s->is_jpeg)
+	if (!s->is_jpeg && !st->v4l2_backend)
 		RSS_HAL_CALL(st->ops, fs_disable_channel, st->hal_ctx, s->fs_chn);
 
 	RSS_DEBUG("stream%d stopped", idx);
@@ -1452,6 +1526,12 @@ void rvd_stream_deinit(rvd_state_t *st, int idx)
 	/* Skip if never successfully initialized (or already rolled back) */
 	if (!s->ring)
 		return;
+	if (st->v4l2_backend) {
+		rvd_v4l2_h264_destroy(st->v4l2);
+		st->v4l2 = NULL;
+		RSS_DEBUG("stream%d V4L2 backend deinit complete", idx);
+		return;
+	}
 
 	/* Unbind chain in reverse */
 	if (!s->is_jpeg) {
@@ -1512,9 +1592,17 @@ int rvd_stream_start(rvd_state_t *st, int idx)
 	if (s->is_jpeg && s->jpeg_idle) {
 		s->enabled = false;
 	} else {
-		if (!s->is_jpeg)
+		if (st->v4l2_backend) {
+			int backend_ret = rvd_v4l2_h264_start(st->v4l2);
+			if (backend_ret != RSS_OK) {
+				RSS_ERROR("stream%d: V4L2 start failed: %d", idx, backend_ret);
+				return backend_ret;
+			}
+		} else if (!s->is_jpeg) {
 			RSS_HAL_CALL(st->ops, fs_enable_channel, st->hal_ctx, s->fs_chn);
-		RSS_HAL_CALL(st->ops, enc_start, st->hal_ctx, s->chn);
+		}
+		if (!st->v4l2_backend)
+			RSS_HAL_CALL(st->ops, enc_start, st->hal_ctx, s->chn);
 		s->enabled = true;
 	}
 
@@ -1531,10 +1619,13 @@ int rvd_stream_start(rvd_state_t *st, int idx)
 		RSS_ERROR("stream%d: pthread_create failed: %d", idx, ret);
 		atomic_store(&st->stream_active[idx], false);
 		if (s->enabled) {
-			RSS_HAL_CALL(st->ops, enc_stop, st->hal_ctx, s->chn);
+			if (st->v4l2_backend)
+				rvd_v4l2_h264_stop(st->v4l2);
+			else
+				RSS_HAL_CALL(st->ops, enc_stop, st->hal_ctx, s->chn);
 			s->enabled = false;
 		}
-		if (!s->is_jpeg)
+		if (!s->is_jpeg && !st->v4l2_backend)
 			RSS_HAL_CALL(st->ops, fs_disable_channel, st->hal_ctx, s->fs_chn);
 		return RSS_ERR;
 	}
@@ -1570,7 +1661,7 @@ void rvd_pipeline_deinit(rvd_state_t *st)
 		rvd_ivs_deinit(st);
 
 	/* Destroy framesource channels (Layer 1 — only on full shutdown) */
-	for (int i = st->stream_count - 1; i >= 0; i--) {
+	for (int i = st->stream_count - 1; i >= 0 && !st->v4l2_backend; i--) {
 		if (!st->streams[i].is_jpeg)
 			RSS_HAL_CALL(st->ops, fs_destroy_channel, st->hal_ctx,
 				     st->streams[i].fs_chn);
@@ -1579,7 +1670,8 @@ void rvd_pipeline_deinit(rvd_state_t *st)
 	pthread_mutex_destroy(&st->osd_lock);
 
 	if (st->hal_ctx) {
-		RSS_HAL_CALL(st->ops, deinit, st->hal_ctx);
+		if (st->hal_initialized)
+			RSS_HAL_CALL(st->ops, deinit, st->hal_ctx);
 		rss_hal_destroy(st->hal_ctx);
 		st->hal_ctx = NULL;
 	}

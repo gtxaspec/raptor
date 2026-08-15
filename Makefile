@@ -72,6 +72,10 @@ ifeq ($(AUDIO_EFFECTS),1)
 CFLAGS += -DRAPTOR_AUDIO_EFFECTS
 endif
 
+ifeq ($(V4L2_OPENIMP),1)
+CFLAGS += -DRAPTOR_V4L2_OPENIMP
+endif
+
 ifeq ($(AAC),1)
 CFLAGS += -DRAPTOR_AAC
 LDFLAGS_AAC_ENC := -lfaac
@@ -248,7 +252,8 @@ ifneq ($(wildcard $(HAL_DIR)/Makefile),)
 build-raptor-hal:
 	@echo "  BUILD   raptor-hal"
 	$(Q)$(MAKE) -C $(HAL_DIR) PLATFORM=$(PLATFORM) CROSS_COMPILE=$(CROSS_COMPILE) \
-		$(if $(DEBUG),DEBUG=1,)
+		$(if $(DEBUG),DEBUG=1,) \
+		$(if $(filter 1,$(V4L2_OPENIMP)),V4L2_OPENIMP=1,)
 
 $(LIB_HAL_VIDEO_FILE) $(LIB_HAL_AUDIO_FILE): build-raptor-hal
 	@:
