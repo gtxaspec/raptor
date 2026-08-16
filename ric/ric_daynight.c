@@ -209,6 +209,18 @@ static void gpio_export(int pin)
 	}
 }
 
+static void spi_set(int value)
+{
+	char path[64];
+	snprintf(path, sizeof(path), "/dev/tmi8152_ir_cut");
+	int fd = open(path, O_WRONLY);
+	if (fd >= 0) {
+		if (write(fd, value ? "1" : "0", 1) < 0)
+			RSS_WARN("SPI set: write failed: %s", strerror(errno));
+		close(fd);
+	}
+}
+
 static void gpio_set(int pin, int value)
 {
 	if (pin < 0)
@@ -279,7 +291,11 @@ int ric_ircut_drive(ric_state_t *st, ric_mode_t pos)
 			RSS_INFO("ircut: gpio %d=0, gpio %d=0 (night)", c->gpio_ircut,
 				 c->gpio_ircut2);
 		} else {
-			gpio_set(c->gpio_ircut, 0);
+			if (c->gpio_ircut == 999) {
+				spi_set(0);
+			} else {
+				gpio_set(c->gpio_ircut, 0);
+			}
 			RSS_INFO("ircut: gpio %d=0 (night)", c->gpio_ircut);
 		}
 	} else {
@@ -292,7 +308,11 @@ int ric_ircut_drive(ric_state_t *st, ric_mode_t pos)
 			RSS_INFO("ircut: gpio %d=0, gpio %d=0 (day)", c->gpio_ircut,
 				 c->gpio_ircut2);
 		} else {
-			gpio_set(c->gpio_ircut, 1);
+			if (c->gpio_ircut == 999) {
+				spi_set(1);
+			} else {
+				gpio_set(c->gpio_ircut, 1);
+			}
 			RSS_INFO("ircut: gpio %d=1 (day)", c->gpio_ircut);
 		}
 	}
