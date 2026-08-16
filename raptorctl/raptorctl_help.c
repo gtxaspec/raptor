@@ -146,6 +146,7 @@ const struct help_entry help_entries[] = {
 	{"ric", "ir940 <on|off>                      Drive the 940nm LED bank alone (ignores "
 		"enable flag)"},
 	{"ric", "set-threshold <key> <val>           Set day/night threshold"},
+	{"ric", "set-trigger <luma|gain|adc|photo>   Switch the trigger live (state re-armed)"},
 	{"ric", "get-thresholds                      Show all thresholds"},
 	{"rhd", "clients                             List connected clients"},
 	{"rwd", "clients                             List connected clients"},

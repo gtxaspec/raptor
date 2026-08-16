@@ -226,6 +226,7 @@ static const struct cmd_def cmd_table[] = {
 	{"ir850", NULL, 1, args_val_str},
 	{"ir940", NULL, 1, args_val_str},
 	{"set-threshold", NULL, 2, args_key_val},
+	{"set-trigger", NULL, 1, args_val_str},
 	{"get-thresholds", NULL, 0, args_none},
 
 	/* OSD */

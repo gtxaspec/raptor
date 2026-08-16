@@ -251,6 +251,7 @@ typedef struct {
 /* ric_daynight.c */
 void ric_gpio_init(ric_state_t *st);
 void ric_set_mode(ric_state_t *st, ric_mode_t mode);
+void ric_trigger_rearm(ric_state_t *st);
 void ric_force_mode(ric_state_t *st, ric_mode_t mode);
 void ric_set_isp_mode(ric_mode_t mode);
 void ric_apply_night_fps(ric_state_t *st, ric_mode_t mode);

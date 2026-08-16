@@ -277,6 +277,7 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 
 		ric_config_t *c = &st->settings;
 		const char *cfg_key = NULL;
+		bool bool_key = false;
 		if (strcmp(key, "night_luma") == 0) {
 			if (val < 0 || val > 255)
 				return rss_ctrl_resp_error(resp_buf, resp_buf_size, "range 0-255");
@@ -386,14 +387,105 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			}
 			c->night_fps = val;
 			cfg_key = "night_fps";
+		} else if (strcmp(key, "ir850") == 0 || strcmp(key, "ir940") == 0) {
+			if (val != 0 && val != 1)
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size, "0 or 1");
+			bool bank940 = (key[2] == '9');
+			bool on = (val == 1);
+			if (bank940) {
+				c->ir940_enabled = on;
+				c->ir940_explicit = true;
+			} else {
+				c->ir850_enabled = on;
+			}
+			/* Policy applies NOW if the regime it governs is
+			 * active: a window-facing camera disabling a bank
+			 * mid-night must see the reflection die immediately,
+			 * not at the next transition. In day the flag simply
+			 * waits for the next night entry. */
+			if (st->current_mode == RIC_MODE_NIGHT)
+				ric_irled_drive(st, bank940, on);
+			cfg_key = bank940 ? "ir940" : "ir850";
+			bool_key = true;
+		} else if (strcmp(key, "adc_night") == 0) {
+			if (val < 0 || val > 65535)
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+							   "range 0-65535");
+			if (val >= c->adc_day)
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+							   "must be below adc_day");
+			c->adc_night = val;
+			cfg_key = "adc_night";
+		} else if (strcmp(key, "adc_day") == 0) {
+			if (val < 0 || val > 65535)
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+							   "range 0-65535");
+			if (val <= c->adc_night)
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+							   "must be above adc_night");
+			c->adc_day = val;
+			cfg_key = "adc_day";
+		} else if (strcmp(key, "pulse_ms") == 0) {
+			if (val < 1 || val > 1000)
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size, "range 1-1000");
+			c->pulse_ms = val;
+			cfg_key = "pulse_ms";
 		} else {
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "unknown key");
 		}
 
 		char valbuf[16];
 		snprintf(valbuf, sizeof(valbuf), "%d", val);
-		rss_config_set_str(st->cfg, "ircut", cfg_key, valbuf);
+		rss_config_set_str(st->cfg, "ircut", cfg_key,
+				   bool_key ? (val ? "true" : "false") : valbuf);
 		RSS_INFO("threshold %s set to %d", key, val);
+		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+	}
+
+	if (strcmp(cmd, "set-trigger") == 0) {
+		char tbuf[16] = "";
+		if (rss_json_get_str(cmd_json, "value", tbuf, sizeof(tbuf)) != 0)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+						   "need value (luma, gain, adc, photo)");
+		ric_config_t *c = &st->settings;
+		ric_trigger_t t;
+		if (strcmp(tbuf, "luma") == 0)
+			t = RIC_TRIGGER_LUMA;
+		else if (strcmp(tbuf, "gain") == 0)
+			t = RIC_TRIGGER_GAIN;
+		else if (strcmp(tbuf, "adc") == 0)
+			t = RIC_TRIGGER_ADC;
+		else if (strcmp(tbuf, "photo") == 0)
+			t = RIC_TRIGGER_PHOTO;
+		else
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+						   "unknown trigger (luma, gain, adc, photo)");
+		if (t == c->trigger)
+			return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+
+		/* Startup falls back to luma when the ADC is missing; a
+		 * runtime switch is explicit operator intent and gets the
+		 * failure instead of a silent substitution. */
+		if (t == RIC_TRIGGER_ADC && !st->adc_initialized) {
+			if (!ric_adc_start(st))
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+							   "ADC unavailable");
+			st->adc_initialized = true;
+		}
+
+		c->trigger = t;
+		ric_trigger_rearm(st);
+		if (t == RIC_TRIGGER_PHOTO && c->photo.rgain_rec > 0 && c->photo.bgain_rec > 0) {
+			/* Same config-provided AWB baseline startup honors. */
+			st->photo.rgain_base = c->photo.rgain_rec;
+			st->photo.bgain_base = c->photo.bgain_rec;
+			st->photo.calibrated = true;
+		}
+		rss_config_set_str(st->cfg, "ircut", "trigger", tbuf);
+		RSS_INFO("trigger switched to %s%s", tbuf,
+			 (t == RIC_TRIGGER_PHOTO && c->poll_interval_ms > 200)
+				 ? " (poll_interval_ms 100 recommended for photo)"
+				 : "");
 		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
 	}
 
@@ -421,6 +513,14 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		cJSON_AddNumberToObject(r, "photo_ev_day", c->photo.ev_day);
 		cJSON_AddNumberToObject(r, "photo_rgain_rec", c->photo.rgain_rec);
 		cJSON_AddNumberToObject(r, "photo_bgain_rec", c->photo.bgain_rec);
+		cJSON_AddNumberToObject(r, "probe_gain_pct", c->probe_gain_pct);
+		cJSON_AddNumberToObject(r, "probe_holdoff_sec", c->probe_holdoff_sec);
+		cJSON_AddNumberToObject(r, "probe_recheck_sec", c->probe_recheck_sec);
+		cJSON_AddBoolToObject(r, "ir850", c->ir850_enabled);
+		cJSON_AddBoolToObject(r, "ir940", c->ir940_enabled);
+		cJSON_AddNumberToObject(r, "adc_night", c->adc_night);
+		cJSON_AddNumberToObject(r, "adc_day", c->adc_day);
+		cJSON_AddNumberToObject(r, "pulse_ms", c->pulse_ms);
 		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 	}
 

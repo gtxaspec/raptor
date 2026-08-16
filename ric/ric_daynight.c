@@ -388,6 +388,47 @@ void ric_force_mode(ric_state_t *st, ric_mode_t mode)
 	ric_set_mode(st, mode);
 }
 
+/*
+ * Re-arm the trigger machinery for a live trigger switch: every counter,
+ * baseline and probe in flight describes the OLD trigger's view of the
+ * scene. Baselines zeroed here resample inside the CURRENT regime once
+ * the cooldown lands — the same self-normalizing path a night entry
+ * uses — so switching triggers mid-night needs no mode bounce. The mode
+ * itself, the IR-cut position and the ISP tuning are untouched: the
+ * regime is right, only the judge changed.
+ *
+ * A probe may have the LED banks lifted when the switch arrives, so
+ * night re-asserts every bank to its policy state on the way out.
+ */
+void ric_trigger_rearm(ric_state_t *st)
+{
+	ric_config_t *c = &st->settings;
+
+	st->day_count = 0;
+	st->night_count = 0;
+	st->cooldown_remaining = 3;
+	st->settle_prev_gain = 0;
+	st->settle_agree_run = 0;
+	st->settle_extend_left = 17;
+	st->night_gain_baseline = 0;
+	st->night_ev_baseline = 0;
+	st->night_detect_gain = 0;
+	st->day_verify_pending = false;
+	st->day_lockout_polls = 0;
+	st->day_lockout_next = 0;
+	st->probe_active = false;
+	st->probe_polls_left = 0;
+	st->probe_holdoff_polls = 0;
+	st->probe_dip_run = 0;
+	st->probe_recheck_polls = 0;
+	ric_photo_reset(&st->photo, PHOTO_PHASE_NIGHT_DETECT);
+
+	if (st->current_mode == RIC_MODE_NIGHT) {
+		ric_irled_drive(st, false, c->ir850_enabled);
+		ric_irled_drive(st, true, c->ir940_enabled);
+	}
+}
+
 void ric_set_mode(ric_state_t *st, ric_mode_t mode)
 {
 	if (mode == st->current_mode)
