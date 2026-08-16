@@ -12,6 +12,8 @@
 #include "greatest.h"
 
 #include <errno.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include <string.h>
 #include <unistd.h>
 #include <rss_ipc.h>
@@ -241,6 +243,74 @@ TEST ring_stream_info(void)
 	ASSERT_EQ(25, (int)hdr->fps_num);
 	ASSERT_EQ(1, (int)hdr->fps_den);
 
+	rss_ring_destroy(w);
+	PASS();
+}
+
+/* The stream-info cluster is rewritten in place across an encoder restart
+ * while consumers poll it live; the seqlock snapshot must never hand back
+ * a hybrid of two publishes. Hammer two distinct tuples from a writer
+ * thread and require every successful snapshot to be exactly one of them
+ * in ALL eight fields. */
+struct si_hammer {
+	rss_ring_t *ring;
+	_Atomic bool stop;
+};
+
+static void *si_hammer_writer(void *arg)
+{
+	struct si_hammer *hm = arg;
+	for (uint32_t i = 0; !atomic_load(&hm->stop); i++) {
+		if (i & 1)
+			rss_ring_set_stream_info(hm->ring, 0, 1, 1280, 720, 25, 1, 77, 31);
+		else
+			rss_ring_set_stream_info(hm->ring, 0, 0, 1920, 1080, 30, 1, 100, 40);
+	}
+	return NULL;
+}
+
+TEST ring_stream_info_never_tears(void)
+{
+	rss_ring_t *w = make_ring("test_si_tear", 4, 4096);
+	ASSERT(w);
+	rss_ring_set_stream_info(w, 0, 0, 1920, 1080, 30, 1, 100, 40);
+	rss_ring_t *r = rss_ring_open("test_si_tear");
+	ASSERT(r);
+
+	struct si_hammer hm = {.ring = w};
+	atomic_init(&hm.stop, false);
+	pthread_t wr;
+	ASSERT_EQ(0, pthread_create(&wr, NULL, si_hammer_writer, &hm));
+
+	int ok = 0, again = 0;
+	for (int i = 0; i < 200000; i++) {
+		rss_stream_info_t si;
+		if (rss_ring_get_stream_info(r, &si) != 0) {
+			again++;
+			continue;
+		}
+		ok++;
+		bool a = (si.codec == 0 && si.width == 1920 && si.height == 1080 &&
+			  si.fps_num == 30 && si.fps_den == 1 && si.profile == 100 &&
+			  si.level == 40);
+		bool b =
+			(si.codec == 1 && si.width == 1280 && si.height == 720 &&
+			 si.fps_num == 25 && si.fps_den == 1 && si.profile == 77 && si.level == 31);
+		if (!a && !b) {
+			atomic_store(&hm.stop, true);
+			pthread_join(wr, NULL);
+			FAILm("torn stream-info snapshot observed");
+		}
+	}
+	atomic_store(&hm.stop, true);
+	pthread_join(wr, NULL);
+
+	/* The writer never rests, so some -EAGAIN is expected; a reader that
+	 * never succeeds means the retry bound is wrong. */
+	ASSERT(ok > 0);
+	(void)again;
+
+	rss_ring_close(r);
 	rss_ring_destroy(w);
 	PASS();
 }
@@ -622,6 +692,7 @@ SUITE(ring_suite)
 	RUN_TEST(ring_overflow_recovery);
 	RUN_TEST(ring_idr_request);
 	RUN_TEST(ring_stream_info);
+	RUN_TEST(ring_stream_info_never_tears);
 	RUN_TEST(ring_acquire_release);
 	RUN_TEST(ring_large_frame);
 	RUN_TEST(ring_multiple_readers);

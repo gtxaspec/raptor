@@ -126,13 +126,16 @@ static const char *rsd_codec_name(uint32_t codec)
  * show corruption or freeze, and a recorder writes a file that disagrees with
  * its own header. Disconnecting makes the client re-DESCRIBE, which is the only
  * transition RTSP actually defines.
+ *
+ * Everyone with a SETUP transport goes, not just the playing: a PAUSEd client
+ * holds the same stale SDP and would resume straight onto the new geometry.
  */
 static void rsd_drop_stream_clients(rsd_server_t *srv, int stream_idx, const char *what)
 {
 	pthread_mutex_lock(&srv->clients_lock);
 	for (int i = 0; i < srv->client_count; i++) {
 		rsd_client_t *c = srv->clients[i];
-		if (c && c->stream_idx == stream_idx && c->video.playing) {
+		if (c && c->stream_idx == stream_idx && c->video.rtp) {
 			shutdown(c->fd, SHUT_RDWR);
 			RSS_INFO("disconnecting client on stream %d (%s changed)", stream_idx,
 				 what);
@@ -342,20 +345,28 @@ void *rsd_video_reader_thread(void *arg)
 			atomic_store_explicit(&rctx->pps_len, 0, memory_order_relaxed);
 
 			/* Cache all SDP-relevant fields so the session thread
-			 * never needs to dereference the ring pointer. */
-			const rss_ring_header_t *new_hdr = rss_ring_get_header(rctx->ring);
-			/* Both comparisons read what the old ring advertised, so
-			 * they have to happen before the cache is overwritten. */
-			bool codec_changed = (new_hdr->codec != rctx->last_codec);
-			bool geometry_changed = (new_hdr->width != rctx->last_width ||
-						 new_hdr->height != rctx->last_height);
-			rctx->last_codec = new_hdr->codec;
-			rctx->last_width = new_hdr->width;
-			rctx->last_height = new_hdr->height;
-			rctx->last_fps_num = new_hdr->fps_num;
-			rctx->last_fps_den = new_hdr->fps_den;
-			rctx->last_profile = new_hdr->profile;
-			rctx->last_level = new_hdr->level;
+			 * never needs to dereference the ring pointer. The seqlock
+			 * snapshot cannot hand back a torn pair; -EAGAIN (producer
+			 * died mid-rewrite) keeps the old cache, and the live
+			 * check below catches up on the next pass. */
+			rss_stream_info_t si;
+			bool codec_changed = false;
+			bool geometry_changed = false;
+			if (rss_ring_get_stream_info(rctx->ring, &si) == 0) {
+				/* Both comparisons read what the old ring advertised,
+				 * so they have to happen before the cache is
+				 * overwritten. */
+				codec_changed = (si.codec != rctx->last_codec);
+				geometry_changed = (si.width != rctx->last_width ||
+						    si.height != rctx->last_height);
+				rctx->last_codec = si.codec;
+				rctx->last_width = si.width;
+				rctx->last_height = si.height;
+				rctx->last_fps_num = si.fps_num;
+				rctx->last_fps_den = si.fps_den;
+				rctx->last_profile = si.profile;
+				rctx->last_level = si.level;
+			}
 
 			/* Ring reconnected — reset all clients on this stream
 			 * so they re-sync from the next keyframe, unless what the
@@ -450,10 +461,23 @@ void *rsd_video_reader_thread(void *arg)
 		 * between ring_wait returns. Processing them sequentially
 		 * preserves every frame; the reader is fast enough to catch up
 		 * (measured <2ms per frame vs 33ms budget on T20). */
-		const rss_ring_header_t *rhdr = rss_ring_get_header(rctx->ring);
-		uint32_t fps = (rhdr->fps_num > 0 && rhdr->fps_den > 0)
-				       ? rhdr->fps_num / rhdr->fps_den
-				       : 30;
+		/* One seqlock snapshot serves the pacing, the rate refresh and
+		 * the change check below, so all three see the same rewrite —
+		 * never the new width beside the old height. -EAGAIN (producer
+		 * died mid-rewrite) falls back to the cache and retries on the
+		 * next pass. */
+		rss_stream_info_t si;
+		bool si_ok = (rss_ring_get_stream_info(rctx->ring, &si) == 0);
+		if (!si_ok) {
+			si.codec = rctx->last_codec;
+			si.width = rctx->last_width;
+			si.height = rctx->last_height;
+			si.fps_num = rctx->last_fps_num;
+			si.fps_den = rctx->last_fps_den;
+			si.profile = rctx->last_profile;
+			si.level = rctx->last_level;
+		}
+		uint32_t fps = (si.fps_num > 0 && si.fps_den > 0) ? si.fps_num / si.fps_den : 30;
 		uint32_t frame_dur = 90000 / fps;
 
 		/*
@@ -472,27 +496,26 @@ void *rsd_video_reader_thread(void *arg)
 		 * keyframe re-cache (see the sps_len test in the read loop),
 		 * which is what a re-DESCRIBE will then be answered with.
 		 */
-		if (rhdr->fps_num != rctx->last_fps_num || rhdr->fps_den != rctx->last_fps_den) {
-			RSS_INFO("ring[%d]: rate now %u/%u fps", rctx->idx, rhdr->fps_num,
-				 rhdr->fps_den);
-			rctx->last_fps_num = rhdr->fps_num;
-			rctx->last_fps_den = rhdr->fps_den;
+		if (si.fps_num != rctx->last_fps_num || si.fps_den != rctx->last_fps_den) {
+			RSS_INFO("ring[%d]: rate now %u/%u fps", rctx->idx, si.fps_num, si.fps_den);
+			rctx->last_fps_num = si.fps_num;
+			rctx->last_fps_den = si.fps_den;
 		}
 
-		if (rhdr->codec != rctx->last_codec || rhdr->width != rctx->last_width ||
-		    rhdr->height != rctx->last_height) {
-			bool codec_changed = (rhdr->codec != rctx->last_codec);
+		if (si.codec != rctx->last_codec || si.width != rctx->last_width ||
+		    si.height != rctx->last_height) {
+			bool codec_changed = (si.codec != rctx->last_codec);
 
 			RSS_INFO("ring[%d]: stream is now %s %ux%u (was %s %ux%u)", rctx->idx,
-				 rsd_codec_name(rhdr->codec), rhdr->width, rhdr->height,
+				 rsd_codec_name(si.codec), si.width, si.height,
 				 rsd_codec_name(rctx->last_codec), (unsigned)rctx->last_width,
 				 (unsigned)rctx->last_height);
 
-			rctx->last_codec = rhdr->codec;
-			rctx->last_width = rhdr->width;
-			rctx->last_height = rhdr->height;
-			rctx->last_profile = rhdr->profile;
-			rctx->last_level = rhdr->level;
+			rctx->last_codec = si.codec;
+			rctx->last_width = si.width;
+			rctx->last_height = si.height;
+			rctx->last_profile = si.profile;
+			rctx->last_level = si.level;
 
 			atomic_store_explicit(&rctx->vps_len, 0, memory_order_relaxed);
 			atomic_store_explicit(&rctx->sps_len, 0, memory_order_relaxed);

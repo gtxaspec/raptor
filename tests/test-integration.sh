@@ -2034,6 +2034,92 @@ else
     fi
 fi
 
+# ── A PAUSEd client holds the stale SDP too ──
+# PAUSE keeps the session and its negotiated SDP; a geometry change
+# while paused would otherwise resume the client straight onto frames
+# its SDP does not describe. The drop must reach everyone with a SETUP
+# transport, playing or not.
+PAUSE_OUT=$(python3 - "$OUT/raptorctl" <<'PAUSE_EOF'
+import socket, subprocess, sys, time
+
+def req(sock, buf, method, url, cseq, extra=""):
+    sock.sendall(f"{method} {url} RTSP/1.0\r\nCSeq: {cseq}\r\n{extra}\r\n".encode())
+    while b"\r\n\r\n" not in buf[0]:
+        d = sock.recv(4096)
+        if not d:
+            return ""
+        buf[0] += d
+    head, _, rest = buf[0].partition(b"\r\n\r\n")
+    headers = head.decode(errors="replace")
+    clen = 0
+    for line in headers.split("\r\n"):
+        if line.lower().startswith("content-length:"):
+            clen = int(line.split(":", 1)[1])
+    while len(rest) < clen:
+        rest += sock.recv(4096)
+    buf[0] = rest[clen:]
+    return headers
+
+def ctl(*args):
+    r = subprocess.run([sys.argv[1]] + list(args), capture_output=True,
+                       text=True, timeout=20)
+    return r.stdout
+
+def eof_within(sock, seconds):
+    """True once the server closes; drains interleaved bytes meanwhile."""
+    end = time.time() + seconds
+    while True:
+        left = end - time.time()
+        if left <= 0:
+            return False
+        sock.settimeout(left)
+        try:
+            d = sock.recv(65536)
+        except socket.timeout:
+            return False
+        if not d:
+            return True
+
+base = "rtsp://127.0.0.1:15554/stream0"
+s = socket.create_connection(("127.0.0.1", 15554), timeout=5)
+buf = [b""]
+req(s, buf, "DESCRIBE", base, 1, "Accept: application/sdp\r\n")
+setup = req(s, buf, "SETUP", base + "/video", 2,
+            "Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n")
+sid = ""
+for line in setup.split("\r\n"):
+    if line.lower().startswith("session:"):
+        sid = line.split(":", 1)[1].split(";")[0].strip()
+sess = f"Session: {sid}\r\n"
+play = req(s, buf, "PLAY", base, 3, sess + "Range: npt=0.000-\r\n")
+if " 200 " not in play.split("\r\n")[0] + " ":
+    print("PLAY_FAILED")
+    sys.exit(0)
+time.sleep(1.5)
+pause = req(s, buf, "PAUSE", base, 4, sess)
+if " 200 " not in pause.split("\r\n")[0] + " ":
+    print("PAUSE_FAILED")
+    sys.exit(0)
+
+res = ctl("rvd", "set-resolution", "0", "1280", "720")
+print("SETRES_OK=" + ("1" if '"ok"' in res else "0"))
+print("PAUSED_DROPPED=" + ("1" if eof_within(s, 10.0) else "0"))
+s.close()
+ctl("rvd", "set-resolution", "0", "1920", "1080")
+time.sleep(2)
+PAUSE_EOF
+)
+if echo "$PAUSE_OUT" | grep -qE "PLAY_FAILED|PAUSE_FAILED"; then
+    skip "geometry change drops a PAUSEd client" "no paused session to test ($PAUSE_OUT)"
+elif echo "$PAUSE_OUT" | grep -q "SETRES_OK=0"; then
+    skip "geometry change drops a PAUSEd client" "set-resolution was refused"
+elif echo "$PAUSE_OUT" | grep -q "PAUSED_DROPPED=1"; then
+    pass "geometry change drops a PAUSEd client"
+else
+    fail "geometry change drops a PAUSEd client" \
+        "paused client still connected 10s after set-resolution"
+fi
+
 # ── Recovery invariants: RTP through disturbances ──
 # The slow-client legs above prove the server SURVIVES a stall; this
 # one proves the streams stay CORRECT through it: both tracks' RTP
