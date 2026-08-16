@@ -268,6 +268,18 @@ static bool probe_shm_dims(int s, const char *name, uint32_t *out_w, uint32_t *o
 }
 
 /*
+ * Per-stream OSD gate. ROD renders its SHM regions for every stream
+ * unconditionally, so every RVD path that can create regions from them
+ * must ask this same question: init asks it once, and the 10 Hz rescan
+ * must ask it again, or it resurrects, a few seconds later, the very
+ * regions init deliberately skipped.
+ */
+static bool stream_osd_enabled(rvd_state_t *st, int s)
+{
+	return rss_config_get_bool(st->cfg, st->streams[s].cfg_sect, "osd_enabled", true);
+}
+
+/*
  * Create initial OSD regions by probing for known element SHMs.
  * Also scans /dev/shm for any ROD-created regions we don't know about.
  */
@@ -275,7 +287,7 @@ void rvd_osd_init_stream(rvd_state_t *st, int s)
 {
 	if (st->streams[s].is_jpeg)
 		return;
-	if (!rss_config_get_bool(st->cfg, st->streams[s].cfg_sect, "osd_enabled", true)) {
+	if (!stream_osd_enabled(st, s)) {
 		RSS_INFO("osd stream%d: disabled by [%s] osd_enabled", s, st->streams[s].cfg_sect);
 		return;
 	}
@@ -620,6 +632,9 @@ static void try_open_shm(rvd_state_t *st, int s, rvd_osd_region_t *reg)
  */
 static void scan_new_shm(rvd_state_t *st, int s)
 {
+	if (!stream_osd_enabled(st, s))
+		return;
+
 	char prefix[32];
 	snprintf(prefix, sizeof(prefix), "rss_osd_osd_%d_", s);
 	int prefix_len = (int)strlen(prefix);
