@@ -117,6 +117,31 @@ TEST cfg_set_makes_it_real(void)
 	PASS();
 }
 
+/* A set without a section has nowhere real to land: the writer would
+ * emit it above the first [section] header, where no loader reads it
+ * again. The setter refuses instead of persisting into oblivion -- the
+ * enabling half of the JPEG-channel empty-cfg_sect bug (PR #31). */
+TEST cfg_set_refuses_an_empty_section(void)
+{
+	char path[128];
+	rss_config_t *cfg = empty_cfg(path, sizeof(path));
+	ASSERT(cfg);
+
+	rss_config_set_int(cfg, "", "orphan", 1);
+	rss_config_set_str(cfg, NULL, "orphan2", "x");
+	ASSERT_FALSE(rss_config_has_dirty(cfg));
+	ASSERT_EQ(0, rss_config_get_int(cfg, "", "orphan", 0));
+
+	/* A real section still works exactly as before. */
+	rss_config_set_int(cfg, "a", "k", 7);
+	ASSERT(rss_config_has_dirty(cfg));
+	ASSERT_EQ(7, rss_config_get_int(cfg, "a", "k", 0));
+
+	rss_config_free(cfg);
+	unlink(path);
+	PASS();
+}
+
 TEST cfg_null_probe_is_order_free(void)
 {
 	char path[128];
@@ -166,6 +191,7 @@ SUITE(config_suite)
 	RUN_TEST(cfg_default_still_visible_to_display);
 	RUN_TEST(cfg_file_value_beats_every_default);
 	RUN_TEST(cfg_set_makes_it_real);
+	RUN_TEST(cfg_set_refuses_an_empty_section);
 	RUN_TEST(cfg_null_probe_is_order_free);
 	RUN_TEST(cfg_fresh_file_save_skips_defaults);
 }
