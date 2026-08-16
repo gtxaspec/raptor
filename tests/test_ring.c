@@ -12,9 +12,11 @@
 #include "greatest.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <unistd.h>
 #include <rss_ipc.h>
 #include <rss_common.h>
@@ -656,6 +658,71 @@ TEST ring_refmode_producer_superseded(void)
 	PASS();
 }
 
+/* Fill a named enc SHM ("/rss_enc_<ring>") with a byte pattern, the way
+ * the producer's SHM injection does. Returns the mapped size or 0. */
+static uint32_t make_enc_shm(const char *ring_name, uint32_t size, uint8_t pattern)
+{
+	char name[128];
+	snprintf(name, sizeof(name), "/rss_enc_%s", ring_name);
+	shm_unlink(name);
+	int fd = shm_open(name, O_CREAT | O_RDWR | O_EXCL, 0600);
+	if (fd < 0)
+		return 0;
+	if (ftruncate(fd, size) != 0) {
+		close(fd);
+		return 0;
+	}
+	uint8_t *p = mmap(NULL, size, PROT_WRITE, MAP_SHARED, fd, 0);
+	close(fd);
+	if (p == MAP_FAILED)
+		return 0;
+	memset(p, pattern, size);
+	munmap(p, size);
+	return size;
+}
+
+/* An encoder restart on a REUSED ring replaces the backing region: the
+ * producer re-injects a fresh enc SHM and re-enables refmode. A consumer
+ * holding the mapping from open must follow (ref_gen bump -> remap) or it
+ * keeps serving the old object's frozen bytes under fresh slot metadata --
+ * the exact corruption a live set-resolution produced on the wire. */
+TEST ring_refmode_remap_after_region_swap(void)
+{
+	rss_ring_t *w = make_ring("test_refswap", 8, 4096);
+	ASSERT(w);
+	ASSERT(make_enc_shm("test_refswap", 65536, 0xAA));
+	ASSERT_EQ(0, rss_ring_enable_refmode(w, 65536, 0, 2, 32768));
+	ASSERT_EQ(0, rss_ring_publish_ref(w, 0, 64, 1000, 0x14, true, 0));
+
+	rss_ring_t *rd = rss_ring_open("test_refswap");
+	ASSERT(rd);
+
+	uint8_t buf[256];
+	uint32_t len;
+	rss_ring_slot_t meta;
+	uint64_t seq = 1;
+	ASSERT_EQ(0, rss_ring_read(rd, &seq, buf, sizeof(buf), &len, &meta));
+	ASSERT_EQ(64, (int)len);
+	ASSERT_EQ(0xAA, buf[0]);
+	ASSERT_EQ(0xAA, buf[63]);
+
+	/* Encoder restart: new object under the same name, new contents,
+	 * re-enabled refmode. The old mapping is now a lie. */
+	ASSERT(make_enc_shm("test_refswap", 131072, 0xBB));
+	ASSERT_EQ(0, rss_ring_enable_refmode(w, 131072, 0, 2, 65536));
+	ASSERT_EQ(0, rss_ring_publish_ref(w, 0, 64, 2000, 0x14, true, 0));
+
+	ASSERT_EQ(0, rss_ring_read(rd, &seq, buf, sizeof(buf), &len, &meta));
+	ASSERT_EQ(64, (int)len);
+	ASSERT_EQ_FMT(0xBB, buf[0], "0x%02x");
+	ASSERT_EQ_FMT(0xBB, buf[63], "0x%02x");
+
+	rss_ring_close(rd);
+	rss_ring_destroy(w);
+	shm_unlink("/rss_enc_test_refswap");
+	PASS();
+}
+
 TEST ring_open_handle_cannot_publish(void)
 {
 	/* rss_ring_open() yields a consumer handle, and every publish path
@@ -705,5 +772,6 @@ SUITE(ring_suite)
 	RUN_TEST(ring_stale_detection);
 	RUN_TEST(ring_producer_survives_recreate_larger);
 	RUN_TEST(ring_refmode_producer_superseded);
+	RUN_TEST(ring_refmode_remap_after_region_swap);
 	RUN_TEST(ring_open_handle_cannot_publish);
 }

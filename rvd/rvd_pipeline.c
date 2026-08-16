@@ -102,6 +102,41 @@ void rvd_stream_publish_info(rvd_state_t *st, int idx)
 	}
 }
 
+/*
+ * (Re-)declare the ring's reference-mode region from CURRENT encoder
+ * state. Runs at ring creation and again on every reuse across an
+ * encoder restart -- the restart replaces the backing region (new SHM
+ * injection, possibly a new stride), and each enable bumps the ring's
+ * ref generation so live consumers remap instead of reading frozen
+ * bytes from the old object under fresh slot metadata.
+ *
+ * Capacity stays declared at the tracking maximum, not the encoder's
+ * nominal buffer count: after RequestIDR+Flush the T41 encoder emits
+ * IDR AUs from a buffer beyond max_stream_cnt, and a buf_idx past the
+ * declared count makes publish_ref reject exactly the keyframes. The
+ * stride still describes the real per-buffer size.
+ */
+static void rvd_stream_enable_refmode(rvd_state_t *st, int idx)
+{
+	rvd_stream_t *s = &st->streams[idx];
+
+	if (!s->ring || s->is_jpeg || s->enc_cfg.codec == RSS_CODEC_JPEG || !st->refmode)
+		return;
+
+	if (st->refmode_shm && st->enc_shm_size[idx] > 0) {
+		uint8_t cnt = s->enc_cfg.max_stream_cnt;
+		if (!cnt)
+			cnt = 2;
+		rss_ring_enable_refmode(s->ring, st->enc_shm_size[idx], 0, RSS_RING_MAX_REF_BUFS,
+					st->enc_shm_size[idx] / cnt);
+	} else if (!st->refmode_shm && st->rmem_size > 0) {
+		uint32_t actual_stride = 0;
+		RSS_HAL_CALL(st->ops, enc_get_stream_buf_size, st->hal_ctx, s->chn, &actual_stride);
+		rss_ring_enable_refmode(s->ring, st->rmem_size, st->rmem_mmap_offset,
+					RSS_RING_MAX_REF_BUFS, actual_stride);
+	}
+}
+
 /* Parse codec string from config */
 static rss_codec_t parse_codec(const char *s)
 {
@@ -1367,6 +1402,14 @@ create_ring:
 	/* ── Create ring (or reuse existing across encoder restart) ── */
 	if (s->ring) {
 		rvd_stream_publish_info(st, idx);
+		/* The restart replaced the encoder's output region (the SHM
+		 * injection recreated the object; a resize changed the buffer
+		 * stride), but the REUSED ring still advertises the old one:
+		 * consumers keep resolving frames through a mapping of a
+		 * region nobody writes anymore and serve frozen bytes under
+		 * fresh slot metadata. Re-enabling bumps the ring's ref
+		 * generation, which is what tells them to remap. */
+		rvd_stream_enable_refmode(st, idx);
 		RSS_DEBUG("stream%d ring: reused", idx);
 	} else {
 		int local = s->fs_chn - fs_base_channel(s->sensor_idx);
@@ -1467,32 +1510,7 @@ create_ring:
 					rvd_profile_idc(s->enc_cfg.profile),
 					rvd_level_idc(s->enc_cfg.width, s->enc_cfg.height));
 
-				bool jpeg_codec = (s->enc_cfg.codec == RSS_CODEC_JPEG);
-				/* Declare the ring's ref capacity at the tracking
-				 * maximum, not the encoder's nominal buffer count:
-				 * after RequestIDR+Flush the T41 encoder emits IDR
-				 * AUs from a buffer beyond max_stream_cnt, and a
-				 * buf_idx past the declared count makes publish_ref
-				 * reject exactly the keyframes (every later joiner
-				 * then starves in the keyframe hold). The stride
-				 * still describes the real per-buffer size. */
-				if (!jpeg_codec && st->refmode && st->refmode_shm &&
-				    st->enc_shm_size[idx] > 0) {
-					uint8_t cnt = s->enc_cfg.max_stream_cnt;
-					if (!cnt)
-						cnt = 2;
-					rss_ring_enable_refmode(s->ring, st->enc_shm_size[idx], 0,
-								RSS_RING_MAX_REF_BUFS,
-								st->enc_shm_size[idx] / cnt);
-				} else if (!jpeg_codec && st->refmode && !st->refmode_shm &&
-					   st->rmem_size > 0) {
-					uint32_t actual_stride = 0;
-					RSS_HAL_CALL(st->ops, enc_get_stream_buf_size, st->hal_ctx,
-						     s->chn, &actual_stride);
-					rss_ring_enable_refmode(
-						s->ring, st->rmem_size, st->rmem_mmap_offset,
-						RSS_RING_MAX_REF_BUFS, actual_stride);
-				}
+				rvd_stream_enable_refmode(st, idx);
 			}
 		}
 

@@ -5,6 +5,7 @@
  * them to all playing RTSP clients via their compy NalTransport.
  */
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -535,6 +536,24 @@ void *rsd_video_reader_thread(void *arg)
 			ret = rss_ring_read(rctx->ring, &read_seq, rctx->frame_buf,
 					    rctx->frame_buf_size, &length, &meta);
 			frame_data = rctx->frame_buf;
+			if (ret == -ENOSPC) {
+				/* The frame outgrew the buffer sized at ring open —
+				 * an encoder restart (set-resolution) can raise the
+				 * per-buffer stride mid-life. The read reported the
+				 * needed size and already advanced past the frame;
+				 * grow and continue so it stays a one-frame hiccup,
+				 * not a permanent skip storm. */
+				uint8_t *bigger = realloc(rctx->frame_buf, length);
+				if (bigger) {
+					RSS_WARN("video[%d]: frame buffer %u -> %u after "
+						 "producer restart",
+						 stream_idx, rctx->frame_buf_size, length);
+					rctx->frame_buf = bigger;
+					rctx->frame_buf_size = length;
+				}
+				rctx->read_seq = read_seq;
+				continue;
+			}
 			if (ret == RSS_EOVERFLOW) {
 				uint64_t skipped = read_seq - pre_seq;
 				if (skipped == 0) {
