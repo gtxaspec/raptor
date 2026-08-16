@@ -1,5 +1,5 @@
 #!/bin/sh
-# S31raptor -- Raptor Streaming System init script
+# S31raptor -- Raptor Streaming System init script (webcam variant)
 
 CONF=/etc/raptor.conf
 RUNDIR=/var/run/rss
@@ -23,7 +23,7 @@ start_daemon() {
 		printf "  %-4s skipped (not installed)\n" "$name"
 		return
 	fi
-	if ! config_bool "$(daemon_section $name)" "enabled" "$(daemon_default_enabled $name)"; then
+	if ! config_bool "$(daemon_section $name)" "enabled" "true"; then
 		printf "  %-4s disabled\n" "$name"
 		return
 	fi
@@ -39,12 +39,11 @@ start_daemon() {
 	fi
 }
 
-# Map daemon name to config section and default enabled state
+# Map daemon name to config section
 daemon_section() {
 	case $1 in
 		rvd) echo "sensor" ;;
 		rsd) echo "rtsp" ;;
-		rsd-555) echo "rtsp" ;;
 		rad) echo "audio" ;;
 		rhd) echo "http" ;;
 		rod) echo "osd" ;;
@@ -56,13 +55,6 @@ daemon_section() {
 		rsp) echo "push" ;;
 		rsr) echo "srt" ;;
 		*) echo "$1" ;;
-	esac
-}
-
-daemon_default_enabled() {
-	case $1 in
-		rmr | rmd | rwc | rsp | rsr | rsd-555) echo "false" ;;
-		*) echo "true" ;;
 	esac
 }
 
@@ -94,7 +86,6 @@ start() {
 	# Core daemons
 	start_daemon rod
 	start_daemon rsd
-	start_daemon rsd-555
 	start_daemon rhd
 	start_daemon ric
 	start_daemon rmr
@@ -103,32 +94,47 @@ start() {
 	start_daemon rsp
 	start_daemon rsr
 
-	echo "Done."
-}
-
-stop_daemon() {
-	pid=$(pidof "$1") || return
-	kill "$pid" 2>/dev/null
-	i=0
-	while [ $i -lt 30 ] && kill -0 "$pid" 2>/dev/null; do
-		sleep 0.1
-		i=$((i + 1))
-	done
-	if kill -0 "$pid" 2>/dev/null; then
-		kill -9 "$pid" 2>/dev/null
-		printf "  %-4s killed\n" "$1"
-	else
-		printf "  %-4s stopped\n" "$1"
+	# USB webcam: load gadget, switch to device mode, start RWC
+	if config_bool "webcam" "enabled" "false" && [ -x /usr/bin/rwc ]; then
+		if ! lsmod 2>/dev/null | grep -q g_webcam; then
+			modprobe g_webcam 2>/dev/null
+			sleep 1
+			usb-role -m device 2>/dev/null
+			sleep 1
+			soft=$(find /sys/devices -name soft_connect -path "*/dwc2/*" 2>/dev/null | head -1)
+			if [ -n "$soft" ]; then
+				echo connect >"$soft"
+			fi
+		fi
+		start_daemon rwc
+		while :; do
+			setsid /sbin/getty -n -l /bin/sh ttyGS0 0 vt100
+			sleep 1
+		done &
 	fi
+
+	echo "Done."
 }
 
 stop() {
 	echo "Stopping Raptor Streaming System..."
 
 	# Stop consumers first, then producer (RVD) last
-	for d in rsr rsp rwd rmd rmr ric rhd rsd rod rad rvd; do
-		stop_daemon $d
+	for d in rsr rsp rwc rwd rmd rmr ric rhd rsd rod rad rvd; do
+		if pidof $d >/dev/null 2>&1; then
+			start-stop-daemon -K -x /usr/bin/$d 2>/dev/null
+			printf "  %-4s stopped\n" "$d"
+		fi
 	done
+
+	# Unload webcam gadget
+	if lsmod 2>/dev/null | grep -q g_webcam; then
+		soft=$(find /sys/devices -name soft_connect -path "*/dwc2/*" 2>/dev/null | head -1)
+		[ -n "$soft" ] && echo disconnect >"$soft"
+		rmmod g_webcam 2>/dev/null
+		usb-role -m host 2>/dev/null
+		printf "  %-4s unloaded\n" "uvc"
+	fi
 
 	# Clean up runtime files
 	rm -f "$RUNDIR"/*.pid "$RUNDIR"/*.sock
@@ -146,6 +152,7 @@ case "$1" in
 		;;
 	restart)
 		stop
+		sleep 1
 		start
 		;;
 	*)
