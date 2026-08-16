@@ -23,7 +23,7 @@ start_daemon() {
 		printf "  %-4s skipped (not installed)\n" "$name"
 		return
 	fi
-	if ! config_bool "$(daemon_section $name)" "enabled" "true"; then
+	if ! daemon_enabled "$name"; then
 		printf "  %-4s disabled\n" "$name"
 		return
 	fi
@@ -55,6 +55,19 @@ daemon_section() {
 		rsp) echo "push" ;;
 		rsr) echo "srt" ;;
 		*) echo "$1" ;;
+	esac
+}
+
+# Should a daemon start? Its own section decides, normally. rmr hosts two
+# features and runs fine with recording off ("timelapse only -- recording
+# stays off"), so a timelapse-only config must also bring it up: gating on
+# [recording] alone left [timelapse] enabled = true written and honoured,
+# but nothing ever started the daemon that reads it.
+daemon_enabled() {
+	config_bool "$(daemon_section $1)" "enabled" "true" && return 0
+	case $1 in
+		rmr) config_bool "timelapse" "enabled" "false" ;;
+		*) return 1 ;;
 	esac
 }
 
