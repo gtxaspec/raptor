@@ -2,11 +2,23 @@
  * ric_json.c -- GPIO pin discovery from a thingino device file
  *
  * Auto-discovers IR-cut and IR LED pins when raptor.conf leaves them
- * at -1. Recognized keys under the top-level "gpio" object:
- *   "ircut": "57 58"    (one or two GPIOs, space-separated string)
- *   "ircut": 57         (single GPIO as integer)
- *   "ir850": 8          (IR LED GPIO)
- *   "ir940": 9          (IR LED GPIO, used if ir850 absent)
+ * at -1. The thingino fleet's standard notation, all of it recognized
+ * here, under the top-level "gpio" object:
+ *   "ircut": 57                  (single GPIO as integer)
+ *   "ircut": "57 58"             (dual-coil pair; pin order defines
+ *                                 polarity: first = day, second = night)
+ *   "ircut": {"pin": 57, "active_low": true}
+ *                                (single inverted pin; the object is
+ *                                 the standard's only polarity escape
+ *                                 hatch, valid for the LED keys too)
+ *   "ir850": 8 / "ir940": 9      (IR LED GPIOs)
+ *   -1 or ""                     (explicitly disabled, silent)
+ * "ircut": 999 means the board's filter hangs off the tmi8152
+ * motor-driver character device, which ric does not drive yet; that
+ * is warned as unsupported, not misread as a pin. The retired o/O
+ * drive-level suffix notation is rejected whole rather than
+ * half-read: strtol stopping at a suffix used to hold one coil of a
+ * dual H-bridge asserted while the other pin was never exported.
  *
  * One optional discovery source: raptor.conf's [ircut] section is
  * authoritative and is consulted first, and the file is absent on any
@@ -32,6 +44,7 @@
 #include "ric_json.h"
 
 #define GPIO_PIN_MAX 191
+#define TMI8152_DEV  999 /* fleet marker for the motor-driver char device */
 
 /*
  * Bound the read explicitly rather than by the size of whatever
@@ -45,6 +58,97 @@
 static bool valid_gpio(int pin)
 {
 	return pin >= 0 && pin <= GPIO_PIN_MAX;
+}
+
+/*
+ * {pin, active_low}: the standard's escape hatch for a single
+ * inverted pin. jct types both members properly (pin as a number,
+ * active_low as a bool), and the webui's bookkeeping keys riding in
+ * the same object (active_on_boot) are not ric's business. A
+ * malformed object warns: like everything else here, silence would
+ * read as "no pins on this board".
+ */
+static bool gpio_object(const cJSON *item, const char *key, int *pin, bool *active_low)
+{
+	if (!cJSON_IsObject(item))
+		return false;
+	const cJSON *p = cJSON_GetObjectItemCaseSensitive(item, "pin");
+	if (!cJSON_IsNumber(p) || !valid_gpio(p->valueint)) {
+		RSS_WARN("gpio.%s object carries no usable \"pin\" -- ignored", key);
+		return false;
+	}
+	*pin = p->valueint;
+	*active_low = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(item, "active_low"));
+	return true;
+}
+
+/*
+ * "N" or "N M", nothing else. Suffixed tokens and any other trailing
+ * decoration reject the whole value: a half-read pair used to hold
+ * one coil of a dual H-bridge asserted while the other pin was never
+ * exported. "-1" and "" are the explicit-disable spellings and stay
+ * silent; other unparseable strings warn.
+ */
+static bool gpio_pin_pair(const char *s, const char *key, int *pin, int *pin2)
+{
+	char *endp;
+	long v = strtol(s, &endp, 10);
+	if (endp == s || v == -1) {
+		if (endp == s && *s != '\0')
+			RSS_WARN("gpio.%s \"%s\" is not pin notation -- ignored", key, s);
+		return false;
+	}
+	if (v == TMI8152_DEV) {
+		RSS_WARN("gpio.%s is the tmi8152 motor-driver device (999), which ric does not "
+			 "support yet -- IR-cut switching stays off",
+			 key);
+		return false;
+	}
+	if (!valid_gpio((int)v))
+		goto bad;
+	*pin = (int)v;
+	while (*endp == ' ')
+		endp++;
+	if (*endp == '\0')
+		return true;
+	const char *second = endp;
+	v = strtol(second, &endp, 10);
+	if (endp == second || !valid_gpio((int)v))
+		goto bad;
+	*pin2 = (int)v;
+	while (*endp == ' ')
+		endp++;
+	if (*endp == '\0')
+		return true;
+bad:
+	*pin = -1;
+	*pin2 = -1;
+	RSS_WARN("gpio.%s \"%s\" is not the standard \"pin\" or \"pin pin\" notation -- "
+		 "ignored whole rather than half-read",
+		 key, s);
+	return false;
+}
+
+/* ir850/ir940: a bare number or the {pin, active_low} object. */
+static void gpio_led_pin(const cJSON *gpio, const char *key, int *pin, bool *active_low)
+{
+	const cJSON *item = cJSON_GetObjectItemCaseSensitive(gpio, key);
+	if (cJSON_IsNumber(item)) {
+		if (valid_gpio(item->valueint)) {
+			*pin = item->valueint;
+			*active_low = false;
+		} else if (item->valueint > GPIO_PIN_MAX) {
+			RSS_WARN("gpio.%s %d is out of range -- ignored", key, item->valueint);
+		}
+		/* negative = explicitly disabled, silent */
+	} else if (cJSON_IsObject(item)) {
+		gpio_object(item, key, pin, active_low);
+	} else if (cJSON_IsString(item) && item->valuestring && item->valuestring[0] &&
+		   strcmp(item->valuestring, "-1") != 0) {
+		RSS_WARN("gpio.%s \"%s\": the standard form for an LED pin is a bare number -- "
+			 "ignored",
+			 key, item->valuestring);
+	}
 }
 
 void ric_json_gpio_load(ric_config_t *c, const char *path)
@@ -124,38 +228,45 @@ void ric_json_gpio_load(ric_config_t *c, const char *path)
 
 	if (c->gpio_ircut < 0) {
 		cJSON *ircut = cJSON_GetObjectItemCaseSensitive(gpio, "ircut");
-		if (cJSON_IsNumber(ircut) && valid_gpio(ircut->valueint)) {
-			c->gpio_ircut = ircut->valueint;
+		int pin = -1, pin2 = -1;
+		bool alow = false;
+		if (cJSON_IsNumber(ircut)) {
+			if (ircut->valueint == TMI8152_DEV)
+				RSS_WARN("gpio.ircut is the tmi8152 motor-driver device (999), "
+					 "which ric does not support yet -- IR-cut switching "
+					 "stays off");
+			else if (valid_gpio(ircut->valueint))
+				pin = ircut->valueint;
+			else if (ircut->valueint > GPIO_PIN_MAX)
+				RSS_WARN("gpio.ircut %d is out of range -- ignored",
+					 ircut->valueint);
+		} else if (cJSON_IsObject(ircut)) {
+			gpio_object(ircut, "ircut", &pin, &alow);
 		} else if (cJSON_IsString(ircut) && ircut->valuestring) {
-			char *endp;
-			int val = (int)strtol(ircut->valuestring, &endp, 10);
-			if (endp != ircut->valuestring && valid_gpio(val)) {
-				c->gpio_ircut = val;
-				while (*endp == ' ')
-					endp++;
-				char *endp2;
-				val = (int)strtol(endp, &endp2, 10);
-				if (endp2 != endp && valid_gpio(val))
-					c->gpio_ircut2 = val;
-			}
+			gpio_pin_pair(ircut->valuestring, "ircut", &pin, &pin2);
+		}
+		if (pin >= 0) {
+			/* The pin's source carries its polarity: a plain form is
+			 * active-high by definition, so a stale config flag must
+			 * not invert a discovered pin. */
+			c->gpio_ircut = pin;
+			c->gpio_ircut2 = pin2;
+			c->ircut_active_low = alow;
 		}
 	}
 
-	if (c->gpio_irled < 0) {
-		cJSON *ir850 = cJSON_GetObjectItemCaseSensitive(gpio, "ir850");
-		if (cJSON_IsNumber(ir850) && valid_gpio(ir850->valueint))
-			c->gpio_irled = ir850->valueint;
-	}
+	if (c->gpio_irled < 0)
+		gpio_led_pin(gpio, "ir850", &c->gpio_irled, &c->irled_active_low);
 
-	if (c->gpio_irled2 < 0) {
-		cJSON *ir940 = cJSON_GetObjectItemCaseSensitive(gpio, "ir940");
-		if (cJSON_IsNumber(ir940) && valid_gpio(ir940->valueint))
-			c->gpio_irled2 = ir940->valueint;
-	}
+	if (c->gpio_irled2 < 0)
+		gpio_led_pin(gpio, "ir940", &c->gpio_irled2, &c->irled2_active_low);
 
 	cJSON_Delete(root);
 
 	if (c->gpio_ircut >= 0 || c->gpio_irled >= 0)
-		RSS_INFO("GPIOs from %s: ircut=%d ircut2=%d irled=%d irled2=%d", path,
-			 c->gpio_ircut, c->gpio_ircut2, c->gpio_irled, c->gpio_irled2);
+		RSS_INFO("GPIOs from %s: ircut=%d ircut2=%d irled=%d irled2=%d%s%s%s", path,
+			 c->gpio_ircut, c->gpio_ircut2, c->gpio_irled, c->gpio_irled2,
+			 c->ircut_active_low ? " ircut-active-low" : "",
+			 c->irled_active_low ? " irled-active-low" : "",
+			 c->irled2_active_low ? " irled2-active-low" : "");
 }

@@ -73,6 +73,138 @@ TEST ric_json_dual_string_ircut(void)
 	PASS();
 }
 
+/* {pin, active_low}: the standard's single-inverted-pin form, valid
+ * for all three keys; an absent active_low means active-high. */
+TEST ric_json_object_pins(void)
+{
+	ric_config_t c = fresh_config();
+	const char *j = "{\"gpio\":{\"ircut\":{\"pin\":57,\"active_low\":true},"
+			"\"ir850\":{\"pin\":49,\"active_low\":true},"
+			"\"ir940\":{\"pin\":50}}}";
+	write_fixture(j, strlen(j));
+	ric_json_gpio_load(&c, FIXTURE);
+	ASSERT_EQ(57, c.gpio_ircut);
+	ASSERT_EQ(-1, c.gpio_ircut2);
+	ASSERT(c.ircut_active_low);
+	ASSERT_EQ(49, c.gpio_irled);
+	ASSERT(c.irled_active_low);
+	ASSERT_EQ(50, c.gpio_irled2);
+	ASSERT_FALSE(c.irled2_active_low);
+	unlink(FIXTURE);
+	PASS();
+}
+
+/* The webui's bookkeeping keys ride in the same object and are not
+ * ric's business; a jooan-style {active_on_boot, pin} still reads. */
+TEST ric_json_object_extra_keys_ignored(void)
+{
+	ric_config_t c = fresh_config();
+	const char *j = "{\"gpio\":{\"ir850\":{\"active_on_boot\":false,\"pin\":59}}}";
+	write_fixture(j, strlen(j));
+	ric_json_gpio_load(&c, FIXTURE);
+	ASSERT_EQ(59, c.gpio_irled);
+	ASSERT_FALSE(c.irled_active_low);
+	unlink(FIXTURE);
+	PASS();
+}
+
+TEST ric_json_object_without_pin_rejected(void)
+{
+	ric_config_t c = fresh_config();
+	const char *j = "{\"gpio\":{\"ircut\":{\"active_low\":true},"
+			"\"ir850\":{\"pin\":\"49\"}}}";
+	write_fixture(j, strlen(j));
+	ric_json_gpio_load(&c, FIXTURE);
+	ASSERT_EQ(-1, c.gpio_ircut);
+	ASSERT_EQ(-1, c.gpio_irled);
+	unlink(FIXTURE);
+	PASS();
+}
+
+/* The pin's source carries its polarity: a plain form is active-high
+ * by definition, so a stale config flag must not invert a discovered
+ * pin. */
+TEST ric_json_plain_form_resets_polarity(void)
+{
+	ric_config_t c = fresh_config();
+	c.ircut_active_low = true;
+	c.irled_active_low = true;
+	const char *j = "{\"gpio\":{\"ircut\":\"52 53\",\"ir850\":8}}";
+	write_fixture(j, strlen(j));
+	ric_json_gpio_load(&c, FIXTURE);
+	ASSERT_EQ(52, c.gpio_ircut);
+	ASSERT_EQ(53, c.gpio_ircut2);
+	ASSERT_FALSE(c.ircut_active_low);
+	ASSERT_EQ(8, c.gpio_irled);
+	ASSERT_FALSE(c.irled_active_low);
+	unlink(FIXTURE);
+	PASS();
+}
+
+/* 999 is the tmi8152 motor-driver device, not a GPIO: unsupported,
+ * never misread as a pin. */
+TEST ric_json_tmi8152_unsupported(void)
+{
+	ric_config_t c = fresh_config();
+	const char *j = "{\"gpio\":{\"ircut\":999}}";
+	write_fixture(j, strlen(j));
+	ric_json_gpio_load(&c, FIXTURE);
+	ASSERT_EQ(-1, c.gpio_ircut);
+	c = fresh_config();
+	const char *j2 = "{\"gpio\":{\"ircut\":\"999\"}}";
+	write_fixture(j2, strlen(j2));
+	ric_json_gpio_load(&c, FIXTURE);
+	ASSERT_EQ(-1, c.gpio_ircut);
+	unlink(FIXTURE);
+	PASS();
+}
+
+/* The retired o/O suffix notation and any other decorated string are
+ * rejected whole. The historic failure was strtol stopping at the
+ * suffix: ircut=57, ircut2 lost, and a dual-coil filter driven as a
+ * held single pin. */
+TEST ric_json_suffix_rejected_whole(void)
+{
+	ric_config_t c = fresh_config();
+	const char *j = "{\"gpio\":{\"ircut\":\"57o 58o\"}}";
+	write_fixture(j, strlen(j));
+	ric_json_gpio_load(&c, FIXTURE);
+	ASSERT_EQ(-1, c.gpio_ircut);
+	ASSERT_EQ(-1, c.gpio_ircut2);
+	unlink(FIXTURE);
+	PASS();
+}
+
+TEST ric_json_pair_trailing_garbage_rejected(void)
+{
+	ric_config_t c = fresh_config();
+	const char *j = "{\"gpio\":{\"ircut\":\"57 58 59\"}}";
+	write_fixture(j, strlen(j));
+	ric_json_gpio_load(&c, FIXTURE);
+	ASSERT_EQ(-1, c.gpio_ircut);
+	ASSERT_EQ(-1, c.gpio_ircut2);
+	c = fresh_config();
+	const char *j2 = "{\"gpio\":{\"ircut\":\"57 x\"}}";
+	write_fixture(j2, strlen(j2));
+	ric_json_gpio_load(&c, FIXTURE);
+	ASSERT_EQ(-1, c.gpio_ircut);
+	unlink(FIXTURE);
+	PASS();
+}
+
+/* "-1" and "" are the explicit-disable spellings: honored, silent. */
+TEST ric_json_string_disable_silent(void)
+{
+	ric_config_t c = fresh_config();
+	const char *j = "{\"gpio\":{\"ircut\":\"-1\",\"ir850\":\"\"}}";
+	write_fixture(j, strlen(j));
+	ric_json_gpio_load(&c, FIXTURE);
+	ASSERT_EQ(-1, c.gpio_ircut);
+	ASSERT_EQ(-1, c.gpio_irled);
+	unlink(FIXTURE);
+	PASS();
+}
+
 /* Regression: a device file well past 2 KB with the gpio object at
  * the tail. A bounded read that truncates the document loses every
  * pin; reading the whole file must find them. */
@@ -231,6 +363,14 @@ SUITE(ric_json_suite)
 	RUN_TEST(ric_json_missing_file);
 	RUN_TEST(ric_json_int_pins);
 	RUN_TEST(ric_json_dual_string_ircut);
+	RUN_TEST(ric_json_object_pins);
+	RUN_TEST(ric_json_object_extra_keys_ignored);
+	RUN_TEST(ric_json_object_without_pin_rejected);
+	RUN_TEST(ric_json_plain_form_resets_polarity);
+	RUN_TEST(ric_json_tmi8152_unsupported);
+	RUN_TEST(ric_json_suffix_rejected_whole);
+	RUN_TEST(ric_json_pair_trailing_garbage_rejected);
+	RUN_TEST(ric_json_string_disable_silent);
 	RUN_TEST(ric_json_big_file_pins_at_tail);
 	RUN_TEST(ric_json_oversize_skipped);
 	RUN_TEST(ric_json_garbage);

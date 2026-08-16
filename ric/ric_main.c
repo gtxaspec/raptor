@@ -58,6 +58,11 @@ static void load_config(ric_state_t *st)
 	c->gpio_ircut2 = rss_config_get_int(cfg, "ircut", "gpio_ircut2", -1);
 	c->gpio_irled = rss_config_get_int(cfg, "ircut", "gpio_irled", -1);
 	c->gpio_irled2 = rss_config_get_int(cfg, "ircut", "gpio_irled2", -1);
+	/* These pair with manually configured pins; a pin discovered from
+	 * thingino.json carries its own polarity and overwrites them. */
+	c->ircut_active_low = rss_config_get_bool(cfg, "ircut", "gpio_ircut_active_low", false);
+	c->irled_active_low = rss_config_get_bool(cfg, "ircut", "gpio_irled_active_low", false);
+	c->irled2_active_low = rss_config_get_bool(cfg, "ircut", "gpio_irled2_active_low", false);
 	c->ir850_enabled = rss_config_get_bool(cfg, "ircut", "ir850", true);
 	/* Probed before the get, because the getters store their default into
 	 * the config on a miss (for config-get-section) and the key would

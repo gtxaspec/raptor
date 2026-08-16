@@ -125,6 +125,15 @@ typedef struct {
 	int gpio_ircut2; /* second pin for dual GPIO mode, -1 = single */
 	int gpio_irled;	 /* IR LED enable pin (ir850) */
 	int gpio_irled2; /* second IR LED pin (ir940), -1 = none */
+	/*
+	 * Inverted drive, single-pin forms only: a dual-pin ircut
+	 * expresses polarity by pin order (first = day, second = night)
+	 * and never needs these. Inversion happens here in userspace;
+	 * the sysfs active_low attribute is deliberately not used.
+	 */
+	bool ircut_active_low;	/* single-pin ircut driven inverted */
+	bool irled_active_low;	/* ir850 bank lights on 0 */
+	bool irled2_active_low; /* ir940 bank lights on 0 */
 	bool ir850_enabled;
 	bool ir940_enabled;
 	bool ir940_explicit; /* config carries an ir940 key (vs the default) */

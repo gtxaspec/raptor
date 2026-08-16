@@ -232,10 +232,17 @@ void ric_gpio_init(ric_state_t *st)
 	gpio_export(st->settings.gpio_ircut);
 	if (st->settings.gpio_ircut2 >= 0)
 		gpio_export(st->settings.gpio_ircut2);
-	if (st->settings.gpio_irled >= 0)
+	/* Park each bank off right at export: direction "out" leaves the
+	 * line raw-low, which on an active-low bank is lit until the
+	 * first transition gets around to driving it. */
+	if (st->settings.gpio_irled >= 0) {
 		gpio_export(st->settings.gpio_irled);
-	if (st->settings.gpio_irled2 >= 0)
+		gpio_set(st->settings.gpio_irled, st->settings.irled_active_low ? 1 : 0);
+	}
+	if (st->settings.gpio_irled2 >= 0) {
 		gpio_export(st->settings.gpio_irled2);
+		gpio_set(st->settings.gpio_irled2, st->settings.irled2_active_low ? 1 : 0);
+	}
 }
 
 /*
@@ -279,8 +286,9 @@ int ric_ircut_drive(ric_state_t *st, ric_mode_t pos)
 			RSS_INFO("ircut: gpio %d=0, gpio %d=0 (night)", c->gpio_ircut,
 				 c->gpio_ircut2);
 		} else {
-			gpio_set(c->gpio_ircut, 0);
-			RSS_INFO("ircut: gpio %d=0 (night)", c->gpio_ircut);
+			int raw = c->ircut_active_low ? 1 : 0;
+			gpio_set(c->gpio_ircut, raw);
+			RSS_INFO("ircut: gpio %d=%d (night)", c->gpio_ircut, raw);
 		}
 	} else {
 		if (c->gpio_ircut2 >= 0) {
@@ -292,8 +300,9 @@ int ric_ircut_drive(ric_state_t *st, ric_mode_t pos)
 			RSS_INFO("ircut: gpio %d=0, gpio %d=0 (day)", c->gpio_ircut,
 				 c->gpio_ircut2);
 		} else {
-			gpio_set(c->gpio_ircut, 1);
-			RSS_INFO("ircut: gpio %d=1 (day)", c->gpio_ircut);
+			int raw = c->ircut_active_low ? 0 : 1;
+			gpio_set(c->gpio_ircut, raw);
+			RSS_INFO("ircut: gpio %d=%d (day)", c->gpio_ircut, raw);
 		}
 	}
 	return 0;
@@ -314,9 +323,10 @@ int ric_irled_drive(ric_state_t *st, bool bank940, bool on)
 
 	if (pin < 0)
 		return -1;
-	gpio_set(pin, on ? 1 : 0);
-	RSS_INFO("%s: gpio %d=%d (%s)", bank940 ? "ir940" : "ir850", pin, on ? 1 : 0,
-		 on ? "on" : "off");
+	bool alow = bank940 ? c->irled2_active_low : c->irled_active_low;
+	int raw = (on != alow) ? 1 : 0;
+	gpio_set(pin, raw);
+	RSS_INFO("%s: gpio %d=%d (%s)", bank940 ? "ir940" : "ir850", pin, raw, on ? "on" : "off");
 	return 0;
 }
 

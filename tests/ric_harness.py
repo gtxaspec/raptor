@@ -2191,6 +2191,69 @@ def scenario_json_discovery(stub, watch):
     ric.stop()
 
 
+def scenario_active_low(stub, watch):
+    """Inverted single-pin hardware (the tapo c100 class): logical
+    drives must come out raw-inverted from the config flags and from
+    the {pin, active_low} json object alike, and an inverted bank must
+    never see a raw-low (lit) transient, park included."""
+    conf_tail = ("trigger = luma\nnight_luma = 20\nnight_gain = 80000\n"
+                 "day_gain_pct = 25\nhysteresis_sec = 2\n")
+    conf = ("gpio_ircut = %d\ngpio_ircut_active_low = true\n"
+            "gpio_irled = %d\ngpio_irled_active_low = true\n"
+            % (IRCUT1, IRLED)) + conf_tail
+
+    stub.set_scene(luma=120, gain=500, ev=4000)
+    gm, mm = watch.mark(), stub.mark()
+    ric = Ric("alowconf", conf)
+    if not ric.wait_running():
+        result(False, "active-low conf: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    ok = wait_for(lambda: "day" in stub.modes_since(mm), 5)
+    ok = ok and wait_last(watch, gm, IRCUT1, "0") \
+        and wait_last(watch, gm, IRLED, "1")
+    led = [c for _, p, _, c in watch.since(gm) if p == IRLED]
+    result(ok and led and led[0] == "1" and "0" not in led,
+           "active-low conf: day is raw-inverted, bank never flashes",
+           str(watch.since(gm)))
+    gm, mm = watch.mark(), stub.mark()
+    stub.set_scene(luma=5, gain=20000, ev=100000)
+    ok = wait_for(lambda: "night" in stub.modes_since(mm), 4)
+    ok = ok and wait_last(watch, gm, IRCUT1, "1") \
+        and wait_last(watch, gm, IRLED, "0")
+    result(ok, "active-low conf: night holds raw 1, bank lights on raw 0",
+           str(watch.since(gm)))
+    ric.stop()
+
+    orig = open("/etc/thingino.json").read()
+    try:
+        with open("/etc/thingino.json", "w") as f:
+            json.dump({"gpio": {
+                "ircut": {"pin": IRCUT1, "active_low": True},
+                "ir850": {"pin": IRLED, "active_low": True}}}, f)
+        stub.set_scene(luma=120, gain=500, ev=4000)
+        ric = Ric("alowjson", conf_tail)
+        if not ric.wait_running():
+            result(False, "active-low json: ric start", "no 'ric running'")
+            ric.stop()
+            return
+        log = ric.read_log()
+        result("ircut-active-low" in log and "irled-active-low" in log,
+               "active-low json: discovery reports the inversion", log[:400])
+        time.sleep(0.3)
+        gm, mm = watch.mark(), stub.mark()
+        stub.set_scene(luma=5, gain=20000, ev=100000)
+        ok = wait_for(lambda: "night" in stub.modes_since(mm), 4)
+        ok = ok and wait_last(watch, gm, IRCUT1, "1") \
+            and wait_last(watch, gm, IRLED, "0")
+        result(ok, "active-low json: object-form pins drive raw-inverted",
+               str(watch.since(gm)))
+        ric.stop()
+    finally:
+        with open("/etc/thingino.json", "w") as f:
+            f.write(orig)
+
+
 def scenario_live_bank_policy(stub, watch):
     """The ir850/ir940 enable flags are live policy: disabling a bank
     mid-night drops its LED immediately with the mode holding (the
@@ -2363,6 +2426,7 @@ def main():
         scenario_gpio_failure,
         scenario_disabled,
         scenario_json_discovery,
+        scenario_active_low,
         scenario_hostile_config,
         scenario_ctrl_contract,
         scenario_photo_threshold_order,
