@@ -711,6 +711,32 @@ TEST get_sensor_fps_reports_live_and_base(void)
 	PASS();
 }
 
+/* V4L2 still owns an initialized ISP HAL for sensor tuning.  Its control
+ * guard must permit readback without admitting IMP encoder controls. */
+TEST get_sensor_fps_is_available_on_v4l2(void)
+{
+	sensor_fps_setup();
+	st.v4l2_backend = true;
+	setenv("RSS_MOCK_SENSOR_FPS_ACTUAL", "25", 1);
+	call("{\"cmd\":\"get-sensor-fps\"}");
+	unsetenv("RSS_MOCK_SENSOR_FPS_ACTUAL");
+	ASSERT(strstr(resp, "\"status\":\"ok\"") != NULL);
+	ASSERT(strstr(resp, "\"fps_num\":25") != NULL);
+	teardown();
+	PASS();
+}
+
+TEST isp_tuning_is_available_on_v4l2(void)
+{
+	setup();
+	st.v4l2_backend = true;
+	call("{\"cmd\":\"set-brightness\",\"value\":144}");
+	ASSERT(strstr(resp, "\"status\":\"ok\"") != NULL);
+	ASSERT_EQ(144, rec.set_brightness);
+	teardown();
+	PASS();
+}
+
 TEST set_qp_bounds_atomic_update(void)
 {
 	setup();
@@ -1225,6 +1251,8 @@ SUITE(ctrl_suite)
 	RUN_TEST(sensor_fps_sensor_reject_aborts_everything);
 	RUN_TEST(set_fps_clears_active_override);
 	RUN_TEST(get_sensor_fps_reports_live_and_base);
+	RUN_TEST(get_sensor_fps_is_available_on_v4l2);
+	RUN_TEST(isp_tuning_is_available_on_v4l2);
 	RUN_TEST(set_qp_bounds_atomic_update);
 	RUN_TEST(set_qp_bounds_neither_updated_on_failure);
 	RUN_TEST(set_rc_mode_stores_enum_not_string);
