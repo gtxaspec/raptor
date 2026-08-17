@@ -14,6 +14,8 @@
 #include <rss_ipc.h>
 #include <rss_common.h>
 
+#include "rwd_sendq.h"
+
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -190,6 +192,13 @@ struct rwd_client {
 	int stream_idx; /* 0=main, 1=sub */
 	bool sending;
 	bool waiting_keyframe;
+
+	/* Decoupled video send: the ring reader pushes copies, this
+	 * thread pays the packetize/SRTP cost, so the reader never
+	 * overstays the refmode copy budget (see rwd_sendq.h). */
+	rwd_sendq_t sendq;
+	pthread_t send_thread;
+	bool send_thread_started;
 	uint32_t video_ts_offset;
 	bool video_ts_base_set;
 	uint32_t audio_ts_offset;
