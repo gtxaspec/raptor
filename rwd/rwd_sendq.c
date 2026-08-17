@@ -25,7 +25,8 @@ static void purge_locked(rwd_sendq_t *q)
 	}
 }
 
-int rwd_sendq_push(rwd_sendq_t *q, const uint8_t *data, uint32_t len, uint32_t rtp_ts)
+int rwd_sendq_push(rwd_sendq_t *q, const uint8_t *data, uint32_t len, uint32_t rtp_ts,
+		   int64_t capture_us)
 {
 	uint8_t *copy = malloc(len);
 	if (!copy)
@@ -52,6 +53,7 @@ int rwd_sendq_push(rwd_sendq_t *q, const uint8_t *data, uint32_t len, uint32_t r
 	slot->data = copy;
 	slot->len = len;
 	slot->rtp_ts = rtp_ts;
+	slot->capture_us = capture_us;
 	q->head = (q->head + 1) % RWD_SENDQ_SLOTS;
 	q->count++;
 	pthread_cond_signal(&q->cond);

@@ -26,6 +26,7 @@ typedef struct {
 	uint8_t *data; /* malloc'd copy */
 	uint32_t len;
 	uint32_t rtp_ts;
+	int64_t capture_us;
 } rwd_sendq_entry_t;
 
 typedef struct {
@@ -44,7 +45,8 @@ void rwd_sendq_init(rwd_sendq_t *q);
 /* Copy a frame in. Returns 0 on success; 1 if the queue was full (all
  * queued video purged, caller should re-arm waiting-for-keyframe and
  * request an IDR); -1 on allocation failure (treat like 1). */
-int rwd_sendq_push(rwd_sendq_t *q, const uint8_t *data, uint32_t len, uint32_t rtp_ts);
+int rwd_sendq_push(rwd_sendq_t *q, const uint8_t *data, uint32_t len, uint32_t rtp_ts,
+		   int64_t capture_us);
 
 /* Blocking pop. Returns false when the queue is shut down; entries
  * still queued at shutdown are freed by rwd_sendq_destroy, not
