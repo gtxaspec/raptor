@@ -499,9 +499,12 @@ $CC $RWD_CFLAGS -c "$RAPTOR_DIR/rwd/rwd_sdp.c" -o "$OUT/rwd_sdp.o"
 $CC $RWD_CFLAGS -c "$RAPTOR_DIR/rwd/rwd_ice.c" -o "$OUT/rwd_ice.o"
 $CC $RWD_CFLAGS -c "$RAPTOR_DIR/rwd/rwd_dtls.c" -o "$OUT/rwd_dtls.o"
 $CC $RWD_CFLAGS -c "$RAPTOR_DIR/rwd/rwd_media.c" -o "$OUT/rwd_media.o"
+$CC $RWD_CFLAGS -c "$RAPTOR_DIR/rwd/rwd_sendq.c" -o "$OUT/rwd_sendq.o"
+$CC $RWD_CFLAGS -c "$RAPTOR_DIR/rwd/rwd_pacer.c" -o "$OUT/rwd_pacer.o"
 $CC $RWD_CFLAGS -c "$RAPTOR_DIR/rwd/rwd_webtorrent.c" -o "$OUT/rwd_webtorrent.o"
 $CC -o "$OUT/rwd" "$OUT"/rwd_main.o "$OUT"/rwd_signaling.o "$OUT"/rwd_sdp.o \
-    "$OUT"/rwd_ice.o "$OUT"/rwd_dtls.o "$OUT"/rwd_media.o "$OUT"/rwd_webtorrent.o \
+    "$OUT"/rwd_ice.o "$OUT"/rwd_dtls.o "$OUT"/rwd_media.o "$OUT"/rwd_sendq.o \
+    "$OUT"/rwd_pacer.o "$OUT"/rwd_webtorrent.o \
     "$OUT"/rsd_media_clock.o $LIBS "$COMPY_BUILD/libcompy.a" $LIBS_TLS -lopus $LDFLAGS
 echo "  -> rwd"
 
