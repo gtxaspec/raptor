@@ -2450,14 +2450,14 @@ int rvd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, vo
 	if (rss_json_get_str(cmd_json, "cmd", cmd, sizeof(cmd)) != 0)
 		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "missing cmd");
 
-	/* The standalone backend has no initialized IMP HAL graph. Keep its small
-	 * control surface explicit so a web/API request cannot fall through to an
-	 * operation on uninitialized SDK state. */
+	/* The standalone backend initializes the ISP HAL for sensor bring-up and
+	 * tuning, but it has no IMP framesource or encoder graph. Keep its control
+	 * surface explicit so only controls backed by initialized state get through. */
 	if (st->v4l2_backend && strcmp(cmd, "request-idr") != 0 &&
 	    strcmp(cmd, "get-bitrate") != 0 && strcmp(cmd, "get-fps") != 0 &&
 	    strcmp(cmd, "get-gop") != 0 && strcmp(cmd, "get-qp-bounds") != 0 &&
-	    strcmp(cmd, "get-rc-mode") != 0 && strcmp(cmd, "config-show") != 0 &&
-	    strcmp(cmd, "status") != 0)
+	    strcmp(cmd, "get-rc-mode") != 0 && strcmp(cmd, "get-sensor-fps") != 0 &&
+	    strcmp(cmd, "config-show") != 0 && strcmp(cmd, "status") != 0)
 		return rss_ctrl_resp_error(resp_buf, resp_buf_size,
 					   "not supported by the V4L2 backend");
 

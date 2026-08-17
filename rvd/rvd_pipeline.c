@@ -207,11 +207,21 @@ static const char *rc_mode_str(rss_rc_mode_t m)
 
 static void load_stream_config(rss_config_t *cfg, const char *section, rvd_stream_t *s,
 			       int default_w, int default_h, int default_fps, int default_br);
+static int read_sensor_proc_int(int idx, const char *key, int base, int def);
+static int find_active_sensor_proc_index(void);
+static void load_sensor_from_section(rss_config_t *cfg, const char *section,
+				     rss_sensor_config_t *sensor, int proc_idx);
 
 static int rvd_pipeline_init_v4l2(rvd_state_t *st)
 {
+	rss_multi_sensor_config_t multi_cfg = {0};
 	rvd_stream_t *stream = &st->streams[0];
 	const char *device;
+	int sensor_w;
+	int sensor_h;
+	int sensor_fps;
+	int sensor_proc_idx;
+	bool sensor_fps_known;
 	int ret;
 
 	device = rss_config_get_str(st->cfg, "system", "video_device", "/dev/video0");
@@ -227,7 +237,52 @@ static int rvd_pipeline_init_v4l2(rvd_state_t *st)
 	st->ivs_enabled = false;
 	atomic_store(&st->ivs_active, false);
 
-	load_stream_config(st->cfg, "stream0", stream, 2560, 1440, 25, 8000000);
+	/* V4L2 exposes frames from the TX-ISP pipeline, but opening /dev/video0
+	 * does not bind or start the sensor. Bring up ISP + sensor through the
+	 * same HAL sequence as the regular IMP pipeline before configuring the
+	 * capture and encoder backends. */
+	load_sensor_from_section(st->cfg, "sensor", &multi_cfg.sensors[0], 0);
+	multi_cfg.sensor_count = 1;
+	if (!multi_cfg.sensors[0].name[0]) {
+		RSS_FATAL("sensor name not in config and not in /proc/jz/sensor/sensor0/name");
+		return RSS_ERR;
+	}
+	if (multi_cfg.sensors[0].i2c_addr == 0) {
+		RSS_FATAL("i2c_addr not in config and not in /proc/jz/sensor/sensor0/i2c_addr");
+		return RSS_ERR;
+	}
+	RSS_DEBUG("sensor0: %s i2c=0x%02x bus=%d id=%d mclk=%d vin=%d boot=%d",
+		  multi_cfg.sensors[0].name, multi_cfg.sensors[0].i2c_addr,
+		  multi_cfg.sensors[0].i2c_adapter, multi_cfg.sensors[0].sensor_id,
+		  multi_cfg.sensors[0].mclk, multi_cfg.sensors[0].vin_type,
+		  multi_cfg.sensors[0].default_boot);
+
+	ret = RSS_HAL_CALL(st->ops, init, st->hal_ctx, &multi_cfg);
+	if (ret != RSS_OK) {
+		RSS_FATAL("HAL init failed: %d", ret);
+		return ret;
+	}
+	st->hal_initialized = true;
+
+	sensor_proc_idx = find_active_sensor_proc_index();
+	sensor_w = read_sensor_proc_int(sensor_proc_idx, "width", 10, 0);
+	sensor_h = read_sensor_proc_int(sensor_proc_idx, "height", 10, 0);
+	if (sensor_w > 0 && sensor_h > 0) {
+		RSS_INFO("active sensor%d: %dx%d", sensor_proc_idx, sensor_w, sensor_h);
+	} else {
+		sensor_w = 1920;
+		sensor_h = 1080;
+		RSS_WARN("could not determine active sensor resolution; using %dx%d", sensor_w,
+			 sensor_h);
+	}
+	sensor_fps = read_sensor_proc_int(sensor_proc_idx, "max_fps", 10, 0);
+	if (sensor_fps <= 0)
+		sensor_fps = read_sensor_proc_int(sensor_proc_idx, "fps", 10, 0);
+	sensor_fps_known = sensor_fps > 0;
+	if (sensor_fps <= 0)
+		sensor_fps = 25;
+
+	load_stream_config(st->cfg, "stream0", stream, sensor_w, sensor_h, sensor_fps, 8000000);
 	stream->fs_chn = 0;
 	stream->chn = 0;
 	stream->sensor_idx = 0;
@@ -235,6 +290,32 @@ static int rvd_pipeline_init_v4l2(rvd_state_t *st)
 	if (stream->enc_cfg.codec != RSS_CODEC_H264) {
 		RSS_FATAL("V4L2 backend currently requires stream0 codec=h264");
 		return RSS_ERR_NOTSUP;
+	}
+
+	/*
+	 * The public V4L2 node emits every frame produced by the active sensor;
+	 * it has no IMP framesource decimator.  Keep encoder rate control, GOP
+	 * defaults, ring metadata and downstream RTP on that measured clock.
+	 * Reprogramming the physical sensor here is unsafe: some sensor drivers
+	 * advertise the generic FPS control but cannot switch modes while the
+	 * ISP pipeline is active.
+	 */
+	if (sensor_fps_known &&
+	    (stream->enc_cfg.fps_num != (uint32_t)sensor_fps || stream->enc_cfg.fps_den != 1)) {
+		RSS_WARN("V4L2 stream0 rate %u/%u overridden by active sensor%d rate %d/1",
+			 stream->enc_cfg.fps_num, stream->enc_cfg.fps_den, sensor_proc_idx,
+			 sensor_fps);
+		stream->fs_cfg.fps_num = (uint32_t)sensor_fps;
+		stream->fs_cfg.fps_den = 1;
+		stream->enc_cfg.fps_num = (uint32_t)sensor_fps;
+		stream->enc_cfg.fps_den = 1;
+		if (!rss_config_get_str(st->cfg, "stream0", "gop", NULL))
+			stream->enc_cfg.gop_length = (uint32_t)sensor_fps;
+	}
+	if (sensor_fps_known) {
+		st->sensor_base_fps_num = (uint32_t)sensor_fps;
+		st->sensor_base_fps_den = 1;
+		RSS_INFO("sensor%d fps: %d/1", sensor_proc_idx, sensor_fps);
 	}
 	if (rss_config_get_bool(st->cfg, "stream1", "enabled", true) ||
 	    rss_config_get_bool(st->cfg, "jpeg", "enabled", true) ||
@@ -310,6 +391,31 @@ static int read_sensor_proc_int(int idx, const char *key, int base, int def)
 	char path[64];
 	sensor_proc_path(path, sizeof(path), idx, key);
 	return read_procfs_int(path, base, def);
+}
+
+static int find_active_sensor_proc_index(void)
+{
+	for (int idx = 0; idx < RVD_MAX_SENSORS; idx++) {
+		char path[64];
+		char *status;
+		char *end;
+
+		sensor_proc_path(path, sizeof(path), idx, "status");
+		status = rss_read_file(path, NULL);
+		if (!status)
+			continue;
+		end = status + strlen(status);
+		while (end > status &&
+		       (end[-1] == '\n' || end[-1] == '\r' || end[-1] == ' ' || end[-1] == '\t'))
+			*--end = '\0';
+		if (strcmp(status, "active") == 0) {
+			free(status);
+			return idx;
+		}
+		free(status);
+	}
+
+	return 0;
 }
 
 /* Load sensor config from an INI section, with a per-index procfs
