@@ -232,8 +232,7 @@ static void apply_primary_isp_tuning(rvd_state_t *st, rss_config_t *cfg, bool mu
 	uint8_t defog = (uint8_t)rss_config_get_int(cfg, img, "defog_strength", 128);
 	int hflip = rss_config_get_int(cfg, img, "hflip", 0);
 	int vflip = rss_config_get_int(cfg, img, "vflip", 0);
-	int antiflicker =
-		rss_config_get_int(cfg, multi ? "sensor0" : "sensor", "antiflicker", 2);
+	int antiflicker = rss_config_get_int(cfg, multi ? "sensor0" : "sensor", "antiflicker", 2);
 	int bypass_ret;
 
 	RSS_HAL_CALL(st->ops, isp_set_brightness, st->hal_ctx, brightness);
@@ -257,11 +256,10 @@ static void apply_primary_isp_tuning(rvd_state_t *st, rss_config_t *cfg, bool mu
 	RSS_HAL_CALL(st->ops, isp_set_hflip, st->hal_ctx, hflip);
 	RSS_HAL_CALL(st->ops, isp_set_vflip, st->hal_ctx, vflip);
 
-	RSS_DEBUG("isp tuning: brightness=%d contrast=%d saturation=%d sharpness=%d",
-		  brightness, contrast, saturation, sharpness);
+	RSS_DEBUG("isp tuning: brightness=%d contrast=%d saturation=%d sharpness=%d", brightness,
+		  contrast, saturation, sharpness);
 	RSS_DEBUG("  sinter=%d temper=%d hue=%d ae_comp=%d", sinter, temper, hue, ae_comp);
-	RSS_DEBUG("  max_again=%d max_dgain=%d dpc=%d drc=%d", max_again, max_dgain, dpc,
-		  drc);
+	RSS_DEBUG("  max_again=%d max_dgain=%d dpc=%d drc=%d", max_again, max_dgain, dpc, drc);
 	RSS_DEBUG("  highlight=%d backlight=%d defog=%d", highlight, backlight, defog);
 	RSS_DEBUG("  hflip=%d vflip=%d antiflicker=%d bypass=%d", hflip, vflip, antiflicker,
 		  bypass_ret == RSS_OK);

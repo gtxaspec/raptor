@@ -2467,11 +2467,11 @@ int rvd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, vo
 	    (len = handle_isp_cmd(cmd, cmd_json, st, resp_buf, resp_buf_size)) > 0)
 		return len;
 	if (st->v4l2_backend && strcmp(cmd, "request-idr") != 0 &&
-	    strcmp(cmd, "set-bitrate") != 0 &&
-	    strcmp(cmd, "get-bitrate") != 0 && strcmp(cmd, "get-fps") != 0 &&
-	    strcmp(cmd, "get-gop") != 0 && strcmp(cmd, "get-qp-bounds") != 0 &&
-	    strcmp(cmd, "get-rc-mode") != 0 && strcmp(cmd, "get-sensor-fps") != 0 &&
-	    strcmp(cmd, "config-show") != 0 && strcmp(cmd, "status") != 0)
+	    strcmp(cmd, "set-bitrate") != 0 && strcmp(cmd, "get-bitrate") != 0 &&
+	    strcmp(cmd, "get-fps") != 0 && strcmp(cmd, "get-gop") != 0 &&
+	    strcmp(cmd, "get-qp-bounds") != 0 && strcmp(cmd, "get-rc-mode") != 0 &&
+	    strcmp(cmd, "get-sensor-fps") != 0 && strcmp(cmd, "config-show") != 0 &&
+	    strcmp(cmd, "status") != 0)
 		return rss_ctrl_resp_error(resp_buf, resp_buf_size,
 					   "not supported by the V4L2 backend");
 

@@ -95,8 +95,7 @@ static inline int rvd_v4l2_h264_set_bitrate(rvd_v4l2_h264_t *backend, uint32_t b
 	(void)bitrate;
 	return RSS_ERR_NOTSUP;
 }
-static inline int rvd_v4l2_h264_get_bitrate(rvd_v4l2_h264_t *backend,
-					    uint32_t *target_bitrate,
+static inline int rvd_v4l2_h264_get_bitrate(rvd_v4l2_h264_t *backend, uint32_t *target_bitrate,
 					    uint32_t *average_bitrate)
 {
 	(void)backend;
