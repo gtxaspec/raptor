@@ -824,6 +824,16 @@ int rsp_rtmp_publish(rsp_rtmp_t *ctx)
 	}
 
 	RSS_INFO("rtmp: publishing started");
+
+	/* Streaming from here on. The 10s send timeout that bounded
+	 * connect() is far too long once frames flow: rtmp_send runs on
+	 * the ring reader thread, so a server that stops draining stalls
+	 * the reader for the full timeout — seconds of ring overflow and
+	 * IDR churn that every other consumer pays for. Tighten so a
+	 * stalled peer costs one bounded blip and the connection drops
+	 * into the reconnect backoff instead. */
+	struct timeval tv = {.tv_sec = 2};
+	setsockopt(ctx->fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 	return 0;
 }
 
