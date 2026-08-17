@@ -14,6 +14,7 @@
 #include <pthread.h>
 
 #include "rsd.h"
+#include "rsd_media_clock.h"
 
 /* Forward declarations — called by send thread, defined below */
 static void rsd_send_audio_frame(rsd_client_t *c, uint32_t codec, const uint8_t *data, uint32_t len,
@@ -299,12 +300,12 @@ void *rsd_video_reader_thread(void *arg)
 	rsd_server_t *srv = rctx->srv;
 	int stream_idx = rctx->idx;
 
-	/* RTP cadence derives from the encoder timestamps. Their epoch is private
-	 * to the producer, so anchor the first fresh ring frame once to this
-	 * process's CLOCK_MONOTONIC for sender-report projection. */
+	/* RTP cadence derives from the encoder timestamps. Their epoch and clock
+	 * domain are private to the producer, so continuously map fresh ring frames
+	 * to CLOCK_MONOTONIC for sender-report projection. */
 	int64_t video_ts_epoch = 0;
-	int64_t video_mono_offset_us = 0;
-	bool video_mono_offset_set = false;
+	rsd_media_clock_t video_clock;
+	rsd_media_clock_init(&video_clock);
 	uint32_t last_rtp_ts = 0; /* enforce monotonic RTP timestamps */
 	bool has_last_rtp_ts = false;
 	uint64_t last_write_seq = 0;
@@ -348,8 +349,7 @@ void *rsd_video_reader_thread(void *arg)
 			last_write_seq = 0;
 			idle_count = 0;
 			video_ts_epoch = 0;
-			video_mono_offset_us = 0;
-			video_mono_offset_set = false;
+			rsd_media_clock_init(&video_clock);
 			last_rtp_ts = 0;
 			has_last_rtp_ts = false;
 			atomic_store_explicit(&rctx->vps_len, 0, memory_order_relaxed);
@@ -594,12 +594,13 @@ void *rsd_video_reader_thread(void *arg)
 			rctx->read_seq = read_seq;
 			total_read++;
 
-			if (!video_mono_offset_set) {
-				video_mono_offset_us = rss_timestamp_us() - (int64_t)meta.timestamp;
-				video_mono_offset_set = true;
-				RSS_INFO("video[%d] media->monotonic offset=%lld us", stream_idx,
-					 (long long)video_mono_offset_us);
-			}
+			bool first_clock_sample = !rsd_media_clock_ready(&video_clock);
+			int64_t capture_mono_us = rsd_media_clock_map(
+				&video_clock, (int64_t)meta.timestamp, rss_timestamp_us());
+			if (first_clock_sample)
+				RSS_INFO("video[%d] initial media->monotonic offset=%lld us",
+					 stream_idx,
+					 (long long)rsd_media_clock_offset(&video_clock));
 
 			if (video_ts_epoch == 0)
 				video_ts_epoch = meta.timestamp;
@@ -668,7 +669,6 @@ void *rsd_video_reader_thread(void *arg)
 				c->has_last_video_client_ts = true;
 
 				int qret;
-				int64_t capture_mono_us = meta.timestamp + video_mono_offset_us;
 				qret = rsd_sendq_push_video(&c->sendq, frame_data, length,
 							    client_ts, capture_mono_us, sei,
 							    sei_len, is_h265);
