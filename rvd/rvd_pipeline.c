@@ -272,8 +272,8 @@ static int rvd_pipeline_init_v4l2(rvd_state_t *st)
 	} else {
 		sensor_w = 1920;
 		sensor_h = 1080;
-		RSS_WARN("could not determine active sensor resolution; using %dx%d",
-			 sensor_w, sensor_h);
+		RSS_WARN("could not determine active sensor resolution; using %dx%d", sensor_w,
+			 sensor_h);
 	}
 	sensor_fps = read_sensor_proc_int(sensor_proc_idx, "max_fps", 10, 0);
 	if (sensor_fps <= 0)
@@ -282,8 +282,7 @@ static int rvd_pipeline_init_v4l2(rvd_state_t *st)
 	if (sensor_fps <= 0)
 		sensor_fps = 25;
 
-	load_stream_config(st->cfg, "stream0", stream, sensor_w, sensor_h, sensor_fps,
-			   8000000);
+	load_stream_config(st->cfg, "stream0", stream, sensor_w, sensor_h, sensor_fps, 8000000);
 	stream->fs_chn = 0;
 	stream->chn = 0;
 	stream->sensor_idx = 0;
@@ -302,8 +301,7 @@ static int rvd_pipeline_init_v4l2(rvd_state_t *st)
 	 * ISP pipeline is active.
 	 */
 	if (sensor_fps_known &&
-	    (stream->enc_cfg.fps_num != (uint32_t)sensor_fps ||
-	     stream->enc_cfg.fps_den != 1)) {
+	    (stream->enc_cfg.fps_num != (uint32_t)sensor_fps || stream->enc_cfg.fps_den != 1)) {
 		RSS_WARN("V4L2 stream0 rate %u/%u overridden by active sensor%d rate %d/1",
 			 stream->enc_cfg.fps_num, stream->enc_cfg.fps_den, sensor_proc_idx,
 			 sensor_fps);
@@ -407,8 +405,8 @@ static int find_active_sensor_proc_index(void)
 		if (!status)
 			continue;
 		end = status + strlen(status);
-		while (end > status && (end[-1] == '\n' || end[-1] == '\r' || end[-1] == ' ' ||
-					end[-1] == '\t'))
+		while (end > status &&
+		       (end[-1] == '\n' || end[-1] == '\r' || end[-1] == ' ' || end[-1] == '\t'))
 			*--end = '\0';
 		if (strcmp(status, "active") == 0) {
 			free(status);
