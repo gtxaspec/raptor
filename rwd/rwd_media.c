@@ -719,7 +719,16 @@ void *rwd_video_reader_thread(void *arg)
 			}
 
 			any_polled = true;
-			int ret = rss_ring_wait(srv->video_rings[s], 50);
+			uint64_t read_seq = srv->video_read_seq[s];
+			const rss_ring_header_t *wait_hdr =
+				rss_ring_get_header(srv->video_rings[s]);
+			int ret = 0;
+			/* write_seq itself is a complete readable frame. Wait only when
+			 * read_seq is already beyond it; otherwise drain queued frames.
+			 * Always waiting for the next publish makes transient scheduler or
+			 * send delay permanent until the ten-frame skip forces a freeze. */
+			if (wait_hdr->write_seq < read_seq)
+				ret = rss_ring_wait(srv->video_rings[s], 50);
 			if (ret != 0) {
 				const rss_ring_header_t *h =
 					rss_ring_get_header(srv->video_rings[s]);
@@ -742,7 +751,6 @@ void *rwd_video_reader_thread(void *arg)
 
 			uint32_t length;
 			rss_ring_slot_t meta;
-			uint64_t read_seq = srv->video_read_seq[s];
 
 			/* Skip to latest when lag exceeds 10 frames.
 			 * Small lags (2-3 frames on slower SoCs) are read
