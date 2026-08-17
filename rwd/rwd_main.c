@@ -234,6 +234,32 @@ static int create_udp_socket(int port)
 	int reuse = 1;
 	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
 
+	/* One socket carries media for every WebRTC client.  A pair of 1080p
+	 * keyframes can exceed the kernel's small embedded default before Wi-Fi
+	 * drains it.  A lost FU-A fragment used to be invisible to RTP loss
+	 * accounting and left the decoder frozen until the next keyframe.
+	 *
+	 * Linux doubles SO_SNDBUF values internally, so 512 KiB requests a 1 MiB
+	 * queue.  RWD runs as root on the camera; SO_SNDBUFFORCE lets it obtain the
+	 * required queue without changing the system-wide wmem limit. */
+	int sndbuf = 512 * 1024;
+	int sndbuf_set = -1;
+#ifdef SO_SNDBUFFORCE
+	sndbuf_set = setsockopt(fd, SOL_SOCKET, SO_SNDBUFFORCE, &sndbuf, sizeof(sndbuf));
+#endif
+	if (sndbuf_set < 0)
+		sndbuf_set = setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+
+	int actual_sndbuf = 0;
+	socklen_t actual_len = sizeof(actual_sndbuf);
+	if (getsockopt(fd, SOL_SOCKET, SO_SNDBUF, &actual_sndbuf, &actual_len) == 0) {
+		if (sndbuf_set < 0 || actual_sndbuf < sndbuf * 2)
+			RSS_WARN("WebRTC UDP send buffer is %d bytes; requested %d", actual_sndbuf,
+				 sndbuf * 2);
+		else
+			RSS_DEBUG("WebRTC UDP send buffer: %d bytes", actual_sndbuf);
+	}
+
 	struct sockaddr_storage addr;
 	socklen_t addrlen = rss_sockaddr_any(family, (uint16_t)port, &addr);
 
