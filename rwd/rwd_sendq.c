@@ -25,12 +25,25 @@ static void purge_locked(rwd_sendq_t *q)
 	}
 }
 
+void rwd_sendq_fail(rwd_sendq_t *q)
+{
+	pthread_mutex_lock(&q->lock);
+	if (!q->shutdown) {
+		purge_locked(q);
+		q->needs_keyframe = true;
+		q->drops++; /* failed in-flight frame */
+	}
+	pthread_mutex_unlock(&q->lock);
+}
+
 int rwd_sendq_push(rwd_sendq_t *q, const uint8_t *data, uint32_t len, uint32_t rtp_ts,
-		   int64_t capture_us)
+		   int64_t capture_us, bool is_key)
 {
 	uint8_t *copy = malloc(len);
-	if (!copy)
+	if (!copy) {
+		rwd_sendq_fail(q);
 		return -1;
+	}
 	memcpy(copy, data, len);
 
 	pthread_mutex_lock(&q->lock);
@@ -39,11 +52,20 @@ int rwd_sendq_push(rwd_sendq_t *q, const uint8_t *data, uint32_t len, uint32_t r
 		free(copy);
 		return -1;
 	}
+	if (q->needs_keyframe) {
+		if (!is_key) {
+			pthread_mutex_unlock(&q->lock);
+			free(copy);
+			return 1;
+		}
+		q->needs_keyframe = false;
+	}
 	if (q->count >= RWD_SENDQ_SLOTS) {
 		/* The client can't drain at stream rate. Keeping a stale
 		 * backlog only adds latency; drop everything and let the
 		 * caller resume clean at the next keyframe. */
 		purge_locked(q);
+		q->needs_keyframe = true;
 		q->drops++; /* the incoming frame */
 		pthread_mutex_unlock(&q->lock);
 		free(copy);
