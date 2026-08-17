@@ -879,7 +879,7 @@ build_compy() {
     [ "$OPT_TLS" = 1 ] && tls_opt=ON
 
     local fc_seed=""
-    for dep in slice99 datatype99 interface99; do
+    for dep in slice99 datatype99 interface99 metalang99; do
         local seed="$src/build/_deps/${dep}-src"
         [ -d "$seed" ] && fc_seed="$fc_seed -DFETCHCONTENT_SOURCE_DIR_$(echo $dep | tr a-z A-Z)=$seed"
     done
@@ -898,7 +898,7 @@ build_compy() {
     cp -f "$src/include/compy.h" "$SYSROOT_DIR/usr/include/"
     cp -a "$src/include/compy/"* "$SYSROOT_DIR/usr/include/compy/"
     # Header-only transitive deps
-    for dep in slice99 datatype99 interface99; do
+    for dep in slice99 datatype99 interface99 metalang99; do
         [ -d "$builddir/_deps/${dep}-src" ] && \
             cp -f "$builddir/_deps/${dep}-src/"*.h "$SYSROOT_DIR/usr/include/"
     done
