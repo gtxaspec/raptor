@@ -149,7 +149,7 @@ static uint32_t first_vcl_offset(const uint8_t *data, uint32_t len, bool is_h265
  * before the first VCL NAL, after any in-band SPS/PPS.
  */
 int rsd_sendq_push_video(rsd_sendq_t *q, const uint8_t *data, uint32_t len, uint32_t rtp_ts,
-			 const uint8_t *sei, uint32_t sei_len, bool is_h265)
+			 int64_t capture_us, const uint8_t *sei, uint32_t sei_len, bool is_h265)
 {
 	uint8_t *copy = malloc((size_t)len + sei_len);
 	if (!copy)
@@ -184,6 +184,7 @@ int rsd_sendq_push_video(rsd_sendq_t *q, const uint8_t *data, uint32_t len, uint
 	slot->data = copy;
 	slot->len = len;
 	slot->rtp_ts = rtp_ts;
+	slot->capture_us = capture_us;
 	slot->type = RSD_FRAME_VIDEO;
 	slot->codec = 0;
 

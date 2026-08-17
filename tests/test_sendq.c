@@ -24,7 +24,8 @@ static int push_a(rsd_sendq_t *q, uint32_t ts)
 
 static int push_v(rsd_sendq_t *q, uint32_t ts)
 {
-	return rsd_sendq_push_video(q, payload, sizeof(payload), ts, NULL, 0, false);
+	return rsd_sendq_push_video(q, payload, sizeof(payload), ts, (int64_t)ts * 100, NULL, 0,
+				    false);
 }
 
 /* Walk the queue oldest-first, collecting (type, ts) into arrays. */
@@ -55,6 +56,7 @@ TEST push_pop_order_preserved(void)
 	ASSERT_EQ(4, snapshot(&q, types, ts, 8));
 	ASSERT_EQ(RSD_FRAME_VIDEO, types[0]);
 	ASSERT_EQ(100u, ts[0]);
+	ASSERT_EQ(10000, q.entries[q.tail].capture_us);
 	ASSERT_EQ(RSD_FRAME_AUDIO, types[1]);
 	ASSERT_EQ(101u, ts[1]);
 	ASSERT_EQ(RSD_FRAME_VIDEO, types[2]);
@@ -229,11 +231,13 @@ TEST sei_spliced_before_first_vcl(void)
 	static const uint8_t sei[] = {0, 0, 0, 1, 0x06, 0x05, 0x02, 0xde, 0xad};
 
 	ASSERT_EQ(RSD_SENDQ_OK,
-		  rsd_sendq_push_video(&q, frame, sizeof(frame), 77, sei, sizeof(sei), false));
+		  rsd_sendq_push_video(&q, frame, sizeof(frame), 77, 1234567, sei, sizeof(sei),
+					 false));
 	ASSERT_EQ(1, q.count);
 
 	const rsd_sendq_entry_t *e = &q.entries[q.tail];
 	ASSERT_EQ(sizeof(frame) + sizeof(sei), e->len);
+	ASSERT_EQ(1234567, e->capture_us);
 	/* SPS first (start code + 2 bytes), then the SEI, then the IDR. */
 	ASSERT_EQ(0, memcmp(e->data, frame, 6));
 	ASSERT_EQ(0, memcmp(e->data + 6, sei, sizeof(sei)));
