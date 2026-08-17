@@ -28,6 +28,7 @@
 #include <mbedtls/md.h>
 
 #include "rwd.h"
+#include "rwd_rtcp.h"
 #include <rss_net.h>
 #include <rss_http.h>
 
@@ -234,6 +235,32 @@ static int create_udp_socket(int port)
 	int reuse = 1;
 	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
 
+	/* One socket carries media for every WebRTC client.  A pair of 1080p
+	 * keyframes can exceed the kernel's small embedded default before Wi-Fi
+	 * drains it.  A lost FU-A fragment used to be invisible to RTP loss
+	 * accounting and left the decoder frozen until the next keyframe.
+	 *
+	 * Linux doubles SO_SNDBUF values internally, so 512 KiB requests a 1 MiB
+	 * queue.  RWD runs as root on the camera; SO_SNDBUFFORCE lets it obtain the
+	 * required queue without changing the system-wide wmem limit. */
+	int sndbuf = 512 * 1024;
+	int sndbuf_set = -1;
+#ifdef SO_SNDBUFFORCE
+	sndbuf_set = setsockopt(fd, SOL_SOCKET, SO_SNDBUFFORCE, &sndbuf, sizeof(sndbuf));
+#endif
+	if (sndbuf_set < 0)
+		sndbuf_set = setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+
+	int actual_sndbuf = 0;
+	socklen_t actual_len = sizeof(actual_sndbuf);
+	if (getsockopt(fd, SOL_SOCKET, SO_SNDBUF, &actual_sndbuf, &actual_len) == 0) {
+		if (sndbuf_set < 0 || actual_sndbuf < sndbuf * 2)
+			RSS_WARN("WebRTC UDP send buffer is %d bytes; requested %d", actual_sndbuf,
+				 sndbuf * 2);
+		else
+			RSS_DEBUG("WebRTC UDP send buffer: %d bytes", actual_sndbuf);
+	}
+
 	struct sockaddr_storage addr;
 	socklen_t addrlen = rss_sockaddr_any(family, (uint16_t)port, &addr);
 
@@ -398,9 +425,7 @@ static void handle_udp_packet(rwd_server_t *srv, const uint8_t *buf, size_t len,
 		 * Mitigated by: source must match ICE-verified addr, client
 		 * must be in sending state, and rwd_request_idr enforces
 		 * a per-stream cooldown. */
-		uint8_t pt = buf[1] & 0x7F;
-		uint8_t fmt = buf[0] & 0x1F;
-		if (pt == 206 && (fmt == 1 || fmt == 4)) {
+		if (rwd_rtcp_requests_keyframe(buf, len)) {
 			pthread_mutex_lock(&srv->clients_lock);
 			rwd_client_t *c = find_client_by_addr(srv, from, from_len);
 			if (c && c->sending)
@@ -500,6 +525,9 @@ static int rwd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			rwd_client_t *c = srv->clients[i];
 			if (!c)
 				continue;
+			rwd_sendq_stats_t sendq_stats = {0};
+			if (c->send_thread_started)
+				rwd_sendq_get_stats(&c->sendq, &sendq_stats);
 			char addr[INET6_ADDRSTRLEN];
 			rss_addr_str(&c->addr, addr, sizeof(addr));
 			cJSON *item = cJSON_CreateObject();
@@ -507,6 +535,29 @@ static int rwd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			cJSON_AddNumberToObject(item, "stream", c->stream_idx);
 			cJSON_AddBoolToObject(item, "sending", c->sending);
 			cJSON_AddBoolToObject(item, "ice", c->ice_verified);
+			cJSON_AddNumberToObject(item, "queue_depth", sendq_stats.depth);
+			cJSON_AddNumberToObject(item, "queue_max_depth", sendq_stats.max_depth);
+			cJSON_AddNumberToObject(item, "frames_enqueued",
+						(double)sendq_stats.enqueued);
+			cJSON_AddNumberToObject(item, "frames_dequeued",
+						(double)sendq_stats.dequeued);
+			cJSON_AddNumberToObject(item, "frames_sent", (double)sendq_stats.sent);
+			cJSON_AddNumberToObject(item, "frames_dropped", (double)sendq_stats.drops);
+			cJSON_AddNumberToObject(item, "send_failures",
+						(double)sendq_stats.send_failures);
+			cJSON_AddNumberToObject(item, "bytes_sent", (double)sendq_stats.bytes_sent);
+			cJSON_AddNumberToObject(item, "last_frame_bytes",
+						sendq_stats.last_frame_bytes);
+			cJSON_AddNumberToObject(item, "max_frame_bytes",
+						sendq_stats.max_frame_bytes);
+			cJSON_AddNumberToObject(item, "last_queue_us", sendq_stats.last_queue_us);
+			cJSON_AddNumberToObject(item, "max_queue_us", sendq_stats.max_queue_us);
+			cJSON_AddNumberToObject(item, "last_send_us", sendq_stats.last_send_us);
+			cJSON_AddNumberToObject(item, "max_send_us", sendq_stats.max_send_us);
+			cJSON_AddNumberToObject(item, "last_capture_to_send_us",
+						sendq_stats.last_capture_to_send_us);
+			cJSON_AddNumberToObject(item, "max_capture_to_send_us",
+						sendq_stats.max_capture_to_send_us);
 			cJSON_AddStringToObject(
 				item, "dtls",
 				c->dtls_state == RWD_DTLS_ESTABLISHED	? "established"
