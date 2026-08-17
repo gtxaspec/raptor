@@ -878,11 +878,17 @@ build_compy() {
     local tls_opt=OFF
     [ "$OPT_TLS" = 1 ] && tls_opt=ON
 
+    local fc_seed=""
+    for dep in slice99 datatype99 interface99; do
+        local seed="$src/build/_deps/${dep}-src"
+        [ -d "$seed" ] && fc_seed="$fc_seed -DFETCHCONTENT_SOURCE_DIR_$(echo $dep | tr a-z A-Z)=$seed"
+    done
     run compy-cmake cmake .. \
         -DCMAKE_C_COMPILER="${CROSS_COMPILE}gcc" \
         -DCMAKE_SYSTEM_NAME=Linux \
         -DCOMPY_SHARED=OFF \
         -DCOMPY_TLS_MBEDTLS="$tls_opt" \
+        $fc_seed \
         -DCMAKE_C_FLAGS="$([ "$OPT_DEBUG" = 1 ] && echo "-O0 -g" || echo "-Oz") -I$SYSROOT_DIR/usr/include" \
         -DCMAKE_PREFIX_PATH="$SYSROOT_DIR/usr"
     run compy-build make -j"$JOBS"
