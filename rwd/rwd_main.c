@@ -28,6 +28,7 @@
 #include <mbedtls/md.h>
 
 #include "rwd.h"
+#include "rwd_rtcp.h"
 #include <rss_net.h>
 #include <rss_http.h>
 
@@ -424,9 +425,7 @@ static void handle_udp_packet(rwd_server_t *srv, const uint8_t *buf, size_t len,
 		 * Mitigated by: source must match ICE-verified addr, client
 		 * must be in sending state, and rwd_request_idr enforces
 		 * a per-stream cooldown. */
-		uint8_t pt = buf[1] & 0x7F;
-		uint8_t fmt = buf[0] & 0x1F;
-		if (pt == 206 && (fmt == 1 || fmt == 4)) {
+		if (rwd_rtcp_requests_keyframe(buf, len)) {
 			pthread_mutex_lock(&srv->clients_lock);
 			rwd_client_t *c = find_client_by_addr(srv, from, from_len);
 			if (c && c->sending)
