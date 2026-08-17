@@ -1,4 +1,4 @@
-SRCS := rwd_main.c rwd_dtls.c rwd_ice.c rwd_sdp.c rwd_signaling.c rwd_media.c rwd_sendq.c
+SRCS := rwd_main.c rwd_dtls.c rwd_ice.c rwd_sdp.c rwd_signaling.c rwd_media.c rwd_sendq.c rwd_pacer.c
 ifeq ($(WEBTORRENT),1)
 SRCS += rwd_webtorrent.c
 endif

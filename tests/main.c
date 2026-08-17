@@ -20,6 +20,7 @@ extern SUITE(storage_suite);
 extern SUITE(timelapse_suite);
 extern SUITE(sendq_suite);
 extern SUITE(rwd_sendq_suite);
+extern SUITE(rwd_pacer_suite);
 extern SUITE(rad_clock_suite);
 extern SUITE(media_clock_suite);
 extern SUITE(resync_suite);
@@ -51,6 +52,7 @@ int main(int argc, char **argv)
 	RUN_SUITE(timelapse_suite);
 	RUN_SUITE(sendq_suite);
 	RUN_SUITE(rwd_sendq_suite);
+	RUN_SUITE(rwd_pacer_suite);
 	RUN_SUITE(rad_clock_suite);
 	RUN_SUITE(media_clock_suite);
 	RUN_SUITE(resync_suite);
