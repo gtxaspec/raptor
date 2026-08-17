@@ -230,9 +230,8 @@ TEST sei_spliced_before_first_vcl(void)
 	static const uint8_t frame[] = {0, 0, 0, 1, 0x67, 0x42, 0, 0, 0, 1, 0x65, 0x88};
 	static const uint8_t sei[] = {0, 0, 0, 1, 0x06, 0x05, 0x02, 0xde, 0xad};
 
-	ASSERT_EQ(RSD_SENDQ_OK,
-		  rsd_sendq_push_video(&q, frame, sizeof(frame), 77, 1234567, sei, sizeof(sei),
-					 false));
+	ASSERT_EQ(RSD_SENDQ_OK, rsd_sendq_push_video(&q, frame, sizeof(frame), 77, 1234567, sei,
+						     sizeof(sei), false));
 	ASSERT_EQ(1, q.count);
 
 	const rsd_sendq_entry_t *e = &q.entries[q.tail];

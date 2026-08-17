@@ -18,8 +18,8 @@
 /* Forward declarations — called by send thread, defined below */
 static void rsd_send_audio_frame(rsd_client_t *c, uint32_t codec, const uint8_t *data, uint32_t len,
 				 uint32_t rtp_ts, int64_t capture_us);
-static void rsd_send_jpeg_frame(rsd_client_t *c, const uint8_t *data, uint32_t len,
-				uint32_t rtp_ts, int64_t capture_us);
+static void rsd_send_jpeg_frame(rsd_client_t *c, const uint8_t *data, uint32_t len, uint32_t rtp_ts,
+				int64_t capture_us);
 
 /*
  * Minimum interval between IDR requests from the reader's lag-recovery
@@ -279,7 +279,7 @@ void *rsd_client_send_thread(void *arg)
 						    entry.capture_us);
 			else
 				rsd_send_video_interleaved(c, entry.data, entry.len, entry.rtp_ts,
-						       entry.capture_us);
+							   entry.capture_us);
 		} else {
 			pthread_mutex_lock(&c->write_lock);
 			rsd_send_audio_frame(c, entry.codec, entry.data, entry.len, entry.rtp_ts,
@@ -598,7 +598,7 @@ void *rsd_video_reader_thread(void *arg)
 				video_mono_offset_us = rss_timestamp_us() - (int64_t)meta.timestamp;
 				video_mono_offset_set = true;
 				RSS_INFO("video[%d] media->monotonic offset=%lld us", stream_idx,
-					  (long long)video_mono_offset_us);
+					 (long long)video_mono_offset_us);
 			}
 
 			if (video_ts_epoch == 0)
@@ -670,8 +670,8 @@ void *rsd_video_reader_thread(void *arg)
 				int qret;
 				int64_t capture_mono_us = meta.timestamp + video_mono_offset_us;
 				qret = rsd_sendq_push_video(&c->sendq, frame_data, length,
-							    client_ts, capture_mono_us, sei, sei_len,
-							    is_h265);
+							    client_ts, capture_mono_us, sei,
+							    sei_len, is_h265);
 				if (qret == RSD_SENDQ_OK)
 					total_pushed++;
 				else if (qret == RSD_SENDQ_DROPPED) {
