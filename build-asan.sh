@@ -322,7 +322,8 @@ $CC $CFLAGS $COMPY_CFLAGS $RSD_CODEC_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_session.c" -
 $CC $CFLAGS $COMPY_CFLAGS $RSD_CODEC_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_ring_reader.c" -o "$OUT/rsd_ring_reader.o"
 $CC $CFLAGS $COMPY_CFLAGS $RSD_CODEC_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_sendq.c" -o "$OUT/rsd_sendq.o"
 $CC $CFLAGS $COMPY_CFLAGS $RSD_CODEC_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_backchannel.c" -o "$OUT/rsd_backchannel.o"
-$CC -o "$OUT/rsd" "$OUT"/rsd_main.o "$OUT"/rsd_server.o "$OUT"/rsd_session.o "$OUT"/rsd_ring_reader.o "$OUT"/rsd_sendq.o "$OUT"/rsd_backchannel.o $LIBS "$COMPY_BUILD/libcompy.a" $MBEDTLS_LIBS -lopus "$HELIX_BUILD/libhelix-aac.a" $LDFLAGS
+$CC $CFLAGS $COMPY_CFLAGS $RSD_CODEC_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_media_clock.c" -o "$OUT/rsd_media_clock.o"
+$CC -o "$OUT/rsd" "$OUT"/rsd_main.o "$OUT"/rsd_server.o "$OUT"/rsd_session.o "$OUT"/rsd_ring_reader.o "$OUT"/rsd_sendq.o "$OUT"/rsd_backchannel.o "$OUT"/rsd_media_clock.o $LIBS "$COMPY_BUILD/libcompy.a" $MBEDTLS_LIBS -lopus "$HELIX_BUILD/libhelix-aac.a" $LDFLAGS
 echo "  -> rsd"
 
 echo "=== RIC ==="
