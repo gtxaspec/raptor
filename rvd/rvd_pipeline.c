@@ -212,6 +212,61 @@ static int find_active_sensor_proc_index(void);
 static void load_sensor_from_section(rss_config_t *cfg, const char *section,
 				     rss_sensor_config_t *sensor, int proc_idx);
 
+static void apply_primary_isp_tuning(rvd_state_t *st, rss_config_t *cfg, bool multi)
+{
+	const char *img = "image";
+	int brightness = rss_config_get_int(cfg, img, "brightness", 128);
+	int contrast = rss_config_get_int(cfg, img, "contrast", 128);
+	int saturation = rss_config_get_int(cfg, img, "saturation", 128);
+	int sharpness = rss_config_get_int(cfg, img, "sharpness", 128);
+	int sinter = rss_config_get_int(cfg, img, "sinter", 128);
+	int temper = rss_config_get_int(cfg, img, "temper", 128);
+	int hue = rss_config_get_int(cfg, img, "hue", 128);
+	int ae_comp = rss_config_get_int(cfg, img, "ae_comp", 128);
+	int max_again = rss_config_get_int(cfg, img, "max_again", 160);
+	int max_dgain = rss_config_get_int(cfg, img, "max_dgain", 80);
+	int dpc = rss_config_get_int(cfg, img, "dpc_strength", 128);
+	int drc = rss_config_get_int(cfg, img, "drc_strength", 128);
+	int highlight = rss_config_get_int(cfg, img, "highlight_depress", 0);
+	int backlight = rss_config_get_int(cfg, img, "backlight_comp", 0);
+	uint8_t defog = (uint8_t)rss_config_get_int(cfg, img, "defog_strength", 128);
+	int hflip = rss_config_get_int(cfg, img, "hflip", 0);
+	int vflip = rss_config_get_int(cfg, img, "vflip", 0);
+	int antiflicker =
+		rss_config_get_int(cfg, multi ? "sensor0" : "sensor", "antiflicker", 2);
+	int bypass_ret;
+
+	RSS_HAL_CALL(st->ops, isp_set_brightness, st->hal_ctx, brightness);
+	RSS_HAL_CALL(st->ops, isp_set_contrast, st->hal_ctx, contrast);
+	RSS_HAL_CALL(st->ops, isp_set_saturation, st->hal_ctx, saturation);
+	RSS_HAL_CALL(st->ops, isp_set_sharpness, st->hal_ctx, sharpness);
+	RSS_HAL_CALL(st->ops, isp_set_sinter_strength, st->hal_ctx, sinter);
+	RSS_HAL_CALL(st->ops, isp_set_temper_strength, st->hal_ctx, temper);
+	RSS_HAL_CALL(st->ops, isp_set_hue, st->hal_ctx, hue);
+	RSS_HAL_CALL(st->ops, isp_set_ae_comp, st->hal_ctx, ae_comp);
+	RSS_HAL_CALL(st->ops, isp_set_max_again, st->hal_ctx, max_again);
+	RSS_HAL_CALL(st->ops, isp_set_max_dgain, st->hal_ctx, max_dgain);
+	RSS_HAL_CALL(st->ops, isp_set_dpc_strength, st->hal_ctx, dpc);
+	RSS_HAL_CALL(st->ops, isp_set_drc_strength, st->hal_ctx, drc);
+	RSS_HAL_CALL(st->ops, isp_set_highlight_depress, st->hal_ctx, highlight);
+	RSS_HAL_CALL(st->ops, isp_set_backlight_comp, st->hal_ctx, backlight);
+	RSS_HAL_CALL(st->ops, isp_set_defog_strength_adv, st->hal_ctx, &defog);
+	RSS_HAL_CALL(st->ops, isp_set_running_mode, st->hal_ctx, RSS_ISP_DAY);
+	bypass_ret = RSS_HAL_CALL(st->ops, isp_set_bypass, st->hal_ctx, 1);
+	RSS_HAL_CALL(st->ops, isp_set_antiflicker, st->hal_ctx, antiflicker);
+	RSS_HAL_CALL(st->ops, isp_set_hflip, st->hal_ctx, hflip);
+	RSS_HAL_CALL(st->ops, isp_set_vflip, st->hal_ctx, vflip);
+
+	RSS_DEBUG("isp tuning: brightness=%d contrast=%d saturation=%d sharpness=%d",
+		  brightness, contrast, saturation, sharpness);
+	RSS_DEBUG("  sinter=%d temper=%d hue=%d ae_comp=%d", sinter, temper, hue, ae_comp);
+	RSS_DEBUG("  max_again=%d max_dgain=%d dpc=%d drc=%d", max_again, max_dgain, dpc,
+		  drc);
+	RSS_DEBUG("  highlight=%d backlight=%d defog=%d", highlight, backlight, defog);
+	RSS_DEBUG("  hflip=%d vflip=%d antiflicker=%d bypass=%d", hflip, vflip, antiflicker,
+		  bypass_ret == RSS_OK);
+}
+
 static int rvd_pipeline_init_v4l2(rvd_state_t *st)
 {
 	rss_multi_sensor_config_t multi_cfg = {0};
@@ -263,6 +318,7 @@ static int rvd_pipeline_init_v4l2(rvd_state_t *st)
 		return ret;
 	}
 	st->hal_initialized = true;
+	apply_primary_isp_tuning(st, st->cfg, false);
 
 	sensor_proc_idx = find_active_sensor_proc_index();
 	sensor_w = read_sensor_proc_int(sensor_proc_idx, "width", 10, 0);
@@ -800,59 +856,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 	}
 
 	/* ── 3c. ISP tuning defaults (apply to all sensors) ── */
-	{
-		const char *img = "image";
-		int brightness = rss_config_get_int(cfg, img, "brightness", 128);
-		int contrast = rss_config_get_int(cfg, img, "contrast", 128);
-		int saturation = rss_config_get_int(cfg, img, "saturation", 128);
-		int sharpness = rss_config_get_int(cfg, img, "sharpness", 128);
-		int sinter = rss_config_get_int(cfg, img, "sinter", 128);
-		int temper = rss_config_get_int(cfg, img, "temper", 128);
-		int hue = rss_config_get_int(cfg, img, "hue", 128);
-		int ae_comp = rss_config_get_int(cfg, img, "ae_comp", 128);
-		int max_again = rss_config_get_int(cfg, img, "max_again", 160);
-		int max_dgain = rss_config_get_int(cfg, img, "max_dgain", 80);
-		int dpc = rss_config_get_int(cfg, img, "dpc_strength", 128);
-		int drc = rss_config_get_int(cfg, img, "drc_strength", 128);
-		int highlight = rss_config_get_int(cfg, img, "highlight_depress", 0);
-		int backlight = rss_config_get_int(cfg, img, "backlight_comp", 0);
-		uint8_t defog = (uint8_t)rss_config_get_int(cfg, img, "defog_strength", 128);
-		int hflip = rss_config_get_int(cfg, img, "hflip", 0);
-		int vflip = rss_config_get_int(cfg, img, "vflip", 0);
-		int antiflicker =
-			rss_config_get_int(cfg, multi ? "sensor0" : "sensor", "antiflicker", 2);
-
-		RSS_HAL_CALL(st->ops, isp_set_brightness, st->hal_ctx, brightness);
-		RSS_HAL_CALL(st->ops, isp_set_contrast, st->hal_ctx, contrast);
-		RSS_HAL_CALL(st->ops, isp_set_saturation, st->hal_ctx, saturation);
-		RSS_HAL_CALL(st->ops, isp_set_sharpness, st->hal_ctx, sharpness);
-		RSS_HAL_CALL(st->ops, isp_set_sinter_strength, st->hal_ctx, sinter);
-		RSS_HAL_CALL(st->ops, isp_set_temper_strength, st->hal_ctx, temper);
-		RSS_HAL_CALL(st->ops, isp_set_hue, st->hal_ctx, hue);
-		RSS_HAL_CALL(st->ops, isp_set_ae_comp, st->hal_ctx, ae_comp);
-		RSS_HAL_CALL(st->ops, isp_set_max_again, st->hal_ctx, max_again);
-		RSS_HAL_CALL(st->ops, isp_set_max_dgain, st->hal_ctx, max_dgain);
-		RSS_HAL_CALL(st->ops, isp_set_dpc_strength, st->hal_ctx, dpc);
-		RSS_HAL_CALL(st->ops, isp_set_drc_strength, st->hal_ctx, drc);
-		RSS_HAL_CALL(st->ops, isp_set_highlight_depress, st->hal_ctx, highlight);
-		RSS_HAL_CALL(st->ops, isp_set_backlight_comp, st->hal_ctx, backlight);
-		RSS_HAL_CALL(st->ops, isp_set_defog_strength_adv, st->hal_ctx, &defog);
-		RSS_HAL_CALL(st->ops, isp_set_running_mode, st->hal_ctx, RSS_ISP_DAY);
-		ret = RSS_HAL_CALL(st->ops, isp_set_bypass, st->hal_ctx, 1);
-		RSS_HAL_CALL(st->ops, isp_set_antiflicker, st->hal_ctx, antiflicker);
-		RSS_HAL_CALL(st->ops, isp_set_hflip, st->hal_ctx, hflip);
-		RSS_HAL_CALL(st->ops, isp_set_vflip, st->hal_ctx, vflip);
-
-		RSS_DEBUG("isp tuning: brightness=%d contrast=%d saturation=%d "
-			  "sharpness=%d",
-			  brightness, contrast, saturation, sharpness);
-		RSS_DEBUG("  sinter=%d temper=%d hue=%d ae_comp=%d", sinter, temper, hue, ae_comp);
-		RSS_DEBUG("  max_again=%d max_dgain=%d dpc=%d drc=%d", max_again, max_dgain, dpc,
-			  drc);
-		RSS_DEBUG("  highlight=%d backlight=%d defog=%d", highlight, backlight, defog);
-		RSS_DEBUG("  hflip=%d vflip=%d antiflicker=%d bypass=%d", hflip, vflip, antiflicker,
-			  ret == RSS_OK);
-	}
+	apply_primary_isp_tuning(st, cfg, multi);
 
 	/* Dual-sensor: read sensor attrs + disable AeFreeze + set CustomMode (prudynt pattern).
 	 * GetSensorAttr may trigger ISP to initialize the sensor pipeline. */

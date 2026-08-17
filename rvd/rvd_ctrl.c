@@ -246,9 +246,13 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 	if (strcmp(cmd, "set-bitrate") == 0) {
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
 		    rss_json_get_int(cmd_json, "value", &val) == 0 && chn >= 0 &&
-		    chn < st->stream_count) {
-			int ret = RSS_HAL_CALL(st->ops, enc_set_bitrate, st->hal_ctx,
-					       st->streams[chn].chn, val);
+		    chn < st->stream_count && val > 0) {
+			int ret;
+			if (st->v4l2_backend)
+				ret = rvd_v4l2_h264_set_bitrate(st->v4l2, (uint32_t)val);
+			else
+				ret = RSS_HAL_CALL(st->ops, enc_set_bitrate, st->hal_ctx,
+						   st->streams[chn].chn, val);
 			const char *key = rvd_persist_key(&st->streams[chn], "bitrate");
 			if (ret == 0) {
 				st->streams[chn].enc_cfg.bitrate = val;
@@ -258,7 +262,7 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 			}
 			return fmt_hal_result(resp, resp_size, ret);
 		}
-		return rss_ctrl_resp_error(resp, resp_size, "need channel and value");
+		return rss_ctrl_resp_error(resp, resp_size, "need channel and positive value");
 	}
 
 	if (strcmp(cmd, "set-gop") == 0) {
@@ -330,14 +334,16 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 	if (strcmp(cmd, "get-bitrate") == 0) {
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
 		    chn < st->stream_count) {
+			uint32_t target = st->streams[chn].enc_cfg.bitrate;
 			uint32_t avg = 0;
-			if (!st->v4l2_backend)
+			if (st->v4l2_backend)
+				rvd_v4l2_h264_get_bitrate(st->v4l2, &target, &avg);
+			else
 				RSS_HAL_CALL(st->ops, enc_get_avg_bitrate, st->hal_ctx,
 					     st->streams[chn].chn, &avg);
 			cJSON *r = cJSON_CreateObject();
 			cJSON_AddStringToObject(r, "status", "ok");
-			cJSON_AddNumberToObject(r, "bitrate",
-						(double)st->streams[chn].enc_cfg.bitrate);
+			cJSON_AddNumberToObject(r, "bitrate", (double)target);
 			cJSON_AddNumberToObject(r, "avg_bitrate", (double)avg);
 			return rss_ctrl_resp_json(resp, resp_size, r);
 		}
@@ -2344,7 +2350,9 @@ static int handle_config_cmd(const char *cmd, const char *cmd_json, rvd_state_t 
 		for (int i = 0; i < st->stream_count; i++) {
 			rvd_stream_t *s = &st->streams[i];
 			uint32_t avg_br = 0;
-			if (!st->v4l2_backend)
+			if (st->v4l2_backend)
+				rvd_v4l2_h264_get_bitrate(st->v4l2, NULL, &avg_br);
+			else
 				RSS_HAL_CALL(st->ops, enc_get_avg_bitrate, st->hal_ctx, s->chn,
 					     &avg_br);
 			cJSON *item = cJSON_CreateObject();
@@ -2410,7 +2418,9 @@ static int handle_config_cmd(const char *cmd, const char *cmd_json, rvd_state_t 
 		cJSON *arr = cJSON_AddArrayToObject(r, "streams");
 		for (int i = 0; i < st->stream_count; i++) {
 			uint32_t avg_br = 0;
-			if (!st->v4l2_backend)
+			if (st->v4l2_backend)
+				rvd_v4l2_h264_get_bitrate(st->v4l2, NULL, &avg_br);
+			else
 				RSS_HAL_CALL(st->ops, enc_get_avg_bitrate, st->hal_ctx,
 					     st->streams[i].chn, &avg_br);
 			cJSON *item = cJSON_CreateObject();
@@ -2453,7 +2463,11 @@ int rvd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, vo
 	/* The standalone backend initializes the ISP HAL for sensor bring-up and
 	 * tuning, but it has no IMP framesource or encoder graph. Keep its control
 	 * surface explicit so only controls backed by initialized state get through. */
+	if (st->v4l2_backend &&
+	    (len = handle_isp_cmd(cmd, cmd_json, st, resp_buf, resp_buf_size)) > 0)
+		return len;
 	if (st->v4l2_backend && strcmp(cmd, "request-idr") != 0 &&
+	    strcmp(cmd, "set-bitrate") != 0 &&
 	    strcmp(cmd, "get-bitrate") != 0 && strcmp(cmd, "get-fps") != 0 &&
 	    strcmp(cmd, "get-gop") != 0 && strcmp(cmd, "get-qp-bounds") != 0 &&
 	    strcmp(cmd, "get-rc-mode") != 0 && strcmp(cmd, "get-sensor-fps") != 0 &&

@@ -726,6 +726,17 @@ TEST get_sensor_fps_is_available_on_v4l2(void)
 	PASS();
 }
 
+TEST isp_tuning_is_available_on_v4l2(void)
+{
+	setup();
+	st.v4l2_backend = true;
+	call("{\"cmd\":\"set-brightness\",\"value\":144}");
+	ASSERT(strstr(resp, "\"status\":\"ok\"") != NULL);
+	ASSERT_EQ(144, rec.set_brightness);
+	teardown();
+	PASS();
+}
+
 TEST set_qp_bounds_atomic_update(void)
 {
 	setup();
@@ -1241,6 +1252,7 @@ SUITE(ctrl_suite)
 	RUN_TEST(set_fps_clears_active_override);
 	RUN_TEST(get_sensor_fps_reports_live_and_base);
 	RUN_TEST(get_sensor_fps_is_available_on_v4l2);
+	RUN_TEST(isp_tuning_is_available_on_v4l2);
 	RUN_TEST(set_qp_bounds_atomic_update);
 	RUN_TEST(set_qp_bounds_neither_updated_on_failure);
 	RUN_TEST(set_rc_mode_stores_enum_not_string);
