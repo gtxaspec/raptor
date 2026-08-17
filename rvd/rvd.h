@@ -34,6 +34,8 @@ typedef rss_v4l2_h264_t rvd_v4l2_h264_t;
 #define rvd_v4l2_h264_request_idr   rss_v4l2_h264_request_idr
 #define rvd_v4l2_h264_set_bitrate   rss_v4l2_h264_set_bitrate
 #define rvd_v4l2_h264_get_bitrate   rss_v4l2_h264_get_bitrate
+#define rvd_v4l2_h264_set_gop       rss_v4l2_h264_set_gop
+#define rvd_v4l2_h264_get_gop       rss_v4l2_h264_get_gop
 static inline bool rvd_v4l2_h264_supported(void)
 {
 	return true;
@@ -101,6 +103,18 @@ static inline int rvd_v4l2_h264_get_bitrate(rvd_v4l2_h264_t *backend, uint32_t *
 	(void)backend;
 	(void)target_bitrate;
 	(void)average_bitrate;
+	return RSS_ERR_NOTSUP;
+}
+static inline int rvd_v4l2_h264_set_gop(rvd_v4l2_h264_t *backend, uint32_t gop_length)
+{
+	(void)backend;
+	(void)gop_length;
+	return RSS_ERR_NOTSUP;
+}
+static inline int rvd_v4l2_h264_get_gop(rvd_v4l2_h264_t *backend, uint32_t *gop_length)
+{
+	(void)backend;
+	(void)gop_length;
 	return RSS_ERR_NOTSUP;
 }
 #endif

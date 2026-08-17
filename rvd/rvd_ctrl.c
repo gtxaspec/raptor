@@ -268,9 +268,13 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 	if (strcmp(cmd, "set-gop") == 0) {
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 &&
 		    rss_json_get_int(cmd_json, "value", &val) == 0 && chn >= 0 &&
-		    chn < st->stream_count) {
-			int ret = RSS_HAL_CALL(st->ops, enc_set_gop, st->hal_ctx,
-					       st->streams[chn].chn, val);
+		    chn < st->stream_count && val > 0) {
+			int ret;
+			if (st->v4l2_backend)
+				ret = rvd_v4l2_h264_set_gop(st->v4l2, (uint32_t)val);
+			else
+				ret = RSS_HAL_CALL(st->ops, enc_set_gop, st->hal_ctx,
+						   st->streams[chn].chn, val);
 			const char *key = rvd_persist_key(&st->streams[chn], "gop");
 			if (ret == 0) {
 				st->streams[chn].enc_cfg.gop_length = val;
@@ -280,7 +284,7 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 			}
 			return fmt_hal_result(resp, resp_size, ret);
 		}
-		return rss_ctrl_resp_error(resp, resp_size, "need channel and value");
+		return rss_ctrl_resp_error(resp, resp_size, "need channel and positive value");
 	}
 
 	if (strcmp(cmd, "set-fps") == 0) {
@@ -424,7 +428,9 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
 		    chn < st->stream_count) {
 			uint32_t gop = st->streams[chn].enc_cfg.gop_length;
-			if (!st->v4l2_backend)
+			if (st->v4l2_backend)
+				rvd_v4l2_h264_get_gop(st->v4l2, &gop);
+			else
 				RSS_HAL_CALL(st->ops, enc_get_gop_attr, st->hal_ctx,
 					     st->streams[chn].chn, &gop);
 			cJSON *r = cJSON_CreateObject();
@@ -2468,7 +2474,8 @@ int rvd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, vo
 		return len;
 	if (st->v4l2_backend && strcmp(cmd, "request-idr") != 0 &&
 	    strcmp(cmd, "set-bitrate") != 0 && strcmp(cmd, "get-bitrate") != 0 &&
-	    strcmp(cmd, "get-fps") != 0 && strcmp(cmd, "get-gop") != 0 &&
+	    strcmp(cmd, "set-gop") != 0 && strcmp(cmd, "get-fps") != 0 &&
+	    strcmp(cmd, "get-gop") != 0 &&
 	    strcmp(cmd, "get-qp-bounds") != 0 && strcmp(cmd, "get-rc-mode") != 0 &&
 	    strcmp(cmd, "get-sensor-fps") != 0 && strcmp(cmd, "config-show") != 0 &&
 	    strcmp(cmd, "status") != 0)
