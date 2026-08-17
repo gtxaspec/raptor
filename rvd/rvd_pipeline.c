@@ -207,11 +207,15 @@ static const char *rc_mode_str(rss_rc_mode_t m)
 
 static void load_stream_config(rss_config_t *cfg, const char *section, rvd_stream_t *s,
 			       int default_w, int default_h, int default_fps, int default_br);
+static int read_sensor_proc_int(int idx, const char *key, int base, int def);
 
 static int rvd_pipeline_init_v4l2(rvd_state_t *st)
 {
 	rvd_stream_t *stream = &st->streams[0];
 	const char *device;
+	int sensor_w;
+	int sensor_h;
+	int sensor_fps;
 	int ret;
 
 	device = rss_config_get_str(st->cfg, "system", "video_device", "/dev/video0");
@@ -227,7 +231,24 @@ static int rvd_pipeline_init_v4l2(rvd_state_t *st)
 	st->ivs_enabled = false;
 	atomic_store(&st->ivs_active, false);
 
-	load_stream_config(st->cfg, "stream0", stream, 2560, 1440, 25, 8000000);
+	sensor_w = read_sensor_proc_int(0, "width", 10, 0);
+	sensor_h = read_sensor_proc_int(0, "height", 10, 0);
+	if (sensor_w > 0 && sensor_h > 0) {
+		RSS_INFO("sensor resolution: %dx%d", sensor_w, sensor_h);
+	} else {
+		sensor_w = 1920;
+		sensor_h = 1080;
+		RSS_WARN("could not determine sensor resolution; using %dx%d",
+			 sensor_w, sensor_h);
+	}
+	sensor_fps = read_sensor_proc_int(0, "max_fps", 10, 0);
+	if (sensor_fps <= 0)
+		sensor_fps = read_sensor_proc_int(0, "fps", 10, 0);
+	if (sensor_fps <= 0)
+		sensor_fps = 25;
+
+	load_stream_config(st->cfg, "stream0", stream, sensor_w, sensor_h, sensor_fps,
+			   8000000);
 	stream->fs_chn = 0;
 	stream->chn = 0;
 	stream->sensor_idx = 0;
