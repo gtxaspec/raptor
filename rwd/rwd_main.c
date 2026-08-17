@@ -526,6 +526,9 @@ static int rwd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			rwd_client_t *c = srv->clients[i];
 			if (!c)
 				continue;
+			rwd_sendq_stats_t sendq_stats = {0};
+			if (c->send_thread_started)
+				rwd_sendq_get_stats(&c->sendq, &sendq_stats);
 			char addr[INET6_ADDRSTRLEN];
 			rss_addr_str(&c->addr, addr, sizeof(addr));
 			cJSON *item = cJSON_CreateObject();
@@ -533,6 +536,27 @@ static int rwd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			cJSON_AddNumberToObject(item, "stream", c->stream_idx);
 			cJSON_AddBoolToObject(item, "sending", c->sending);
 			cJSON_AddBoolToObject(item, "ice", c->ice_verified);
+			cJSON_AddNumberToObject(item, "queue_depth", sendq_stats.depth);
+			cJSON_AddNumberToObject(item, "queue_max_depth", sendq_stats.max_depth);
+			cJSON_AddNumberToObject(item, "frames_enqueued", (double)sendq_stats.enqueued);
+			cJSON_AddNumberToObject(item, "frames_dequeued", (double)sendq_stats.dequeued);
+			cJSON_AddNumberToObject(item, "frames_sent", (double)sendq_stats.sent);
+			cJSON_AddNumberToObject(item, "frames_dropped", (double)sendq_stats.drops);
+			cJSON_AddNumberToObject(item, "send_failures",
+					       (double)sendq_stats.send_failures);
+			cJSON_AddNumberToObject(item, "bytes_sent", (double)sendq_stats.bytes_sent);
+			cJSON_AddNumberToObject(item, "last_frame_bytes",
+					       sendq_stats.last_frame_bytes);
+			cJSON_AddNumberToObject(item, "max_frame_bytes",
+					       sendq_stats.max_frame_bytes);
+			cJSON_AddNumberToObject(item, "last_queue_us", sendq_stats.last_queue_us);
+			cJSON_AddNumberToObject(item, "max_queue_us", sendq_stats.max_queue_us);
+			cJSON_AddNumberToObject(item, "last_send_us", sendq_stats.last_send_us);
+			cJSON_AddNumberToObject(item, "max_send_us", sendq_stats.max_send_us);
+			cJSON_AddNumberToObject(item, "last_capture_to_send_us",
+					       sendq_stats.last_capture_to_send_us);
+			cJSON_AddNumberToObject(item, "max_capture_to_send_us",
+					       sendq_stats.max_capture_to_send_us);
 			cJSON_AddStringToObject(
 				item, "dtls",
 				c->dtls_state == RWD_DTLS_ESTABLISHED	? "established"

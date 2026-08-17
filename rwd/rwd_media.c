@@ -696,8 +696,15 @@ static void *rwd_client_send_thread(void *arg)
 	rwd_sendq_entry_t e;
 
 	while (rwd_sendq_pop(&c->sendq, &e)) {
-		if (c->sending &&
-		    rwd_send_video_frame(c, e.data, e.len, e.rtp_ts, e.capture_us) < 0) {
+		int64_t send_start_us = rss_timestamp_us();
+		int send_result = c->sending
+			? rwd_send_video_frame(c, e.data, e.len, e.rtp_ts, e.capture_us)
+			: -1;
+		int64_t send_end_us = rss_timestamp_us();
+
+		rwd_sendq_note_send(&c->sendq, &e, send_start_us, send_end_us,
+				    send_result == 0);
+		if (send_result < 0) {
 			rwd_sendq_fail(&c->sendq);
 			RSS_WARN("media: client[%s] UDP send stalled: waiting for keyframe",
 				 c->session_id);
@@ -969,7 +976,8 @@ void *rwd_video_reader_thread(void *arg)
 				if (!c->send_thread_started)
 					continue;
 				if (rwd_sendq_push(&c->sendq, srv->video_bufs[s], length, client_ts,
-						   capture_mono_us, meta.is_key) != 0) {
+						   capture_mono_us, rss_timestamp_us(),
+						   meta.is_key) != 0) {
 					/* Queue full: this client can't drain at
 					 * stream rate, or its last access unit failed.
 					 * Everything queued was purged; resume clean
