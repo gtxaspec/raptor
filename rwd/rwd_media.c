@@ -504,8 +504,8 @@ static const uint8_t *find_nalu_end(const uint8_t *nalu_start, const uint8_t *en
 
 /* ── Parse Annex B and send NALUs via SRTP ── */
 
-static int rwd_send_video_frame(rwd_client_t *c, const uint8_t *data, uint32_t len,
-				uint32_t rtp_ts, int64_t capture_us)
+static int rwd_send_video_frame(rwd_client_t *c, const uint8_t *data, uint32_t len, uint32_t rtp_ts,
+				int64_t capture_us)
 {
 	if (!c->nal_video || !c->sending)
 		return 0;
@@ -549,9 +549,9 @@ static int rwd_send_video_frame(rwd_client_t *c, const uint8_t *data, uint32_t l
 		memcpy(stap + off, pps_data, pps_len);
 		off += pps_len;
 
-		if (Compy_RtpTransport_send_packet(c->rtp_video,
-						   Compy_RtpTimestamp_Raw(rtp_ts), false,
-						   U8Slice99_empty(), U8Slice99_new(stap, off)) < 0)
+		if (Compy_RtpTransport_send_packet(c->rtp_video, Compy_RtpTimestamp_Raw(rtp_ts),
+						   false, U8Slice99_empty(),
+						   U8Slice99_new(stap, off)) < 0)
 			return -1;
 	}
 
@@ -576,8 +576,8 @@ static int rwd_send_video_frame(rwd_client_t *c, const uint8_t *data, uint32_t l
 			.header = Compy_NalHeader_H264(Compy_H264NalHeader_parse(nalu_start[0])),
 			.payload = U8Slice99_new((uint8_t *)(nalu_start + 1), nalu_len - 1),
 		};
-		if (Compy_NalTransport_send_packet(c->nal_video,
-						   Compy_RtpTimestamp_Raw(rtp_ts), nalu) < 0)
+		if (Compy_NalTransport_send_packet(c->nal_video, Compy_RtpTimestamp_Raw(rtp_ts),
+						   nalu) < 0)
 			return -1;
 		p = nalu_end;
 	}
@@ -900,8 +900,8 @@ void *rwd_video_reader_thread(void *arg)
 				uint32_t client_ts = rtp_ts - c->video_ts_offset;
 				if (!c->send_thread_started)
 					continue;
-				if (rwd_sendq_push(&c->sendq, srv->video_bufs[s], length,
-						   client_ts, capture_mono_us, meta.is_key) != 0) {
+				if (rwd_sendq_push(&c->sendq, srv->video_bufs[s], length, client_ts,
+						   capture_mono_us, meta.is_key) != 0) {
 					/* Queue full: this client can't drain at
 					 * stream rate, or its last access unit failed.
 					 * Everything queued was purged; resume clean
