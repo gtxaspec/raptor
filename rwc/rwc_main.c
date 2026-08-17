@@ -476,6 +476,17 @@ static void deliver_frame(rwc_state_t *st)
 					    &length, &meta);
 		}
 	}
+	if (ret == -ENOSPC) {
+		/* Encoder restart raised the stride mid-life; the read already
+		 * advanced past the frame. Grow so the next one fits. */
+		uint8_t *bigger = realloc(st->frame_buf, length);
+		if (bigger) {
+			RSS_WARN("uvc: frame buffer %u -> %u after producer restart",
+				 st->frame_buf_size, length);
+			st->frame_buf = bigger;
+			st->frame_buf_size = length;
+		}
+	}
 	if (ret != 0 || length == 0) {
 		buf.bytesused = 1;
 		ioctl(st->uvc_fd, VIDIOC_QBUF, &buf);

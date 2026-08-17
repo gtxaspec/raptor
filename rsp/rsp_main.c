@@ -380,6 +380,21 @@ static void push_loop(rsp_state_t *st)
 			st->frames_dropped++;
 			continue;
 		}
+		if (ret == -ENOSPC) {
+			/* The frame outgrew the buffer sized at ring open — an
+			 * encoder restart (set-resolution) can raise the
+			 * per-buffer stride mid-life. The read already advanced
+			 * past the frame; grow so it stays a one-frame hiccup. */
+			uint8_t *bigger = realloc(st->frame_buf, length);
+			if (bigger) {
+				RSS_WARN("video: frame buffer %u -> %u after producer restart",
+					 st->frame_buf_size, length);
+				st->frame_buf = bigger;
+				st->frame_buf_size = length;
+			}
+			st->frames_dropped++;
+			continue;
+		}
 		if (ret == -EAGAIN) {
 			const rss_ring_header_t *vhdr = rss_ring_get_header(st->video_ring);
 			uint64_t ws = vhdr->write_seq;

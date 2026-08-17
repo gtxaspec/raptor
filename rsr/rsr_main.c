@@ -7,6 +7,7 @@
  */
 
 #include <stdio.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -341,6 +342,22 @@ static void serve_loop(rsr_state_t *st)
 			int ret = rss_ring_read(s->ring, &s->read_seq, st->frame_buf,
 						st->frame_buf_size, &length, &meta);
 
+			if (ret == -ENOSPC) {
+				/* The frame outgrew the buffer sized at ring
+				 * open — an encoder restart (set-resolution)
+				 * can raise the per-buffer stride mid-life.
+				 * The read already advanced past the frame;
+				 * grow so it stays a one-frame hiccup. */
+				uint8_t *bigger = realloc(st->frame_buf, length);
+				if (bigger) {
+					RSS_WARN("'%s': frame buffer %u -> %u after "
+						 "producer restart",
+						 s->name, st->frame_buf_size, length);
+					st->frame_buf = bigger;
+					st->frame_buf_size = length;
+				}
+				continue;
+			}
 			if (ret == RSS_EOVERFLOW) {
 				RSS_DEBUG("ring overflow on '%s', requesting IDR", s->name);
 				rss_ring_request_idr(s->ring);
