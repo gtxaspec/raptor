@@ -208,9 +208,12 @@ static const char *rc_mode_str(rss_rc_mode_t m)
 static void load_stream_config(rss_config_t *cfg, const char *section, rvd_stream_t *s,
 			       int default_w, int default_h, int default_fps, int default_br);
 static int read_sensor_proc_int(int idx, const char *key, int base, int def);
+static void load_sensor_from_section(rss_config_t *cfg, const char *section,
+				     rss_sensor_config_t *sensor, int proc_idx);
 
 static int rvd_pipeline_init_v4l2(rvd_state_t *st)
 {
+	rss_multi_sensor_config_t multi_cfg = {0};
 	rvd_stream_t *stream = &st->streams[0];
 	const char *device;
 	int sensor_w;
@@ -230,6 +233,33 @@ static int rvd_pipeline_init_v4l2(rvd_state_t *st)
 	st->use_isp_osd = false;
 	st->ivs_enabled = false;
 	atomic_store(&st->ivs_active, false);
+
+	/* V4L2 exposes frames from the TX-ISP pipeline, but opening /dev/video0
+	 * does not bind or start the sensor. Bring up ISP + sensor through the
+	 * same HAL sequence as the regular IMP pipeline before configuring the
+	 * capture and encoder backends. */
+	load_sensor_from_section(st->cfg, "sensor", &multi_cfg.sensors[0], 0);
+	multi_cfg.sensor_count = 1;
+	if (!multi_cfg.sensors[0].name[0]) {
+		RSS_FATAL("sensor name not in config and not in /proc/jz/sensor/sensor0/name");
+		return RSS_ERR;
+	}
+	if (multi_cfg.sensors[0].i2c_addr == 0) {
+		RSS_FATAL("i2c_addr not in config and not in /proc/jz/sensor/sensor0/i2c_addr");
+		return RSS_ERR;
+	}
+	RSS_DEBUG("sensor0: %s i2c=0x%02x bus=%d id=%d mclk=%d vin=%d boot=%d",
+		  multi_cfg.sensors[0].name, multi_cfg.sensors[0].i2c_addr,
+		  multi_cfg.sensors[0].i2c_adapter, multi_cfg.sensors[0].sensor_id,
+		  multi_cfg.sensors[0].mclk, multi_cfg.sensors[0].vin_type,
+		  multi_cfg.sensors[0].default_boot);
+
+	ret = RSS_HAL_CALL(st->ops, init, st->hal_ctx, &multi_cfg);
+	if (ret != RSS_OK) {
+		RSS_FATAL("HAL init failed: %d", ret);
+		return ret;
+	}
+	st->hal_initialized = true;
 
 	sensor_w = read_sensor_proc_int(0, "width", 10, 0);
 	sensor_h = read_sensor_proc_int(0, "height", 10, 0);
