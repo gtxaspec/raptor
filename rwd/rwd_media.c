@@ -697,13 +697,12 @@ static void *rwd_client_send_thread(void *arg)
 
 	while (rwd_sendq_pop(&c->sendq, &e)) {
 		int64_t send_start_us = rss_timestamp_us();
-		int send_result = c->sending
-			? rwd_send_video_frame(c, e.data, e.len, e.rtp_ts, e.capture_us)
-			: -1;
+		int send_result =
+			c->sending ? rwd_send_video_frame(c, e.data, e.len, e.rtp_ts, e.capture_us)
+				   : -1;
 		int64_t send_end_us = rss_timestamp_us();
 
-		rwd_sendq_note_send(&c->sendq, &e, send_start_us, send_end_us,
-				    send_result == 0);
+		rwd_sendq_note_send(&c->sendq, &e, send_start_us, send_end_us, send_result == 0);
 		if (send_result < 0) {
 			rwd_sendq_fail(&c->sendq);
 			RSS_WARN("media: client[%s] UDP send stalled: waiting for keyframe",

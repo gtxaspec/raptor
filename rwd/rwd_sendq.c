@@ -106,13 +106,14 @@ bool rwd_sendq_pop(rwd_sendq_t *q, rwd_sendq_entry_t *out)
 	return true;
 }
 
-void rwd_sendq_note_send(rwd_sendq_t *q, const rwd_sendq_entry_t *entry,
-			 int64_t send_start_us, int64_t send_end_us, bool success)
+void rwd_sendq_note_send(rwd_sendq_t *q, const rwd_sendq_entry_t *entry, int64_t send_start_us,
+			 int64_t send_end_us, bool success)
 {
 	if (!q || !entry)
 		return;
 
-	int64_t queue_us = send_start_us > entry->enqueue_us ? send_start_us - entry->enqueue_us : 0;
+	int64_t queue_us =
+		send_start_us > entry->enqueue_us ? send_start_us - entry->enqueue_us : 0;
 	int64_t send_us = send_end_us > send_start_us ? send_end_us - send_start_us : 0;
 	int64_t capture_to_send_us =
 		send_end_us > entry->capture_us ? send_end_us - entry->capture_us : 0;

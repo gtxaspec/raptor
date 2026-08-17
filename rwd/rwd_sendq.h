@@ -93,8 +93,8 @@ bool rwd_sendq_pop(rwd_sendq_t *q, rwd_sendq_entry_t *out);
 /* Record one synchronous packetize/SRTP/send attempt. Times are measured by
  * the send thread, while the queue lock keeps 64-bit counters coherent on
  * 32-bit cameras for control-socket readers. */
-void rwd_sendq_note_send(rwd_sendq_t *q, const rwd_sendq_entry_t *entry,
-			 int64_t send_start_us, int64_t send_end_us, bool success);
+void rwd_sendq_note_send(rwd_sendq_t *q, const rwd_sendq_entry_t *entry, int64_t send_start_us,
+			 int64_t send_end_us, bool success);
 
 void rwd_sendq_get_stats(rwd_sendq_t *q, rwd_sendq_stats_t *stats);
 
