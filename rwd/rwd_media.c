@@ -715,6 +715,24 @@ void *rwd_video_reader_thread(void *arg)
 				pthread_mutex_unlock(&srv->clients_lock);
 				continue;
 			}
+			if (ret == -ENOSPC) {
+				/* The frame outgrew the buffer sized at ring open —
+				 * an encoder restart (set-resolution) can raise the
+				 * per-buffer stride mid-life. The read reported the
+				 * needed size and already advanced past the frame;
+				 * grow and continue so it stays a one-frame hiccup,
+				 * not a permanent skip storm. */
+				uint8_t *bigger = realloc(srv->video_bufs[s], length);
+				if (bigger) {
+					RSS_WARN("media: video[%d] frame buffer %u -> %u after "
+						 "producer restart",
+						 s, srv->video_buf_sizes[s], length);
+					srv->video_bufs[s] = bigger;
+					srv->video_buf_sizes[s] = length;
+				}
+				srv->video_read_seq[s] = read_seq;
+				continue;
+			}
 			if (ret != 0)
 				continue;
 

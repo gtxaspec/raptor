@@ -7,6 +7,7 @@
 
 #include "rsd555.h"
 
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -264,6 +265,24 @@ void *rsd555_video_reader_thread(void *arg)
 				ctx->read_seq = read_seq;
 				maybe_request_idr(ctx->ring, &ctx->last_idr_req_us);
 				break;
+			}
+			if (ret == -ENOSPC) {
+				/* The frame outgrew the buffer sized at ring open —
+				 * an encoder restart (set-resolution) can raise the
+				 * per-buffer stride mid-life. The read reported the
+				 * needed size and already advanced past the frame;
+				 * grow and continue so it stays a one-frame hiccup,
+				 * not a permanent skip storm. */
+				uint8_t *bigger = realloc(ctx->frame_buf, length);
+				if (bigger) {
+					RSS_WARN("video[%d]: frame buffer %u -> %u after "
+						 "producer restart",
+						 ctx->idx, ctx->frame_buf_size, length);
+					ctx->frame_buf = bigger;
+					ctx->frame_buf_size = length;
+				}
+				ctx->read_seq = read_seq;
+				continue;
 			}
 			if (ret != 0)
 				break;
