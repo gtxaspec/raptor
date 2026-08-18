@@ -14,6 +14,7 @@
 #include <pthread.h>
 
 #include "rsd.h"
+#include "rsd_idr_recovery.h"
 
 /* Forward declarations — called by send thread, defined below */
 static void rsd_send_audio_frame(rsd_client_t *c, uint32_t codec, const uint8_t *data, uint32_t len,
@@ -22,23 +23,17 @@ static void rsd_send_jpeg_frame(rsd_client_t *c, const uint8_t *data, uint32_t l
 				uint32_t rtp_ts);
 
 /*
- * Minimum interval between IDR requests from the reader's lag-recovery
- * paths (skip-to-latest, RSS_EOVERFLOW, sendq-full). Without this cap the
- * three call sites cascade on slow SoCs: each IDR is ~10x a P-frame, so
- * requesting one slows the reader, which triggers another skip, which
- * requests another IDR — observed as 1:9 IDR:SLICE on T20 (expected with
- * GOP=60 is 1:60). One second is enough: the encoder's own GOP will
- * produce its next IDR in due course, and the client already has the
- * current keyframe.
+ * Request one recovery IDR when the reader or a client falls behind. Natural
+ * keyframes count against the same guard: otherwise a large IDR blocked in a
+ * high-RTT TCP writer fills the sendq, whose overflow requests another large
+ * IDR, and the recovery path becomes a self-sustaining burst generator.
  */
-#define RSD_IDR_REQ_MIN_INTERVAL_US 1000000
-
-static inline void rsd_maybe_request_idr(rss_ring_t *ring, int64_t *last_req_us)
+static inline void rsd_maybe_request_idr(rss_ring_t *ring, rsd_idr_recovery_t *recovery)
 {
 	int64_t now_us = rss_timestamp_us();
-	if (now_us - *last_req_us > RSD_IDR_REQ_MIN_INTERVAL_US) {
+	if (rsd_idr_recovery_request_due(recovery, now_us)) {
 		rss_ring_request_idr(ring);
-		*last_req_us = now_us;
+		rsd_idr_recovery_note(recovery, now_us);
 	}
 }
 
@@ -302,7 +297,8 @@ void *rsd_video_reader_thread(void *arg)
 	int idle_count = 0;
 
 	/* Per-thread state for rsd_maybe_request_idr (see top of file). */
-	int64_t last_idr_req_us = 0;
+	rsd_idr_recovery_t idr_recovery;
+	rsd_idr_recovery_init(&idr_recovery);
 
 	uint64_t total_read = 0, total_pushed = 0, total_overflow = 0;
 	int64_t last_count_log = rss_timestamp_us();
@@ -574,7 +570,7 @@ void *rsd_video_reader_thread(void *arg)
 					 stream_idx, (unsigned long long)pre_seq,
 					 (unsigned long long)read_seq, (unsigned long long)skipped);
 				rctx->read_seq = read_seq;
-				rsd_maybe_request_idr(rctx->ring, &last_idr_req_us);
+				rsd_maybe_request_idr(rctx->ring, &idr_recovery);
 				break;
 			}
 			if (ret != 0)
@@ -583,6 +579,7 @@ void *rsd_video_reader_thread(void *arg)
 			rctx->read_seq = read_seq;
 			total_read++;
 
+			int64_t read_now_us = rss_timestamp_us();
 			if (video_ts_epoch == 0)
 				video_ts_epoch = meta.timestamp;
 			uint32_t rtp_ts = (uint32_t)((uint64_t)(meta.timestamp - video_ts_epoch) *
@@ -592,6 +589,9 @@ void *rsd_video_reader_thread(void *arg)
 				rtp_ts = last_rtp_ts + frame_dur;
 			last_rtp_ts = rtp_ts;
 			has_last_rtp_ts = true;
+
+			if (meta.is_key)
+				rsd_idr_recovery_note(&idr_recovery, read_now_us);
 
 			if (meta.is_key && rctx->last_codec != 2 && rctx->last_codec != 3 &&
 			    atomic_load_explicit(&rctx->sps_len, memory_order_relaxed) == 0)
@@ -656,7 +656,7 @@ void *rsd_video_reader_thread(void *arg)
 					total_pushed++;
 				else if (qret == RSD_SENDQ_DROPPED) {
 					c->waiting_keyframe = (c->video.jpeg == NULL);
-					rsd_maybe_request_idr(rctx->ring, &last_idr_req_us);
+					rsd_maybe_request_idr(rctx->ring, &idr_recovery);
 				}
 			}
 			pthread_mutex_unlock(&srv->clients_lock);
