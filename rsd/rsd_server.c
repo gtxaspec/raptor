@@ -199,15 +199,16 @@ static void accept_client(rsd_server_t *srv)
 		return;
 
 	/* Keep fd blocking for writes — non-blocking would drop RTP packets
-	 * when the send buffer fills (200KB keyframes need multiple writes).
+	 * when the send buffer fills (large keyframes need multiple writes).
 	 * Reads are handled by epoll with EPOLLIN. */
 	int one = 1;
 	setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
 
-	/* TCP send buffer: smaller = lower latency, but it must absorb one
-	 * access-unit burst plus ordinary ACK jitter. Linux doubles the requested
-	 * value and caps it at net.core.wmem_max; report the effective size so a
-	 * board whose ceiling is too low is diagnosable from one startup log. */
+	/* Bound the kernel backlog as well as the userspace sendq. A buffer large
+	 * enough for several access units only turns a slow link into stale video;
+	 * blocking writes already split large keyframes across ACK windows. Linux
+	 * doubles the requested value and caps it at net.core.wmem_max, so report
+	 * the effective size for board diagnostics. */
 	int sndbuf = srv->tcp_sndbuf;
 	if (setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf)) != 0) {
 		RSS_WARN("failed to set TCP send buffer to %d: %s", sndbuf, strerror(errno));
