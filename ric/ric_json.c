@@ -11,6 +11,9 @@
  *                                (single inverted pin; the object is
  *                                 the standard's only polarity escape
  *                                 hatch, valid for the LED keys too)
+ *   "ircut": {"pin": [52, 53], "delay_us": 100000}
+ *                                (dual-coil pair with its hardware
+ *                                 pulse width; first = day, second = night)
  *   "ir850": 8 / "ir940": 9      (IR LED GPIOs)
  *   -1 or ""                     (explicitly disabled, silent)
  * "ircut": 999 means the board's filter hangs off the tmi8152
@@ -129,6 +132,85 @@ bad:
 	return false;
 }
 
+/* A structured dual-coil description uses one or two bare GPIO
+ * numbers. Per-pin polarity is expressed by pair order for pulse-mode
+ * filters; accepting nested active_low objects here would pretend ric
+ * implements a drive convention it does not. */
+static bool gpio_pin_array(const cJSON *item, int *pin, int *pin2)
+{
+	int n = cJSON_GetArraySize(item);
+	if (n < 1 || n > 2)
+		goto bad;
+	const cJSON *p = cJSON_GetArrayItem(item, 0);
+	if (!cJSON_IsNumber(p) || !valid_gpio(p->valueint))
+		goto bad;
+	*pin = p->valueint;
+	if (n == 2) {
+		p = cJSON_GetArrayItem(item, 1);
+		if (!cJSON_IsNumber(p) || !valid_gpio(p->valueint))
+			goto bad;
+		*pin2 = p->valueint;
+	}
+	return true;
+bad:
+	*pin = -1;
+	*pin2 = -1;
+	RSS_WARN("gpio.ircut.pin array must contain one or two GPIO numbers -- ignored");
+	return false;
+}
+
+/* Parse the structured IR-cut form shared with Thingino's generic
+ * ircut utility. RIC currently implements pulse drive; rejecting any
+ * other named mode is safer than silently applying pulse semantics to
+ * level-sequence hardware. */
+static bool ircut_object_mode_supported(const cJSON *item)
+{
+	const cJSON *mode = cJSON_GetObjectItemCaseSensitive(item, "mode");
+	if (mode && (!cJSON_IsString(mode) || !mode->valuestring ||
+		     strcmp(mode->valuestring, "pulse") != 0)) {
+		RSS_WARN("gpio.ircut mode is not pulse -- unsupported by ric");
+		return false;
+	}
+	return true;
+}
+
+static bool ircut_object(const cJSON *item, int *pin, int *pin2, bool *active_low)
+{
+	const cJSON *p = cJSON_GetObjectItemCaseSensitive(item, "pin");
+	if (cJSON_IsNumber(p)) {
+		if (!valid_gpio(p->valueint))
+			goto bad;
+		*pin = p->valueint;
+		*active_low = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(item, "active_low"));
+		return true;
+	}
+	if (cJSON_IsString(p) && p->valuestring)
+		return gpio_pin_pair(p->valuestring, "ircut.pin", pin, pin2);
+	if (cJSON_IsArray(p))
+		return gpio_pin_array(p, pin, pin2);
+bad:
+	RSS_WARN("gpio.ircut object carries no usable \"pin\" -- ignored");
+	return false;
+}
+
+/* thingino.json records actuator timing in microseconds because the
+ * shell GPIO utility uses usleep. RIC's public setting is milliseconds;
+ * round upward so conversion can never shorten a hardware pulse. */
+static void ircut_object_timing(const cJSON *item, ric_config_t *c)
+{
+	if (c->pulse_ms_explicit)
+		return;
+	const cJSON *delay = cJSON_GetObjectItemCaseSensitive(item, "delay_us");
+	if (!delay)
+		return;
+	if (!cJSON_IsNumber(delay) || delay->valuedouble < 1 || delay->valuedouble > 1000000) {
+		RSS_WARN("gpio.ircut delay_us must be in 1..1000000 -- using %dms", c->pulse_ms);
+		return;
+	}
+	int delay_us = delay->valueint;
+	c->pulse_ms = (delay_us + 999) / 1000;
+}
+
 /* ir850/ir940: a bare number or the {pin, active_low} object. */
 static void gpio_led_pin(const cJSON *gpio, const char *key, int *pin, bool *active_low)
 {
@@ -153,7 +235,7 @@ static void gpio_led_pin(const cJSON *gpio, const char *key, int *pin, bool *act
 
 void ric_json_gpio_load(ric_config_t *c, const char *path)
 {
-	if (c->gpio_ircut >= 0 && c->gpio_irled >= 0 && c->gpio_irled2 >= 0)
+	if (c->gpio_ircut >= 0 && c->gpio_irled >= 0 && c->gpio_irled2 >= 0 && c->pulse_ms_explicit)
 		return;
 
 	FILE *f = fopen(path, "r");
@@ -226,8 +308,12 @@ void ric_json_gpio_load(ric_config_t *c, const char *path)
 		return;
 	}
 
+	cJSON *ircut = cJSON_GetObjectItemCaseSensitive(gpio, "ircut");
+	bool ircut_object_ok = !cJSON_IsObject(ircut) || ircut_object_mode_supported(ircut);
+	if (cJSON_IsObject(ircut) && ircut_object_ok)
+		ircut_object_timing(ircut, c);
+
 	if (c->gpio_ircut < 0) {
-		cJSON *ircut = cJSON_GetObjectItemCaseSensitive(gpio, "ircut");
 		int pin = -1, pin2 = -1;
 		bool alow = false;
 		if (cJSON_IsNumber(ircut)) {
@@ -240,8 +326,8 @@ void ric_json_gpio_load(ric_config_t *c, const char *path)
 			else if (ircut->valueint > GPIO_PIN_MAX)
 				RSS_WARN("gpio.ircut %d is out of range -- ignored",
 					 ircut->valueint);
-		} else if (cJSON_IsObject(ircut)) {
-			gpio_object(ircut, "ircut", &pin, &alow);
+		} else if (cJSON_IsObject(ircut) && ircut_object_ok) {
+			ircut_object(ircut, &pin, &pin2, &alow);
 		} else if (cJSON_IsString(ircut) && ircut->valuestring) {
 			gpio_pin_pair(ircut->valuestring, "ircut", &pin, &pin2);
 		}
@@ -264,9 +350,9 @@ void ric_json_gpio_load(ric_config_t *c, const char *path)
 	cJSON_Delete(root);
 
 	if (c->gpio_ircut >= 0 || c->gpio_irled >= 0)
-		RSS_INFO("GPIOs from %s: ircut=%d ircut2=%d irled=%d irled2=%d%s%s%s", path,
-			 c->gpio_ircut, c->gpio_ircut2, c->gpio_irled, c->gpio_irled2,
-			 c->ircut_active_low ? " ircut-active-low" : "",
+		RSS_INFO("GPIOs from %s: ircut=%d ircut2=%d irled=%d irled2=%d pulse=%dms%s%s%s",
+			 path, c->gpio_ircut, c->gpio_ircut2, c->gpio_irled, c->gpio_irled2,
+			 c->pulse_ms, c->ircut_active_low ? " ircut-active-low" : "",
 			 c->irled_active_low ? " irled-active-low" : "",
 			 c->irled2_active_low ? " irled2-active-low" : "");
 }
