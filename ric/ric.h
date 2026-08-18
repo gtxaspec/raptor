@@ -181,6 +181,7 @@ typedef struct {
 
 	/* Dual-GPIO IR-cut coil pulse width */
 	int pulse_ms;
+	bool pulse_ms_explicit; /* raptor.conf overrides device metadata */
 } ric_config_t;
 
 /* Global state */

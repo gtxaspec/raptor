@@ -132,11 +132,13 @@ static void load_config(ric_state_t *st)
 		"poll_interval_ms",
 		rss_config_get_int(cfg, "ircut", "poll_interval_ms", default_poll), 50, 10000);
 
-	/* Dual-GPIO coil pulse. 10ms is what the thingino ircut script has
-	 * driven the whole fleet with since thingino-daynight existed; both
-	 * 10ms and 100ms measured 20/20 reliable on a dual-GPIO Wyze Cam3,
-	 * so the default follows the fleet. Clamped: a zero pulse moves no
-	 * filter, and holding the coil for seconds is a heater. */
+	/* Probe before the getter stores its default. An explicit runtime
+	 * setting is policy and wins over timing in thingino.json; otherwise
+	 * the device description may replace the fleet's 10ms default with
+	 * the actuator's measured pulse width. */
+	c->pulse_ms_explicit = rss_config_get_str(cfg, "ircut", "pulse_ms", NULL) != NULL;
+	/* A zero pulse moves no filter, and holding the coil for seconds is
+	 * a heater. */
 	c->pulse_ms =
 		cfg_clamp("pulse_ms", rss_config_get_int(cfg, "ircut", "pulse_ms", 10), 1, 1000);
 
