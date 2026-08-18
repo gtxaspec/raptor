@@ -235,8 +235,7 @@ static void gpio_led_pin(const cJSON *gpio, const char *key, int *pin, bool *act
 
 void ric_json_gpio_load(ric_config_t *c, const char *path)
 {
-	if (c->gpio_ircut >= 0 && c->gpio_irled >= 0 && c->gpio_irled2 >= 0 &&
-	    c->pulse_ms_explicit)
+	if (c->gpio_ircut >= 0 && c->gpio_irled >= 0 && c->gpio_irled2 >= 0 && c->pulse_ms_explicit)
 		return;
 
 	FILE *f = fopen(path, "r");
@@ -352,10 +351,8 @@ void ric_json_gpio_load(ric_config_t *c, const char *path)
 
 	if (c->gpio_ircut >= 0 || c->gpio_irled >= 0)
 		RSS_INFO("GPIOs from %s: ircut=%d ircut2=%d irled=%d irled2=%d pulse=%dms%s%s%s",
-			 path,
-			 c->gpio_ircut, c->gpio_ircut2, c->gpio_irled, c->gpio_irled2,
-			 c->pulse_ms,
-			 c->ircut_active_low ? " ircut-active-low" : "",
+			 path, c->gpio_ircut, c->gpio_ircut2, c->gpio_irled, c->gpio_irled2,
+			 c->pulse_ms, c->ircut_active_low ? " ircut-active-low" : "",
 			 c->irled_active_low ? " irled-active-low" : "",
 			 c->irled2_active_low ? " irled2-active-low" : "");
 }
