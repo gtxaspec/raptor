@@ -667,6 +667,39 @@ void ric_poll_exposure(ric_state_t *st)
 		return;
 	}
 
+	/* RVD can become reachable before the sensor's cold-start AE has
+	 * found an exposure.  On T31 this presents as several low-luma,
+	 * minimum-gain frames while exposure and EV are still climbing.  A
+	 * fixed startup delay either races slow AE or needlessly delays a
+	 * genuinely dark boot, so qualify the readings instead:
+	 *
+	 *  - day luma means the day position is already proven;
+	 *  - night gain means the scene is already proven dark;
+	 *  - otherwise, require three successive EV readings within 5%
+	 *    before low luma may enter the normal debounce.
+	 *
+	 * EV covers exposure time as well as gain, unlike the night baseline
+	 * settling check below.  Platforms without EV retain the old behavior
+	 * rather than being held in day indefinitely. */
+	if (st->startup_ae_settling && st->current_mode == RIC_MODE_DAY &&
+	    st->settings.trigger == RIC_TRIGGER_LUMA && have_ev) {
+		bool day_proven = have_luma && ae_luma >= (uint32_t)st->settings.night_luma;
+		bool night_proven = have_gain && total_gain >= (uint32_t)st->settings.night_gain;
+		bool within = st->startup_prev_ev > 0 &&
+			      ev <= st->startup_prev_ev + st->startup_prev_ev / 20 &&
+			      ev >= st->startup_prev_ev - st->startup_prev_ev / 20;
+
+		st->startup_ev_agree_run = within ? st->startup_ev_agree_run + 1 : 0;
+		st->startup_prev_ev = ev;
+		if (!day_proven && !night_proven && st->startup_ev_agree_run < 3) {
+			st->night_count = 0;
+			return;
+		}
+		st->startup_ae_settling = false;
+		RSS_DEBUG("startup AE ready: luma=%u gain=%u ev=%u (%s)", ae_luma, total_gain, ev,
+			  day_proven ? "day luma" : (night_proven ? "night gain" : "settled EV"));
+	}
+
 	bool want_night = false, want_day = false;
 	char why[128];
 

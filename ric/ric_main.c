@@ -652,6 +652,7 @@ int main(int argc, char **argv)
 	}
 
 	/* Apply initial mode -- force GPIOs to known state at startup */
+	st.startup_ae_settling = st.settings.opmode == RIC_AUTO;
 	st.current_mode = RIC_MODE_UNSET;
 	if (st.settings.opmode == RIC_FORCE_DAY)
 		ric_set_mode(&st, RIC_MODE_DAY);
