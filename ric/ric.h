@@ -227,13 +227,14 @@ typedef struct {
 	int settle_agree_run;
 	int settle_extend_left;
 
-	/* The first day-mode samples arrive while AE is still climbing from
-	 * its cold-start exposure.  Do not mistake those underexposed frames
-	 * for darkness; arm the normal luma policy once day luma is reached,
-	 * gain proves darkness, or EV has actually settled. */
-	bool startup_ae_settling;
-	uint32_t startup_prev_ev;
-	int startup_ev_agree_run;
+	/* Day-mode samples can arrive while AE is still climbing from its
+	 * reset exposure, both at cold start and after an ISP mode switch.
+	 * Do not mistake those underexposed frames for darkness; arm the
+	 * normal luma policy once day luma is reached, gain proves darkness,
+	 * or EV has actually settled. */
+	bool day_ae_settling;
+	uint32_t day_prev_ev;
+	int day_ev_agree_run;
 
 	/* Photo mode state */
 	ric_photo_state_t photo;
