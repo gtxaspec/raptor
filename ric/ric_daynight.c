@@ -420,6 +420,10 @@ void ric_trigger_rearm(ric_state_t *st)
 	st->settle_prev_gain = 0;
 	st->settle_agree_run = 0;
 	st->settle_extend_left = 17;
+	st->day_ae_settling =
+		st->current_mode == RIC_MODE_DAY && st->settings.trigger == RIC_TRIGGER_LUMA;
+	st->day_prev_ev = 0;
+	st->day_ev_agree_run = 0;
 	st->night_gain_baseline = 0;
 	st->night_ev_baseline = 0;
 	st->night_detect_gain = 0;
@@ -462,6 +466,9 @@ void ric_set_mode(ric_state_t *st, ric_mode_t mode)
 	st->settle_prev_gain = 0;
 	st->settle_agree_run = 0;
 	st->settle_extend_left = 17;
+	st->day_ae_settling = mode == RIC_MODE_DAY;
+	st->day_prev_ev = 0;
+	st->day_ev_agree_run = 0;
 	st->probe_recheck_polls = 0; /* re-armed when the baseline lands */
 	if (mode == RIC_MODE_DAY)
 		st->night_gain_baseline = 0;
@@ -510,6 +517,40 @@ static uint32_t json_get_uint(const cJSON *root, const char *key)
 {
 	const cJSON *item = cJSON_GetObjectItem(root, key);
 	return cJSON_IsNumber(item) ? (uint32_t)item->valuedouble : 0;
+}
+
+/* Qualify a day-mode exposure before low luma is allowed to mean night.
+ * Switching ISP mode restarts AE on T31 just like cold start does: the
+ * first frames have minimum gain and exposure, then EV climbs until the
+ * scene is usable. A fixed delay either races slow AE or stalls a real
+ * dark transition, so accept the first of:
+ *
+ *  - luma already proves daylight;
+ *  - gain already proves darkness;
+ *  - three successive EV readings agree within 5%.
+ *
+ * Platforms without EV retain the previous behavior. */
+static bool ric_day_ae_ready(ric_state_t *st, bool have_gain, uint32_t total_gain, bool have_luma,
+			     uint32_t ae_luma, bool have_ev, uint32_t ev)
+{
+	if (!st->day_ae_settling || st->current_mode != RIC_MODE_DAY ||
+	    st->settings.trigger != RIC_TRIGGER_LUMA || !have_ev)
+		return true;
+
+	bool day_proven = have_luma && ae_luma >= (uint32_t)st->settings.night_luma;
+	bool night_proven = have_gain && total_gain >= (uint32_t)st->settings.night_gain;
+	bool within = st->day_prev_ev > 0 && ev <= st->day_prev_ev + st->day_prev_ev / 20 &&
+		      ev >= st->day_prev_ev - st->day_prev_ev / 20;
+
+	st->day_ev_agree_run = within ? st->day_ev_agree_run + 1 : 0;
+	st->day_prev_ev = ev;
+	if (!day_proven && !night_proven && st->day_ev_agree_run < 3)
+		return false;
+
+	st->day_ae_settling = false;
+	RSS_DEBUG("day AE ready: luma=%u gain=%u ev=%u (%s)", ae_luma, total_gain, ev,
+		  day_proven ? "day luma" : (night_proven ? "night gain" : "settled EV"));
+	return true;
 }
 
 /* Poll ISP exposure once and decide the day/night transition. */
@@ -587,6 +628,9 @@ void ric_poll_exposure(ric_state_t *st)
 		st->settings.trigger = RIC_TRIGGER_LUMA;
 	}
 
+	bool day_ae_ready =
+		ric_day_ae_ready(st, have_gain, total_gain, have_luma, ae_luma, have_ev, ev);
+
 	/* Cooldown after mode switch: wait for IR LEDs / ISP to stabilize.
 	 * After cooldown in night mode, sample total_gain as baseline for
 	 * the auto-calibrating night→day transition. */
@@ -594,6 +638,14 @@ void ric_poll_exposure(ric_state_t *st)
 		st->cooldown_remaining--;
 		if (st->cooldown_remaining == 0 && st->current_mode == RIC_MODE_DAY &&
 		    st->day_verify_pending) {
+			/* The ISP mode switch itself restarts AE. Keep the normal
+			 * cooldown alive until the exposure is meaningful; otherwise
+			 * a valid dawn probe is rejected from a few minimum-exposure
+			 * frames before AE has had a chance to climb. */
+			if (!day_ae_ready) {
+				st->cooldown_remaining = 1;
+				return;
+			}
 			st->day_verify_pending = false;
 			if (have_luma && ae_luma < (uint32_t)st->settings.night_luma) {
 				/* The scene reads night-dark with the IR off: the
@@ -664,6 +716,11 @@ void ric_poll_exposure(ric_state_t *st)
 		/* Every cooldown poll seeds the settling comparison above,
 		 * so the first evaluation has a real predecessor. */
 		st->settle_prev_gain = total_gain;
+		return;
+	}
+
+	if (!day_ae_ready) {
+		st->night_count = 0;
 		return;
 	}
 

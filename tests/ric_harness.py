@@ -142,6 +142,7 @@ class StubRvd:
 
     def __init__(self):
         self.scene = {}
+        self.scene_queue = []
         self.modes = []  # (monotonic, "day"|"night")
         self.fps_calls = []  # (monotonic, int value) from set-sensor-fps
         self.fps_error = False  # answer set-sensor-fps with an error
@@ -172,6 +173,13 @@ class StubRvd:
     def set_scene(self, **kw):
         with self.lock:
             self.scene = dict(kw)
+            self.scene_queue = []
+
+    def set_scene_sequence(self, scenes):
+        """Return one scripted exposure per query, then hold the last."""
+        with self.lock:
+            self.scene_queue = [dict(sc) for sc in scenes]
+            self.scene = dict(scenes[-1])
 
     def mark(self):
         with self.lock:
@@ -203,7 +211,10 @@ class StubRvd:
                 cmd = json.loads(req).get("cmd", "")
                 if cmd == "get-exposure":
                     with self.lock:
-                        sc = dict(self.scene)
+                        if self.scene_queue:
+                            sc = self.scene_queue.pop(0)
+                        else:
+                            sc = dict(self.scene)
                     resp = {
                         "total_gain": sc.get("gain", 0),
                         "exposure_us": sc.get("exposure_us", 10000),
@@ -440,6 +451,102 @@ def scenario_startup_park(stub, watch):
             "gpio directions set to out",
             str(dirs),
         )
+    ric.stop()
+
+
+def scenario_startup_ae_walk(stub, watch):
+    """RVD is live before cold-start AE reaches a daylight exposure.
+    Rising EV must not be counted as consecutive night samples."""
+    samples = [
+        {"luma": 4, "gain": 256, "ev": 45},
+        {"luma": 5, "gain": 256, "ev": 50},
+        {"luma": 6, "gain": 257, "ev": 56},
+        {"luma": 8, "gain": 256, "ev": 63},
+        {"luma": 11, "gain": 256, "ev": 71},
+        {"luma": 14, "gain": 257, "ev": 80},
+        {"luma": 17, "gain": 256, "ev": 90},
+        {"luma": 19, "gain": 256, "ev": 101},
+        {"luma": 21, "gain": 256, "ev": 113},
+        {"luma": 30, "gain": 256, "ev": 140},
+    ]
+    stub.set_scene_sequence(samples)
+    mm = stub.mark()
+    ric = Ric("startup-ae-walk", LUMA_CONF)
+    ok = ric.wait_running() and wait_for(
+        lambda: "day AE ready" in ric.read_log(), 4
+    )
+    result(ok, "startup AE walk reaches a qualified reading", ric.read_log())
+    modes = stub.modes_since(mm)
+    result(
+        "night" not in modes and ric_status().get("state") == "day",
+        "startup AE walk does not cause a false night switch",
+        "modes=%s log=%s" % (modes, ric.read_log()),
+    )
+    ric.stop()
+
+
+def scenario_startup_dark(stub, watch):
+    """The startup guard must still admit a genuinely dark, settled scene."""
+    stub.set_scene(luma=5, gain=20000, ev=100000)
+    mm = stub.mark()
+    ric = Ric("startup-dark", LUMA_CONF)
+    ok = ric.wait_running() and wait_for(
+        lambda: "night" in stub.modes_since(mm), 4
+    )
+    result(ok, "settled dark startup still switches to night", ric.read_log())
+    ric.stop()
+
+
+def scenario_day_switch_ae_walk(stub, watch):
+    """Entering day mode restarts AE. Rising EV after a valid dawn decision
+    must not fail post-switch verification or debounce straight back to night."""
+    stub.set_scene(luma=120, gain=500, ev=4000)
+    ric = Ric("day-switch-ae-walk", LUMA_CONF)
+    if not ric.wait_running():
+        result(False, "day-switch AE walk: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    time.sleep(0.5)
+
+    mm = stub.mark()
+    stub.set_scene(luma=5, gain=20000, ev=100000)
+    if not wait_for(lambda: "night" in stub.modes_since(mm), 4):
+        result(False, "day-switch AE walk: night entry", ric.read_log())
+        ric.stop()
+        return
+
+    # Let the IR-lit night reading become the baseline, then present dawn
+    # below the ratio threshold. The mode switch resets AE to a string of
+    # underexposed frames before daylight luma returns.
+    time.sleep((3 + 2) * POLL_MS / 1000.0)
+    mm = stub.mark()
+    stub.set_scene(luma=50, gain=4000, ev=20000)
+    if not wait_for(lambda: "day" in stub.modes_since(mm), 4):
+        result(False, "day-switch AE walk: day entry", ric.read_log())
+        ric.stop()
+        return
+
+    dm = stub.mark()
+    stub.set_scene_sequence([
+        {"luma": 4, "gain": 256, "ev": 45},
+        {"luma": 5, "gain": 256, "ev": 50},
+        {"luma": 6, "gain": 257, "ev": 56},
+        {"luma": 8, "gain": 256, "ev": 63},
+        {"luma": 11, "gain": 256, "ev": 71},
+        {"luma": 14, "gain": 257, "ev": 80},
+        {"luma": 17, "gain": 256, "ev": 90},
+        {"luma": 19, "gain": 256, "ev": 101},
+        {"luma": 21, "gain": 256, "ev": 113},
+        {"luma": 30, "gain": 256, "ev": 140},
+    ])
+    ok = wait_for(lambda: "day AE ready" in ric.read_log(), 4)
+    result(ok, "day-switch AE walk reaches a qualified reading", ric.read_log())
+    modes = stub.modes_since(dm)
+    result(
+        "night" not in modes and ric_status().get("state") == "day",
+        "day-switch AE walk does not reject a valid dawn",
+        "modes=%s log=%s" % (modes, ric.read_log()),
+    )
     ric.stop()
 
 
@@ -2390,6 +2497,9 @@ def main():
 
     scenarios = [
         scenario_startup_park,
+        scenario_startup_ae_walk,
+        scenario_startup_dark,
+        scenario_day_switch_ae_walk,
         scenario_dusk_dawn,
         scenario_hysteresis,
         scenario_cooldown,
