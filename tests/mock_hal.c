@@ -118,8 +118,11 @@ static int mock_init(void *ctx, const rss_multi_sensor_config_t *cfg)
 	return RSS_OK;
 }
 
-/* Media clock: µs since mock_init, same epoch the synthetic frame
- * timestamps approximate (40ms per frame, delivered in real time). */
+/* Media clock: µs since mock_init. Video frames are stamped from this
+ * same clock at production, the way the SDK stamps them from its
+ * hardware clock; a synthetic seq*40ms timeline paced by nanosleep
+ * runs slow by the sleep overshoot (thousands of ppm), which the
+ * consumers' media-to-monotonic mapping is not built to follow. */
 static int mock_sys_get_timestamp(void *ctx, int64_t *ts)
 {
 	(void)ctx;
@@ -397,7 +400,7 @@ static int mock_enc_get_frame(void *ctx, int chn, rss_frame_t *frame)
 	frame->nals = ch->nals;
 	frame->nal_count = nal_idx;
 	frame->codec = ch->cfg.codec;
-	frame->timestamp = (int64_t)ch->frame_seq * 40000;
+	frame->timestamp = mock_mono_us() - mock_epoch_us;
 	frame->seq = ch->frame_seq;
 	frame->is_key = is_key;
 
