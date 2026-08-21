@@ -839,6 +839,12 @@ static void server_run(rhd_server_t *srv)
 					continue;
 				}
 				c->fd = cfd;
+				{
+					struct timespec ts;
+					clock_gettime(CLOCK_MONOTONIC, &ts);
+					c->recv_start =
+						(int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+				}
 				memcpy(&c->addr, &sa, sizeof(c->addr));
 #ifdef RSS_HAS_TLS
 				c->srv_tls = srv->tls;
@@ -922,15 +928,24 @@ static void server_run(rhd_server_t *srv)
 			}
 		}
 
-		/* Reap stalled async sends */
+		/* Reap stalled async sends and clients still owing a request */
 		{
 			struct timespec ts;
 			clock_gettime(CLOCK_MONOTONIC, &ts);
 			int64_t now = ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 			for (int i = srv->client_count - 1; i >= 0; i--) {
 				rhd_client_t *c = srv->clients[i];
-				if (c->send_buf && (now - c->send_start) > RHD_SEND_TIMEOUT_MS)
+				if (c->send_buf && (now - c->send_start) > RHD_SEND_TIMEOUT_MS) {
 					remove_client(srv, i);
+					continue;
+				}
+				if (rhd_client_recv_expired(c, now)) {
+					char addrstr[INET6_ADDRSTRLEN];
+					client_addr_str(&c->addr, addrstr, sizeof(addrstr));
+					RSS_WARN("dropped %s:%u (no request within %d ms)", addrstr,
+						 client_port(&c->addr), RHD_RECV_TIMEOUT_MS);
+					remove_client(srv, i);
+				}
 			}
 		}
 
