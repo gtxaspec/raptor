@@ -394,6 +394,37 @@ static void get_ring_name(int sensor_idx, const char *type, char *buf, size_t le
 		snprintf(buf, len, "s%d_%s", sensor_idx, type);
 }
 
+/*
+ * clamp_ring_slots -- force a configured slot count into what the ring accepts.
+ *
+ * rss_ring_create takes a power-of-two count no greater than
+ * RSS_RING_MAX_SLOTS and rejects everything else by returning NULL, which
+ * reaches the caller as a fatal "failed to create ring <name>" naming neither
+ * the key nor the constraint. Round instead, and name both.
+ *
+ * Down rather than up, so a fixed-up value never costs more memory than the
+ * one that was asked for -- these boards are sized to their rings.
+ */
+static int clamp_ring_slots(int slots, const char *key)
+{
+	int orig = slots;
+	int pow2 = 1;
+
+	if (slots < 2)
+		slots = 2;
+	if (slots > RSS_RING_MAX_SLOTS)
+		slots = RSS_RING_MAX_SLOTS;
+
+	while (pow2 * 2 <= slots)
+		pow2 *= 2;
+
+	if (pow2 != orig)
+		RSS_WARN("[ring] %s = %d is not a power of two in 2..%d, using %d", key, orig,
+			 RSS_RING_MAX_SLOTS, pow2);
+
+	return pow2;
+}
+
 /* OSD pool sizing callback — estimates per-element region bytes */
 struct osd_pool_ctx {
 	rss_config_t *cfg;
@@ -1451,8 +1482,17 @@ create_ring:
 			const char *type = is_main ? "main" : "sub";
 			get_ring_name(s->sensor_idx, type, ring_name, sizeof(ring_name));
 
-			int slots_cfg = rss_config_get_int(
-				cfg, "ring", is_main ? "main_slots" : "sub_slots", 32);
+			const char *slots_key = is_main ? "main_slots" : "sub_slots";
+			int slots_cfg = rss_config_get_int(cfg, "ring", slots_key, 32);
+			/*
+			 * rss_ring_create takes only a power-of-two slot count, and
+			 * signals a bad one by returning NULL -- which arrives here as
+			 * a fatal "failed to create ring". A config typo should not
+			 * stop the daemon at startup with an error naming the wrong
+			 * thing, so fix it up and say exactly what was done. Rounding
+			 * down keeps the footprint at or under what was asked for.
+			 */
+			slots_cfg = clamp_ring_slots(slots_cfg, slots_key);
 			int mb_cfg = rss_config_get_int(
 				cfg, "ring", is_main ? "main_data_mb" : "sub_data_mb", 0);
 			uint32_t min_data = is_main ? (256 * 1024) : (128 * 1024);
