@@ -22,7 +22,7 @@ LDFLAGS = $(SAN_FLAGS) -lpthread -lrt -lm
 
 TEST_SRCS = main.c test_ric_json.c test_nal.c test_prebuf.c test_mux.c test_codec.c test_sdp.c test_ring.c test_rsp.c \
             test_ctrl.c test_sign.c test_storage.c test_timelapse.c test_sendq.c test_rad_clock.c test_resync.c \
-            test_backchannel.c test_config.c
+            test_backchannel.c test_config.c test_rhd_slots.c
 LIB_SRCS = ../ric/ric_json.c ../rsd/rsd_sendq.c ../rsd/rsd_backchannel.c ../rad/rad_clock.c ../rad/rad_resync.c ../rmr/rmr_nal.c ../rmr/rmr_prebuf.c ../rmr/rmr_mux.c ../rmr/rmr_sign.c ../rmr/rmr_timelapse.c ../../raptor-common/src/rss_sign.c ../../raptor-common/src/rss_jpeg.c ../../raptor-common/src/rss_aac.c ../rmr/rmr_storage.c \
            ../../raptor-common/src/rss_util.c ../../raptor-common/src/rss_log.c \
            ../../raptor-common/src/cJSON.c \
@@ -40,7 +40,14 @@ SDP_SRC = sdp_parse.c
 $(SDP_SRC): ../rwd/rwd_sdp.c
 	sed '/^int rwd_sdp_generate_answer/,$$d' $< > $@
 
-tests: $(TEST_SRCS) $(LIB_SRCS) $(CTRL_SRCS) $(IPC_SRCS) $(SDP_SRC) greatest.h
+# Headers too. The suite compiles every source in one command, so there are no
+# object files to carry -MMD dependencies -- which means a header change leaves
+# the binary silently stale, and a test asserting something about a header goes
+# on asserting the old value.
+TEST_HDRS = $(wildcard *.h ../*/*.h ../../raptor-hal/include/*.h \
+                       ../../raptor-common/include/*.h ../../raptor-ipc/include/*.h)
+
+tests: $(TEST_SRCS) $(LIB_SRCS) $(CTRL_SRCS) $(IPC_SRCS) $(SDP_SRC) $(TEST_HDRS)
 	$(CC) $(CFLAGS) -DRWD_H -include ../fuzz/fuzz_rwd_shim.h \
 		-o $@ $(TEST_SRCS) $(LIB_SRCS) $(CTRL_SRCS) $(IPC_SRCS) $(SDP_SRC) $(LDFLAGS)
 

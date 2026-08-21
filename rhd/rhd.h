@@ -33,9 +33,10 @@
 #define RHD_MAX_CLIENTS	    8
 #define RHD_RECV_BUF	    4096
 #define RHD_MJPEG_BOUNDARY  "raptorframe"
-#define RHD_SEND_TIMEOUT_MS 3000 /* max time to drain a one-shot response */
-#define RHD_SNAP_TIMEOUT_MS 5000 /* max wait for a JPEG encoder to produce a fresh frame */
-#define RHD_MAX_JPEG	    6	 /* up to 2 per sensor, 3 sensors */
+#define RHD_SEND_TIMEOUT_MS 3000  /* max time to drain a one-shot response */
+#define RHD_RECV_TIMEOUT_MS 10000 /* max time a client may take to finish its request */
+#define RHD_SNAP_TIMEOUT_MS 5000  /* max wait for a JPEG encoder to produce a fresh frame */
+#define RHD_MAX_JPEG	    6	  /* up to 2 per sensor, 3 sensors */
 
 /* Index page — loaded from file on first request, cached */
 #define RHD_INDEX_PATH "/usr/share/raptor/index.html"
@@ -78,6 +79,7 @@ typedef struct {
 	struct sockaddr_storage addr;
 	char recv_buf[RHD_RECV_BUF];
 	size_t recv_len;
+	int64_t recv_start; /* monotonic ms a still-reading client connected at */
 
 	/*
 	 * Parked /snap request. An idle JPEG encoder needs a frame period or
@@ -107,6 +109,20 @@ typedef struct {
 	pthread_t send_tid;
 	bool send_thread_running;
 } rhd_client_t;
+
+/*
+ * True for a client that connected, took a slot, and has still not asked for
+ * anything. There are only RHD_MAX_CLIENTS slots and nothing else bounds this
+ * state: a stream, a parked snapshot and a draining response each carry their
+ * own deadline, so none of them are still reading a request and none are
+ * reaped here.
+ */
+static inline bool rhd_client_recv_expired(const rhd_client_t *c, int64_t now)
+{
+	if (c->is_mjpeg || c->is_audio || c->send_buf || c->snap_pending)
+		return false;
+	return now - c->recv_start > RHD_RECV_TIMEOUT_MS;
+}
 
 typedef struct {
 	int listen_fd;
