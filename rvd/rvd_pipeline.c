@@ -1519,10 +1519,25 @@ create_ring:
 				uint32_t fps = s->enc_cfg.fps_num;
 				if (fps == 0)
 					fps = 25;
-				/* I-frame headroom: 4x for normal GOP, 8x for
-				 * short GOP where every frame is an I-frame */
+				/*
+				 * I-frame headroom. The data region has to hold
+				 * `slots` frames, and an I-frame is bigger than the
+				 * bitrate's per-frame average; 4x covers that.
+				 *
+				 * 8x is meant for an all-intra stream, where every
+				 * frame carries a whole picture. The test for that
+				 * used to be `gop <= fps`, which is true of the
+				 * default config rather than of an unusual one: gop
+				 * is normally unset and defaults to fps in
+				 * load_stream_config, and a one-second GOP is an
+				 * ordinary GOP. So every board took the 8x branch and
+				 * sized every ring at twice what it needed -- 3.2MB
+				 * instead of 1.6MB for a 3Mbps main stream, out of a
+				 * /dev/shm that on a 64MB board shares ~27MB with
+				 * everything else. Ask for what the branch says.
+				 */
 				uint32_t gop = s->enc_cfg.gop_length;
-				uint32_t iframe_mult = (gop > 0 && gop <= fps) ? 8 : 4;
+				uint32_t iframe_mult = (gop > 0 && gop <= 2) ? 8 : 4;
 				uint32_t max_frame =
 					(uint32_t)((uint64_t)bps * iframe_mult / 8 / fps);
 				if (max_frame < min_frame)
