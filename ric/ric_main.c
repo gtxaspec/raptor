@@ -96,7 +96,7 @@ static void load_config(ric_state_t *st)
 			  rss_config_get_int(cfg, "ircut", "probe_holdoff_sec", 60), 1, 86400);
 	c->probe_recheck_sec =
 		cfg_clamp("probe_recheck_sec",
-			  rss_config_get_int(cfg, "ircut", "probe_recheck_sec", 600), 0, 86400);
+			  rss_config_get_int(cfg, "ircut", "probe_recheck_sec", 0), 0, 86400);
 
 	/* ADC thresholds (trigger=adc) */
 	c->adc_channel = rss_config_get_int(cfg, "ircut", "adc_channel", 0);
