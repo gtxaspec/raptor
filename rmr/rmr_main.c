@@ -180,7 +180,7 @@ static int start_segment(rmr_state_t *st)
 
 	st->mux = rmr_mux_create(direct_write, st);
 	if (!st->mux) {
-		rmr_storage_close_segment(fd);
+		rmr_storage_close_segment(fd, st->segment_path, 0);
 		return -1;
 	}
 
@@ -215,7 +215,7 @@ static void close_segment(rmr_state_t *st)
 	st->segment_fd = -1;
 
 	if (fd >= 0) {
-		rmr_storage_close_segment(fd);
+		rmr_storage_close_segment(fd, st->segment_path, st->bytes_written);
 		RSS_DEBUG("segment closed: %s (%" PRIu64 " frames, %" PRIu64 " bytes)",
 			  st->segment_path, st->frames_written, st->bytes_written);
 	}
@@ -234,7 +234,7 @@ static int open_clip(rmr_state_t *st)
 
 	st->clip_mux = rmr_mux_create(clip_write, st);
 	if (!st->clip_mux) {
-		rmr_storage_close_segment(fd);
+		rmr_storage_close_segment(fd, st->clip_path, 0);
 		return -1;
 	}
 
@@ -266,7 +266,7 @@ static void close_clip(rmr_state_t *st)
 		st->clip_mux = NULL;
 	}
 	if (st->clip_fd >= 0) {
-		rmr_storage_close_segment(st->clip_fd);
+		rmr_storage_close_segment(st->clip_fd, st->clip_path, st->clip_bytes);
 		RSS_DEBUG("motion clip closed: %s (%" PRIu64 " bytes)", st->clip_path,
 			  st->clip_bytes);
 		st->clip_fd = -1;
@@ -295,7 +295,7 @@ static void close_timelapse(rmr_state_t *st)
 		st->tl_mux = NULL;
 	}
 	if (st->tl_fd >= 0) {
-		rmr_storage_close_segment(st->tl_fd);
+		rmr_storage_close_segment(st->tl_fd, st->tl_path, st->tl_bytes);
 		RSS_INFO("timelapse file closed: %s (%u frames, %" PRIu64 " bytes)", st->tl_path,
 			 st->tl.frames_in_file, st->tl_bytes);
 		st->tl_fd = -1;
@@ -322,7 +322,7 @@ static int open_timelapse(rmr_state_t *st, int32_t day)
 
 	st->tl_mux = rmr_mux_create(tl_write, st);
 	if (!st->tl_mux) {
-		rmr_storage_close_segment(fd);
+		rmr_storage_close_segment(fd, st->tl_path, 0);
 		return -1;
 	}
 
@@ -1370,6 +1370,9 @@ int main(int argc, char **argv)
 		.segment_minutes = rss_config_get_int(dctx.cfg, "recording", "segment_minutes", 5),
 		.segment_seconds = rss_config_get_int(dctx.cfg, "recording", "segment_seconds", 0),
 		.max_storage_mb = rss_config_get_int(dctx.cfg, "recording", "max_storage_mb", 0),
+		.prealloc_bytes =
+			(uint64_t)rss_config_get_int(dctx.cfg, "recording", "prealloc_mb", 0) *
+			1024ULL * 1024ULL,
 	};
 	st.storage = rmr_storage_create(&scfg);
 	if (!st.storage) {
