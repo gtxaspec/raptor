@@ -21,6 +21,21 @@
  * H.264 video
  * ================================================================ */
 
+/* b=AS for a video subsession: the stream's configured target, the same
+ * defaults rvd applies (main 3 Mbps, sub 1 Mbps). The old hardcoded 2000
+ * was under the main default, so any busy scene read as an overshoot of
+ * a promise nobody made. Capped modes bound at 4/3 of target, inside the
+ * 35% a bandwidth estimate is conventionally read with. */
+static unsigned rsd555_video_est_kbps(rsd555_video_ctx_t *ctx)
+{
+	const char *sect = ctx->idx == 0 ? "stream0" : "stream1";
+	int def = ctx->idx == 0 ? 3000000 : 1000000;
+	int bps = rss_config_get_int(ctx->state->cfg, sect, "bitrate", def);
+	if (bps <= 0)
+		bps = def;
+	return (unsigned)(bps / 1000);
+}
+
 RingH264Subsession *RingH264Subsession::createNew(UsageEnvironment &env, rsd555_video_ctx_t *ctx,
 						  Boolean reuseSource)
 {
@@ -40,7 +55,7 @@ RingH264Subsession::~RingH264Subsession()
 FramedSource *RingH264Subsession::createNewStreamSource(unsigned /*clientSessionId*/,
 							unsigned &estBitrate)
 {
-	estBitrate = 2000; /* kbps estimate for SDP b= line */
+	estBitrate = rsd555_video_est_kbps(fCtx); /* SDP b=AS */
 	RingVideoSource *src = RingVideoSource::createNew(envir(), fCtx);
 	if (!src)
 		return NULL;
@@ -83,7 +98,7 @@ RingH265Subsession::~RingH265Subsession()
 FramedSource *RingH265Subsession::createNewStreamSource(unsigned /*clientSessionId*/,
 							unsigned &estBitrate)
 {
-	estBitrate = 2000;
+	estBitrate = rsd555_video_est_kbps(fCtx); /* SDP b=AS */
 	RingVideoSource *src = RingVideoSource::createNew(envir(), fCtx);
 	if (!src)
 		return NULL;
