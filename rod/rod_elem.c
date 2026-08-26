@@ -211,6 +211,17 @@ void create_elem_shm(rod_state_t *st, rod_element_t *e, int s)
 		return;
 	}
 
+	/*
+	 * Text and receipt sizes are a character count times the font metrics,
+	 * and neither count knows the frame size, so the sizes above are
+	 * unbounded. Clip: text that runs off the region is visible, a region
+	 * larger than the canvas is not.
+	 */
+	if (st->stream_w[s] > 0 && w > (uint32_t)st->stream_w[s])
+		w = (uint32_t)st->stream_w[s];
+	if (st->stream_h[s] > 0 && h > (uint32_t)st->stream_h[s])
+		h = (uint32_t)st->stream_h[s];
+
 	w = (w + 1) & ~1u;
 	h = (h + 1) & ~1u;
 
