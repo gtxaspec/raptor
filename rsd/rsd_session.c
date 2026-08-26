@@ -308,6 +308,22 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 	rsd_ring_ctx_t *rctx = &self->srv->video[self->stream_idx];
 	bool has_video = rctx->last_width > 0;
 
+	/* RFC 2435 carries dimensions in 8-bit units of 8 pixels: 2040 is
+	 * the widest JPEG the payload format can describe, and compy sends
+	 * width 0 beyond it, which no receiver can decode. A 4MP camera's
+	 * jpeg channel inherits the main stream's width, so refuse the
+	 * endpoint honestly instead of serving frames nothing can render.
+	 * RHD's HTTP paths carry the same ring at full size. */
+	if (idx >= RSD_STREAM_JPEG && rctx->last_width > 2040) {
+		RSS_WARN("DESCRIBE %s: %ux%u JPEG exceeds RFC 2435's 2040px "
+			 "field; endpoint refused (use RHD, or cap [jpeg] "
+			 "width at 2040)",
+			 idx == RSD_STREAM_JPEG ? "/jpeg" : "/jpeg_sub", (unsigned)rctx->last_width,
+			 (unsigned)rctx->last_height);
+		compy_respond(ctx, COMPY_STATUS_NOT_FOUND, "JPEG wider than RFC 2435 allows");
+		return;
+	}
+
 	/*
 	 * b=AS carries the stream's configured bitrate in kbps (RFC 4566
 	 * Section 5.8). A fixed value understates configured-up streams,
