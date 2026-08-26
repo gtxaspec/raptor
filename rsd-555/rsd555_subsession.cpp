@@ -14,6 +14,7 @@
 #include <H265VideoRTPSink.hh>
 #include <MPEG4GenericRTPSink.hh>
 #include <SimpleRTPSink.hh>
+#include <GroupsockHelper.hh>
 
 #include <rss_aac.h>
 
@@ -34,6 +35,18 @@ static unsigned rsd555_video_est_kbps(rsd555_video_ctx_t *ctx)
 	if (bps <= 0)
 		bps = def;
 	return (unsigned)(bps / 1000);
+}
+
+/* live555 sends UDP fire-and-forget from whatever SO_SNDBUF the OS
+ * hands out; a keyframe fanned out to several receivers can overflow
+ * it and the tail packets are silently dropped (device SndbufErrors).
+ * Ask for enough to hold a worst-case burst -- the kernel caps the
+ * request at net.core.wmem_max, so the sysctl has to allow it too. */
+static void rsd555_widen_sndbuf(UsageEnvironment &env, Groupsock *gs, rsd555_video_ctx_t *ctx)
+{
+	int want = rss_config_get_int(ctx->state->cfg, "rtsp", "send_buffer_size", 512 * 1024);
+	if (want > 0 && gs)
+		increaseSendBufferTo(env, gs->socketNum(), (unsigned)want);
 }
 
 RingH264Subsession *RingH264Subsession::createNew(UsageEnvironment &env, rsd555_video_ctx_t *ctx,
@@ -70,6 +83,7 @@ RTPSink *RingH264Subsession::createNewRTPSink(Groupsock *rtpGroupsock,
 	uint16_t sps_len = __atomic_load_n(&fCtx->sps_len, __ATOMIC_ACQUIRE);
 	uint16_t pps_len = __atomic_load_n(&fCtx->pps_len, __ATOMIC_ACQUIRE);
 
+	rsd555_widen_sndbuf(envir(), rtpGroupsock, fCtx);
 	return H264VideoRTPSink::createNew(envir(), rtpGroupsock, rtpPayloadTypeIfDynamic,
 					   sps_len > 0 ? fCtx->sps : NULL, sps_len,
 					   pps_len > 0 ? fCtx->pps : NULL, pps_len);
@@ -113,6 +127,7 @@ RTPSink *RingH265Subsession::createNewRTPSink(Groupsock *rtpGroupsock,
 	uint16_t sps_len = __atomic_load_n(&fCtx->sps_len, __ATOMIC_ACQUIRE);
 	uint16_t pps_len = __atomic_load_n(&fCtx->pps_len, __ATOMIC_ACQUIRE);
 
+	rsd555_widen_sndbuf(envir(), rtpGroupsock, fCtx);
 	return H265VideoRTPSink::createNew(envir(), rtpGroupsock, rtpPayloadTypeIfDynamic,
 					   vps_len > 0 ? fCtx->vps : NULL, vps_len,
 					   sps_len > 0 ? fCtx->sps : NULL, sps_len,
