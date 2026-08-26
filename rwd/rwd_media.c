@@ -25,7 +25,7 @@
 
 #include "rwd.h"
 #include "rwd_pacer.h"
-#include "../rsd/rsd_media_clock.h"
+#include <rss_media_clock.h>
 
 /* Defined below the send helpers; spawned by rwd_media_setup. */
 static void *rwd_client_send_thread(void *arg);
@@ -740,10 +740,10 @@ void *rwd_video_reader_thread(void *arg)
 {
 	rwd_server_t *srv = arg;
 	int64_t video_ts_epoch[RWD_STREAM_COUNT] = {0};
-	rsd_media_clock_t video_clock[RWD_STREAM_COUNT];
+	rss_media_clock_t video_clock[RWD_STREAM_COUNT];
 	bool stream_active[RWD_STREAM_COUNT] = {false};
 	for (int s = 0; s < RWD_STREAM_COUNT; s++)
-		rsd_media_clock_init(&video_clock[s]);
+		rss_media_clock_init(&video_clock[s]);
 
 	/* Wait for at least the main ring */
 	while (rss_running(srv->running) && !srv->video_rings[0]) {
@@ -817,7 +817,7 @@ void *rwd_video_reader_thread(void *arg)
 					last_ws[s] = 0;
 					idle[s] = 0;
 					video_ts_epoch[s] = 0;
-					rsd_media_clock_init(&video_clock[s]);
+					rss_media_clock_init(&video_clock[s]);
 
 					/* Detect codec change — disconnect clients
 					 * if codec switched (WebRTC can't renegotiate
@@ -867,7 +867,7 @@ void *rwd_video_reader_thread(void *arg)
 				continue;
 			}
 			if (!stream_active[s]) {
-				rsd_media_clock_init(&video_clock[s]);
+				rss_media_clock_init(&video_clock[s]);
 				stream_active[s] = true;
 			}
 
@@ -958,7 +958,7 @@ void *rwd_video_reader_thread(void *arg)
 				continue;
 
 			srv->video_read_seq[s] = read_seq;
-			int64_t capture_mono_us = rsd_media_clock_map(
+			int64_t capture_mono_us = rss_media_clock_map(
 				&video_clock[s], (int64_t)meta.timestamp, rss_timestamp_us());
 
 			if (video_ts_epoch[s] == 0)

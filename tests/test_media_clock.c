@@ -3,7 +3,7 @@
  */
 
 #include "greatest.h"
-#include "../rsd/rsd_media_clock.h"
+#include <rss_media_clock.h>
 
 #define FRAME_US 40000
 
@@ -17,8 +17,8 @@ static int64_t abs64(int64_t value)
  * reproduce wall-clock rate after its rolling-minimum warmup. */
 TEST media_clock_tracks_positive_domain_drift(void)
 {
-	rsd_media_clock_t clock;
-	rsd_media_clock_init(&clock);
+	rss_media_clock_t clock;
+	rss_media_clock_init(&clock);
 
 	int64_t media_us = 1000000;
 	int64_t wall_us = 2000000;
@@ -31,7 +31,7 @@ TEST media_clock_tracks_positive_domain_drift(void)
 		int64_t latency_us = 2000 + (i % 7) * 37;
 		if (i % 113 == 0)
 			latency_us += 20000;
-		int64_t mapped_us = rsd_media_clock_map(&clock, media_us, wall_us + latency_us);
+		int64_t mapped_us = rss_media_clock_map(&clock, media_us, wall_us + latency_us);
 		if (i == 1499)
 			warm_err = mapped_us - wall_us;
 		if (i == 4499)
@@ -47,8 +47,8 @@ TEST media_clock_tracks_positive_domain_drift(void)
  * non-negative contaminant, so isolated stalls must not move the mapping. */
 TEST media_clock_rejects_reader_latency_spikes(void)
 {
-	rsd_media_clock_t clock;
-	rsd_media_clock_init(&clock);
+	rss_media_clock_t clock;
+	rss_media_clock_init(&clock);
 
 	int64_t media_us = 1000000;
 	int64_t previous_offset = 0;
@@ -57,15 +57,15 @@ TEST media_clock_rejects_reader_latency_spikes(void)
 		int64_t latency_us = 1800 + (i % 5) * 20;
 		if (i > 0 && i % 97 == 0)
 			latency_us += 100000;
-		rsd_media_clock_map(&clock, media_us, media_us + latency_us);
-		int64_t offset = rsd_media_clock_offset(&clock);
+		rss_media_clock_map(&clock, media_us, media_us + latency_us);
+		int64_t offset = rss_media_clock_offset(&clock);
 		if (i > 0)
 			ASSERT(abs64(offset - previous_offset) <= 1000);
 		previous_offset = offset;
 	}
 
-	ASSERT(rsd_media_clock_offset(&clock) >= 1750);
-	ASSERT(rsd_media_clock_offset(&clock) <= 2500);
+	ASSERT(rss_media_clock_offset(&clock) >= 1750);
+	ASSERT(rss_media_clock_offset(&clock) <= 2500);
 	PASS();
 }
 
@@ -73,22 +73,22 @@ TEST media_clock_rejects_reader_latency_spikes(void)
  * The correction may move only by the advertised per-frame authority. */
 TEST media_clock_ages_minimum_with_bounded_slew(void)
 {
-	rsd_media_clock_t clock;
-	rsd_media_clock_init(&clock);
+	rss_media_clock_t clock;
+	rss_media_clock_init(&clock);
 
 	int64_t media_us = 1000000;
 	int64_t previous_offset = 0;
 	for (int i = 0; i < 750; i++) {
 		media_us += FRAME_US;
 		int64_t domain_offset = i < 250 ? 1000 : 21000;
-		rsd_media_clock_map(&clock, media_us, media_us + domain_offset + 1000);
-		int64_t offset = rsd_media_clock_offset(&clock);
+		rss_media_clock_map(&clock, media_us, media_us + domain_offset + 1000);
+		int64_t offset = rss_media_clock_offset(&clock);
 		if (i > 0)
 			ASSERT(abs64(offset - previous_offset) <= 1000);
 		previous_offset = offset;
 	}
 
-	ASSERT(rsd_media_clock_offset(&clock) > 18000);
+	ASSERT(rss_media_clock_offset(&clock) > 18000);
 	PASS();
 }
 
@@ -100,8 +100,8 @@ TEST media_clock_ages_minimum_with_bounded_slew(void)
  * 0.4 to 31 s. The mapping must sit on the floor every second reaches. */
 TEST media_clock_ignores_rare_fast_frames(void)
 {
-	rsd_media_clock_t clock;
-	rsd_media_clock_init(&clock);
+	rss_media_clock_t clock;
+	rss_media_clock_init(&clock);
 
 	int64_t media_us = 1000000;
 	int64_t previous_offset = 0;
@@ -117,8 +117,8 @@ TEST media_clock_ignores_rare_fast_frames(void)
 			latency_us = 1000;
 			next_fast++;
 		}
-		rsd_media_clock_map(&clock, media_us, media_us + latency_us);
-		int64_t offset = rsd_media_clock_offset(&clock);
+		rss_media_clock_map(&clock, media_us, media_us + latency_us);
+		int64_t offset = rss_media_clock_offset(&clock);
 		if (i > 0)
 			ASSERT(abs64(offset - previous_offset) <= 1000);
 		previous_offset = offset;

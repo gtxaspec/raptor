@@ -14,7 +14,7 @@
 #include <pthread.h>
 
 #include "rsd.h"
-#include "rsd_media_clock.h"
+#include <rss_media_clock.h>
 #include "rsd_idr_recovery.h"
 
 /* Forward declarations — called by send thread, defined below */
@@ -299,8 +299,8 @@ void *rsd_video_reader_thread(void *arg)
 	 * domain are private to the producer, so continuously map fresh ring frames
 	 * to CLOCK_MONOTONIC for sender-report projection. */
 	int64_t video_ts_epoch = 0;
-	rsd_media_clock_t video_clock;
-	rsd_media_clock_init(&video_clock);
+	rss_media_clock_t video_clock;
+	rss_media_clock_init(&video_clock);
 	uint32_t last_rtp_ts = 0; /* enforce monotonic RTP timestamps */
 	bool has_last_rtp_ts = false;
 	uint64_t last_write_seq = 0;
@@ -345,7 +345,7 @@ void *rsd_video_reader_thread(void *arg)
 			last_write_seq = 0;
 			idle_count = 0;
 			video_ts_epoch = 0;
-			rsd_media_clock_init(&video_clock);
+			rss_media_clock_init(&video_clock);
 			last_rtp_ts = 0;
 			has_last_rtp_ts = false;
 			atomic_store_explicit(&rctx->vps_len, 0, memory_order_relaxed);
@@ -590,13 +590,13 @@ void *rsd_video_reader_thread(void *arg)
 			rctx->read_seq = read_seq;
 			total_read++;
 
-			bool first_clock_sample = !rsd_media_clock_ready(&video_clock);
-			int64_t capture_mono_us = rsd_media_clock_map(
+			bool first_clock_sample = !rss_media_clock_ready(&video_clock);
+			int64_t capture_mono_us = rss_media_clock_map(
 				&video_clock, (int64_t)meta.timestamp, rss_timestamp_us());
 			if (first_clock_sample)
 				RSS_INFO("video[%d] initial media->monotonic offset=%lld us",
 					 stream_idx,
-					 (long long)rsd_media_clock_offset(&video_clock));
+					 (long long)rss_media_clock_offset(&video_clock));
 
 			int64_t read_now_us = rss_timestamp_us();
 			if (video_ts_epoch == 0)

@@ -264,6 +264,7 @@ $CC $CFLAGS -c "$COMMON_DIR/src/rss_sei.c" -o "$OUT/rss_sei.o"
 $CC $CFLAGS -c "$COMMON_DIR/src/rss_sign.c" -o "$OUT/rss_sign.o"
 $CC $CFLAGS -c "$COMMON_DIR/src/rss_jpeg.c" -o "$OUT/rss_jpeg.o"
 $CC $CFLAGS -c "$COMMON_DIR/src/rss_aac.c" -o "$OUT/rss_aac.o"
+$CC $CFLAGS -c "$COMMON_DIR/src/rss_media_clock.c" -o "$OUT/rss_media_clock.o"
 $CC $CFLAGS -c "$COMMON_DIR/third_party/monocypher/monocypher.c" -o "$OUT/monocypher.o"
 $CC $CFLAGS -c "$COMMON_DIR/third_party/monocypher/monocypher-ed25519.c" -o "$OUT/monocypher-ed25519.o"
 $CC $CFLAGS -c "$COMMON_DIR/src/cJSON.c" -o "$OUT/cJSON.o"
@@ -273,7 +274,7 @@ const char *rss_build_time = "asan-build";
 const char *rss_build_platform = "x86_64";
 BUILDEOF
 $CC $CFLAGS -c "$OUT/rss_build_info.c" -o "$OUT/rss_build_info.o"
-ar rcs "$OUT/librss_common.a" "$OUT"/rss_log.o "$OUT"/rss_config.o "$OUT"/rss_daemon.o "$OUT"/rss_util.o "$OUT"/rss_ctrl_common.o "$OUT"/rss_ctrl_client.o "$OUT"/rss_http.o "$OUT"/rss_ts.o "$OUT"/rss_sei.o "$OUT"/rss_sign.o "$OUT"/rss_jpeg.o "$OUT"/rss_aac.o "$OUT"/monocypher.o "$OUT"/monocypher-ed25519.o "$OUT"/cJSON.o
+ar rcs "$OUT/librss_common.a" "$OUT"/rss_log.o "$OUT"/rss_config.o "$OUT"/rss_daemon.o "$OUT"/rss_util.o "$OUT"/rss_ctrl_common.o "$OUT"/rss_ctrl_client.o "$OUT"/rss_http.o "$OUT"/rss_ts.o "$OUT"/rss_sei.o "$OUT"/rss_sign.o "$OUT"/rss_jpeg.o "$OUT"/rss_aac.o "$OUT"/rss_media_clock.o "$OUT"/monocypher.o "$OUT"/monocypher-ed25519.o "$OUT"/cJSON.o
 
 echo "=== raptor-ipc ==="
 $CC $CFLAGS -c "$IPC_DIR/src/rss_ring.c" -o "$OUT/rss_ring.o"
@@ -336,8 +337,7 @@ $CC $CFLAGS $COMPY_CFLAGS $RSD_CODEC_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_session.c" -
 $CC $CFLAGS $COMPY_CFLAGS $RSD_CODEC_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_ring_reader.c" -o "$OUT/rsd_ring_reader.o"
 $CC $CFLAGS $COMPY_CFLAGS $RSD_CODEC_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_sendq.c" -o "$OUT/rsd_sendq.o"
 $CC $CFLAGS $COMPY_CFLAGS $RSD_CODEC_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_backchannel.c" -o "$OUT/rsd_backchannel.o"
-$CC $CFLAGS $COMPY_CFLAGS $RSD_CODEC_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_media_clock.c" -o "$OUT/rsd_media_clock.o"
-$CC -o "$OUT/rsd" "$OUT"/rsd_main.o "$OUT"/rsd_server.o "$OUT"/rsd_session.o "$OUT"/rsd_ring_reader.o "$OUT"/rsd_sendq.o "$OUT"/rsd_backchannel.o "$OUT"/rsd_media_clock.o $LIBS "$COMPY_BUILD/libcompy.a" $MBEDTLS_LIBS -lopus "$HELIX_BUILD/libhelix-aac.a" $LDFLAGS
+$CC -o "$OUT/rsd" "$OUT"/rsd_main.o "$OUT"/rsd_server.o "$OUT"/rsd_session.o "$OUT"/rsd_ring_reader.o "$OUT"/rsd_sendq.o "$OUT"/rsd_backchannel.o $LIBS "$COMPY_BUILD/libcompy.a" $MBEDTLS_LIBS -lopus "$HELIX_BUILD/libhelix-aac.a" $LDFLAGS
 echo "  -> rsd"
 
 echo "=== RIC ==="
@@ -519,7 +519,7 @@ $CC $RWD_CFLAGS -c "$RAPTOR_DIR/rwd/rwd_webtorrent.c" -o "$OUT/rwd_webtorrent.o"
 $CC -o "$OUT/rwd" "$OUT"/rwd_main.o "$OUT"/rwd_signaling.o "$OUT"/rwd_sdp.o \
     "$OUT"/rwd_ice.o "$OUT"/rwd_dtls.o "$OUT"/rwd_media.o "$OUT"/rwd_sendq.o \
     "$OUT"/rwd_pacer.o "$OUT"/rwd_webtorrent.o \
-    "$OUT"/rsd_media_clock.o $LIBS "$COMPY_BUILD/libcompy.a" $LIBS_TLS -lopus $LDFLAGS
+    $LIBS "$COMPY_BUILD/libcompy.a" $LIBS_TLS -lopus $LDFLAGS
 echo "  -> rwd"
 
 echo "$SAN_LABEL" > "$STAMP"

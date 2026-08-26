@@ -2,7 +2,7 @@ SRCS := rwd_main.c rwd_dtls.c rwd_ice.c rwd_sdp.c rwd_signaling.c rwd_media.c rw
 ifeq ($(WEBTORRENT),1)
 SRCS += rwd_webtorrent.c
 endif
-OBJS := $(SRCS:.c=.o) rsd_media_clock.o
+OBJS := $(SRCS:.c=.o)
 BIN  := rwd
 
 all: $(BIN)
@@ -12,10 +12,6 @@ $(BIN): $(OBJS)
 	$(Q)$(CC) -o $@ $^ $(LIBS) $(LDFLAGS)
 
 %.o: %.c
-	@echo "  CC      $<"
-	$(Q)$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
-
-rsd_media_clock.o: ../rsd/rsd_media_clock.c ../rsd/rsd_media_clock.h
 	@echo "  CC      $<"
 	$(Q)$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
