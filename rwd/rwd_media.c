@@ -696,10 +696,17 @@ static void *rwd_client_send_thread(void *arg)
 	rwd_sendq_entry_t e;
 
 	while (rwd_sendq_pop(&c->sendq, &e)) {
+		/* Teardown clears sending before it shuts the queue, and a
+		 * codec change clears it without shutting the queue at all:
+		 * what is still queued then is not a failed send, just a
+		 * client that is gone. Counting it as one purged the queue
+		 * and logged a stall for every disconnect. */
+		if (!c->sending) {
+			free(e.data);
+			continue;
+		}
 		int64_t send_start_us = rss_timestamp_us();
-		int send_result =
-			c->sending ? rwd_send_video_frame(c, e.data, e.len, e.rtp_ts, e.capture_us)
-				   : -1;
+		int send_result = rwd_send_video_frame(c, e.data, e.len, e.rtp_ts, e.capture_us);
 		int64_t send_end_us = rss_timestamp_us();
 
 		rwd_sendq_note_send(&c->sendq, &e, send_start_us, send_end_us, send_result == 0);
