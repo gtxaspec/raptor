@@ -28,6 +28,7 @@
 #include <mbedtls/md.h>
 
 #include "rwd.h"
+#include "rwd_rtcp.h"
 #include <rss_net.h>
 #include <rss_http.h>
 
@@ -424,9 +425,7 @@ static void handle_udp_packet(rwd_server_t *srv, const uint8_t *buf, size_t len,
 		 * Mitigated by: source must match ICE-verified addr, client
 		 * must be in sending state, and rwd_request_idr enforces
 		 * a per-stream cooldown. */
-		uint8_t pt = buf[1] & 0x7F;
-		uint8_t fmt = buf[0] & 0x1F;
-		if (pt == 206 && (fmt == 1 || fmt == 4)) {
+		if (rwd_rtcp_requests_keyframe(buf, len)) {
 			pthread_mutex_lock(&srv->clients_lock);
 			rwd_client_t *c = find_client_by_addr(srv, from, from_len);
 			if (c && c->sending)
@@ -526,6 +525,9 @@ static int rwd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			rwd_client_t *c = srv->clients[i];
 			if (!c)
 				continue;
+			rwd_sendq_stats_t sendq_stats = {0};
+			if (c->send_thread_started)
+				rwd_sendq_get_stats(&c->sendq, &sendq_stats);
 			char addr[INET6_ADDRSTRLEN];
 			rss_addr_str(&c->addr, addr, sizeof(addr));
 			cJSON *item = cJSON_CreateObject();
@@ -533,6 +535,29 @@ static int rwd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			cJSON_AddNumberToObject(item, "stream", c->stream_idx);
 			cJSON_AddBoolToObject(item, "sending", c->sending);
 			cJSON_AddBoolToObject(item, "ice", c->ice_verified);
+			cJSON_AddNumberToObject(item, "queue_depth", sendq_stats.depth);
+			cJSON_AddNumberToObject(item, "queue_max_depth", sendq_stats.max_depth);
+			cJSON_AddNumberToObject(item, "frames_enqueued",
+						(double)sendq_stats.enqueued);
+			cJSON_AddNumberToObject(item, "frames_dequeued",
+						(double)sendq_stats.dequeued);
+			cJSON_AddNumberToObject(item, "frames_sent", (double)sendq_stats.sent);
+			cJSON_AddNumberToObject(item, "frames_dropped", (double)sendq_stats.drops);
+			cJSON_AddNumberToObject(item, "send_failures",
+						(double)sendq_stats.send_failures);
+			cJSON_AddNumberToObject(item, "bytes_sent", (double)sendq_stats.bytes_sent);
+			cJSON_AddNumberToObject(item, "last_frame_bytes",
+						sendq_stats.last_frame_bytes);
+			cJSON_AddNumberToObject(item, "max_frame_bytes",
+						sendq_stats.max_frame_bytes);
+			cJSON_AddNumberToObject(item, "last_queue_us", sendq_stats.last_queue_us);
+			cJSON_AddNumberToObject(item, "max_queue_us", sendq_stats.max_queue_us);
+			cJSON_AddNumberToObject(item, "last_send_us", sendq_stats.last_send_us);
+			cJSON_AddNumberToObject(item, "max_send_us", sendq_stats.max_send_us);
+			cJSON_AddNumberToObject(item, "last_capture_to_send_us",
+						sendq_stats.last_capture_to_send_us);
+			cJSON_AddNumberToObject(item, "max_capture_to_send_us",
+						sendq_stats.max_capture_to_send_us);
 			cJSON_AddStringToObject(
 				item, "dtls",
 				c->dtls_state == RWD_DTLS_ESTABLISHED	? "established"

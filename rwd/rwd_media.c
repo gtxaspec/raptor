@@ -15,6 +15,7 @@
 #include <poll.h>
 #include <pthread.h>
 #include <sys/socket.h>
+#include <time.h>
 #ifdef RAPTOR_OPUS
 #include <opus/opus.h>
 #endif
@@ -23,6 +24,7 @@
 #endif
 
 #include "rwd.h"
+#include "rwd_pacer.h"
 #include "../rsd/rsd_media_clock.h"
 
 /* Defined below the send helpers; spawned by rwd_media_setup. */
@@ -40,6 +42,7 @@ typedef struct {
 	socklen_t addr_len;
 	uint32_t backpressure_events;
 	int64_t last_backpressure_log_us;
+	rwd_pacer_t pacer;
 } RwdUdpSender;
 
 declImpl(Compy_Transport, RwdUdpSender);
@@ -55,6 +58,25 @@ static int RwdUdpSender_transmit(VSelf, Compy_IoVecSlice bufs)
 	};
 	bool waited = false;
 	int64_t deadline_us = 0;
+
+	if (self->pacer.rate_bps) {
+		uint64_t packet_bytes = 48; /* UDP + worst-case IPv6 headers */
+		for (size_t i = 0; i < bufs.len; i++)
+			packet_bytes += bufs.ptr[i].iov_len;
+		if (packet_bytes > UINT32_MAX)
+			packet_bytes = UINT32_MAX;
+
+		uint64_t pace_us =
+			rwd_pacer_reserve(&self->pacer, (uint32_t)packet_bytes, rss_timestamp_us());
+		if (pace_us) {
+			struct timespec delay = {
+				.tv_sec = (time_t)(pace_us / 1000000),
+				.tv_nsec = (long)(pace_us % 1000000) * 1000,
+			};
+			while (nanosleep(&delay, &delay) < 0 && errno == EINTR)
+				;
+		}
+	}
 
 	for (;;) {
 		ssize_t ret = sendmsg(self->fd, &msg, 0);
@@ -128,8 +150,9 @@ static void RwdUdpSender_drop(VSelf)
 impl(Compy_Droppable, RwdUdpSender);
 impl(Compy_Transport, RwdUdpSender);
 
-Compy_Transport rwd_transport_sendto(int fd, const struct sockaddr_storage *addr,
-				     socklen_t addr_len)
+static Compy_Transport rwd_transport_sendto_paced(int fd, const struct sockaddr_storage *addr,
+						  socklen_t addr_len, uint32_t pacing_bps,
+						  uint32_t burst_bytes)
 {
 	RwdUdpSender *s = calloc(1, sizeof(*s));
 	if (!s) {
@@ -140,7 +163,14 @@ Compy_Transport rwd_transport_sendto(int fd, const struct sockaddr_storage *addr
 	s->fd = fd;
 	memcpy(&s->addr, addr, addr_len);
 	s->addr_len = addr_len;
+	rwd_pacer_init(&s->pacer, pacing_bps, burst_bytes, rss_timestamp_us());
 	return DYN(RwdUdpSender, Compy_Transport, s);
+}
+
+Compy_Transport rwd_transport_sendto(int fd, const struct sockaddr_storage *addr,
+				     socklen_t addr_len)
+{
+	return rwd_transport_sendto_paced(fd, addr, addr_len, 0, 0);
 }
 
 /* ── Backchannel audio receiver (browser mic → speaker ring) ── */
@@ -248,6 +278,39 @@ impl(Compy_Droppable, rwd_bc_recv_t);
 
 /* ── Set up per-client SRTP/RTP/NAL stack ── */
 
+static const char *rwd_stream_config_section(int stream_idx)
+{
+	static const char *const sections[RWD_STREAM_COUNT] = {
+		"stream0",	   "stream1",	      "sensor1_stream0",
+		"sensor1_stream1", "sensor2_stream0", "sensor2_stream1",
+	};
+
+	if (stream_idx < 0 || stream_idx >= RWD_STREAM_COUNT)
+		stream_idx = 0;
+	return sections[stream_idx];
+}
+
+#define RWD_VIDEO_PACING_MIN_BPS     12000000U
+#define RWD_VIDEO_PACING_MAX_BPS     100000000U
+#define RWD_VIDEO_PACING_MULTIPLIER  3U
+#define RWD_VIDEO_PACING_BURST_BYTES (16U * COMPY_MAX_H264_NALU_SIZE)
+
+static uint32_t rwd_video_pacing_rate(const rwd_client_t *c)
+{
+	const char *section = rwd_stream_config_section(c->stream_idx);
+	int default_bps = (c->stream_idx & 1) ? 1000000 : 8000000;
+	int stream_bps = rss_config_get_int(c->server->cfg, section, "bitrate", default_bps);
+	if (stream_bps <= 0)
+		stream_bps = default_bps;
+
+	uint64_t rate = (uint64_t)stream_bps * RWD_VIDEO_PACING_MULTIPLIER;
+	if (rate < RWD_VIDEO_PACING_MIN_BPS)
+		rate = RWD_VIDEO_PACING_MIN_BPS;
+	if (rate > RWD_VIDEO_PACING_MAX_BPS)
+		rate = RWD_VIDEO_PACING_MAX_BPS;
+	return (uint32_t)rate;
+}
+
 int rwd_media_setup(rwd_client_t *c)
 {
 	Compy_SrtpKeyMaterial send_key, recv_key;
@@ -258,11 +321,16 @@ int rwd_media_setup(rwd_client_t *c)
 	Compy_SrtpSuite suite = Compy_SrtpSuite_AES_CM_128_HMAC_SHA1_80;
 
 	/* Video: UDP → SRTP → RTP → NAL */
-	Compy_Transport udp_v = rwd_transport_sendto(srv->udp_fd, &c->addr, c->addr_len);
+	uint32_t pacing_bps = rwd_video_pacing_rate(c);
+	Compy_Transport udp_v = rwd_transport_sendto_paced(
+		srv->udp_fd, &c->addr, c->addr_len, pacing_bps, RWD_VIDEO_PACING_BURST_BYTES);
 	if (!udp_v.self) {
 		RSS_ERROR("media: failed to create video UDP transport");
 		return -1;
 	}
+	if (pacing_bps)
+		RSS_DEBUG("media: video[%d] UDP pacing: %u bps, %u-byte bursts", c->stream_idx,
+			  pacing_bps, RWD_VIDEO_PACING_BURST_BYTES);
 	c->srtp_video = compy_transport_srtp(udp_v, suite, &send_key);
 
 	int video_pt = c->offer.video_pt > 0 ? c->offer.video_pt : RWD_VIDEO_PT;
@@ -628,8 +696,14 @@ static void *rwd_client_send_thread(void *arg)
 	rwd_sendq_entry_t e;
 
 	while (rwd_sendq_pop(&c->sendq, &e)) {
-		if (c->sending &&
-		    rwd_send_video_frame(c, e.data, e.len, e.rtp_ts, e.capture_us) < 0) {
+		int64_t send_start_us = rss_timestamp_us();
+		int send_result =
+			c->sending ? rwd_send_video_frame(c, e.data, e.len, e.rtp_ts, e.capture_us)
+				   : -1;
+		int64_t send_end_us = rss_timestamp_us();
+
+		rwd_sendq_note_send(&c->sendq, &e, send_start_us, send_end_us, send_result == 0);
+		if (send_result < 0) {
 			rwd_sendq_fail(&c->sendq);
 			RSS_WARN("media: client[%s] UDP send stalled: waiting for keyframe",
 				 c->session_id);
@@ -901,7 +975,8 @@ void *rwd_video_reader_thread(void *arg)
 				if (!c->send_thread_started)
 					continue;
 				if (rwd_sendq_push(&c->sendq, srv->video_bufs[s], length, client_ts,
-						   capture_mono_us, meta.is_key) != 0) {
+						   capture_mono_us, rss_timestamp_us(),
+						   meta.is_key) != 0) {
 					/* Queue full: this client can't drain at
 					 * stream rate, or its last access unit failed.
 					 * Everything queued was purged; resume clean
