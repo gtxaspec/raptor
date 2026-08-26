@@ -206,6 +206,22 @@ static int rsp_audio_send_cb(const uint8_t *aac_data, uint32_t aac_len, uint32_t
 
 /* ── Main push loop ── */
 
+/* Release a peeked video frame and report whether the bytes stayed
+ * valid while they were used. On overflow the writer lapped the peek,
+ * so anything derived from the mapping (sent bytes, cached SPS/PPS) is
+ * suspect: drop cached params and ask for a fresh IDR to recover. */
+static bool rsp_video_peek_ok(rsp_state_t *st, bool peeked, const rss_ring_slot_t *meta)
+{
+	if (!peeked)
+		return true;
+	if (rss_ring_peek_done(st->video_ring, meta) != RSS_EOVERFLOW)
+		return true;
+	st->params.ready = false;
+	rss_ring_request_idr(st->video_ring);
+	st->frames_dropped++;
+	return false;
+}
+
 static void push_loop(rsp_state_t *st)
 {
 	int ctrl_fd = st->ctrl ? rss_ctrl_get_fd(st->ctrl) : -1;
@@ -420,12 +436,14 @@ static void push_loop(rsp_state_t *st)
 		/* UDP mode sends the Annex B frame as-is: SPS/PPS ride
 		 * in-band on every IDR, so there is no header handshake
 		 * and no AVCC conversion. Sent under the peek -- the
-		 * datagrams are on the wire before the slot is released. */
+		 * datagrams are on the wire before the slot is released,
+		 * so a lapped peek is repaired by the fresh IDR the
+		 * release requests, not by suppressing the send. */
 		if (st->net_mode) {
 			int nals = rsp_net_send_video(&st->net, frame_data, length, meta.timestamp,
 						      meta.is_key, st->video_codec);
-			if (peeked)
-				rss_ring_peek_done(st->video_ring, &meta);
+			if (!rsp_video_peek_ok(st, peeked, &meta))
+				continue;
 			if (nals > 0) {
 				st->frames_sent++;
 				st->bytes_sent += length;
@@ -442,16 +460,14 @@ static void push_loop(rsp_state_t *st)
 		if (meta.is_key && !st->params.ready)
 			rmr_extract_params(frame_data, length, st->video_codec, &st->params);
 		if (!st->params.ready) {
-			if (peeked)
-				rss_ring_peek_done(st->video_ring, &meta);
+			rsp_video_peek_ok(st, peeked, &meta);
 			continue;
 		}
 
 		/* Send sequence headers on first keyframe */
 		if (!st->header_sent && meta.is_key) {
 			if (rsp_send_headers(st) < 0) {
-				if (peeked)
-					rss_ring_peek_done(st->video_ring, &meta);
+				rsp_video_peek_ok(st, peeked, &meta);
 				RSS_WARN("header send failed, reconnecting");
 				rsp_disconnect(st);
 				reconnect_wait = st->reconnect_delay;
@@ -459,16 +475,16 @@ static void push_loop(rsp_state_t *st)
 			}
 		}
 		if (!st->header_sent) {
-			if (peeked)
-				rss_ring_peek_done(st->video_ring, &meta);
+			rsp_video_peek_ok(st, peeked, &meta);
 			continue;
 		}
 
-		/* Convert Annex B to AVCC — then release the peek */
+		/* Convert Annex B to AVCC — then release the peek. A
+		 * conversion that raced the writer is discarded here. */
 		int avcc_len = rmr_annexb_to_avcc(frame_data, length, st->avcc_buf,
 						  st->avcc_buf_size, st->video_codec);
-		if (peeked)
-			rss_ring_peek_done(st->video_ring, &meta);
+		if (!rsp_video_peek_ok(st, peeked, &meta))
+			continue;
 		if (avcc_len <= 0)
 			continue;
 
