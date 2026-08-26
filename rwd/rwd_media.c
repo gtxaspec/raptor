@@ -667,7 +667,7 @@ static int rwd_send_video_frame(rwd_client_t *c, const uint8_t *data, uint32_t l
 }
 
 static void rwd_send_audio_frame(rwd_client_t *c, const uint8_t *data, uint32_t len,
-				 uint32_t rtp_ts)
+				 uint32_t rtp_ts, int64_t capture_us)
 {
 	if (!c->rtp_audio || !c->sending)
 		return;
@@ -675,6 +675,14 @@ static void rwd_send_audio_frame(rwd_client_t *c, const uint8_t *data, uint32_t 
 	(void)!Compy_RtpTransport_send_packet(c->rtp_audio, Compy_RtpTimestamp_Raw(rtp_ts), true,
 					      U8Slice99_empty(),
 					      U8Slice99_new((uint8_t *)data, len));
+
+	/* Media-clock reference for sender reports (RFC 3550 6.4.1), the
+	 * same pairing the video path and rsd's audio path make: this
+	 * frame's wire timestamp against its capture instant. rad already
+	 * disciplines ring audio stamps to CLOCK_MONOTONIC, so without
+	 * this the SR fell back to compy's send-time anchor and any send
+	 * scheduling delay was published as a lip-sync shift. */
+	Compy_RtpTransport_set_clock_reference(c->rtp_audio, rtp_ts, (uint64_t)capture_us);
 
 	/* Periodic RTCP SR (every 5 seconds) */
 	if (c->rtcp_audio) {
@@ -1413,7 +1421,8 @@ void *rwd_audio_reader_thread(void *arg)
 						c->audio_ts_base_set = true;
 					}
 					rwd_send_audio_frame(c, audio_buf, length,
-							     rtp_ts - c->audio_ts_offset);
+							     rtp_ts - c->audio_ts_offset,
+							     (int64_t)meta.timestamp);
 				}
 				pthread_mutex_unlock(&srv->clients_lock);
 			} else if (srv->wire_codec == RWD_CODEC_PCMU) {
@@ -1461,7 +1470,8 @@ void *rwd_audio_reader_thread(void *arg)
 						}
 						rwd_send_audio_frame(c, transcode_out, enc_len,
 								     pcmu_rtp_ts -
-									     c->audio_ts_offset);
+									     c->audio_ts_offset,
+								     (int64_t)meta.timestamp);
 					}
 					pthread_mutex_unlock(&srv->clients_lock);
 					pcmu_rtp_ts += (uint32_t)enc_len;
@@ -1512,9 +1522,18 @@ void *rwd_audio_reader_thread(void *arg)
 							c->audio_ts_offset = opus_rtp_ts;
 							c->audio_ts_base_set = true;
 						}
-						rwd_send_audio_frame(c, transcode_out, el,
-								     opus_rtp_ts -
-									     c->audio_ts_offset);
+						/* The frame just encoded ends pcm_accum_fill
+						 * decoder-rate samples before the newest
+						 * decoded sample, whose capture instant is
+						 * meta.timestamp. The accumulator counts at
+						 * the ring's sample rate, not Opus's 48k
+						 * wire clock. */
+						rwd_send_audio_frame(
+							c, transcode_out, el,
+							opus_rtp_ts - c->audio_ts_offset,
+							(int64_t)meta.timestamp -
+								(int64_t)pcm_accum_fill * 1000000 /
+									sample_rate);
 					}
 					pthread_mutex_unlock(&srv->clients_lock);
 					opus_rtp_ts += 960;
