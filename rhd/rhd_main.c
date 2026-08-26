@@ -954,6 +954,29 @@ static void server_run(rhd_server_t *srv)
 		if (++jpeg_reconnect_tick >= 20) {
 			jpeg_reconnect_tick = 0;
 			for (int j = 0; j < RHD_MAX_JPEG; j++) {
+				/*
+				 * A restarted producer unlinks the name and creates a
+				 * new file, leaving this handle on an orphan whose
+				 * write_seq and incarnation are both frozen -- so
+				 * neither a read nor the idle counter below can tell
+				 * it from a ring that is merely quiet, and only the
+				 * file's identity can. Closing here falls into the
+				 * reopen below, in this same pass.
+				 */
+				if (srv->jpeg_rings[j] && rss_ring_stale(srv->jpeg_rings[j])) {
+					RSS_DEBUG("jpeg ring replaced by a new producer, "
+						  "reopening (%s)",
+						  jpeg_ring_names[j]);
+					if (ring_acquired[j]) {
+						rss_ring_release(srv->jpeg_rings[j]);
+						ring_acquired[j] = false;
+					}
+					rss_ring_close(srv->jpeg_rings[j]);
+					srv->jpeg_rings[j] = NULL;
+					jpeg_idle[j] = 0;
+					jpeg_last_ws[j] = 0;
+				}
+
 				if (!srv->jpeg_rings[j]) {
 					if (jpeg_ring_open_slot(srv, j) && ring_wanted[j]) {
 						rss_ring_acquire(srv->jpeg_rings[j]);
