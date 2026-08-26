@@ -49,6 +49,49 @@ static void publish_frame(rss_ring_t *r, const uint8_t *data, uint32_t len, int6
 
 /* ── Tests ── */
 
+/* The circular data arena wraps faster than the slot table when frames
+ * are large relative to data_size. Reserving space over an older
+ * frame's bytes must invalidate that slot: a reader holding its seq
+ * would otherwise copy overwritten data and pass the post-copy
+ * recheck. Regression for the torn cold-start MJPEG frame. */
+TEST ring_arena_wrap_invalidates_overlapped_slot(void)
+{
+	/* data_size fits exactly two 1500-byte frames plus change, while
+	 * eight slots stay "valid" -- the arena laps the slot table. */
+	rss_ring_t *w = rss_ring_create("test_arwrap", 8, 3200);
+	ASSERT(w);
+	uint8_t frame[1500];
+	memset(frame, 0xAB, sizeof(frame));
+	ASSERT_EQ(0, rss_ring_publish(w, frame, sizeof(frame), 1000, 0, 1));
+	ASSERT_EQ(0, rss_ring_publish(w, frame, sizeof(frame), 2000, 0, 1));
+
+	rss_ring_t *r = rss_ring_open("test_arwrap");
+	ASSERT(r);
+	uint64_t seq = 1; /* the oldest frame */
+	uint8_t buf[1500];
+	uint32_t len;
+	rss_ring_slot_t meta;
+
+	/* Third publish wraps to offset 0 and overwrites frame 1's bytes. */
+	memset(frame, 0xCD, sizeof(frame));
+	ASSERT_EQ(0, rss_ring_publish(w, frame, sizeof(frame), 3000, 0, 1));
+
+	/* Reading the overlapped slot must report overflow, not hand back
+	 * a "valid" copy of clobbered bytes. */
+	int ret = rss_ring_read(r, &seq, buf, sizeof(buf), &len, &meta);
+	ASSERT_EQ(RSS_EOVERFLOW, ret);
+
+	/* The parked sequence must read the newest frame cleanly. */
+	ASSERT_EQ(0, rss_ring_read(r, &seq, buf, sizeof(buf), &len, &meta));
+	ASSERT_EQ(1500, (int)len);
+	ASSERT_EQ(0xCD, buf[0]);
+	ASSERT_EQ(0xCD, buf[len - 1]);
+
+	rss_ring_close(r);
+	rss_ring_destroy(w);
+	PASS();
+}
+
 TEST ring_create_destroy(void)
 {
 	rss_ring_t *r = rss_ring_create("test_cd", 4, 4096);
@@ -774,4 +817,5 @@ SUITE(ring_suite)
 	RUN_TEST(ring_refmode_producer_superseded);
 	RUN_TEST(ring_refmode_remap_after_region_swap);
 	RUN_TEST(ring_open_handle_cannot_publish);
+	RUN_TEST(ring_arena_wrap_invalidates_overlapped_slot);
 }

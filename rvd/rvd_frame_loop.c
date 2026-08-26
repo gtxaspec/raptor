@@ -199,6 +199,26 @@ void *rvd_encoder_thread(void *arg)
 			continue;
 		}
 
+		/* Helix JPEG cold start can hand over a full-length frame whose
+		 * tail never landed in memory: plausible Content-Length, no EOI
+		 * anywhere in the scan data. Publishing it gives every consumer
+		 * an undecodable image, so drop it and leave the encoder
+		 * running; the next frame arrives clean immediately. */
+		if (s->is_jpeg && frame.nal_count > 0) {
+			const rss_nal_unit_t *tail = &frame.nals[frame.nal_count - 1];
+			if (tail->length < 2 || tail->data[tail->length - 2] != 0xFF ||
+			    tail->data[tail->length - 1] != 0xD9) {
+				RSS_DEBUG("jpeg chn %d: dropped EOI-less frame (%u bytes)", s->chn,
+					  tail->length);
+				if (st->v4l2_backend)
+					rvd_v4l2_h264_release_frame(st->v4l2, &frame);
+				else
+					RSS_HAL_CALL(st->ops, enc_release_frame, st->hal_ctx,
+						     s->chn, &frame);
+				continue;
+			}
+		}
+
 		/* Refmode: publish a reference (offset+length) into the encoder's
 		 * DMA output buffer. Assumes all NALs are contiguous starting at
 		 * nals[0].data — guaranteed by the Ingenic encoder IP which packs

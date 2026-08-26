@@ -703,8 +703,13 @@ static void server_run(rhd_server_t *srv)
 				int ret = rss_ring_read(srv->jpeg_rings[j], &srv->jpeg_read_seqs[j],
 							srv->frame_buf, srv->frame_buf_size, &len,
 							&meta);
-				if (ret == RSS_EOVERFLOW && srv->jpeg_read_seqs[j] > 0) {
-					srv->jpeg_read_seqs[j]--;
+				if (ret == RSS_EOVERFLOW) {
+					/* Fell behind: the overflow return parked
+					 * read_seq at the newest complete frame,
+					 * which is safe to read directly. Stepping
+					 * back one instead handed cold clients a
+					 * stale frame whose arena bytes the new
+					 * session was already overwriting. */
 					ret = rss_ring_read(srv->jpeg_rings[j],
 							    &srv->jpeg_read_seqs[j], srv->frame_buf,
 							    srv->frame_buf_size, &len, &meta);
