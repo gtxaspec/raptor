@@ -8,7 +8,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define RSD_MEDIA_CLOCK_BUCKETS 8
+#define RSD_MEDIA_CLOCK_BUCKETS 16
 
 typedef struct {
 	int64_t bucket_min_us[RSD_MEDIA_CLOCK_BUCKETS];

@@ -7,11 +7,22 @@
  * the mapping must discover the relationship instead of assuming a domain.
  *
  * At the ring reader, now-media is the clock-domain offset plus non-negative
- * delivery latency. The minimum observation is the best offset estimate.
- * One minimum per second keeps an eight-second rolling window without a
- * per-frame sample array. The estimate is then followed with the filtered
- * proportional slew used by rad_clock: scheduler jitter cannot step the
- * published timeline, while ordinary clock-frequency error cannot accumulate.
+ * delivery latency, so the offset is estimated from the low end of that
+ * distribution: one minimum per second over a sixteen-second rolling window,
+ * without a per-frame sample array. The estimate is the MEDIAN of those
+ * per-second minima, not their minimum. A sub-stream frame normally
+ * publishes only after the main-stream frame from the same capture has been
+ * encoded, and a few frames per minute skip that wait (measured 29 ms on a
+ * T31 at 2560x1440), so the window's absolute minimum is sampled only every
+ * few seconds to half a minute. A minimum-of-minima then flips between the
+ * two floors as those frames enter and leave the window, a 25 ms sawtooth
+ * in every sender report, which is exactly the instability this tracker
+ * exists to remove. The median of the per-second minima sits on the floor
+ * that every second reaches; an isolated faster frame moves nothing, and a
+ * genuine offset change still crosses the median within half the window.
+ * The estimate is then followed with the filtered proportional slew used by
+ * rad_clock: scheduler jitter cannot step the published timeline, while
+ * ordinary clock-frequency error cannot accumulate.
  */
 
 #include "rsd_media_clock.h"
@@ -75,11 +86,22 @@ int64_t rsd_media_clock_map(rsd_media_clock_t *clock, int64_t media_us, int64_t 
 	if (sample_us < clock->bucket_min_us[clock->bucket])
 		clock->bucket_min_us[clock->bucket] = sample_us;
 
-	int64_t target_us = INT64_MAX;
+	/* Median of the populated per-second minima: insertion sort of at
+	 * most sixteen values, once per frame. */
+	int64_t sorted[RSD_MEDIA_CLOCK_BUCKETS];
+	int n = 0;
 	for (int i = 0; i < RSD_MEDIA_CLOCK_BUCKETS; i++) {
-		if (clock->bucket_min_us[i] < target_us)
-			target_us = clock->bucket_min_us[i];
+		int64_t v = clock->bucket_min_us[i];
+		if (v == INT64_MAX)
+			continue;
+		int j = n++;
+		while (j > 0 && sorted[j - 1] > v) {
+			sorted[j] = sorted[j - 1];
+			j--;
+		}
+		sorted[j] = v;
 	}
+	int64_t target_us = n ? sorted[n / 2] : INT64_MAX;
 
 	if (target_us != INT64_MAX) {
 		int64_t err_us = target_us - clock->offset_us;

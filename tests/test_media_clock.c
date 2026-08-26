@@ -92,9 +92,55 @@ TEST media_clock_ages_minimum_with_bounded_slew(void)
 	PASS();
 }
 
+/* A sub-stream frame normally publishes behind the main-stream encode of
+ * the same capture, and a few frames per minute skip that wait. Those
+ * isolated fast deliveries are the window's true minimum but a terrible
+ * estimator: following them flips the mapping by the encode time every
+ * time one enters or leaves the window. Measured on a T31: 29 ms, every
+ * 0.4 to 31 s. The mapping must sit on the floor every second reaches. */
+TEST media_clock_ignores_rare_fast_frames(void)
+{
+	rsd_media_clock_t clock;
+	rsd_media_clock_init(&clock);
+
+	int64_t media_us = 1000000;
+	int64_t previous_offset = 0;
+	int64_t lo = INT64_MAX, hi = INT64_MIN;
+	static const int fast_at[] = {320,  427,  592,	624,  680,  1084, 1085, 1660, 1864, 2340,
+				      2436, 3328, 3454, 3611, 3612, 3706, 3770, 3782, 3783, 4028};
+	int next_fast = 0;
+	for (int i = 0; i < 4300; i++) { /* 172 s at 25 fps */
+		media_us += FRAME_US;
+		int64_t latency_us = 30000 + (i % 9) * 300;
+		if (next_fast < (int)(sizeof(fast_at) / sizeof(fast_at[0])) &&
+		    i == fast_at[next_fast]) {
+			latency_us = 1000;
+			next_fast++;
+		}
+		rsd_media_clock_map(&clock, media_us, media_us + latency_us);
+		int64_t offset = rsd_media_clock_offset(&clock);
+		if (i > 0)
+			ASSERT(abs64(offset - previous_offset) <= 1000);
+		previous_offset = offset;
+		if (i >= 500) {
+			if (offset < lo)
+				lo = offset;
+			if (offset > hi)
+				hi = offset;
+		}
+	}
+
+	/* On the every-second floor, and never more than a frame-jitter
+	 * away from it: the 29 ms fast path never reached the estimate. */
+	ASSERT(lo >= 27000);
+	ASSERT(hi - lo < 4000);
+	PASS();
+}
+
 SUITE(media_clock_suite)
 {
 	RUN_TEST(media_clock_tracks_positive_domain_drift);
 	RUN_TEST(media_clock_rejects_reader_latency_spikes);
 	RUN_TEST(media_clock_ages_minimum_with_bounded_slew);
+	RUN_TEST(media_clock_ignores_rare_fast_frames);
 }
