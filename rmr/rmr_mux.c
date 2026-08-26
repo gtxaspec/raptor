@@ -548,7 +548,7 @@ static void write_stsd_audio(rmr_mux_t *m)
 		bb_w16(m, 16);			       /* sample_size */
 		bb_w16(m, 0);			       /* compression_id */
 		bb_w16(m, 0);			       /* packet_size */
-		bb_w32(m, m->audio.sample_rate << 16); /* sample_rate 16.16 */
+		bb_w32(m, (uint32_t)m->audio.sample_rate << 16); /* sample_rate 16.16 */
 		{
 			uint8_t asc[RSS_AAC_ASC_MAX];
 			int aot = (m->audio.aot == 5) ? RSS_AAC_AOT_SBR : RSS_AAC_AOT_LC;
@@ -570,7 +570,7 @@ static void write_stsd_audio(rmr_mux_t *m)
 		bb_w16(m, 16);		/* sample_size */
 		bb_w16(m, 0);		/* compression_id */
 		bb_w16(m, 0);		/* packet_size */
-		bb_w32(m, 48000 << 16); /* sample_rate 16.16 (always 48kHz) */
+		bb_w32(m, 48000u << 16); /* sample_rate 16.16 (always 48kHz) */
 		write_dops(m, m->audio.sample_rate);
 		bb_box_end(m, entry_off);
 	} else {
