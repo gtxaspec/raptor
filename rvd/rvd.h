@@ -104,6 +104,9 @@ typedef struct {
 	int sensor_idx;	   /* which sensor (0, 1, 2) */
 	char cfg_sect[32]; /* config section name (e.g. "stream0", "sensor1_stream0") */
 	bool enabled;
+	bool nr_vbs_auto;	    /* nr_vbs came from the default, not the config */
+	bool vbs_fallback_tried;    /* one-shot single-buffer fallback consumed */
+	int64_t started_us;	    /* last rvd_stream_start, for the fallback grace */
 	bool is_jpeg;		    /* true for snapshot channel */
 	bool jpeg_idle;		    /* true = stop encoder when no consumers */
 	int64_t pulse_next_us;	    /* jpeg_pulse: earliest next RecvPic start */
@@ -245,6 +248,7 @@ void rvd_pipeline_deinit(rvd_state_t *st);
 /* Per-stream lifecycle (hot restart) */
 int rvd_stream_init(rvd_state_t *st, int idx);
 void rvd_stream_deinit(rvd_state_t *st, int idx);
+int rvd_stream_restart_vbs_fallback(rvd_state_t *st, int chn);
 int rvd_stream_start(rvd_state_t *st, int idx);
 void rvd_stream_stop(rvd_state_t *st, int idx);
 

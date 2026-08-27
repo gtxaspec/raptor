@@ -456,7 +456,37 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running)
 		}
 	}
 
+	int64_t last_vbs_check = rss_timestamp_us();
+
 	while (rss_running(running)) {
+		/* A stream that never produces a frame is the visible face
+		 * of two silent failures: the tx-isp driver refusing the
+		 * multi-buffer schedule, and rmem too small for the buffer
+		 * pool -- neither returns an error anywhere. Once per
+		 * stream, rebuild the channel with a single DMA buffer.
+		 * Runs in this thread so it serializes with control-socket
+		 * restarts. Explicit nr_vbs in the config is trusted. */
+		int64_t vbs_now = rss_timestamp_us();
+		if (vbs_now - last_vbs_check >= 1000000 && !st->v4l2_backend) {
+			last_vbs_check = vbs_now;
+			for (int i = 0; i < st->stream_count; i++) {
+				rvd_stream_t *s = &st->streams[i];
+				if (s->is_jpeg || !s->enabled || !s->ring || !s->nr_vbs_auto ||
+				    s->vbs_fallback_tried || s->fs_cfg.nr_vbs <= 1)
+					continue;
+				if (vbs_now - s->started_us < 6000000)
+					continue;
+				if (rss_ring_get_header(s->ring)->write_seq != 0)
+					continue;
+				RSS_WARN("stream%d: no frames %ds after start with nr_vbs=%d; "
+					 "rebuilding the channel with a single DMA buffer",
+					 i, (int)((vbs_now - s->started_us) / 1000000),
+					 s->fs_cfg.nr_vbs);
+				s->vbs_fallback_tried = true;
+				rvd_stream_restart_vbs_fallback(st, i);
+			}
+		}
+
 		/* Check control socket */
 		if (epoll_fd >= 0) {
 			struct epoll_event events[4];

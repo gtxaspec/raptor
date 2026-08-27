@@ -265,8 +265,13 @@ static void load_stream_config(rss_config_t *cfg, const char *section, rvd_strea
 		.pixfmt = RSS_PIXFMT_NV12,
 		.fps_num = fps,
 		.fps_den = 1,
-		.nr_vbs = rss_config_get_int(cfg, section, "nr_vbs", 2),
+		.nr_vbs = rss_config_get_int(cfg, section, "nr_vbs", -1),
 	};
+	/* No configured value: default to 2 and allow the runtime
+	 * single-buffer fallback; an explicit value is trusted as-is. */
+	s->nr_vbs_auto = (s->fs_cfg.nr_vbs <= 0);
+	if (s->nr_vbs_auto)
+		s->fs_cfg.nr_vbs = 2;
 
 	/* Encoder config */
 	s->enc_cfg = (rss_video_config_t){
@@ -1698,6 +1703,8 @@ void rvd_stream_deinit(rvd_state_t *st, int idx)
 int rvd_stream_start(rvd_state_t *st, int idx)
 {
 	rvd_stream_t *s = &st->streams[idx];
+
+	s->started_us = rss_timestamp_us();
 
 	/* JPEG on-demand: don't enable FS (shares with video) or start
 	 * encoder here — the encoder thread handles start/stop based on
