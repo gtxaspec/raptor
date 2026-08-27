@@ -364,6 +364,7 @@ check_contains "enc-get color2grey" "color2grey" "$OUT/raptorctl" rvd enc-get 0 
 check_contains "get-isp" "brightness" "$OUT/raptorctl" rvd get-isp
 check_contains "get-wb" "mode" "$OUT/raptorctl" rvd get-wb
 check_contains "get-exposure" "total_gain" "$OUT/raptorctl" rvd get-exposure
+check_contains "get-exposure validity" "valid_mask" "$OUT/raptorctl" rvd get-exposure
 check_contains "set-brightness" "ok" "$OUT/raptorctl" rvd set-brightness 200
 
 # Config

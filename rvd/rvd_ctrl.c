@@ -1263,6 +1263,7 @@ static int handle_isp_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 		rss_exposure_t exp = {0};
 		RSS_HAL_CALL(st->ops, isp_get_exposure, st->hal_ctx, &exp);
 		cJSON *r = cJSON_CreateObject();
+		cJSON_AddNumberToObject(r, "valid_mask", (double)exp.valid_mask);
 		cJSON_AddNumberToObject(r, "total_gain", (double)exp.total_gain);
 		cJSON_AddNumberToObject(r, "exposure_us", (double)exp.exposure_time);
 		cJSON_AddNumberToObject(r, "ae_luma", (double)exp.ae_luma);

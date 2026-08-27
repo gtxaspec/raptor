@@ -13,6 +13,8 @@
 #include <fcntl.h>
 #include <sys/ioctl.h>
 
+#include <raptor_hal.h>
+
 #include "ric.h"
 
 /* Backoff for day attempts after a failed verification, in polls
@@ -557,6 +559,8 @@ void ric_poll_exposure(ric_state_t *st)
 
 	uint32_t total_gain = 0, ae_luma = 0;
 	uint32_t ev = 0;
+	uint32_t valid_mask = 0;
+	bool has_valid_mask = false;
 	uint16_t wb_rgain = 0, wb_bgain = 0;
 	cJSON *parsed = cJSON_Parse(resp);
 	if (!parsed) {
@@ -566,27 +570,35 @@ void ric_poll_exposure(ric_state_t *st)
 	total_gain = json_get_uint(parsed, "total_gain");
 	ae_luma = json_get_uint(parsed, "ae_luma");
 	ev = json_get_uint(parsed, "ev");
+	const cJSON *valid_item = cJSON_GetObjectItem(parsed, "valid_mask");
+	if (cJSON_IsNumber(valid_item)) {
+		valid_mask = (uint32_t)valid_item->valuedouble;
+		has_valid_mask = true;
+	}
 	wb_rgain = (uint16_t)json_get_uint(parsed, "wb_rgain");
 	wb_bgain = (uint16_t)json_get_uint(parsed, "wb_bgain");
 	cJSON_Delete(parsed);
 
 	/*
-	 * Zero means "this backend cannot answer for that field" -- the
-	 * exposure contract raptor-hal documents in hal_isp.c, not a
-	 * convention invented here. A live sensor never reports a mean luma
-	 * of exactly 0, so treating it as absent costs nothing real.
+	 * New HALs report field validity explicitly, because zero can be a real
+	 * reading (notably ae_luma on the first black frame of a cold T31 ISP).
+	 * Keep the old nonzero sentinel behavior for an rvd that predates the
+	 * validity mask so independently upgraded daemons remain compatible.
 	 *
 	 * The ADC trigger reads its own sensor and must not be starved by
 	 * missing exposure data -- it is the very fallback recommended
 	 * below for platforms without a readback.
 	 */
-	bool have_gain = total_gain > 0;
-	bool have_luma = ae_luma > 0;
-	bool have_ev = ev > 0;
+	bool have_gain = has_valid_mask ?
+		(valid_mask & RSS_EXPOSURE_VALID_TOTAL_GAIN) != 0 : total_gain > 0;
+	bool have_luma = has_valid_mask ?
+		(valid_mask & RSS_EXPOSURE_VALID_AE_LUMA) != 0 : ae_luma > 0;
+	bool have_ev = has_valid_mask ?
+		(valid_mask & RSS_EXPOSURE_VALID_EV) != 0 : ev > 0;
 
 	if (st->settings.trigger != RIC_TRIGGER_ADC && !have_gain && !have_luma && !have_ev) {
 		if (!st->no_exposure_warned) {
-			RSS_WARN("no exposure data from rvd (gain, luma and ev all zero) -- "
+			RSS_WARN("no valid gain, luma or ev data from rvd -- "
 				 "holding %s mode. This platform's HAL has no exposure "
 				 "readback; use `raptorctl ric mode day|night`, or "
 				 "trigger=adc if the board has a photoresistor",

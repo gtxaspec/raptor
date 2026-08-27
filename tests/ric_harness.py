@@ -43,6 +43,7 @@ WORK = os.environ.get("RIC_TEST_WORK", "/tmp/ric-test")
 RIC_BIN = os.environ.get("RIC_BIN", "asan-out/ric")
 ADC_PRELOAD = os.environ.get("RIC_ADC_PRELOAD", "")
 POLL_MS = 200
+EXPOSURE_VALID_AE_LUMA = 1 << 2
 
 PASS = 0
 FAIL = 0
@@ -212,6 +213,8 @@ class StubRvd:
                         "wb_rgain": sc.get("rgain", 0),
                         "wb_bgain": sc.get("bgain", 0),
                     }
+                    if "valid_mask" in sc:
+                        resp["valid_mask"] = sc["valid_mask"]
                 elif cmd == "set-running-mode":
                     val = json.loads(req).get("value", "?")
                     with self.lock:
@@ -1047,6 +1050,25 @@ def scenario_zero_exposure(stub, watch):
     ok = r is not None and r.get("state") == "night"
     ev_ok = wait_for(lambda: last_value(watch.since(gm), IRLED) == "1", 3)
     result(ok and ev_ok, "zero exposure: manual override still actuates", str(r))
+    ric.stop()
+
+
+def scenario_valid_zero_luma(stub, watch):
+    """An explicitly valid zero luma is a black frame, not missing data.
+    This is the first exposure sample on a cold T31 ISP."""
+    stub.set_scene(luma=0, gain=0, ev=0,
+                   valid_mask=EXPOSURE_VALID_AE_LUMA)
+    ric = Ric("valid-zero-luma", LUMA_CONF)
+    if not ric.wait_running():
+        result(False, "valid-zero-luma: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    mm = stub.mark()
+    ok = wait_for(lambda: "night" in stub.modes_since(mm), 4)
+    result(ok, "valid zero luma drives night",
+           str(stub.modes_since(mm)))
+    result("no valid gain, luma or ev" not in ric.read_log(),
+           "valid zero luma is not reported missing", ric.read_log()[-300:])
     ric.stop()
 
 
@@ -2478,6 +2500,7 @@ def main():
         scenario_photo_interference,
         scenario_photo_no_ev,
         scenario_zero_exposure,
+        scenario_valid_zero_luma,
         scenario_partial_fields,
         scenario_adc,
         scenario_adc_dead,
