@@ -589,12 +589,11 @@ void ric_poll_exposure(ric_state_t *st)
 	 * missing exposure data -- it is the very fallback recommended
 	 * below for platforms without a readback.
 	 */
-	bool have_gain = has_valid_mask ?
-		(valid_mask & RSS_EXPOSURE_VALID_TOTAL_GAIN) != 0 : total_gain > 0;
-	bool have_luma = has_valid_mask ?
-		(valid_mask & RSS_EXPOSURE_VALID_AE_LUMA) != 0 : ae_luma > 0;
-	bool have_ev = has_valid_mask ?
-		(valid_mask & RSS_EXPOSURE_VALID_EV) != 0 : ev > 0;
+	bool have_gain =
+		has_valid_mask ? (valid_mask & RSS_EXPOSURE_VALID_TOTAL_GAIN) != 0 : total_gain > 0;
+	bool have_luma =
+		has_valid_mask ? (valid_mask & RSS_EXPOSURE_VALID_AE_LUMA) != 0 : ae_luma > 0;
+	bool have_ev = has_valid_mask ? (valid_mask & RSS_EXPOSURE_VALID_EV) != 0 : ev > 0;
 
 	if (st->settings.trigger != RIC_TRIGGER_ADC && !have_gain && !have_luma && !have_ev) {
 		if (!st->no_exposure_warned) {
