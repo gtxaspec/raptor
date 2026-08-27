@@ -49,6 +49,49 @@ static void rsd555_widen_sndbuf(UsageEnvironment &env, Groupsock *gs, rsd555_vid
 		increaseSendBufferTo(env, gs->socketNum(), (unsigned)want);
 }
 
+/* A video sink's staging buffer must hold this ring's whole frame
+ * bound (the reader keeps frame_buf_size at the ring's bound across
+ * reconnects); before the reader has connected, fall back generously. */
+static unsigned rsd555_video_sink_bound(rsd555_video_ctx_t *ctx)
+{
+	uint32_t b = ctx->frame_buf_size;
+	return (b ? b : 640 * 1024) + 4096;
+}
+
+/* Audio access units are a few KB at worst (AAC ADTS, 20ms PCM). */
+#define RSD555_AUDIO_SINK_BOUND (64 * 1024)
+
+/* H264or5 RTP sinks read OutPacketBuffer::maxSize twice: for their
+ * staging buffer at construction, and for their fragmenter's input
+ * buffer lazily at first PLAY -- which can run long after other
+ * subsessions were set up. So the static may only move in two safe
+ * ways: monotonically up for video (a lazy read then always sees the
+ * largest bound any ring needs -- an access unit that outgrows the
+ * buffer is silently truncated), and briefly down around an audio
+ * sink's constructor, where nothing else can read it (sink creation
+ * and fragmenter creation both run on the single event-loop thread).
+ * Handing audio sinks the video bound instead would multiply every
+ * session's footprint by megabytes on 64MB rigs. */
+static void rsd555_sink_buffer_raise(unsigned bound)
+{
+	if (!rsd555_obuf_pinned() && bound > OutPacketBuffer::maxSize)
+		OutPacketBuffer::maxSize = bound;
+}
+
+struct AudioSinkBufferScope {
+	unsigned saved;
+	AudioSinkBufferScope() : saved(OutPacketBuffer::maxSize)
+	{
+		if (!rsd555_obuf_pinned())
+			OutPacketBuffer::maxSize = RSD555_AUDIO_SINK_BOUND;
+	}
+	~AudioSinkBufferScope()
+	{
+		if (!rsd555_obuf_pinned())
+			OutPacketBuffer::maxSize = saved;
+	}
+};
+
 RingH264Subsession *RingH264Subsession::createNew(UsageEnvironment &env, rsd555_video_ctx_t *ctx,
 						  Boolean reuseSource)
 {
@@ -84,6 +127,7 @@ RTPSink *RingH264Subsession::createNewRTPSink(Groupsock *rtpGroupsock,
 	uint16_t pps_len = __atomic_load_n(&fCtx->pps_len, __ATOMIC_ACQUIRE);
 
 	rsd555_widen_sndbuf(envir(), rtpGroupsock, fCtx);
+	rsd555_sink_buffer_raise(rsd555_video_sink_bound(fCtx));
 	return H264VideoRTPSink::createNew(envir(), rtpGroupsock, rtpPayloadTypeIfDynamic,
 					   sps_len > 0 ? fCtx->sps : NULL, sps_len,
 					   pps_len > 0 ? fCtx->pps : NULL, pps_len);
@@ -128,6 +172,7 @@ RTPSink *RingH265Subsession::createNewRTPSink(Groupsock *rtpGroupsock,
 	uint16_t pps_len = __atomic_load_n(&fCtx->pps_len, __ATOMIC_ACQUIRE);
 
 	rsd555_widen_sndbuf(envir(), rtpGroupsock, fCtx);
+	rsd555_sink_buffer_raise(rsd555_video_sink_bound(fCtx));
 	return H265VideoRTPSink::createNew(envir(), rtpGroupsock, rtpPayloadTypeIfDynamic,
 					   vps_len > 0 ? fCtx->vps : NULL, vps_len,
 					   sps_len > 0 ? fCtx->sps : NULL, sps_len,
@@ -184,6 +229,7 @@ RTPSink *RingAACSubsession::createNewRTPSink(Groupsock *rtpGroupsock,
 
 	/* The RTP clock is the output (SBR) rate for HE, the coded rate for
 	 * LC — both equal fCtx->sample_rate here. */
+	AudioSinkBufferScope obuf_scope;
 	return MPEG4GenericRTPSink::createNew(envir(), rtpGroupsock, rtpPayloadTypeIfDynamic,
 					      fCtx->sample_rate, "audio", "AAC-hbr", configStr,
 					      1 /* numChannels */);
@@ -220,6 +266,7 @@ RTPSink *RingG711Subsession::createNewRTPSink(Groupsock *rtpGroupsock,
 					      unsigned char /*rtpPayloadTypeIfDynamic*/,
 					      FramedSource * /*inputSource*/)
 {
+	AudioSinkBufferScope obuf_scope;
 	if (fIsAlaw)
 		return SimpleRTPSink::createNew(envir(), rtpGroupsock, 8, 8000, "audio", "PCMA", 1,
 						False);
@@ -257,6 +304,7 @@ RTPSink *RingL16Subsession::createNewRTPSink(Groupsock *rtpGroupsock,
 					     unsigned char rtpPayloadTypeIfDynamic,
 					     FramedSource * /*inputSource*/)
 {
+	AudioSinkBufferScope obuf_scope;
 	return SimpleRTPSink::createNew(envir(), rtpGroupsock, rtpPayloadTypeIfDynamic,
 					fCtx->sample_rate, "audio", "L16", 1, False);
 }
@@ -296,6 +344,7 @@ RTPSink *RingOpusSubsession::createNewRTPSink(Groupsock *rtpGroupsock,
 	 * SimpleRTPSink is correct for Opus: each RTP packet contains one
 	 * self-delimiting Opus frame (RFC 7587 Section 4.2). Marker bit is
 	 * set per-packet which is fine for continuous camera audio. */
+	AudioSinkBufferScope obuf_scope;
 	return SimpleRTPSink::createNew(envir(), rtpGroupsock, rtpPayloadTypeIfDynamic, 48000,
 					"audio", "opus", 2, False);
 }

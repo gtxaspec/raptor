@@ -16,6 +16,7 @@
 #include "rsd555_backchannel.h"
 
 #include "rsd555.h"
+#include <exception>
 #include <string.h>
 #include <unistd.h>
 
@@ -26,20 +27,15 @@ static char g_watch = 0;
 
 static UsageEnvironment *g_env;
 
-/* out_buffer_size came from the config: reader reconnects must not
+/* out_buffer_size came from the config: per-sink sizing must not
  * override the operator's choice. */
 static bool g_obuf_pinned = false;
 
-/* Reader threads call this on every ring (re)open: a stream restart
- * can raise the encoder's frame bound (resolution up), and a sink
- * buffer smaller than a frame silently truncates it. Monotonic:
- * never shrinks, so live sinks only ever see a same-or-larger size. */
-extern "C" void rsd555_raise_out_buffer(unsigned frame_bound)
+/* The subsessions manage OutPacketBuffer::maxSize per media kind;
+ * a pinned config size disables that entirely. */
+extern "C" int rsd555_obuf_pinned(void)
 {
-	if (g_obuf_pinned || frame_bound + 4096 <= OutPacketBuffer::maxSize)
-		return;
-	OutPacketBuffer::maxSize = frame_bound + 4096;
-	RSS_INFO("out packet buffer raised to %u KB", (frame_bound + 4096) / 1024);
+	return g_obuf_pinned ? 1 : 0;
 }
 
 static RTSPServer *g_rtspServer;
@@ -152,6 +148,14 @@ int main(int argc, char **argv)
 	int ret = rss_daemon_init(&dctx, "rsd-555", argc, argv, "live555");
 	if (ret != 0)
 		return ret < 0 ? 1 : 0;
+
+	/* A daemonized process dies silently on an uncaught exception
+	 * (a bad_alloc under memory pressure, say): leave a syslog line
+	 * behind instead of an unexplained missing listener. */
+	std::set_terminate([] {
+		RSS_FATAL("terminating on an uncaught C++ exception");
+		abort();
+	});
 
 	g_state.cfg = dctx.cfg;
 	g_state.config_path = dctx.config_path;
@@ -302,16 +306,13 @@ int main(int argc, char **argv)
 		}
 	}
 
-	/* Any access unit larger than OutPacketBuffer::maxSize is silently
-	 * truncated by live555 (every oversized keyframe loses its bottom
-	 * rows; decoders report mid-slice bytestream exhaustion), so size
-	 * it from the rings' own frame bound (the encoder's stream buffer)
-	 * instead of a fixed guess. -1 selects that auto size and lets
-	 * reader reconnects raise it; an explicit rtsp.out_buffer_size
-	 * wins. Set before the reader threads start so their raise hook
-	 * never races the base value. */
+	/* Sink staging buffers are sized per media kind at SETUP time via
+	 * rsd555_sink_buffer (video: that ring's frame bound; audio: a
+	 * few frames). The global value set here only covers sinks that
+	 * never flip it. -1 selects that scheme; an explicit
+	 * rtsp.out_buffer_size pins one size for everything. */
 	int obuf_cfg = rss_config_get_int(dctx.cfg, "rtsp", "out_buffer_size", -1);
-	unsigned obuf;
+	unsigned obuf = 256 * 1024;
 	if (obuf_cfg > 0) {
 		obuf = (unsigned)obuf_cfg;
 		g_obuf_pinned = true;
@@ -319,14 +320,10 @@ int main(int argc, char **argv)
 			RSS_WARN("out_buffer_size %u below the %u frame bound: "
 				 "oversized frames will be truncated",
 				 obuf, max_frame_bound + 4096);
-	} else {
-		obuf = 256 * 1024;
-		if (max_frame_bound && max_frame_bound + 4096 > obuf)
-			obuf = max_frame_bound + 4096;
 	}
 	OutPacketBuffer::maxSize = obuf;
-	RSS_INFO("out packet buffer: %u KB (frame bound %u KB)", obuf / 1024,
-		 max_frame_bound / 1024);
+	RSS_INFO("sink buffers: %s (video frame bound %u KB)",
+		 g_obuf_pinned ? "pinned by config" : "per-sink", max_frame_bound / 1024);
 
 	/* Control socket */
 	rss_mkdir_p(RSS_RUN_DIR);
