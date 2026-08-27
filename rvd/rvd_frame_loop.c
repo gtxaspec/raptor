@@ -16,6 +16,10 @@
 #include <sys/epoll.h>
 
 #include "rvd.h"
+#include <rss_vui.h>
+#ifdef __mips__
+#include <sys/cachectl.h>
+#endif
 
 #define RVD_STATS_INTERVAL_US 30000000 /* 30s */
 #define RVD_REAP_INTERVAL_US  10000000 /* 10s */
@@ -102,6 +106,9 @@ void *rvd_encoder_thread(void *arg)
 		RSS_DEBUG("jpeg chn %d: pulsed receive every %lld ms", s->chn,
 			  (long long)(pulse_interval_us / 1000));
 	bool had_readers = false; /* pulse pacing applies to held demand only */
+	bool vui_full_range = rss_config_get_bool(st->cfg, "system", "vui_full_range", true);
+	bool vui_flip_logged = false;
+	bool vui_flip_warned = false;
 
 	while (rss_running(st->running) && atomic_load(&st->stream_active[idx])) {
 		/* JPEG on-demand: start/stop encoder based on ring consumers */
@@ -197,6 +204,41 @@ void *rvd_encoder_thread(void *arg)
 			RSS_WARN("stream%d: enc_get_frame failed (chn %d, ret=%d)", idx, s->chn,
 				 ret);
 			continue;
+		}
+
+		/* The ISP feeds the encoder full-range pixels, but the SPS
+		 * VUI the encoder writes declares limited range, so players
+		 * rescale 16-235 and clip both ends of the image. The VUI
+		 * already carries the video_signal_type block, so the fix is
+		 * a length-preserving flip of video_full_range_flag -- done
+		 * here, before publish, so every consumer (and the SDP
+		 * parameter caches built from ring frames) sees the
+		 * corrected declaration on both ring modes. */
+		if (vui_full_range && !s->is_jpeg && frame.is_key) {
+			for (uint32_t n = 0; n < frame.nal_count; n++) {
+				rss_nal_type_t t = frame.nals[n].type;
+				if (t != RSS_NAL_H264_SPS && t != RSS_NAL_H265_SPS)
+					continue;
+				int rc = rss_vui_set_full_range((uint8_t *)frame.nals[n].data,
+								frame.nals[n].length,
+								t == RSS_NAL_H265_SPS);
+				if (rc == 1) {
+#ifdef __mips__
+					cacheflush((void *)(uintptr_t)frame.nals[n].data,
+						   frame.nals[n].length, DCACHE);
+#endif
+					if (!vui_flip_logged) {
+						vui_flip_logged = true;
+						RSS_INFO("stream%d: declaring full-range video in "
+							 "the SPS VUI",
+							 idx);
+					}
+				} else if (rc < 0 && !vui_flip_warned) {
+					vui_flip_warned = true;
+					RSS_WARN("stream%d: SPS VUI range fix skipped (rc=%d)", idx,
+						 rc);
+				}
+			}
 		}
 
 		/* Helix JPEG cold start can hand over a full-length frame whose

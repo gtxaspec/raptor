@@ -21,9 +21,9 @@ CFLAGS = -Wall -Wextra -std=$(RAPTOR_STD) -D_GNU_SOURCE -g $(SAN_FLAGS) $(RAPTOR
 LDFLAGS = $(SAN_FLAGS) -lpthread -lrt -lm
 
 TEST_SRCS = main.c test_ric_json.c test_nal.c test_prebuf.c test_mux.c test_codec.c test_sdp.c test_ring.c test_rsp.c \
-            test_ctrl.c test_sign.c test_storage.c test_timelapse.c test_sendq.c test_idr_recovery.c test_rwd_sendq.c test_rwd_pacer.c test_rwd_rtcp.c test_rad_clock.c test_media_clock.c test_resync.c \
+            test_ctrl.c test_sign.c test_storage.c test_timelapse.c test_sendq.c test_idr_recovery.c test_rwd_sendq.c test_rwd_pacer.c test_rwd_rtcp.c test_rad_clock.c test_media_clock.c test_resync.c test_vui.c \
             test_backchannel.c test_config.c test_rhd_slots.c
-LIB_SRCS = ../ric/ric_json.c ../rsd/rsd_sendq.c ../rsd/rsd_backchannel.c ../rwd/rwd_sendq.c ../rwd/rwd_pacer.c ../rad/rad_clock.c ../rad/rad_resync.c ../rmr/rmr_nal.c ../rmr/rmr_prebuf.c ../rmr/rmr_mux.c ../rmr/rmr_sign.c ../rmr/rmr_timelapse.c ../../raptor-common/src/rss_media_clock.c ../../raptor-common/src/rss_sign.c ../../raptor-common/src/rss_jpeg.c ../../raptor-common/src/rss_aac.c ../rmr/rmr_storage.c \
+LIB_SRCS = ../ric/ric_json.c ../rsd/rsd_sendq.c ../rsd/rsd_backchannel.c ../rwd/rwd_sendq.c ../rwd/rwd_pacer.c ../rad/rad_clock.c ../rad/rad_resync.c ../rmr/rmr_nal.c ../rmr/rmr_prebuf.c ../rmr/rmr_mux.c ../rmr/rmr_sign.c ../rmr/rmr_timelapse.c ../../raptor-common/src/rss_media_clock.c ../../raptor-common/src/rss_vui.c ../../raptor-common/src/rss_sign.c ../../raptor-common/src/rss_jpeg.c ../../raptor-common/src/rss_aac.c ../rmr/rmr_storage.c \
            ../../raptor-common/src/rss_util.c ../../raptor-common/src/rss_log.c \
            ../../raptor-common/src/cJSON.c \
            ../../raptor-common/third_party/monocypher/monocypher.c \
