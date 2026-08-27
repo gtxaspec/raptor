@@ -185,6 +185,10 @@ typedef struct {
 	pthread_mutex_t sources_lock;
 } rsd555_audio_ctx_t;
 
+/* Raise OutPacketBuffer::maxSize to hold frame_bound (reader threads,
+ * on ring (re)open). No-op when the config pinned an explicit size. */
+void rsd555_raise_out_buffer(unsigned frame_bound);
+
 /* Source registration — called by FramedSource constructor/destructor */
 int rsd555_video_add_source(rsd555_video_ctx_t *ctx, rsd555_frame_queue_t *q);
 void rsd555_video_remove_source(rsd555_video_ctx_t *ctx, rsd555_frame_queue_t *q);

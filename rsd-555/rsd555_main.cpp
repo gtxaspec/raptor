@@ -26,14 +26,27 @@ static char g_watch = 0;
 
 static UsageEnvironment *g_env;
 
+/* out_buffer_size came from the config: reader reconnects must not
+ * override the operator's choice. */
+static bool g_obuf_pinned = false;
+
+/* Reader threads call this on every ring (re)open: a stream restart
+ * can raise the encoder's frame bound (resolution up), and a sink
+ * buffer smaller than a frame silently truncates it. Monotonic:
+ * never shrinks, so live sinks only ever see a same-or-larger size. */
+extern "C" void rsd555_raise_out_buffer(unsigned frame_bound)
+{
+	if (g_obuf_pinned || frame_bound + 4096 <= OutPacketBuffer::maxSize)
+		return;
+	OutPacketBuffer::maxSize = frame_bound + 4096;
+	RSS_INFO("out packet buffer raised to %u KB", (frame_bound + 4096) / 1024);
+}
+
 static RTSPServer *g_rtspServer;
 
-static ServerMediaSession *create_stream_session(UsageEnvironment &env,
-						 const char *name,
-						 const char *info,
-						 rsd555_video_ctx_t *vctx,
-						 rsd555_audio_ctx_t *actx,
-						 bool has_audio,
+static ServerMediaSession *create_stream_session(UsageEnvironment &env, const char *name,
+						 const char *info, rsd555_video_ctx_t *vctx,
+						 rsd555_audio_ctx_t *actx, bool has_audio,
 						 bool backchannel);
 
 /* Periodic check: rebuild sessions when readers discover new streams */
@@ -55,14 +68,11 @@ static void check_streams(void * /*clientData*/)
 
 		if (need_rebuild && g_rtspServer && g_state.stream_names[s][0]) {
 			ServerMediaSession *sms = create_stream_session(
-				*g_env, g_state.stream_names[s],
-				g_state.session_name,
-				&g_state.video[s], &g_state.audio,
-				g_state.audio.sample_rate > 0,
+				*g_env, g_state.stream_names[s], g_state.session_name,
+				&g_state.video[s], &g_state.audio, g_state.audio.sample_rate > 0,
 				g_state.backchannel);
 			if (sms) {
-				g_rtspServer->deleteServerMediaSession(
-					g_state.stream_names[s]);
+				g_rtspServer->deleteServerMediaSession(g_state.stream_names[s]);
 				g_rtspServer->addServerMediaSession(sms);
 				if (g_state.video[s].width > 0)
 					g_state.video_added[s] = true;
@@ -78,16 +88,13 @@ static void check_streams(void * /*clientData*/)
 	g_env->taskScheduler().scheduleDelayedTask(500000, check_streams, NULL);
 }
 
-static ServerMediaSession *create_stream_session(UsageEnvironment &env,
-						 const char *name,
-						 const char *info,
-						 rsd555_video_ctx_t *vctx,
-						 rsd555_audio_ctx_t *actx,
-						 bool has_audio,
+static ServerMediaSession *create_stream_session(UsageEnvironment &env, const char *name,
+						 const char *info, rsd555_video_ctx_t *vctx,
+						 rsd555_audio_ctx_t *actx, bool has_audio,
 						 bool backchannel)
 {
-	ServerMediaSession *sms = ServerMediaSession::createNew(
-		env, name, info, "Raptor RSS (rsd-555)");
+	ServerMediaSession *sms =
+		ServerMediaSession::createNew(env, name, info, "Raptor RSS (rsd-555)");
 	if (!sms)
 		return NULL;
 
@@ -158,12 +165,13 @@ int main(int argc, char **argv)
 	}
 
 	g_state.port = rss_config_get_int(dctx.cfg, "rtsp-555", "port",
-					rss_config_get_int(dctx.cfg, "rtsp", "port", 554));
+					  rss_config_get_int(dctx.cfg, "rtsp", "port", 554));
 	if (g_state.port < 1 || g_state.port > 65535) {
 		RSS_WARN("invalid port %d, using 554", g_state.port);
 		g_state.port = 554;
 	}
-	g_state.max_clients = rss_config_get_int(dctx.cfg, "rtsp", "max_clients", RSD555_MAX_CLIENTS);
+	g_state.max_clients =
+		rss_config_get_int(dctx.cfg, "rtsp", "max_clients", RSD555_MAX_CLIENTS);
 	if (g_state.max_clients < 1)
 		g_state.max_clients = 1;
 	if (g_state.max_clients > RSD555_MAX_CLIENTS)
@@ -179,15 +187,14 @@ int main(int argc, char **argv)
 	rss_strlcpy(g_state.session_name,
 		    rss_config_get_str(dctx.cfg, "rtsp", "session_name", "Raptor Live"),
 		    sizeof(g_state.session_name));
-	rss_strlcpy(g_state.session_info,
-		    rss_config_get_str(dctx.cfg, "rtsp", "session_info", ""),
+	rss_strlcpy(g_state.session_info, rss_config_get_str(dctx.cfg, "rtsp", "session_info", ""),
 		    sizeof(g_state.session_info));
 
 	g_state.backchannel = rss_config_get_bool(dctx.cfg, "rtsp", "backchannel", false);
 
 	/* Load endpoint aliases (same config keys as RSD) */
 	static const char *const endpoint_keys[RSD555_STREAM_COUNT] = {
-		"endpoint_main", "endpoint_sub", "endpoint_s1_main",
+		"endpoint_main",   "endpoint_sub",     "endpoint_s1_main",
 		"endpoint_s1_sub", "endpoint_s2_main", "endpoint_s2_sub",
 	};
 	for (int s = 0; s < RSD555_STREAM_COUNT; s++) {
@@ -197,7 +204,9 @@ int main(int argc, char **argv)
 	}
 
 	/* Probe rings for stream info, then close — reader threads re-open
-	 * and handle buffer allocation + reconnection properly. */
+	 * and handle buffer allocation + reconnection properly. The frame
+	 * bound feeds OutPacketBuffer sizing below. */
+	uint32_t max_frame_bound = 0;
 	for (int s = 0; s < RSD555_STREAM_COUNT; s++) {
 		g_state.video[s].idx = s;
 		g_state.video[s].ring_name = rsd555_ring_names[s];
@@ -215,6 +224,9 @@ int main(int argc, char **argv)
 			g_state.video[s].fps_den = hdr->fps_den;
 			g_state.video[s].profile = hdr->profile;
 			g_state.video[s].level = hdr->level;
+			uint32_t mfs = rss_ring_max_frame_size(probe);
+			if (mfs > max_frame_bound)
+				max_frame_bound = mfs;
 			rss_ring_close(probe);
 			RSS_INFO("stream %d (%s): %s %ux%u", s, rsd555_ring_names[s],
 				 g_state.video[s].codec == 0 ? "H.264" : "H.265",
@@ -238,6 +250,9 @@ int main(int argc, char **argv)
 				g_state.video[0].fps_den = hdr->fps_den;
 				g_state.video[0].profile = hdr->profile;
 				g_state.video[0].level = hdr->level;
+				uint32_t mfs = rss_ring_max_frame_size(probe);
+				if (mfs > max_frame_bound)
+					max_frame_bound = mfs;
 				rss_ring_close(probe);
 				RSS_INFO("stream 0 (main): %s %ux%u",
 					 g_state.video[0].codec == 0 ? "H.264" : "H.265",
@@ -257,6 +272,9 @@ int main(int argc, char **argv)
 				g_state.video[1].fps_den = hdr->fps_den;
 				g_state.video[1].profile = hdr->profile;
 				g_state.video[1].level = hdr->level;
+				uint32_t mfs = rss_ring_max_frame_size(probe);
+				if (mfs > max_frame_bound)
+					max_frame_bound = mfs;
 				rss_ring_close(probe);
 				RSS_INFO("stream 1 (sub): %s %ux%u",
 					 g_state.video[1].codec == 0 ? "H.264" : "H.265",
@@ -279,9 +297,36 @@ int main(int argc, char **argv)
 			g_state.audio.sample_rate = ahdr->fps_num;
 			g_state.has_audio = true;
 			rss_ring_close(probe);
-			RSS_INFO("audio ring: codec=%u rate=%u", g_state.audio.codec, g_state.audio.sample_rate);
+			RSS_INFO("audio ring: codec=%u rate=%u", g_state.audio.codec,
+				 g_state.audio.sample_rate);
 		}
 	}
+
+	/* Any access unit larger than OutPacketBuffer::maxSize is silently
+	 * truncated by live555 (every oversized keyframe loses its bottom
+	 * rows; decoders report mid-slice bytestream exhaustion), so size
+	 * it from the rings' own frame bound (the encoder's stream buffer)
+	 * instead of a fixed guess. -1 selects that auto size and lets
+	 * reader reconnects raise it; an explicit rtsp.out_buffer_size
+	 * wins. Set before the reader threads start so their raise hook
+	 * never races the base value. */
+	int obuf_cfg = rss_config_get_int(dctx.cfg, "rtsp", "out_buffer_size", -1);
+	unsigned obuf;
+	if (obuf_cfg > 0) {
+		obuf = (unsigned)obuf_cfg;
+		g_obuf_pinned = true;
+		if (max_frame_bound && obuf < max_frame_bound + 4096)
+			RSS_WARN("out_buffer_size %u below the %u frame bound: "
+				 "oversized frames will be truncated",
+				 obuf, max_frame_bound + 4096);
+	} else {
+		obuf = 256 * 1024;
+		if (max_frame_bound && max_frame_bound + 4096 > obuf)
+			obuf = max_frame_bound + 4096;
+	}
+	OutPacketBuffer::maxSize = obuf;
+	RSS_INFO("out packet buffer: %u KB (frame bound %u KB)", obuf / 1024,
+		 max_frame_bound / 1024);
 
 	/* Control socket */
 	rss_mkdir_p(RSS_RUN_DIR);
@@ -296,8 +341,8 @@ int main(int argc, char **argv)
 		pthread_attr_t attr;
 		pthread_attr_init(&attr);
 		pthread_attr_setstacksize(&attr, 128 * 1024);
-		if (pthread_create(&g_state.video_tids[s], &attr,
-				   rsd555_video_reader_thread, &g_state.video[s]) == 0)
+		if (pthread_create(&g_state.video_tids[s], &attr, rsd555_video_reader_thread,
+				   &g_state.video[s]) == 0)
 			g_state.video_started[s] = true;
 		pthread_attr_destroy(&attr);
 	}
@@ -305,15 +350,13 @@ int main(int argc, char **argv)
 		pthread_attr_t attr;
 		pthread_attr_init(&attr);
 		pthread_attr_setstacksize(&attr, 128 * 1024);
-		if (pthread_create(&g_state.audio_tid, &attr,
-				   rsd555_audio_reader_thread, &g_state.audio) == 0)
+		if (pthread_create(&g_state.audio_tid, &attr, rsd555_audio_reader_thread,
+				   &g_state.audio) == 0)
 			g_state.audio_started = true;
 		pthread_attr_destroy(&attr);
 	}
 
 	/* live555 setup */
-	OutPacketBuffer::maxSize = rss_config_get_int(dctx.cfg, "rtsp",
-						      "out_buffer_size", 256 * 1024);
 	TaskScheduler *scheduler = BasicTaskScheduler::createNew();
 	UsageEnvironment *env = BasicUsageEnvironment::createNew(*scheduler);
 	g_env = env;
@@ -328,11 +371,11 @@ int main(int argc, char **argv)
 		RSS_INFO("RTSP Digest auth enabled");
 	}
 
-	rtspServer = RTSPServer::createNew(*env, (Port)g_state.port, authDB,
-					   g_state.session_timeout);
+	rtspServer =
+		RTSPServer::createNew(*env, (Port)g_state.port, authDB, g_state.session_timeout);
 	if (!rtspServer) {
-		RSS_FATAL("failed to create RTSP server on port %d: %s",
-			  g_state.port, env->getResultMsg());
+		RSS_FATAL("failed to create RTSP server on port %d: %s", g_state.port,
+			  env->getResultMsg());
 		goto cleanup;
 	}
 	g_rtspServer = rtspServer;
@@ -355,9 +398,8 @@ int main(int argc, char **argv)
 				 "stream%d", s);
 
 		ServerMediaSession *sms = create_stream_session(
-			*env, g_state.stream_names[s], g_state.session_name,
-			&g_state.video[s], &g_state.audio, g_state.has_audio,
-			g_state.backchannel);
+			*env, g_state.stream_names[s], g_state.session_name, &g_state.video[s],
+			&g_state.audio, g_state.has_audio, g_state.backchannel);
 		if (!sms)
 			continue;
 		rtspServer->addServerMediaSession(sms);

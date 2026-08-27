@@ -199,6 +199,7 @@ void *rsd555_video_reader_thread(void *arg)
 			uint32_t max_frame = rss_ring_max_frame_size(ctx->ring);
 			if (max_frame < 256 * 1024)
 				max_frame = 256 * 1024;
+			rsd555_raise_out_buffer(max_frame);
 			if (ctx->frame_buf_size < max_frame) {
 				uint8_t *new_buf = malloc(max_frame);
 				if (!new_buf) {
