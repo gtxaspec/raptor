@@ -57,6 +57,54 @@ TEST vui_h265_flip_and_idempotent(void)
 	PASS();
 }
 
+TEST vui_h264_matrix_and_idempotent(void)
+{
+	uint8_t nal[sizeof(sps264)];
+	memcpy(nal, sps264, sizeof(nal));
+
+	/* The capture declares bt709 (1): rewriting to the same value is
+	 * a no-op that touches nothing. */
+	ASSERT_EQ(0, rss_vui_set_matrix(nal, sizeof(nal), 0, 1));
+	ASSERT_EQ(0, memcmp(nal, sps264, sizeof(nal)));
+	/* Rewriting to smpte170m (6) edits once, then reports done. */
+	ASSERT_EQ(1, rss_vui_set_matrix(nal, sizeof(nal), 0, 6));
+	ASSERT_EQ(0, rss_vui_set_matrix(nal, sizeof(nal), 0, 6));
+	/* The matrix edit leaves the range flag intact and editable. */
+	ASSERT_EQ(1, rss_vui_set_full_range(nal, sizeof(nal), 0));
+	ASSERT_EQ(1, rss_vui_set_matrix(nal, sizeof(nal), 0, 1));
+	PASS();
+}
+
+TEST vui_h265_matrix_and_idempotent(void)
+{
+	uint8_t nal[sizeof(sps265)];
+	memcpy(nal, sps265, sizeof(nal));
+
+	ASSERT_EQ(0, rss_vui_set_matrix(nal, sizeof(nal), 1, 1));
+	ASSERT_EQ(0, memcmp(nal, sps265, sizeof(nal)));
+	ASSERT_EQ(1, rss_vui_set_matrix(nal, sizeof(nal), 1, 6));
+	ASSERT_EQ(0, rss_vui_set_matrix(nal, sizeof(nal), 1, 6));
+	ASSERT_EQ(1, rss_vui_set_full_range(nal, sizeof(nal), 1));
+	ASSERT_EQ(1, rss_vui_set_matrix(nal, sizeof(nal), 1, 5));
+	PASS();
+}
+
+TEST vui_matrix_truncated_never_grows_or_loops(void)
+{
+	/* Same contract as the range sweep: any outcome is fine on
+	 * garbage input as long as writes stay inside the given length
+	 * and a successful edit is idempotent. */
+	for (size_t cut = 5; cut < sizeof(sps264); cut++) {
+		uint8_t nal[sizeof(sps264)];
+		memcpy(nal, sps264, sizeof(nal));
+		int rc = rss_vui_set_matrix(nal, (uint32_t)cut, 0, 6);
+		if (rc == 1)
+			ASSERT_EQ(0, rss_vui_set_matrix(nal, (uint32_t)cut, 0, 6));
+		ASSERT_EQ(0, memcmp(nal + cut, sps264 + cut, sizeof(nal) - cut));
+	}
+	PASS();
+}
+
 TEST vui_accepts_annexb_start_code(void)
 {
 	uint8_t nal[4 + sizeof(sps264)] = {0x00, 0x00, 0x00, 0x01};
@@ -120,6 +168,9 @@ SUITE(vui_suite)
 {
 	RUN_TEST(vui_h264_flip_and_idempotent);
 	RUN_TEST(vui_h265_flip_and_idempotent);
+	RUN_TEST(vui_h264_matrix_and_idempotent);
+	RUN_TEST(vui_h265_matrix_and_idempotent);
+	RUN_TEST(vui_matrix_truncated_never_grows_or_loops);
 	RUN_TEST(vui_accepts_annexb_start_code);
 	RUN_TEST(vui_no_vui_is_a_noop);
 	RUN_TEST(vui_rejects_wrong_nal_type);

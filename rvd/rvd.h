@@ -169,6 +169,11 @@ struct rvd_state {
 	/* Low latency mode */
 	bool low_latency;
 
+	/* SPS VUI corrections (system section, parsed once at init so the
+	 * encoder threads never touch the lazily-inserting config map) */
+	bool vui_full_range;
+	int vui_matrix; /* matrix_coefficients to declare, -1 = keep */
+
 	/* Ring reference mode (zero-copy) */
 	bool refmode;
 	bool refmode_shm; /* true = SHM injection, false = /dev/rmem */

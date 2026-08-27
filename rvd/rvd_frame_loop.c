@@ -106,9 +106,12 @@ void *rvd_encoder_thread(void *arg)
 		RSS_DEBUG("jpeg chn %d: pulsed receive every %lld ms", s->chn,
 			  (long long)(pulse_interval_us / 1000));
 	bool had_readers = false; /* pulse pacing applies to held demand only */
-	bool vui_full_range = rss_config_get_bool(st->cfg, "system", "vui_full_range", true);
+	const bool vui_full_range = st->vui_full_range;
+	const int vui_matrix = st->vui_matrix;
 	bool vui_flip_logged = false;
 	bool vui_flip_warned = false;
+	bool vui_matrix_logged = false;
+	bool vui_matrix_warned = false;
 
 	while (rss_running(st->running) && atomic_load(&st->stream_active[idx])) {
 		/* JPEG on-demand: start/stop encoder based on ring consumers */
@@ -206,37 +209,63 @@ void *rvd_encoder_thread(void *arg)
 			continue;
 		}
 
-		/* The ISP feeds the encoder full-range pixels, but the SPS
-		 * VUI the encoder writes declares limited range, so players
-		 * rescale 16-235 and clip both ends of the image. The VUI
-		 * already carries the video_signal_type block, so the fix is
-		 * a length-preserving flip of video_full_range_flag -- done
-		 * here, before publish, so every consumer (and the SDP
+		/* The ISP feeds the encoder BT.601 full-range YUV, but the
+		 * SPS VUI the encoder writes declares limited-range BT.709,
+		 * so players rescale 16-235 (clipping both ends) and
+		 * reconstruct hues with the wrong matrix. Both fixes are
+		 * length-preserving edits of the video_signal_type block --
+		 * done here, before publish, so every consumer (and the SDP
 		 * parameter caches built from ring frames) sees the
 		 * corrected declaration on both ring modes. */
-		if (vui_full_range && !s->is_jpeg && frame.is_key) {
+		if ((vui_full_range || vui_matrix >= 0) && !s->is_jpeg && frame.is_key) {
 			for (uint32_t n = 0; n < frame.nal_count; n++) {
 				rss_nal_type_t t = frame.nals[n].type;
 				if (t != RSS_NAL_H264_SPS && t != RSS_NAL_H265_SPS)
 					continue;
-				int rc = rss_vui_set_full_range((uint8_t *)frame.nals[n].data,
-								frame.nals[n].length,
-								t == RSS_NAL_H265_SPS);
-				if (rc == 1) {
+				bool edited = false;
+				if (vui_full_range) {
+					int rc = rss_vui_set_full_range(
+						(uint8_t *)frame.nals[n].data, frame.nals[n].length,
+						t == RSS_NAL_H265_SPS);
+					if (rc == 1) {
+						edited = true;
+						if (!vui_flip_logged) {
+							vui_flip_logged = true;
+							RSS_INFO("stream%d: declaring full-range "
+								 "video in the SPS VUI",
+								 idx);
+						}
+					} else if (rc < 0 && !vui_flip_warned) {
+						vui_flip_warned = true;
+						RSS_WARN("stream%d: SPS VUI range fix skipped "
+							 "(rc=%d)",
+							 idx, rc);
+					}
+				}
+				if (vui_matrix >= 0) {
+					int rc = rss_vui_set_matrix(
+						(uint8_t *)frame.nals[n].data, frame.nals[n].length,
+						t == RSS_NAL_H265_SPS, (uint8_t)vui_matrix);
+					if (rc == 1) {
+						edited = true;
+						if (!vui_matrix_logged) {
+							vui_matrix_logged = true;
+							RSS_INFO("stream%d: declaring matrix %d "
+								 "in the SPS VUI",
+								 idx, vui_matrix);
+						}
+					} else if (rc < 0 && !vui_matrix_warned) {
+						vui_matrix_warned = true;
+						RSS_WARN("stream%d: SPS VUI matrix fix skipped "
+							 "(rc=%d)",
+							 idx, rc);
+					}
+				}
+				if (edited) {
 #ifdef __mips__
 					cacheflush((void *)(uintptr_t)frame.nals[n].data,
 						   frame.nals[n].length, DCACHE);
 #endif
-					if (!vui_flip_logged) {
-						vui_flip_logged = true;
-						RSS_INFO("stream%d: declaring full-range video in "
-							 "the SPS VUI",
-							 idx);
-					}
-				} else if (rc < 0 && !vui_flip_warned) {
-					vui_flip_warned = true;
-					RSS_WARN("stream%d: SPS VUI range fix skipped (rc=%d)", idx,
-						 rc);
 				}
 			}
 		}
