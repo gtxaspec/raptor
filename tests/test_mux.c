@@ -1,5 +1,6 @@
 #include "greatest.h"
 #include "rmr_mux.h"
+#include "rmr_timelapse.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -41,6 +42,11 @@ static int mem_write(const void *buf, uint32_t len, void *ctx)
 static uint32_t rd32(const uint8_t *p)
 {
 	return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
+}
+
+static uint64_t rd64(const uint8_t *p)
+{
+	return ((uint64_t)rd32(p) << 32) | rd32(p + 4);
 }
 
 /* Find a box by 4cc type in [start, start+len). Returns offset or -1. */
@@ -228,6 +234,81 @@ TEST mux_single_sample_fragment_duration(void)
 			p = hit + 4;
 		}
 		ASSERT_EQ(3, truns);
+		mux_buf_reset();
+	}
+	PASS();
+}
+
+/* The seam the timelapse writer lives on: rmr_tl_sample_dts90's grid
+ * and the mux's declared duration must describe the same timeline for
+ * ANY playback rate the user can set (config or runtime). Drive both
+ * the way the daemon does (fragment per sample, default_duration =
+ * 90000/fps) and assert the file agrees with itself: each fragment's
+ * tfdt equals the previous tfdt plus its declared duration, within
+ * the 1-tick truncation wobble of a rate that does not divide 90000.
+ * This is the pairing whose absence shipped files that declared a
+ * 25fps duration on a 30fps DTS grid. */
+TEST mux_timelapse_grid_all_rates(void)
+{
+	static const int rates[] = {1, 7, 15, 24, 30, 60, 120};
+	for (size_t r = 0; r < sizeof(rates) / sizeof(rates[0]); r++) {
+		int fps = rates[r];
+		mux_buf_reset();
+		rmr_mux_t *mux = rmr_mux_create(mem_write, NULL);
+		ASSERT(mux);
+		rmr_video_params_t vp = {.codec = RMR_CODEC_H264,
+					 .width = 640,
+					 .height = 480,
+					 .timescale = 90000,
+					 .default_duration = 90000u / (uint32_t)fps};
+		rmr_mux_set_video(mux, &vp, test_sps, sizeof(test_sps), test_pps, sizeof(test_pps),
+				  NULL, 0);
+		rmr_mux_start(mux);
+
+		rmr_tl_t tl;
+		rmr_tl_init(&tl, 10, fps, 0);
+		rmr_tl_file_opened(&tl, 20260827);
+
+		for (int i = 0; i < 10; i++) {
+			if (i > 0)
+				rmr_mux_flush_fragment(mux);
+			uint32_t ns;
+			uint8_t *nal = make_fake_nal(512, 0x65, &ns);
+			int64_t dts = rmr_tl_sample_dts90(&tl);
+			rmr_video_sample_t vs = {
+				.data = nal, .size = ns, .dts = dts, .pts = dts, .is_key = true};
+			rmr_mux_write_video(mux, &vs);
+			free(nal);
+		}
+		rmr_mux_flush_fragment(mux);
+		rmr_mux_destroy(mux);
+
+		/* Walk fragments: each tfdt must continue where the prior
+		 * fragment's declared duration left off. */
+		int frags = 0;
+		uint64_t expect = 0;
+		const uint8_t *p = g_buf;
+		uint32_t left = g_len;
+		for (;;) {
+			const uint8_t *tfdt = memmem(p, left, "tfdt", 4);
+			if (!tfdt)
+				break;
+			ASSERT(tfdt + 16 <= g_buf + g_len);
+			uint64_t base = rd64(tfdt + 8);
+			uint32_t after = (uint32_t)(g_buf + g_len - (tfdt + 4));
+			const uint8_t *trun = memmem(tfdt + 4, after, "trun", 4);
+			ASSERT(trun && trun + 20 <= g_buf + g_len);
+			uint32_t dur = rd32(trun + 16);
+			if (frags == 0)
+				ASSERT_EQ(0, (int)base);
+			else
+				ASSERT(base >= expect && base - expect <= 1);
+			expect = base + dur;
+			frags++;
+			left -= (uint32_t)(tfdt + 4 - p);
+			p = tfdt + 4;
+		}
+		ASSERT_EQ(10, frags);
 		mux_buf_reset();
 	}
 	PASS();
@@ -793,6 +874,7 @@ SUITE(mux_suite)
 	RUN_TEST(mux_video_h264);
 	RUN_TEST(mux_video_h265);
 	RUN_TEST(mux_single_sample_fragment_duration);
+	RUN_TEST(mux_timelapse_grid_all_rates);
 	RUN_TEST(mux_audio_pcmu);
 	RUN_TEST(mux_combined);
 	RUN_TEST(mux_multi_fragment);
