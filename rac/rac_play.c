@@ -146,7 +146,7 @@ static int publish_pcm(rss_ring_t *ring, rac_pacer_t *pacer, const int16_t *pcm,
 	while (off < count) {
 		int n = (count - off < chunk) ? (count - off) : chunk;
 		rss_ring_publish(ring, (const uint8_t *)(data + off), n * 2, rss_timestamp_us(), 0,
-				 0);
+				 0, RSS_SRC_SEQ_NONE);
 		off += n;
 		pacer_advance(pacer, n);
 	}
@@ -240,7 +240,8 @@ int cmd_play(const char *src, int sample_rate)
 		/* Emit the peeked bytes first (for stdin, where we can't
 		 * rewind). Then stream the rest. */
 		if (!can_rewind && peek_len > 0) {
-			rss_ring_publish(ring, peek, (uint32_t)peek_len, rss_timestamp_us(), 0, 0);
+			rss_ring_publish(ring, peek, (uint32_t)peek_len, rss_timestamp_us(), 0, 0,
+					 RSS_SRC_SEQ_NONE);
 			total_samples += peek_len / 2;
 			pacer_advance(&pacer, (int)(peek_len / 2));
 		}
@@ -248,7 +249,8 @@ int cmd_play(const char *src, int sample_rate)
 			size_t n = fread(buf, 1, frame_bytes, in);
 			if (n == 0)
 				break;
-			rss_ring_publish(ring, buf, (uint32_t)n, rss_timestamp_us(), 0, 0);
+			rss_ring_publish(ring, buf, (uint32_t)n, rss_timestamp_us(), 0, 0,
+					 RSS_SRC_SEQ_NONE);
 			total_samples += n / 2;
 			pacer_advance(&pacer, (int)(n / 2));
 		}
@@ -657,7 +659,7 @@ int cmd_beep(int freq_hz, int duration_ms, int sample_rate)
 			phase += step;
 		}
 		rss_ring_publish(ring, (const uint8_t *)buf, (uint32_t)(n * 2), rss_timestamp_us(),
-				 0, 0);
+				 0, 0, RSS_SRC_SEQ_NONE);
 		total_samples += (uint64_t)n;
 		done_samples += n;
 		pacer_advance(&pacer, n);

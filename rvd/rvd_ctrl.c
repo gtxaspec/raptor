@@ -2392,6 +2392,20 @@ static int handle_config_cmd(const char *cmd, const char *cmd_json, rvd_state_t 
 			cJSON_AddNumberToObject(item, "max_qp", (double)s->enc_cfg.max_qp);
 			cJSON_AddNumberToObject(item, "rc_mode", (double)s->enc_cfg.rc_mode);
 			cJSON_AddNumberToObject(item, "profile", (double)s->enc_cfg.profile);
+			/* Source-loss ledger: frames the encoder produced that
+			 * never reached the ring, split by where they went
+			 * missing. Only meaningful on streams that stamp a
+			 * source counter (video; JPEG channels do not). */
+			if (s->ring && !s->is_jpeg) {
+				rss_ring_loss_t loss;
+				rss_ring_get_loss(s->ring, &loss);
+				cJSON_AddNumberToObject(item, "drop_source",
+							(double)loss.drop_source);
+				cJSON_AddNumberToObject(item, "drop_publish",
+							(double)loss.drop_publish);
+				cJSON_AddNumberToObject(item, "src_seq_resets",
+							(double)loss.src_seq_resets);
+			}
 			cJSON_AddItemToArray(arr, item);
 		}
 		cJSON_AddStringToObject(cfg, "config_path", st->config_path);

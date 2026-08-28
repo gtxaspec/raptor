@@ -32,7 +32,7 @@ static void publish_frame(rss_ring_t *r, const uint8_t *data, uint32_t len, int6
 			  uint16_t nal_type, bool is_key)
 {
 	rss_iov_t iov = {.data = data, .length = len};
-	rss_ring_publish_iov(r, &iov, 1, ts, nal_type, is_key ? 1 : 0);
+	rss_ring_publish_iov(r, &iov, 1, ts, nal_type, is_key ? 1 : 0, RSS_SRC_SEQ_NONE);
 }
 
 /*
@@ -62,8 +62,8 @@ TEST ring_arena_wrap_invalidates_overlapped_slot(void)
 	ASSERT(w);
 	uint8_t frame[1500];
 	memset(frame, 0xAB, sizeof(frame));
-	ASSERT_EQ(0, rss_ring_publish(w, frame, sizeof(frame), 1000, 0, 1));
-	ASSERT_EQ(0, rss_ring_publish(w, frame, sizeof(frame), 2000, 0, 1));
+	ASSERT_EQ(0, rss_ring_publish(w, frame, sizeof(frame), 1000, 0, 1, RSS_SRC_SEQ_NONE));
+	ASSERT_EQ(0, rss_ring_publish(w, frame, sizeof(frame), 2000, 0, 1, RSS_SRC_SEQ_NONE));
 
 	rss_ring_t *r = rss_ring_open("test_arwrap");
 	ASSERT(r);
@@ -74,7 +74,7 @@ TEST ring_arena_wrap_invalidates_overlapped_slot(void)
 
 	/* Third publish wraps to offset 0 and overwrites frame 1's bytes. */
 	memset(frame, 0xCD, sizeof(frame));
-	ASSERT_EQ(0, rss_ring_publish(w, frame, sizeof(frame), 3000, 0, 1));
+	ASSERT_EQ(0, rss_ring_publish(w, frame, sizeof(frame), 3000, 0, 1, RSS_SRC_SEQ_NONE));
 
 	/* Reading the overlapped slot must report overflow, not hand back
 	 * a "valid" copy of clobbered bytes. */
@@ -666,7 +666,8 @@ TEST ring_producer_survives_recreate_larger(void)
 	memset(payload, 0x5A, sizeof(payload));
 	/* Larger than the old mapping's whole data region, smaller than
 	 * the new one's: the size the header now advertises. */
-	int ret = rss_ring_publish(old, payload, sizeof(payload), 1000, 0x14, false);
+	int ret = rss_ring_publish(old, payload, sizeof(payload), 1000, 0x14, false,
+				   RSS_SRC_SEQ_NONE);
 	ASSERT(ret != 0);
 
 	rss_ring_destroy(fresh);
@@ -686,7 +687,7 @@ TEST ring_refmode_producer_superseded(void)
 	ASSERT_EQ(0, rss_ring_enable_refmode(old, 65536, 0, 2, 32768));
 
 	/* Publishing works while this handle owns the ring. */
-	ASSERT_EQ(0, rss_ring_publish_ref(old, 0, 1024, 5000, 0x14, false, 0));
+	ASSERT_EQ(0, rss_ring_publish_ref(old, 0, 1024, 5000, 0x14, false, 0, RSS_SRC_SEQ_NONE));
 
 	/* Someone re-creates it with more slots; our slot array is still
 	 * the old, smaller one. */
@@ -694,7 +695,8 @@ TEST ring_refmode_producer_superseded(void)
 	ASSERT(fresh);
 	ASSERT_EQ(0, rss_ring_enable_refmode(fresh, 65536, 0, 2, 32768));
 
-	ASSERT_EQ(-EPIPE, rss_ring_publish_ref(old, 0, 1024, 6000, 0x14, false, 0));
+	ASSERT_EQ(-EPIPE,
+		  rss_ring_publish_ref(old, 0, 1024, 6000, 0x14, false, 0, RSS_SRC_SEQ_NONE));
 
 	rss_ring_destroy(fresh);
 	rss_ring_destroy(old);
@@ -735,7 +737,7 @@ TEST ring_refmode_remap_after_region_swap(void)
 	ASSERT(w);
 	ASSERT(make_enc_shm("test_refswap", 65536, 0xAA));
 	ASSERT_EQ(0, rss_ring_enable_refmode(w, 65536, 0, 2, 32768));
-	ASSERT_EQ(0, rss_ring_publish_ref(w, 0, 64, 1000, 0x14, true, 0));
+	ASSERT_EQ(0, rss_ring_publish_ref(w, 0, 64, 1000, 0x14, true, 0, RSS_SRC_SEQ_NONE));
 
 	rss_ring_t *rd = rss_ring_open("test_refswap");
 	ASSERT(rd);
@@ -753,7 +755,7 @@ TEST ring_refmode_remap_after_region_swap(void)
 	 * re-enabled refmode. The old mapping is now a lie. */
 	ASSERT(make_enc_shm("test_refswap", 131072, 0xBB));
 	ASSERT_EQ(0, rss_ring_enable_refmode(w, 131072, 0, 2, 65536));
-	ASSERT_EQ(0, rss_ring_publish_ref(w, 0, 64, 2000, 0x14, true, 0));
+	ASSERT_EQ(0, rss_ring_publish_ref(w, 0, 64, 2000, 0x14, true, 0, RSS_SRC_SEQ_NONE));
 
 	ASSERT_EQ(0, rss_ring_read(rd, &seq, buf, sizeof(buf), &len, &meta));
 	ASSERT_EQ(64, (int)len);
@@ -780,11 +782,13 @@ TEST ring_open_handle_cannot_publish(void)
 	ASSERT(opened);
 
 	uint8_t data[] = {0x01, 0x02};
-	ASSERT_EQ(-EINVAL, rss_ring_publish(opened, data, sizeof(data), 1000, 0x14, false));
+	ASSERT_EQ(-EINVAL, rss_ring_publish(opened, data, sizeof(data), 1000, 0x14, false,
+					    RSS_SRC_SEQ_NONE));
 	/* A create on the same name does yield a producer handle. */
 	rss_ring_t *taken = rss_ring_create("test_ownpub", 4, 4096);
 	ASSERT(taken);
-	ASSERT_EQ(0, rss_ring_publish(taken, data, sizeof(data), 2000, 0x14, false));
+	ASSERT_EQ(0,
+		  rss_ring_publish(taken, data, sizeof(data), 2000, 0x14, false, RSS_SRC_SEQ_NONE));
 
 	rss_ring_close(opened);
 	rss_ring_destroy(taken);

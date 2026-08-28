@@ -45,8 +45,7 @@ BackchannelSink *BackchannelSink::createNew(UsageEnvironment &env)
 	return new BackchannelSink(env);
 }
 
-BackchannelSink::BackchannelSink(UsageEnvironment &env)
-	: MediaSink(env), fSpeakerRing(NULL)
+BackchannelSink::BackchannelSink(UsageEnvironment &env) : MediaSink(env), fSpeakerRing(NULL)
 {
 }
 
@@ -60,8 +59,8 @@ Boolean BackchannelSink::continuePlaying()
 {
 	if (!fSource)
 		return False;
-	fSource->getNextFrame(fReceiveBuffer, sizeof(fReceiveBuffer),
-			      afterGettingFrame, this, onSourceClosure, this);
+	fSource->getNextFrame(fReceiveBuffer, sizeof(fReceiveBuffer), afterGettingFrame, this,
+			      onSourceClosure, this);
 	return True;
 }
 
@@ -96,8 +95,8 @@ void BackchannelSink::processFrame(unsigned frameSize)
 		pcm[i * 2] = s;
 		pcm[i * 2 + 1] = s;
 	}
-	rss_ring_publish(fSpeakerRing, (const uint8_t *)pcm, n * 4,
-			 rss_timestamp_us(), 0, 0);
+	rss_ring_publish(fSpeakerRing, (const uint8_t *)pcm, n * 4, rss_timestamp_us(), 0, 0,
+			 RSD555_SRC_SEQ_NONE);
 }
 
 /* ================================================================
@@ -105,10 +104,8 @@ void BackchannelSink::processFrame(unsigned frameSize)
  * ================================================================ */
 
 BackchannelStreamState::BackchannelStreamState()
-	: rtpSource(NULL), sink(NULL), rtcpInstance(NULL),
-	  rtpGroupsock(NULL), rtcpGroupsock(NULL),
-	  tcpSocketNum(-1), rtpChannelId(0), rtcpChannelId(0),
-	  tlsState(NULL)
+    : rtpSource(NULL), sink(NULL), rtcpInstance(NULL), rtpGroupsock(NULL), rtcpGroupsock(NULL),
+      tcpSocketNum(-1), rtpChannelId(0), rtcpChannelId(0), tlsState(NULL)
 {
 	gethostname(cname, sizeof(cname));
 	cname[sizeof(cname) - 1] = '\0';
@@ -146,7 +143,7 @@ BackchannelSubsession *BackchannelSubsession::createNew(UsageEnvironment &env)
 }
 
 BackchannelSubsession::BackchannelSubsession(UsageEnvironment &env)
-	: ServerMediaSubsession(env), fSDPLines(NULL)
+    : ServerMediaSubsession(env), fSDPLines(NULL)
 {
 }
 
@@ -177,15 +174,11 @@ char const *BackchannelSubsession::sdpLines(int /*addressFamily*/)
 }
 
 void BackchannelSubsession::getStreamParameters(
-	unsigned clientSessionId,
-	struct sockaddr_storage const &clientAddress,
-	Port const & /*clientRTPPort*/, Port const & /*clientRTCPPort*/,
-	int tcpSocketNum, unsigned char rtpChannelId,
-	unsigned char rtcpChannelId, TLSState *tlsState,
-	struct sockaddr_storage &destinationAddress,
-	u_int8_t & /*destinationTTL*/, Boolean &isMulticast,
-	Port &serverRTPPort, Port &serverRTCPPort,
-	void *&streamToken)
+	unsigned clientSessionId, struct sockaddr_storage const &clientAddress,
+	Port const & /*clientRTPPort*/, Port const & /*clientRTCPPort*/, int tcpSocketNum,
+	unsigned char rtpChannelId, unsigned char rtcpChannelId, TLSState *tlsState,
+	struct sockaddr_storage &destinationAddress, u_int8_t & /*destinationTTL*/,
+	Boolean &isMulticast, Port &serverRTPPort, Port &serverRTCPPort, void *&streamToken)
 {
 	isMulticast = False;
 	streamToken = NULL;
@@ -213,9 +206,8 @@ void BackchannelSubsession::getStreamParameters(
 	state->rtcpGroupsock = new Groupsock(envir(), nullAddr, dummyPort, 0);
 
 	/* RTP source — receives PCMU from client */
-	state->rtpSource = SimpleRTPSource::createNew(
-		envir(), state->rtpGroupsock, 0, 8000,
-		"audio/PCMU", 0, False);
+	state->rtpSource = SimpleRTPSource::createNew(envir(), state->rtpGroupsock, 0, 8000,
+						      "audio/PCMU", 0, False);
 	if (!state->rtpSource) {
 		delete state;
 		return;
@@ -231,22 +223,21 @@ void BackchannelSubsession::getStreamParameters(
 	}
 
 	/* RTCP for receiver reports */
-	state->rtcpInstance = RTCPInstance::createNew(
-		envir(), state->rtcpGroupsock, 64,
-		(unsigned char *)state->cname,
-		NULL, state->rtpSource, False);
+	state->rtcpInstance = RTCPInstance::createNew(envir(), state->rtcpGroupsock, 64,
+						      (unsigned char *)state->cname, NULL,
+						      state->rtpSource, False);
 
 	streamToken = (void *)state;
-	RSS_DEBUG("backchannel SETUP: session=%u tcp=%d ch=%u/%u",
-		  clientSessionId, tcpSocketNum, rtpChannelId, rtcpChannelId);
+	RSS_DEBUG("backchannel SETUP: session=%u tcp=%d ch=%u/%u", clientSessionId, tcpSocketNum,
+		  rtpChannelId, rtcpChannelId);
 }
 
-void BackchannelSubsession::startStream(
-	unsigned /*clientSessionId*/, void *streamToken,
-	TaskFunc * /*rtcpRRHandler*/, void * /*rtcpRRHandlerClientData*/,
-	unsigned short &rtpSeqNum, unsigned &rtpTimestamp,
-	ServerRequestAlternativeByteHandler *handler,
-	void *handlerClientData)
+void BackchannelSubsession::startStream(unsigned /*clientSessionId*/, void *streamToken,
+					TaskFunc * /*rtcpRRHandler*/,
+					void * /*rtcpRRHandlerClientData*/,
+					unsigned short &rtpSeqNum, unsigned &rtpTimestamp,
+					ServerRequestAlternativeByteHandler *handler,
+					void *handlerClientData)
 {
 	BackchannelStreamState *state = (BackchannelStreamState *)streamToken;
 	if (!state || !state->sink || !state->rtpSource)
@@ -257,21 +248,18 @@ void BackchannelSubsession::startStream(
 
 	/* Wire up TCP interleaved receive */
 	if (state->tcpSocketNum >= 0) {
-		state->rtpSource->setStreamSocket(
-			state->tcpSocketNum, state->rtpChannelId,
-			state->tlsState);
+		state->rtpSource->setStreamSocket(state->tcpSocketNum, state->rtpChannelId,
+						  state->tlsState);
 		if (state->rtcpInstance)
-			state->rtcpInstance->addStreamSocket(
-				state->tcpSocketNum, state->rtcpChannelId,
-				state->tlsState);
+			state->rtcpInstance->addStreamSocket(state->tcpSocketNum,
+							     state->rtcpChannelId, state->tlsState);
 		if (handler) {
 			RTPInterface::setServerRequestAlternativeByteHandler(
-				envir(), state->tcpSocketNum,
-				handler, handlerClientData);
+				envir(), state->tcpSocketNum, handler, handlerClientData);
 		}
 		RSS_DEBUG("backchannel: tcp=%d rtp_ch=%u rtcp_ch=%u handler=%p",
-			  state->tcpSocketNum, state->rtpChannelId,
-			  state->rtcpChannelId, (void *)handler);
+			  state->tcpSocketNum, state->rtpChannelId, state->rtcpChannelId,
+			  (void *)handler);
 	}
 
 	/* Start receiving audio */
@@ -281,22 +269,19 @@ void BackchannelSubsession::startStream(
 		RSS_INFO("backchannel: streaming started");
 }
 
-void BackchannelSubsession::deleteStream(unsigned /*clientSessionId*/,
-					  void *&streamToken)
+void BackchannelSubsession::deleteStream(unsigned /*clientSessionId*/, void *&streamToken)
 {
 	BackchannelStreamState *state = (BackchannelStreamState *)streamToken;
 	delete state;
 	streamToken = NULL;
 }
 
-void BackchannelSubsession::pauseStream(unsigned /*clientSessionId*/,
-					 void * /*streamToken*/)
+void BackchannelSubsession::pauseStream(unsigned /*clientSessionId*/, void * /*streamToken*/)
 {
 }
 
-void BackchannelSubsession::getRTPSinkandRTCP(void * /*streamToken*/,
-					       RTPSink *&rtpSink,
-					       RTCPInstance *&rtcp)
+void BackchannelSubsession::getRTPSinkandRTCP(void * /*streamToken*/, RTPSink *&rtpSink,
+					      RTCPInstance *&rtcp)
 {
 	rtpSink = NULL;
 	rtcp = NULL;

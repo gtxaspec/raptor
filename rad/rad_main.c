@@ -1356,7 +1356,8 @@ int main(int argc, char **argv)
 						    encode_buf_size, ts);
 
 		if (out_len > 0 && ring)
-			rss_ring_publish(ring, encode_buf, out_len, ts, ctrl_ctx.codec_id, 0);
+			rss_ring_publish(ring, encode_buf, out_len, ts, ctrl_ctx.codec_id, 0,
+					 RSS_SRC_SEQ_NONE);
 
 		RSS_HAL_CALL(ops, audio_release_frame, hal_ctx, ai_dev, 0, &frame);
 

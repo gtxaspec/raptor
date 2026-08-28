@@ -151,7 +151,8 @@ static int aac_encode(rad_codec_ctx_t *ctx, const int16_t *pcm, int samples, uin
 		}
 
 		if (len > 0 && ctx->ring)
-			rss_ring_publish(ctx->ring, out, len, ts, ctx->codec_id, 0);
+			rss_ring_publish(ctx->ring, out, len, ts, ctx->codec_id, 0,
+					 RSS_SRC_SEQ_NONE);
 
 		src += chunk;
 		remaining -= chunk;

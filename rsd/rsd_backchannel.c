@@ -304,7 +304,8 @@ static void bc_handle_g711(rsd_bc_dec_t *d, rss_ring_t *ring, uint8_t pt, const 
 		pcm[i * 2 + 1] = s;
 	}
 	bc_note_codec(d, pt);
-	rss_ring_publish(ring, (const uint8_t *)pcm, (uint32_t)(n * 4), rss_timestamp_us(), 0, 0);
+	rss_ring_publish(ring, (const uint8_t *)pcm, (uint32_t)(n * 4), rss_timestamp_us(), 0, 0,
+			 RSS_SRC_SEQ_NONE);
 }
 
 /* L16/16000/1: network byte order to host, already at ring rate. */
@@ -319,7 +320,8 @@ static void bc_handle_l16(rsd_bc_dec_t *d, rss_ring_t *ring, const uint8_t *payl
 	for (int i = 0; i < n; i++)
 		pcm[i] = (int16_t)(((uint16_t)payload[i * 2] << 8) | payload[i * 2 + 1]);
 	bc_note_codec(d, RSD_BC_PT_L16);
-	rss_ring_publish(ring, (const uint8_t *)pcm, (uint32_t)(n * 2), rss_timestamp_us(), 0, 0);
+	rss_ring_publish(ring, (const uint8_t *)pcm, (uint32_t)(n * 2), rss_timestamp_us(), 0, 0,
+			 RSS_SRC_SEQ_NONE);
 }
 
 static bool bc_warn_due(rsd_bc_dec_t *d)
@@ -369,7 +371,8 @@ static void bc_handle_opus(rsd_bc_dec_t *d, rss_ring_t *ring, const uint8_t *pay
 		return;
 	}
 	bc_note_codec(d, RSD_BC_PT_OPUS);
-	rss_ring_publish(ring, (const uint8_t *)pcm, (uint32_t)(n * 2), rss_timestamp_us(), 0, 0);
+	rss_ring_publish(ring, (const uint8_t *)pcm, (uint32_t)(n * 2), rss_timestamp_us(), 0, 0,
+			 RSS_SRC_SEQ_NONE);
 }
 #endif /* RAPTOR_OPUS */
 
@@ -435,7 +438,7 @@ static void bc_aac_decode_au(rsd_bc_dec_t *d, rss_ring_t *ring, const uint8_t *a
 		return;
 	bc_note_codec(d, RSD_BC_PT_AAC);
 	rss_ring_publish(ring, (const uint8_t *)pcm, (uint32_t)(samples * 2), rss_timestamp_us(), 0,
-			 0);
+			 0, RSS_SRC_SEQ_NONE);
 }
 
 static void bc_handle_aac(rsd_bc_dec_t *d, rss_ring_t *ring, uint32_t rtp_ts,

@@ -542,7 +542,7 @@ int main(int argc, char **argv)
 				if (len > 0)
 					rss_ring_publish(st.video_ring, st.scratch, (uint32_t)len,
 							 rss_timestamp_us(), mf->nal_type,
-							 mf->is_key);
+							 mf->is_key, RSS_SRC_SEQ_NONE);
 				break;
 			}
 		} else if (st.frames) {
@@ -552,7 +552,7 @@ int main(int argc, char **argv)
 					continue;
 				rss_ring_publish(st.video_ring, st.video_data + f->offset,
 						 f->length, rss_timestamp_us(), f->nal_type,
-						 f->is_key);
+						 f->is_key, RSS_SRC_SEQ_NONE);
 				break;
 			}
 		}
@@ -588,7 +588,8 @@ int main(int argc, char **argv)
 					if (len > 0)
 						rss_ring_publish(st.video_ring, st.scratch,
 								 (uint32_t)len, st.epoch + rel,
-								 mf->nal_type, mf->is_key);
+								 mf->nal_type, mf->is_key,
+								 RSS_SRC_SEQ_NONE);
 					st.frame_pos++;
 					st.video_published++;
 					did_work = true;
@@ -613,7 +614,7 @@ int main(int argc, char **argv)
 						rss_ring_publish(st.audio_ring, st.encode_buf,
 								 (uint32_t)encoded, now,
 								 (uint16_t)st.audio_codec.codec_id,
-								 0);
+								 0, RSS_SRC_SEQ_NONE);
 					st.audio_pos += chunk_bytes;
 					st.audio_published++;
 					did_work = true;
@@ -626,7 +627,8 @@ int main(int argc, char **argv)
 					rss_ring_publish(st.audio_ring,
 							 st.mp4.file_data + af->file_offset,
 							 af->length, st.epoch + rel,
-							 (uint16_t)st.mp4.audio_codec_id, 0);
+							 (uint16_t)st.mp4.audio_codec_id, 0,
+							 RSS_SRC_SEQ_NONE);
 					st.mp4_audio_pos++;
 					st.audio_published++;
 					did_work = true;
@@ -643,7 +645,8 @@ int main(int argc, char **argv)
 									 1000000LL /
 									 st.settings.fps;
 					rss_ring_publish(st.video_ring, st.video_data + f->offset,
-							 f->length, pts, f->nal_type, f->is_key);
+							 f->length, pts, f->nal_type, f->is_key,
+							 RSS_SRC_SEQ_NONE);
 					st.frame_pos++;
 					st.video_published++;
 					did_work = true;
@@ -667,7 +670,7 @@ int main(int argc, char **argv)
 						rss_ring_publish(st.audio_ring, st.encode_buf,
 								 (uint32_t)encoded, now,
 								 (uint16_t)st.audio_codec.codec_id,
-								 0);
+								 0, RSS_SRC_SEQ_NONE);
 					st.audio_pos += chunk_bytes;
 					st.audio_published++;
 					did_work = true;
@@ -683,7 +686,7 @@ int main(int argc, char **argv)
 				rfs_mp4_frame_t *af = &st.mp4.audio_frames[st.mp4_audio_pos];
 				rss_ring_publish(st.audio_ring, st.mp4.file_data + af->file_offset,
 						 af->length, now, (uint16_t)st.mp4.audio_codec_id,
-						 0);
+						 0, RSS_SRC_SEQ_NONE);
 				st.mp4_audio_pos++;
 				st.audio_published++;
 			}

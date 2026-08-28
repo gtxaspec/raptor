@@ -190,10 +190,12 @@ int main(int argc, char **argv)
 	/* Publish initial JPEG frames so RHD has data immediately */
 	if (jpeg0)
 		for (int i = 0; i < 4; i++)
-			rss_ring_publish(jpeg0, fake_jpeg, sizeof(fake_jpeg), i * 40000, 0x30, 1);
+			rss_ring_publish(jpeg0, fake_jpeg, sizeof(fake_jpeg), i * 40000, 0x30, 1,
+					 RSS_SRC_SEQ_NONE);
 	if (jpeg1)
 		for (int i = 0; i < 4; i++)
-			rss_ring_publish(jpeg1, fake_jpeg, sizeof(fake_jpeg), i * 40000, 0x30, 1);
+			rss_ring_publish(jpeg1, fake_jpeg, sizeof(fake_jpeg), i * 40000, 0x30, 1,
+					 RSS_SRC_SEQ_NONE);
 
 	/* Build IDR frame: [SPS][PPS][IDR_slice] */
 	uint8_t idr_frame[4096];
@@ -233,26 +235,28 @@ int main(int argc, char **argv)
 
 		if (!skip_video) {
 			const uint8_t *data = is_key ? idr_frame : p_frame;
-			uint32_t len = is_key ? (uint32_t)sizeof(idr_frame)
-					      : (uint32_t)sizeof(p_frame);
+			uint32_t len =
+				is_key ? (uint32_t)sizeof(idr_frame) : (uint32_t)sizeof(p_frame);
 			uint16_t nal = is_key ? 0x13 : 0x14;
 
 			rss_iov_t viov = {.data = data, .length = len};
 			if (main_ring)
-				rss_ring_publish_iov(main_ring, &viov, 1, vts, nal,
-						     is_key ? 1 : 0);
+				rss_ring_publish_iov(main_ring, &viov, 1, vts, nal, is_key ? 1 : 0,
+						     RSS_SRC_SEQ_NONE);
 			if (sub_ring)
-				rss_ring_publish_iov(sub_ring, &viov, 1, vts, nal,
-						     is_key ? 1 : 0);
+				rss_ring_publish_iov(sub_ring, &viov, 1, vts, nal, is_key ? 1 : 0,
+						     RSS_SRC_SEQ_NONE);
 		}
 
 		/* Publish JPEG snapshot at 5fps (every 5th video frame) */
 		if (frame_num % 5 == 0) {
 			rss_iov_t jiov = {.data = fake_jpeg, .length = sizeof(fake_jpeg)};
 			if (jpeg0)
-				rss_ring_publish_iov(jpeg0, &jiov, 1, vts, 0x30, 1);
+				rss_ring_publish_iov(jpeg0, &jiov, 1, vts, 0x30, 1,
+						     RSS_SRC_SEQ_NONE);
 			if (jpeg1)
-				rss_ring_publish_iov(jpeg1, &jiov, 1, vts, 0x30, 1);
+				rss_ring_publish_iov(jpeg1, &jiov, 1, vts, 0x30, 1,
+						     RSS_SRC_SEQ_NONE);
 		}
 
 		/* 2 audio frames per video frame (20ms audio x 2 = 40ms = 1 video frame) */
@@ -261,7 +265,8 @@ int main(int argc, char **argv)
 						    frame_num * 2 + a);
 			if (alen > 0 && audio) {
 				rss_iov_t aiov = {.data = audio_frame, .length = (uint32_t)alen};
-				rss_ring_publish_iov(audio, &aiov, 1, ats, audio_codec, 0);
+				rss_ring_publish_iov(audio, &aiov, 1, ats, audio_codec, 0,
+						     RSS_SRC_SEQ_NONE);
 			}
 			ats += 20000; /* 20ms in us */
 		}

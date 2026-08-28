@@ -239,7 +239,7 @@ static void rwd_bc_recv_t_on_audio(VSelf, uint8_t payload_type, uint32_t timesta
 			pcm_up[i * 2 + 1] = s;
 		}
 		rss_ring_publish(*ring_ptr, (const uint8_t *)pcm_up, n * 4, rss_timestamp_us(), 0,
-				 0);
+				 0, RSS_SRC_SEQ_NONE);
 	}
 #ifdef RAPTOR_OPUS
 	else if (self->opus_dec && payload.len > 0) {
@@ -253,7 +253,7 @@ static void rwd_bc_recv_t_on_audio(VSelf, uint8_t payload_type, uint32_t timesta
 			for (int i = 0; i < out_samples; i++)
 				pcm16[i] = pcm48[i * 3];
 			rss_ring_publish(*ring_ptr, (const uint8_t *)pcm16, out_samples * 2,
-					 rss_timestamp_us(), 0, 0);
+					 rss_timestamp_us(), 0, 0, RSS_SRC_SEQ_NONE);
 		}
 	}
 #endif

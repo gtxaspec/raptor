@@ -103,6 +103,12 @@ static void print_header(const rss_ring_header_t *hdr, const char *name)
 		atomic_load(&hdr->reader_count), atomic_load(&hdr->reader_pids[0]),
 		atomic_load(&hdr->reader_pids[1]), atomic_load(&hdr->reader_pids[2]),
 		atomic_load(&hdr->reader_pids[3]));
+	uint32_t last = atomic_load((_Atomic uint32_t *)&hdr->src_seq_last);
+	if (last != RSS_SRC_SEQ_NONE)
+		fprintf(stderr, "  Src seq:   %u (drop_source=%u drop_publish=%u resets=%u)\n",
+			last, atomic_load((_Atomic uint32_t *)&hdr->drop_source),
+			atomic_load((_Atomic uint32_t *)&hdr->drop_publish),
+			atomic_load((_Atomic uint32_t *)&hdr->src_seq_resets));
 }
 
 static int64_t clock_monotonic_raw_us(void)
