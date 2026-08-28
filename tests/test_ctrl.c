@@ -436,6 +436,23 @@ TEST set_gop_no_state_change_on_hal_failure(void)
 	PASS();
 }
 
+/* Backends present sparse vtables: an op a backend lacks is a NULL
+ * slot, RSS_HAL_CALL answers NOTSUP, and the ctrl surface reports it
+ * with no per-backend verb allowlist anywhere. */
+TEST sparse_backend_slot_answers_notsup(void)
+{
+	setup();
+	int (*saved)(void *, int, uint32_t) = ops.enc_set_gop;
+	ops.enc_set_gop = NULL;
+	call("{\"cmd\":\"set-gop\",\"channel\":0,\"value\":25}");
+	ASSERT(strstr(resp, "not supported") != NULL);
+	ops.enc_set_gop = saved;
+	call("{\"cmd\":\"set-gop\",\"channel\":0,\"value\":25}");
+	ASSERT(strstr(resp, "\"status\":\"ok\"") != NULL);
+	teardown();
+	PASS();
+}
+
 TEST set_fps_updates_state_on_success(void)
 {
 	setup();
@@ -1211,6 +1228,7 @@ SUITE(ctrl_suite)
 	RUN_TEST(set_bitrate_updates_state_on_success);
 	RUN_TEST(set_bitrate_no_state_change_on_hal_failure);
 	RUN_TEST(set_gop_no_state_change_on_hal_failure);
+	RUN_TEST(sparse_backend_slot_answers_notsup);
 	RUN_TEST(set_fps_updates_state_on_success);
 	RUN_TEST(set_fps_resets_a_fractional_den);
 	RUN_TEST(set_fps_publishes_the_channel_it_changed);

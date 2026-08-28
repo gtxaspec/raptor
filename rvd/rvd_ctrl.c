@@ -69,7 +69,7 @@ static int fmt_hal_result(char *buf, int bufsz, int ret)
 	if (ret == 0)
 		return rss_ctrl_resp_ok(buf, bufsz);
 	else if (ret == RSS_ERR_NOTSUP)
-		return rss_ctrl_resp_error(buf, bufsz, "not supported on this SoC");
+		return rss_ctrl_resp_error(buf, bufsz, "not supported by this backend/SoC");
 	else {
 		char reason[32];
 		snprintf(reason, sizeof(reason), "failed (%d)", ret);
@@ -189,11 +189,7 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 			 * ask for, and an encoder may reject the request. */
 			if (st->streams[i].is_jpeg)
 				continue;
-			if (st->v4l2_backend)
-				rvd_v4l2_h264_request_idr(st->v4l2);
-			else
-				RSS_HAL_CALL(st->ops, enc_request_idr, st->hal_ctx,
-					     st->streams[i].chn);
+			RSS_HAL_CALL(st->ops, enc_request_idr, st->hal_ctx, st->streams[i].chn);
 		}
 		return rss_ctrl_resp_ok(resp, resp_size);
 	}
@@ -331,9 +327,8 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
 		    chn < st->stream_count) {
 			uint32_t avg = 0;
-			if (!st->v4l2_backend)
-				RSS_HAL_CALL(st->ops, enc_get_avg_bitrate, st->hal_ctx,
-					     st->streams[chn].chn, &avg);
+			RSS_HAL_CALL(st->ops, enc_get_avg_bitrate, st->hal_ctx,
+				     st->streams[chn].chn, &avg);
 			cJSON *r = cJSON_CreateObject();
 			cJSON_AddStringToObject(r, "status", "ok");
 			cJSON_AddNumberToObject(r, "bitrate",
@@ -349,9 +344,8 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 		    chn < st->stream_count) {
 			uint32_t num = st->streams[chn].enc_cfg.fps_num;
 			uint32_t den = st->streams[chn].enc_cfg.fps_den;
-			if (!st->v4l2_backend)
-				RSS_HAL_CALL(st->ops, enc_get_fps, st->hal_ctx,
-					     st->streams[chn].chn, &num, &den);
+			RSS_HAL_CALL(st->ops, enc_get_fps, st->hal_ctx, st->streams[chn].chn, &num,
+				     &den);
 			cJSON *r = cJSON_CreateObject();
 			cJSON_AddStringToObject(r, "status", "ok");
 			cJSON_AddNumberToObject(r, "fps_num", (double)num);
@@ -418,9 +412,8 @@ static int handle_encoder_cmd(const char *cmd, const char *cmd_json, rvd_state_t
 		if (rss_json_get_int(cmd_json, "channel", &chn) == 0 && chn >= 0 &&
 		    chn < st->stream_count) {
 			uint32_t gop = st->streams[chn].enc_cfg.gop_length;
-			if (!st->v4l2_backend)
-				RSS_HAL_CALL(st->ops, enc_get_gop_attr, st->hal_ctx,
-					     st->streams[chn].chn, &gop);
+			RSS_HAL_CALL(st->ops, enc_get_gop_attr, st->hal_ctx, st->streams[chn].chn,
+				     &gop);
 			cJSON *r = cJSON_CreateObject();
 			cJSON_AddStringToObject(r, "status", "ok");
 			cJSON_AddNumberToObject(r, "gop", (double)gop);
@@ -1444,7 +1437,7 @@ static int do_stream_restart_ex(rvd_state_t *st, int chn, char *resp, int resp_s
 	if (has_ivs)
 		atomic_store(&st->ivs_active, true); /* re-enable for bind chain */
 
-	if (recreate_fs && !st->v4l2_backend) {
+	if (recreate_fs && st->hal_caps && st->hal_caps->has_framesource) {
 		/* Framesource channels are normally created once for the
 		 * process lifetime; a buffer-count change only lands by
 		 * building the channel again while the bind chain is down. */
@@ -2376,9 +2369,7 @@ static int handle_config_cmd(const char *cmd, const char *cmd_json, rvd_state_t 
 		for (int i = 0; i < st->stream_count; i++) {
 			rvd_stream_t *s = &st->streams[i];
 			uint32_t avg_br = 0;
-			if (!st->v4l2_backend)
-				RSS_HAL_CALL(st->ops, enc_get_avg_bitrate, st->hal_ctx, s->chn,
-					     &avg_br);
+			RSS_HAL_CALL(st->ops, enc_get_avg_bitrate, st->hal_ctx, s->chn, &avg_br);
 			cJSON *item = cJSON_CreateObject();
 			cJSON_AddNumberToObject(item, "chn", (double)s->chn);
 			cJSON_AddNumberToObject(item, "w", (double)s->enc_cfg.width);
@@ -2456,9 +2447,8 @@ static int handle_config_cmd(const char *cmd, const char *cmd_json, rvd_state_t 
 		cJSON *arr = cJSON_AddArrayToObject(r, "streams");
 		for (int i = 0; i < st->stream_count; i++) {
 			uint32_t avg_br = 0;
-			if (!st->v4l2_backend)
-				RSS_HAL_CALL(st->ops, enc_get_avg_bitrate, st->hal_ctx,
-					     st->streams[i].chn, &avg_br);
+			RSS_HAL_CALL(st->ops, enc_get_avg_bitrate, st->hal_ctx, st->streams[i].chn,
+				     &avg_br);
 			cJSON *item = cJSON_CreateObject();
 			cJSON_AddNumberToObject(item, "chn", (double)st->streams[i].chn);
 			cJSON_AddNumberToObject(item, "w", (double)st->streams[i].enc_cfg.width);
@@ -2495,17 +2485,6 @@ int rvd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, vo
 	char cmd[64];
 	if (rss_json_get_str(cmd_json, "cmd", cmd, sizeof(cmd)) != 0)
 		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "missing cmd");
-
-	/* The standalone backend has no initialized IMP HAL graph. Keep its small
-	 * control surface explicit so a web/API request cannot fall through to an
-	 * operation on uninitialized SDK state. */
-	if (st->v4l2_backend && strcmp(cmd, "request-idr") != 0 &&
-	    strcmp(cmd, "get-bitrate") != 0 && strcmp(cmd, "get-fps") != 0 &&
-	    strcmp(cmd, "get-gop") != 0 && strcmp(cmd, "get-qp-bounds") != 0 &&
-	    strcmp(cmd, "get-rc-mode") != 0 && strcmp(cmd, "config-show") != 0 &&
-	    strcmp(cmd, "status") != 0)
-		return rss_ctrl_resp_error(resp_buf, resp_buf_size,
-					   "not supported by the V4L2 backend");
 
 	if ((len = handle_encoder_cmd(cmd, cmd_json, st, resp_buf, resp_buf_size)) > 0)
 		return len;

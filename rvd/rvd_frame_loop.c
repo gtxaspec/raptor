@@ -34,14 +34,10 @@ static void publish_utc_mapping(rvd_state_t *st, rss_ring_t *ring)
 {
 	int64_t media_a = 0, media_b = 0;
 
-	if (st->v4l2_backend)
-		media_a = rss_timestamp_us();
-	else if (RSS_HAL_CALL(st->ops, sys_get_timestamp, st->hal_ctx, &media_a) != RSS_OK)
+	if (RSS_HAL_CALL(st->ops, sys_get_timestamp, st->hal_ctx, &media_a) != RSS_OK)
 		return;
 	int64_t wall = rss_wallclock_us();
-	if (st->v4l2_backend)
-		media_b = rss_timestamp_us();
-	else if (RSS_HAL_CALL(st->ops, sys_get_timestamp, st->hal_ctx, &media_b) != RSS_OK)
+	if (RSS_HAL_CALL(st->ops, sys_get_timestamp, st->hal_ctx, &media_b) != RSS_OK)
 		return;
 	if (media_b - media_a > 1000)
 		return; /* preempted mid-sample, retry next interval */
@@ -90,9 +86,7 @@ void *rvd_encoder_thread(void *arg)
 	 * each configured frame. Skipped at near-continuous rates
 	 * where start/stop churn would exceed the savings.
 	 */
-	const rss_hal_caps_t *caps = NULL;
-	if (!st->v4l2_backend && st->ops->get_caps)
-		caps = st->ops->get_caps(st->hal_ctx);
+	const rss_hal_caps_t *caps = st->ops->get_caps ? st->ops->get_caps(st->hal_ctx) : NULL;
 	int64_t pulse_interval_us = 0;
 	bool pulse =
 		s->is_jpeg && s->jpeg_idle && caps && caps->jpeg_pulse && s->enc_cfg.fps_num > 0;
@@ -177,20 +171,12 @@ void *rvd_encoder_thread(void *arg)
 		 * consulting the ring's codec, and this loop is the only place
 		 * that acts on it, so one gate here covers every raiser.
 		 */
-		if (s->ring && rss_ring_check_idr(s->ring) && !s->is_jpeg) {
-			if (st->v4l2_backend)
-				rvd_v4l2_h264_request_idr(st->v4l2);
-			else
-				RSS_HAL_CALL(st->ops, enc_request_idr, st->hal_ctx, s->chn);
-		}
+		if (s->ring && rss_ring_check_idr(s->ring) && !s->is_jpeg)
+			RSS_HAL_CALL(st->ops, enc_request_idr, st->hal_ctx, s->chn);
 
 		/* Block until encoder has a frame (up to 1 second timeout).
 		 * Each thread blocks independently so channels don't starve. */
-		int ret;
-		if (st->v4l2_backend)
-			ret = rvd_v4l2_h264_poll(st->v4l2, 1000);
-		else
-			ret = RSS_HAL_CALL(st->ops, enc_poll, st->hal_ctx, s->chn, 1000);
+		int ret = RSS_HAL_CALL(st->ops, enc_poll, st->hal_ctx, s->chn, 1000);
 		if (ret != RSS_OK) {
 			/* Timeouts are normal (sensor idle, JPEG on-demand stopped).
 			 * Log on repeated failures to catch flaky sensor/encoder. */
@@ -202,10 +188,7 @@ void *rvd_encoder_thread(void *arg)
 		poll_errors = 0;
 
 		rss_frame_t frame;
-		if (st->v4l2_backend)
-			ret = rvd_v4l2_h264_get_frame(st->v4l2, &frame);
-		else
-			ret = RSS_HAL_CALL(st->ops, enc_get_frame, st->hal_ctx, s->chn, &frame);
+		ret = RSS_HAL_CALL(st->ops, enc_get_frame, st->hal_ctx, s->chn, &frame);
 		if (ret == -EAGAIN)
 			continue; /* no frame this time (empty stream / JPEG fps divider) */
 		if (ret != RSS_OK) {
@@ -286,11 +269,8 @@ void *rvd_encoder_thread(void *arg)
 			    tail->data[tail->length - 1] != 0xD9) {
 				RSS_DEBUG("jpeg chn %d: dropped EOI-less frame (%u bytes)", s->chn,
 					  tail->length);
-				if (st->v4l2_backend)
-					rvd_v4l2_h264_release_frame(st->v4l2, &frame);
-				else
-					RSS_HAL_CALL(st->ops, enc_release_frame, st->hal_ctx,
-						     s->chn, &frame);
+				RSS_HAL_CALL(st->ops, enc_release_frame, st->hal_ctx, s->chn,
+					     &frame);
 				continue;
 			}
 		}
@@ -417,10 +397,7 @@ void *rvd_encoder_thread(void *arg)
 			}
 		}
 
-		if (st->v4l2_backend)
-			rvd_v4l2_h264_release_frame(st->v4l2, &frame);
-		else
-			RSS_HAL_CALL(st->ops, enc_release_frame, st->hal_ctx, s->chn, &frame);
+		RSS_HAL_CALL(st->ops, enc_release_frame, st->hal_ctx, s->chn, &frame);
 
 		frame_count++;
 
@@ -507,7 +484,10 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running)
 		 * Runs in this thread so it serializes with control-socket
 		 * restarts. Explicit nr_vbs in the config is trusted. */
 		int64_t vbs_now = rss_timestamp_us();
-		if (vbs_now - last_vbs_check >= 1000000 && !st->v4l2_backend) {
+		/* The single-buffer fallback recreates framesource channels;
+		 * a backend without the graph has nothing to recreate. */
+		if (vbs_now - last_vbs_check >= 1000000 && st->hal_caps &&
+		    st->hal_caps->has_framesource) {
 			last_vbs_check = vbs_now;
 			for (int i = 0; i < st->stream_count; i++) {
 				rvd_stream_t *s = &st->streams[i];

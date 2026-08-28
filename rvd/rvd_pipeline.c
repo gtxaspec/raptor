@@ -208,14 +208,21 @@ static const char *rc_mode_str(rss_rc_mode_t m)
 static void load_stream_config(rss_config_t *cfg, const char *section, rvd_stream_t *s,
 			       int default_w, int default_h, int default_fps, int default_br);
 
+static int read_sensor_proc_int(int idx, const char *key, int base, int def);
+static int find_active_sensor_proc_index(void);
+static void load_sensor_from_section(rss_config_t *cfg, const char *section,
+				     rss_sensor_config_t *sensor, int proc_idx);
+
 static int rvd_pipeline_init_v4l2(rvd_state_t *st)
 {
+	rss_multi_sensor_config_t multi_cfg = {0};
 	rvd_stream_t *stream = &st->streams[0];
-	const char *device;
 	int ret;
 
-	device = rss_config_get_str(st->cfg, "system", "video_device", "/dev/video0");
-	rss_strlcpy(st->v4l2_device, device, sizeof(st->v4l2_device));
+#ifdef RAPTOR_V4L2_OPENIMP
+	rss_hal_v4l2_set_device(
+		st->hal_ctx, rss_config_get_str(st->cfg, "system", "video_device", "/dev/video0"));
+#endif
 	st->v4l2_backend = true;
 	st->sensor_count = 1;
 	st->stream_count = 1;
@@ -227,7 +234,42 @@ static int rvd_pipeline_init_v4l2(rvd_state_t *st)
 	st->ivs_enabled = false;
 	atomic_store(&st->ivs_active, false);
 
-	load_stream_config(st->cfg, "stream0", stream, 2560, 1440, 25, 8000000);
+	/* The capture node exposes frames from the TX-ISP pipeline, but
+	 * opening it does not bind or start a sensor. Bring up ISP and
+	 * sensor through the same ops->init the IMP path uses. */
+	load_sensor_from_section(st->cfg, "sensor", &multi_cfg.sensors[0], 0);
+	multi_cfg.sensor_count = 1;
+	if (!multi_cfg.sensors[0].name[0] || multi_cfg.sensors[0].i2c_addr == 0) {
+		RSS_FATAL("sensor name/i2c_addr not in config or /proc/jz/sensor");
+		return RSS_ERR;
+	}
+	ret = RSS_HAL_CALL(st->ops, init, st->hal_ctx, &multi_cfg);
+	if (ret != RSS_OK) {
+		RSS_FATAL("HAL init failed: %d", ret);
+		return ret;
+	}
+	st->hal_initialized = true;
+
+	/* Default geometry and cadence from the active sensor registry
+	 * entry; the node has no framesource decimator, so a configured
+	 * rate the sensor does not run at would skew rc, GOP, and every
+	 * downstream clock. */
+	int proc_idx = find_active_sensor_proc_index();
+	int sensor_w = read_sensor_proc_int(proc_idx, "width", 10, 0);
+	int sensor_h = read_sensor_proc_int(proc_idx, "height", 10, 0);
+	if (sensor_w <= 0 || sensor_h <= 0) {
+		sensor_w = 1920;
+		sensor_h = 1080;
+		RSS_WARN("active sensor resolution unknown; using %dx%d", sensor_w, sensor_h);
+	}
+	int sensor_fps = read_sensor_proc_int(proc_idx, "max_fps", 10, 0);
+	if (sensor_fps <= 0)
+		sensor_fps = read_sensor_proc_int(proc_idx, "fps", 10, 0);
+	bool sensor_fps_known = sensor_fps > 0;
+	if (sensor_fps <= 0)
+		sensor_fps = 25;
+
+	load_stream_config(st->cfg, "stream0", stream, sensor_w, sensor_h, sensor_fps, 8000000);
 	stream->fs_chn = 0;
 	stream->chn = 0;
 	stream->sensor_idx = 0;
@@ -235,6 +277,21 @@ static int rvd_pipeline_init_v4l2(rvd_state_t *st)
 	if (stream->enc_cfg.codec != RSS_CODEC_H264) {
 		RSS_FATAL("V4L2 backend currently requires stream0 codec=h264");
 		return RSS_ERR_NOTSUP;
+	}
+	if (sensor_fps_known &&
+	    (stream->enc_cfg.fps_num != (uint32_t)sensor_fps || stream->enc_cfg.fps_den != 1)) {
+		RSS_WARN("V4L2 stream0 rate %u/%u overridden by sensor%d registry rate %d/1",
+			 stream->enc_cfg.fps_num, stream->enc_cfg.fps_den, proc_idx, sensor_fps);
+		stream->fs_cfg.fps_num = (uint32_t)sensor_fps;
+		stream->fs_cfg.fps_den = 1;
+		stream->enc_cfg.fps_num = (uint32_t)sensor_fps;
+		stream->enc_cfg.fps_den = 1;
+		if (!rss_config_get_str(st->cfg, "stream0", "gop", NULL))
+			stream->enc_cfg.gop_length = (uint32_t)sensor_fps;
+	}
+	if (sensor_fps_known) {
+		st->sensor_base_fps_num = (uint32_t)sensor_fps;
+		st->sensor_base_fps_den = 1;
 	}
 	if (rss_config_get_bool(st->cfg, "stream1", "enabled", true) ||
 	    rss_config_get_bool(st->cfg, "jpeg", "enabled", true) ||
@@ -246,7 +303,7 @@ static int rvd_pipeline_init_v4l2(rvd_state_t *st)
 	if (ret != RSS_OK)
 		return ret;
 	st->pipeline_ready = true;
-	RSS_INFO("pipeline ready: V4L2 %s -> OpenIMP AVC -> main ring", st->v4l2_device);
+	RSS_INFO("pipeline ready: V4L2 -> OpenIMP AVC -> main ring");
 	return RSS_OK;
 }
 
@@ -315,6 +372,32 @@ static int read_sensor_proc_int(int idx, const char *key, int base, int def)
 	char path[64];
 	sensor_proc_path(path, sizeof(path), idx, key);
 	return read_procfs_int(path, base, def);
+}
+
+/* Which /proc/jz/sensor slot is the active one (falls back to 0). */
+static int find_active_sensor_proc_index(void)
+{
+	for (int idx = 0; idx < RVD_MAX_SENSORS; idx++) {
+		char path[64];
+		char *status;
+		char *end;
+
+		sensor_proc_path(path, sizeof(path), idx, "status");
+		status = rss_read_file(path, NULL);
+		if (!status)
+			continue;
+		end = status + strlen(status);
+		while (end > status &&
+		       (end[-1] == '\n' || end[-1] == '\r' || end[-1] == ' ' || end[-1] == '\t'))
+			*--end = '\0';
+		if (strcmp(status, "active") == 0) {
+			free(status);
+			return idx;
+		}
+		free(status);
+	}
+
+	return 0;
 }
 
 /* Load sensor config from an INI section, with a per-index procfs
@@ -523,20 +606,21 @@ int rvd_pipeline_init(rvd_state_t *st)
 		st->enc_shm_fd[i] = -1;
 
 	/* ── 1. Create HAL ── */
-	st->hal_ctx = rss_hal_create();
+	const char *backend = rss_config_get_str(cfg, "system", "video_backend", "imp");
+	st->hal_ctx = rss_hal_create_backend(backend);
 	if (!st->hal_ctx) {
-		RSS_FATAL("rss_hal_create failed");
+		if (strcasecmp(backend, "imp") != 0)
+			RSS_FATAL("video_backend '%s' is not in this build "
+				  "(the v4l2 backend needs V4L2_OPENIMP=1)",
+				  backend);
+		else
+			RSS_FATAL("rss_hal_create failed");
 		return RSS_ERR;
 	}
 	st->ops = rss_hal_get_ops(st->hal_ctx);
-	if (strcasecmp(rss_config_get_str(cfg, "system", "video_backend", "imp"), "v4l2") == 0) {
-		if (!rvd_v4l2_h264_supported()) {
-			RSS_FATAL("V4L2/OpenIMP backend requested but Raptor was built without "
-				  "V4L2_OPENIMP=1");
-			return RSS_ERR_NOTSUP;
-		}
+	st->hal_caps = st->ops->get_caps ? st->ops->get_caps(st->hal_ctx) : NULL;
+	if (strcasecmp(backend, "v4l2") == 0)
 		return rvd_pipeline_init_v4l2(st);
-	}
 
 	/* ── 2. Sensor config ── */
 	rss_multi_sensor_config_t multi_cfg = {0};
@@ -1248,12 +1332,12 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 	rss_config_t *cfg = st->cfg;
 	int ret;
 
-	if (st->v4l2_backend) {
-		if (idx != 0)
-			return RSS_ERR_NOTSUP;
-		ret = rvd_v4l2_h264_create(&st->v4l2, st->v4l2_device, &s->enc_cfg);
+	if (st->hal_caps && !st->hal_caps->has_framesource) {
+		/* No graph to build: the backend's encoder slot owns the
+		 * whole capture path. */
+		ret = RSS_HAL_CALL(st->ops, enc_create_channel, st->hal_ctx, s->chn, &s->enc_cfg);
 		if (ret != RSS_OK) {
-			RSS_ERROR("V4L2/OpenIMP backend create failed: %d", ret);
+			RSS_ERROR("stream%d: backend create failed: %d", idx, ret);
 			return ret;
 		}
 		goto create_ring;
@@ -1606,9 +1690,8 @@ create_ring:
 
 	/* Rollback on failure */
 fail_ring:
-	if (st->v4l2_backend) {
-		rvd_v4l2_h264_destroy(st->v4l2);
-		st->v4l2 = NULL;
+	if (st->hal_caps && !st->hal_caps->has_framesource) {
+		RSS_HAL_CALL(st->ops, enc_destroy_channel, st->hal_ctx, s->chn);
 		return ret;
 	}
 fail_bind:
@@ -1643,15 +1726,13 @@ void rvd_stream_stop(rvd_state_t *st, int idx)
 
 	/* Stop encoder */
 	if (s->enabled) {
-		if (st->v4l2_backend)
-			rvd_v4l2_h264_stop(st->v4l2);
-		else
-			RSS_HAL_CALL(st->ops, enc_stop, st->hal_ctx, s->chn);
+		RSS_HAL_CALL(st->ops, enc_stop, st->hal_ctx, s->chn);
 		s->enabled = false;
 	}
 
-	/* Disable framesource (JPEG shares FS, caller handles ordering) */
-	if (!s->is_jpeg && !st->v4l2_backend)
+	/* Disable framesource (JPEG shares FS, caller handles ordering;
+	 * a graphless backend answers NOTSUP and that is fine) */
+	if (!s->is_jpeg)
 		RSS_HAL_CALL(st->ops, fs_disable_channel, st->hal_ctx, s->fs_chn);
 
 	RSS_DEBUG("stream%d stopped", idx);
@@ -1664,10 +1745,9 @@ void rvd_stream_deinit(rvd_state_t *st, int idx)
 	/* Skip if never successfully initialized (or already rolled back) */
 	if (!s->ring)
 		return;
-	if (st->v4l2_backend) {
-		rvd_v4l2_h264_destroy(st->v4l2);
-		st->v4l2 = NULL;
-		RSS_DEBUG("stream%d V4L2 backend deinit complete", idx);
+	if (st->hal_caps && !st->hal_caps->has_framesource) {
+		RSS_HAL_CALL(st->ops, enc_destroy_channel, st->hal_ctx, s->chn);
+		RSS_DEBUG("stream%d backend deinit complete", idx);
 		return;
 	}
 
@@ -1732,17 +1812,13 @@ int rvd_stream_start(rvd_state_t *st, int idx)
 	if (s->is_jpeg && s->jpeg_idle) {
 		s->enabled = false;
 	} else {
-		if (st->v4l2_backend) {
-			int backend_ret = rvd_v4l2_h264_start(st->v4l2);
-			if (backend_ret != RSS_OK) {
-				RSS_ERROR("stream%d: V4L2 start failed: %d", idx, backend_ret);
-				return backend_ret;
-			}
-		} else if (!s->is_jpeg) {
+		if (!s->is_jpeg)
 			RSS_HAL_CALL(st->ops, fs_enable_channel, st->hal_ctx, s->fs_chn);
+		int start_ret = RSS_HAL_CALL(st->ops, enc_start, st->hal_ctx, s->chn);
+		if (start_ret != RSS_OK && start_ret != RSS_ERR_NOTSUP) {
+			RSS_ERROR("stream%d: encoder start failed: %d", idx, start_ret);
+			return start_ret;
 		}
-		if (!st->v4l2_backend)
-			RSS_HAL_CALL(st->ops, enc_start, st->hal_ctx, s->chn);
 		s->enabled = true;
 	}
 
@@ -1759,13 +1835,10 @@ int rvd_stream_start(rvd_state_t *st, int idx)
 		RSS_ERROR("stream%d: pthread_create failed: %d", idx, ret);
 		atomic_store(&st->stream_active[idx], false);
 		if (s->enabled) {
-			if (st->v4l2_backend)
-				rvd_v4l2_h264_stop(st->v4l2);
-			else
-				RSS_HAL_CALL(st->ops, enc_stop, st->hal_ctx, s->chn);
+			RSS_HAL_CALL(st->ops, enc_stop, st->hal_ctx, s->chn);
 			s->enabled = false;
 		}
-		if (!s->is_jpeg && !st->v4l2_backend)
+		if (!s->is_jpeg)
 			RSS_HAL_CALL(st->ops, fs_disable_channel, st->hal_ctx, s->fs_chn);
 		return RSS_ERR;
 	}
@@ -1800,8 +1873,9 @@ void rvd_pipeline_deinit(rvd_state_t *st)
 	if (st->ivs_active)
 		rvd_ivs_deinit(st);
 
-	/* Destroy framesource channels (Layer 1 — only on full shutdown) */
-	for (int i = st->stream_count - 1; i >= 0 && !st->v4l2_backend; i--) {
+	/* Destroy framesource channels (Layer 1 — only on full shutdown;
+	 * NOTSUP from a graphless backend is fine) */
+	for (int i = st->stream_count - 1; i >= 0; i--) {
 		if (!st->streams[i].is_jpeg)
 			RSS_HAL_CALL(st->ops, fs_destroy_channel, st->hal_ctx,
 				     st->streams[i].fs_chn);
