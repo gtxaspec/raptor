@@ -545,9 +545,9 @@ static void write_stsd_audio(rmr_mux_t *m)
 		bb_w16(m, 1);	/* data_reference_index */
 		bb_zeros(m, 8); /* reserved */
 		bb_w16(m, m->audio.channels);
-		bb_w16(m, 16);			       /* sample_size */
-		bb_w16(m, 0);			       /* compression_id */
-		bb_w16(m, 0);			       /* packet_size */
+		bb_w16(m, 16);					 /* sample_size */
+		bb_w16(m, 0);					 /* compression_id */
+		bb_w16(m, 0);					 /* packet_size */
 		bb_w32(m, (uint32_t)m->audio.sample_rate << 16); /* sample_rate 16.16 */
 		{
 			uint8_t asc[RSS_AAC_ASC_MAX];
@@ -567,9 +567,9 @@ static void write_stsd_audio(rmr_mux_t *m)
 		bb_w16(m, 1);	/* data_reference_index */
 		bb_zeros(m, 8); /* reserved */
 		bb_w16(m, m->audio.channels);
-		bb_w16(m, 16);		/* sample_size */
-		bb_w16(m, 0);		/* compression_id */
-		bb_w16(m, 0);		/* packet_size */
+		bb_w16(m, 16);		 /* sample_size */
+		bb_w16(m, 0);		 /* compression_id */
+		bb_w16(m, 0);		 /* packet_size */
 		bb_w32(m, 48000u << 16); /* sample_rate 16.16 (always 48kHz) */
 		write_dops(m, m->audio.sample_rate);
 		bb_box_end(m, entry_off);
@@ -1051,11 +1051,14 @@ int rmr_mux_flush_fragment(rmr_mux_t *mux)
 	if (!mux)
 		return -1;
 
-	/* Patch last video sample duration (use same as previous, or default) */
+	/* Patch last video sample duration (use same as previous, else the
+	 * caller's declared grid step, else a 25fps guess) */
 	if (mux->v_count > 0 && mux->v_samples[mux->v_count - 1].duration == 0) {
 		if (mux->v_count > 1)
 			mux->v_samples[mux->v_count - 1].duration =
 				mux->v_samples[mux->v_count - 2].duration;
+		else if (mux->video.default_duration > 0)
+			mux->v_samples[0].duration = mux->video.default_duration;
 		else if (mux->video.timescale > 0)
 			mux->v_samples[0].duration = mux->video.timescale / 25; /* fallback */
 	}

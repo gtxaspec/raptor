@@ -43,6 +43,12 @@ typedef struct {
 	uint16_t width;
 	uint16_t height;
 	uint32_t timescale; /* typically 90000 */
+	/* Duration (timescale units) for a fragment's last sample when no
+	 * following sample exists to derive it from. A fragment-per-sample
+	 * writer (the timelapse) must set this to its presentation grid
+	 * step or every sample's declared duration contradicts the DTS
+	 * grid and players drop or stretch frames. 0 = timescale/25. */
+	uint32_t default_duration;
 } rmr_video_params_t;
 
 typedef struct {

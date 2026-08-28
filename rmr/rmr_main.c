@@ -120,7 +120,7 @@ static int tl_write(const void *buf, uint32_t len, void *ctx)
 
 /* ── Segment management ── */
 
-static void setup_mux_video_track(rmr_mux_t *mux, rmr_state_t *st)
+static void setup_mux_video_track_dur(rmr_mux_t *mux, rmr_state_t *st, uint32_t default_duration)
 {
 	rmr_video_params_t vp = {
 		.codec = (st->video_codec == 2)	  ? RMR_CODEC_MJPEG
@@ -129,6 +129,7 @@ static void setup_mux_video_track(rmr_mux_t *mux, rmr_state_t *st)
 		.width = st->width,
 		.height = st->height,
 		.timescale = 90000,
+		.default_duration = default_duration,
 	};
 	if (st->video_codec == 2)
 		rmr_mux_set_video(mux, &vp, NULL, 0, NULL, 0, NULL, 0);
@@ -137,6 +138,11 @@ static void setup_mux_video_track(rmr_mux_t *mux, rmr_state_t *st)
 				  st->params.pps_len,
 				  st->params.vps_len > 0 ? st->params.vps : NULL,
 				  st->params.vps_len);
+}
+
+static void setup_mux_video_track(rmr_mux_t *mux, rmr_state_t *st)
+{
+	setup_mux_video_track_dur(mux, st, 0);
 }
 
 static void setup_mux_tracks(rmr_mux_t *mux, rmr_state_t *st)
@@ -329,7 +335,10 @@ static int open_timelapse(rmr_state_t *st, int32_t day)
 	st->tl_fd = fd;
 	st->tl_bytes = 0;
 
-	setup_mux_video_track(st->tl_mux, st);
+	/* Fragment-per-sample: without a next sample to derive from, each
+	 * sample's declared duration must be the playback grid step or the
+	 * file contradicts its own DTS grid and players drop frames. */
+	setup_mux_video_track_dur(st->tl_mux, st, 90000 / st->tl.playback_fps);
 	if (st->sign_enabled)
 		rmr_sign_stream_begin(&st->sign_tl, &st->sign_key);
 	rmr_mux_start(st->tl_mux);

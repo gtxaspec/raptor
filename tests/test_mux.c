@@ -40,8 +40,7 @@ static int mem_write(const void *buf, uint32_t len, void *ctx)
 
 static uint32_t rd32(const uint8_t *p)
 {
-	return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
-	       ((uint32_t)p[2] << 8) | p[3];
+	return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
 }
 
 /* Find a box by 4cc type in [start, start+len). Returns offset or -1. */
@@ -60,8 +59,7 @@ static int find_box(const uint8_t *data, uint32_t len, const char *type)
 }
 
 /* Find a box inside a container box (skip container's 8-byte header) */
-static int find_child_box(const uint8_t *data, uint32_t len, uint32_t parent_off,
-			  const char *type)
+static int find_child_box(const uint8_t *data, uint32_t len, uint32_t parent_off, const char *type)
 {
 	uint32_t parent_size = rd32(data + parent_off);
 	if (parent_off + parent_size > len)
@@ -99,8 +97,10 @@ TEST mux_video_h264(void)
 	rmr_mux_t *mux = rmr_mux_create(mem_write, NULL);
 	ASSERT(mux);
 
-	rmr_video_params_t vp = {.codec = RMR_CODEC_H264, .width = 640, .height = 480, .timescale = 90000};
-	rmr_mux_set_video(mux, &vp, test_sps, sizeof(test_sps), test_pps, sizeof(test_pps), NULL, 0);
+	rmr_video_params_t vp = {
+		.codec = RMR_CODEC_H264, .width = 640, .height = 480, .timescale = 90000};
+	rmr_mux_set_video(mux, &vp, test_sps, sizeof(test_sps), test_pps, sizeof(test_pps), NULL,
+			  0);
 	rmr_mux_start(mux);
 
 	/* One GOP: IDR + 4 P-frames */
@@ -108,8 +108,8 @@ TEST mux_video_h264(void)
 		bool key = (i == 0);
 		uint32_t ns;
 		uint8_t *nal = make_fake_nal(key ? 2048 : 512, key ? 0x65 : 0x41, &ns);
-		rmr_video_sample_t vs = {.data = nal, .size = ns, .dts = i * 3600,
-					 .pts = i * 3600, .is_key = key};
+		rmr_video_sample_t vs = {
+			.data = nal, .size = ns, .dts = i * 3600, .pts = i * 3600, .is_key = key};
 		rmr_mux_write_video(mux, &vs);
 		free(nal);
 	}
@@ -147,8 +147,10 @@ TEST mux_video_h265(void)
 	uint8_t sps265[] = {0x42, 0x01, 0x01, 0x01};
 	uint8_t pps265[] = {0x44, 0x01, 0xC0};
 
-	rmr_video_params_t vp = {.codec = RMR_CODEC_H265, .width = 1920, .height = 1080, .timescale = 90000};
-	rmr_mux_set_video(mux, &vp, sps265, sizeof(sps265), pps265, sizeof(pps265), vps, sizeof(vps));
+	rmr_video_params_t vp = {
+		.codec = RMR_CODEC_H265, .width = 1920, .height = 1080, .timescale = 90000};
+	rmr_mux_set_video(mux, &vp, sps265, sizeof(sps265), pps265, sizeof(pps265), vps,
+			  sizeof(vps));
 	rmr_mux_start(mux);
 
 	/* One keyframe */
@@ -170,13 +172,75 @@ TEST mux_video_h265(void)
 	PASS();
 }
 
+/* Timelapse shape: fragment per sample, so no sample ever has a
+ * successor to derive its duration from. The declared duration must be
+ * the caller's grid step; the legacy 25fps guess contradicts any other
+ * playback rate's DTS grid and players drop or stretch frames. */
+TEST mux_single_sample_fragment_duration(void)
+{
+	for (int pass = 0; pass < 2; pass++) {
+		uint32_t declared = pass == 0 ? 3000 : 0; /* 30fps grid vs legacy */
+		uint32_t expect = pass == 0 ? 3000 : 3600;
+
+		mux_buf_reset();
+		rmr_mux_t *mux = rmr_mux_create(mem_write, NULL);
+		ASSERT(mux);
+		rmr_video_params_t vp = {.codec = RMR_CODEC_H264,
+					 .width = 640,
+					 .height = 480,
+					 .timescale = 90000,
+					 .default_duration = declared};
+		rmr_mux_set_video(mux, &vp, test_sps, sizeof(test_sps), test_pps, sizeof(test_pps),
+				  NULL, 0);
+		rmr_mux_start(mux);
+
+		for (int i = 0; i < 3; i++) {
+			if (i > 0)
+				rmr_mux_flush_fragment(mux);
+			uint32_t ns;
+			uint8_t *nal = make_fake_nal(1024, 0x65, &ns);
+			rmr_video_sample_t vs = {.data = nal,
+						 .size = ns,
+						 .dts = i * 3000,
+						 .pts = i * 3000,
+						 .is_key = true};
+			rmr_mux_write_video(mux, &vs);
+			free(nal);
+		}
+		rmr_mux_flush_fragment(mux);
+		rmr_mux_destroy(mux);
+
+		/* Every trun holds one sample declaring the expected step
+		 * (layout: tag, ver/flags, sample_count, data_offset,
+		 * then the first sample's duration). */
+		int truns = 0;
+		const uint8_t *p = g_buf;
+		uint32_t left = g_len;
+		for (;;) {
+			const uint8_t *hit = memmem(p, left, "trun", 4);
+			if (!hit)
+				break;
+			ASSERT(hit + 20 <= g_buf + g_len);
+			ASSERT_EQ(1, rd32(hit + 8));
+			ASSERT_EQ(expect, rd32(hit + 16));
+			truns++;
+			left -= (uint32_t)(hit + 4 - p);
+			p = hit + 4;
+		}
+		ASSERT_EQ(3, truns);
+		mux_buf_reset();
+	}
+	PASS();
+}
+
 TEST mux_audio_pcmu(void)
 {
 	mux_buf_reset();
 	rmr_mux_t *mux = rmr_mux_create(mem_write, NULL);
 	ASSERT(mux);
 
-	rmr_audio_params_t ap = {.codec = RMR_AUDIO_PCMU, .sample_rate = 8000, .channels = 1, .bits_per_sample = 8};
+	rmr_audio_params_t ap = {
+		.codec = RMR_AUDIO_PCMU, .sample_rate = 8000, .channels = 1, .bits_per_sample = 8};
 	rmr_mux_set_audio(mux, &ap);
 	rmr_mux_start(mux);
 
@@ -205,9 +269,12 @@ TEST mux_combined(void)
 	rmr_mux_t *mux = rmr_mux_create(mem_write, NULL);
 	ASSERT(mux);
 
-	rmr_video_params_t vp = {.codec = RMR_CODEC_H264, .width = 640, .height = 480, .timescale = 90000};
-	rmr_audio_params_t ap = {.codec = RMR_AUDIO_L16, .sample_rate = 16000, .channels = 1, .bits_per_sample = 16};
-	rmr_mux_set_video(mux, &vp, test_sps, sizeof(test_sps), test_pps, sizeof(test_pps), NULL, 0);
+	rmr_video_params_t vp = {
+		.codec = RMR_CODEC_H264, .width = 640, .height = 480, .timescale = 90000};
+	rmr_audio_params_t ap = {
+		.codec = RMR_AUDIO_L16, .sample_rate = 16000, .channels = 1, .bits_per_sample = 16};
+	rmr_mux_set_video(mux, &vp, test_sps, sizeof(test_sps), test_pps, sizeof(test_pps), NULL,
+			  0);
 	rmr_mux_set_audio(mux, &ap);
 	rmr_mux_start(mux);
 
@@ -250,8 +317,10 @@ TEST mux_multi_fragment(void)
 	rmr_mux_t *mux = rmr_mux_create(mem_write, NULL);
 	ASSERT(mux);
 
-	rmr_video_params_t vp = {.codec = RMR_CODEC_H264, .width = 640, .height = 480, .timescale = 90000};
-	rmr_mux_set_video(mux, &vp, test_sps, sizeof(test_sps), test_pps, sizeof(test_pps), NULL, 0);
+	rmr_video_params_t vp = {
+		.codec = RMR_CODEC_H264, .width = 640, .height = 480, .timescale = 90000};
+	rmr_mux_set_video(mux, &vp, test_sps, sizeof(test_sps), test_pps, sizeof(test_pps), NULL,
+			  0);
 	rmr_mux_start(mux);
 
 	int64_t dts = 0;
@@ -260,8 +329,8 @@ TEST mux_multi_fragment(void)
 			bool key = (f == 0);
 			uint32_t ns;
 			uint8_t *nal = make_fake_nal(key ? 1024 : 256, key ? 0x65 : 0x41, &ns);
-			rmr_video_sample_t vs = {.data = nal, .size = ns, .dts = dts,
-						 .pts = dts, .is_key = key};
+			rmr_video_sample_t vs = {
+				.data = nal, .size = ns, .dts = dts, .pts = dts, .is_key = key};
 			rmr_mux_write_video(mux, &vs);
 			free(nal);
 			dts += 3600;
@@ -293,8 +362,10 @@ TEST mux_verify_avcC(void)
 	rmr_mux_t *mux = rmr_mux_create(mem_write, NULL);
 	ASSERT(mux);
 
-	rmr_video_params_t vp = {.codec = RMR_CODEC_H264, .width = 640, .height = 480, .timescale = 90000};
-	rmr_mux_set_video(mux, &vp, test_sps, sizeof(test_sps), test_pps, sizeof(test_pps), NULL, 0);
+	rmr_video_params_t vp = {
+		.codec = RMR_CODEC_H264, .width = 640, .height = 480, .timescale = 90000};
+	rmr_mux_set_video(mux, &vp, test_sps, sizeof(test_sps), test_pps, sizeof(test_pps), NULL,
+			  0);
 	rmr_mux_start(mux);
 	rmr_mux_destroy(mux);
 
@@ -317,8 +388,10 @@ TEST mux_finalize(void)
 	rmr_mux_t *mux = rmr_mux_create(mem_write, NULL);
 	ASSERT(mux);
 
-	rmr_video_params_t vp = {.codec = RMR_CODEC_H264, .width = 640, .height = 480, .timescale = 90000};
-	rmr_mux_set_video(mux, &vp, test_sps, sizeof(test_sps), test_pps, sizeof(test_pps), NULL, 0);
+	rmr_video_params_t vp = {
+		.codec = RMR_CODEC_H264, .width = 640, .height = 480, .timescale = 90000};
+	rmr_mux_set_video(mux, &vp, test_sps, sizeof(test_sps), test_pps, sizeof(test_pps), NULL,
+			  0);
 	rmr_mux_start(mux);
 
 	uint32_t ns;
@@ -347,8 +420,10 @@ TEST mux_empty_flush(void)
 	rmr_mux_t *mux = rmr_mux_create(mem_write, NULL);
 	ASSERT(mux);
 
-	rmr_video_params_t vp = {.codec = RMR_CODEC_H264, .width = 640, .height = 480, .timescale = 90000};
-	rmr_mux_set_video(mux, &vp, test_sps, sizeof(test_sps), test_pps, sizeof(test_pps), NULL, 0);
+	rmr_video_params_t vp = {
+		.codec = RMR_CODEC_H264, .width = 640, .height = 480, .timescale = 90000};
+	rmr_mux_set_video(mux, &vp, test_sps, sizeof(test_sps), test_pps, sizeof(test_pps), NULL,
+			  0);
 	rmr_mux_start(mux);
 
 	uint32_t after_init = g_len;
@@ -368,8 +443,10 @@ TEST mux_double_flush(void)
 	rmr_mux_t *mux = rmr_mux_create(mem_write, NULL);
 	ASSERT(mux);
 
-	rmr_video_params_t vp = {.codec = RMR_CODEC_H264, .width = 640, .height = 480, .timescale = 90000};
-	rmr_mux_set_video(mux, &vp, test_sps, sizeof(test_sps), test_pps, sizeof(test_pps), NULL, 0);
+	rmr_video_params_t vp = {
+		.codec = RMR_CODEC_H264, .width = 640, .height = 480, .timescale = 90000};
+	rmr_mux_set_video(mux, &vp, test_sps, sizeof(test_sps), test_pps, sizeof(test_pps), NULL,
+			  0);
 	rmr_mux_start(mux);
 
 	uint32_t ns;
@@ -412,8 +489,10 @@ TEST mux_single_sample_fragment(void)
 	rmr_mux_t *mux = rmr_mux_create(mem_write, NULL);
 	ASSERT(mux);
 
-	rmr_video_params_t vp = {.codec = RMR_CODEC_H264, .width = 640, .height = 480, .timescale = 90000};
-	rmr_mux_set_video(mux, &vp, test_sps, sizeof(test_sps), test_pps, sizeof(test_pps), NULL, 0);
+	rmr_video_params_t vp = {
+		.codec = RMR_CODEC_H264, .width = 640, .height = 480, .timescale = 90000};
+	rmr_mux_set_video(mux, &vp, test_sps, sizeof(test_sps), test_pps, sizeof(test_pps), NULL,
+			  0);
 	rmr_mux_start(mux);
 
 	/* Single keyframe, immediate flush */
@@ -442,8 +521,10 @@ TEST mux_large_timestamps(void)
 	rmr_mux_t *mux = rmr_mux_create(mem_write, NULL);
 	ASSERT(mux);
 
-	rmr_video_params_t vp = {.codec = RMR_CODEC_H264, .width = 640, .height = 480, .timescale = 90000};
-	rmr_mux_set_video(mux, &vp, test_sps, sizeof(test_sps), test_pps, sizeof(test_pps), NULL, 0);
+	rmr_video_params_t vp = {
+		.codec = RMR_CODEC_H264, .width = 640, .height = 480, .timescale = 90000};
+	rmr_mux_set_video(mux, &vp, test_sps, sizeof(test_sps), test_pps, sizeof(test_pps), NULL,
+			  0);
 	rmr_mux_start(mux);
 
 	/* Simulate 24 hours of recording at 90kHz timescale.
@@ -454,8 +535,11 @@ TEST mux_large_timestamps(void)
 		bool key = (i == 0);
 		uint32_t ns;
 		uint8_t *nal = make_fake_nal(key ? 1024 : 256, key ? 0x65 : 0x41, &ns);
-		rmr_video_sample_t vs = {.data = nal, .size = ns, .dts = base_dts + i * 3600,
-					 .pts = base_dts + i * 3600, .is_key = key};
+		rmr_video_sample_t vs = {.data = nal,
+					 .size = ns,
+					 .dts = base_dts + i * 3600,
+					 .pts = base_dts + i * 3600,
+					 .is_key = key};
 		rmr_mux_write_video(mux, &vs);
 		free(nal);
 	}
@@ -485,8 +569,10 @@ TEST mux_cts_offset(void)
 	rmr_mux_t *mux = rmr_mux_create(mem_write, NULL);
 	ASSERT(mux);
 
-	rmr_video_params_t vp = {.codec = RMR_CODEC_H264, .width = 640, .height = 480, .timescale = 90000};
-	rmr_mux_set_video(mux, &vp, test_sps, sizeof(test_sps), test_pps, sizeof(test_pps), NULL, 0);
+	rmr_video_params_t vp = {
+		.codec = RMR_CODEC_H264, .width = 640, .height = 480, .timescale = 90000};
+	rmr_mux_set_video(mux, &vp, test_sps, sizeof(test_sps), test_pps, sizeof(test_pps), NULL,
+			  0);
 	rmr_mux_start(mux);
 
 	/* PTS != DTS: simulate reordering (PTS ahead of DTS by 2 frames) */
@@ -497,7 +583,8 @@ TEST mux_cts_offset(void)
 	free(nal);
 
 	nal = make_fake_nal(256, 0x41, &ns);
-	rmr_video_sample_t vs2 = {.data = nal, .size = ns, .dts = 3600, .pts = 3600, .is_key = false};
+	rmr_video_sample_t vs2 = {
+		.data = nal, .size = ns, .dts = 3600, .pts = 3600, .is_key = false};
 	rmr_mux_write_video(mux, &vs2);
 	free(nal);
 
@@ -508,8 +595,8 @@ TEST mux_cts_offset(void)
 	ASSERT(trun);
 	/* trun box: [size:4]["trun":4][version:1][flags:3] */
 	uint8_t *trun_flags = (uint8_t *)trun + 4 + 1; /* skip version byte */
-	uint32_t flags = ((uint32_t)trun_flags[0] << 16) |
-			 ((uint32_t)trun_flags[1] << 8) | trun_flags[2];
+	uint32_t flags =
+		((uint32_t)trun_flags[0] << 16) | ((uint32_t)trun_flags[1] << 8) | trun_flags[2];
 	ASSERT(flags & 0x000800); /* sample_composition_time_offsets_present */
 
 	rmr_mux_destroy(mux);
@@ -530,8 +617,8 @@ TEST mux_null_inputs(void)
 	/* set_video with missing params */
 	rmr_mux_t *mux = rmr_mux_create(mem_write, NULL);
 	ASSERT(mux);
-	ASSERT_EQ(-1, rmr_mux_set_video(mux, NULL, test_sps, sizeof(test_sps),
-					 test_pps, sizeof(test_pps), NULL, 0));
+	ASSERT_EQ(-1, rmr_mux_set_video(mux, NULL, test_sps, sizeof(test_sps), test_pps,
+					sizeof(test_pps), NULL, 0));
 
 	/* write_video with NULL sample */
 	ASSERT_EQ(-1, rmr_mux_write_video(mux, NULL));
@@ -550,7 +637,8 @@ TEST mux_audio_aac(void)
 	rmr_mux_t *mux = rmr_mux_create(mem_write, NULL);
 	ASSERT(mux);
 
-	rmr_audio_params_t ap = {.codec = RMR_AUDIO_AAC, .sample_rate = 16000, .channels = 1, .bits_per_sample = 16};
+	rmr_audio_params_t ap = {
+		.codec = RMR_AUDIO_AAC, .sample_rate = 16000, .channels = 1, .bits_per_sample = 16};
 	rmr_mux_set_audio(mux, &ap);
 	rmr_mux_start(mux);
 
@@ -558,7 +646,8 @@ TEST mux_audio_aac(void)
 	uint8_t aac_frame[128];
 	memset(aac_frame, 0x21, sizeof(aac_frame));
 	for (int i = 0; i < 10; i++) {
-		rmr_audio_sample_t as = {.data = aac_frame, .size = sizeof(aac_frame), .dts = i * 1024};
+		rmr_audio_sample_t as = {
+			.data = aac_frame, .size = sizeof(aac_frame), .dts = i * 1024};
 		rmr_mux_write_audio(mux, &as);
 	}
 	ASSERT_EQ(0, rmr_mux_flush_fragment(mux));
@@ -583,7 +672,10 @@ TEST mux_audio_opus(void)
 	rmr_mux_t *mux = rmr_mux_create(mem_write, NULL);
 	ASSERT(mux);
 
-	rmr_audio_params_t ap = {.codec = RMR_AUDIO_OPUS, .sample_rate = 16000, .channels = 1, .bits_per_sample = 16};
+	rmr_audio_params_t ap = {.codec = RMR_AUDIO_OPUS,
+				 .sample_rate = 16000,
+				 .channels = 1,
+				 .bits_per_sample = 16};
 	rmr_mux_set_audio(mux, &ap);
 	rmr_mux_start(mux);
 
@@ -591,7 +683,8 @@ TEST mux_audio_opus(void)
 	uint8_t opus_frame[64];
 	memset(opus_frame, 0x42, sizeof(opus_frame));
 	for (int i = 0; i < 10; i++) {
-		rmr_audio_sample_t as = {.data = opus_frame, .size = sizeof(opus_frame), .dts = i * 320};
+		rmr_audio_sample_t as = {
+			.data = opus_frame, .size = sizeof(opus_frame), .dts = i * 320};
 		rmr_mux_write_audio(mux, &as);
 	}
 	ASSERT_EQ(0, rmr_mux_flush_fragment(mux));
@@ -619,9 +712,12 @@ TEST mux_av_duration(void)
 	rmr_mux_t *mux = rmr_mux_create(mem_write, NULL);
 	ASSERT(mux);
 
-	rmr_video_params_t vp = {.codec = RMR_CODEC_H264, .width = 640, .height = 480, .timescale = 90000};
-	rmr_audio_params_t ap = {.codec = RMR_AUDIO_PCMU, .sample_rate = 8000, .channels = 1, .bits_per_sample = 8};
-	rmr_mux_set_video(mux, &vp, test_sps, sizeof(test_sps), test_pps, sizeof(test_pps), NULL, 0);
+	rmr_video_params_t vp = {
+		.codec = RMR_CODEC_H264, .width = 640, .height = 480, .timescale = 90000};
+	rmr_audio_params_t ap = {
+		.codec = RMR_AUDIO_PCMU, .sample_rate = 8000, .channels = 1, .bits_per_sample = 8};
+	rmr_mux_set_video(mux, &vp, test_sps, sizeof(test_sps), test_pps, sizeof(test_pps), NULL,
+			  0);
 	rmr_mux_set_audio(mux, &ap);
 	rmr_mux_start(mux);
 
@@ -635,7 +731,8 @@ TEST mux_av_duration(void)
 		bool key = (f == 0);
 		uint32_t ns;
 		uint8_t *nal = make_fake_nal(key ? 4096 : 512, key ? 0x65 : 0x41, &ns);
-		rmr_video_sample_t vs = {.data = nal, .size = ns, .dts = v_dts, .pts = v_dts, .is_key = key};
+		rmr_video_sample_t vs = {
+			.data = nal, .size = ns, .dts = v_dts, .pts = v_dts, .is_key = key};
 		rmr_mux_write_video(mux, &vs);
 		total_v_data += ns;
 		free(nal);
@@ -645,7 +742,8 @@ TEST mux_av_duration(void)
 		for (int a = 0; a < 2; a++) {
 			uint8_t audio[160]; /* 20ms at 8kHz, 8-bit */
 			memset(audio, 0x80, sizeof(audio));
-			rmr_audio_sample_t as = {.data = audio, .size = sizeof(audio), .dts = a_dts};
+			rmr_audio_sample_t as = {
+				.data = audio, .size = sizeof(audio), .dts = a_dts};
 			rmr_mux_write_audio(mux, &as);
 			total_a_data += sizeof(audio);
 			a_dts += 160;
@@ -694,6 +792,7 @@ SUITE(mux_suite)
 {
 	RUN_TEST(mux_video_h264);
 	RUN_TEST(mux_video_h265);
+	RUN_TEST(mux_single_sample_fragment_duration);
 	RUN_TEST(mux_audio_pcmu);
 	RUN_TEST(mux_combined);
 	RUN_TEST(mux_multi_fragment);
