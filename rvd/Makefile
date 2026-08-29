@@ -4,9 +4,9 @@ BIN  := rvd
 
 all: $(BIN)
 
-$(BIN): $(OBJS)
+$(BIN): $(OBJS) $(LIB_DEPS)
 	@echo "  LD      $@"
-	$(Q)$(CC) -o $@ $^ $(LIBS) $(LDFLAGS)
+	$(Q)$(CC) -o $@ $(OBJS) $(LIBS) $(LDFLAGS)
 
 %.o: %.c
 	@echo "  CC      $<"
