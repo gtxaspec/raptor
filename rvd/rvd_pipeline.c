@@ -276,12 +276,9 @@ static int rvd_pipeline_init_v4l2(rvd_state_t *st)
 {
 	rss_multi_sensor_config_t multi_cfg = {0};
 	rvd_stream_t *stream = &st->streams[0];
+	const char *device;
 	int ret;
 
-#ifdef RAPTOR_V4L2_OPENIMP
-	rss_hal_v4l2_set_device(
-		st->hal_ctx, rss_config_get_str(st->cfg, "system", "video_device", "/dev/video0"));
-#endif
 	st->v4l2_backend = true;
 	st->sensor_count = 1;
 	st->stream_count = 1;
@@ -330,6 +327,26 @@ static int rvd_pipeline_init_v4l2(rvd_state_t *st)
 		sensor_fps = 25;
 
 	load_stream_config(st->cfg, "stream0", stream, sensor_w, sensor_h, sensor_fps, 8000000);
+#ifdef RAPTOR_V4L2_OPENIMP
+	device = rss_config_get_str(st->cfg, "system", "video_device", NULL);
+	if (!device || !device[0]) {
+#if defined(PLATFORM_T20)
+		/* T20 exposes the full-resolution path on video1 and the scaled
+		 * path on video2.  Select by requested geometry, never by sensor
+		 * identity; an explicit video_device still takes precedence. */
+		if (stream->enc_cfg.width < (uint32_t)sensor_w ||
+		    stream->enc_cfg.height < (uint32_t)sensor_h)
+			device = "/dev/video2";
+		else
+			device = "/dev/video1";
+#else
+		device = "/dev/video0";
+#endif
+	}
+	rss_hal_v4l2_set_device(st->hal_ctx, device);
+#else
+	device = "/dev/video0";
+#endif
 	stream->fs_chn = 0;
 	stream->chn = 0;
 	stream->sensor_idx = 0;
@@ -363,7 +380,7 @@ static int rvd_pipeline_init_v4l2(rvd_state_t *st)
 	if (ret != RSS_OK)
 		return ret;
 	st->pipeline_ready = true;
-	RSS_INFO("pipeline ready: V4L2 -> OpenIMP AVC -> main ring");
+	RSS_INFO("pipeline ready: V4L2 %s -> OpenIMP AVC -> main ring", device);
 	return RSS_OK;
 }
 
