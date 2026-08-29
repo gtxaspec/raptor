@@ -34,6 +34,7 @@ static ric_config_t fresh_config(void)
 	c.gpio_ircut2 = -1;
 	c.gpio_irled = -1;
 	c.gpio_irled2 = -1;
+	c.pulse_ms = 10;
 	return c;
 }
 
@@ -90,6 +91,46 @@ TEST ric_json_object_pins(void)
 	ASSERT(c.irled_active_low);
 	ASSERT_EQ(50, c.gpio_irled2);
 	ASSERT_FALSE(c.irled2_active_low);
+	unlink(FIXTURE);
+	PASS();
+}
+
+TEST ric_json_object_pair_and_timing(void)
+{
+	ric_config_t c = fresh_config();
+	const char *j = "{\"gpio\":{\"ircut\":{\"pin\":[52,53],\"delay_us\":100000}}}";
+	write_fixture(j, strlen(j));
+	ric_json_gpio_load(&c, FIXTURE);
+	ASSERT_EQ(52, c.gpio_ircut);
+	ASSERT_EQ(53, c.gpio_ircut2);
+	ASSERT_EQ(100, c.pulse_ms);
+	unlink(FIXTURE);
+	PASS();
+}
+
+TEST ric_json_explicit_timing_wins(void)
+{
+	ric_config_t c = fresh_config();
+	c.pulse_ms = 75;
+	c.pulse_ms_explicit = true;
+	const char *j = "{\"gpio\":{\"ircut\":{\"pin\":[52,53],\"delay_us\":100000}}}";
+	write_fixture(j, strlen(j));
+	ric_json_gpio_load(&c, FIXTURE);
+	ASSERT_EQ(52, c.gpio_ircut);
+	ASSERT_EQ(53, c.gpio_ircut2);
+	ASSERT_EQ(75, c.pulse_ms);
+	unlink(FIXTURE);
+	PASS();
+}
+
+TEST ric_json_unsupported_drive_mode_rejected(void)
+{
+	ric_config_t c = fresh_config();
+	const char *j = "{\"gpio\":{\"ircut\":{\"pin\":[52,53],\"mode\":\"level-sequence\"}}}";
+	write_fixture(j, strlen(j));
+	ric_json_gpio_load(&c, FIXTURE);
+	ASSERT_EQ(-1, c.gpio_ircut);
+	ASSERT_EQ(-1, c.gpio_ircut2);
 	unlink(FIXTURE);
 	PASS();
 }
@@ -364,6 +405,9 @@ SUITE(ric_json_suite)
 	RUN_TEST(ric_json_int_pins);
 	RUN_TEST(ric_json_dual_string_ircut);
 	RUN_TEST(ric_json_object_pins);
+	RUN_TEST(ric_json_object_pair_and_timing);
+	RUN_TEST(ric_json_explicit_timing_wins);
+	RUN_TEST(ric_json_unsupported_drive_mode_rejected);
 	RUN_TEST(ric_json_object_extra_keys_ignored);
 	RUN_TEST(ric_json_object_without_pin_rejected);
 	RUN_TEST(ric_json_plain_form_resets_polarity);
