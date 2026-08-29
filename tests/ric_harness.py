@@ -43,6 +43,7 @@ WORK = os.environ.get("RIC_TEST_WORK", "/tmp/ric-test")
 RIC_BIN = os.environ.get("RIC_BIN", "asan-out/ric")
 ADC_PRELOAD = os.environ.get("RIC_ADC_PRELOAD", "")
 POLL_MS = 200
+EXPOSURE_VALID_AE_LUMA = 1 << 2
 
 PASS = 0
 FAIL = 0
@@ -212,6 +213,8 @@ class StubRvd:
                         "wb_rgain": sc.get("rgain", 0),
                         "wb_bgain": sc.get("bgain", 0),
                     }
+                    if "valid_mask" in sc:
+                        resp["valid_mask"] = sc["valid_mask"]
                 elif cmd == "set-running-mode":
                     val = json.loads(req).get("value", "?")
                     with self.lock:
@@ -781,6 +784,60 @@ def scenario_probe_slow_ae(stub, watch):
     ric.stop()
 
 
+def scenario_probe_restore_slow_ae(stub, watch):
+    """A failed ambient probe must restart baseline settling when IR
+    returns. The post-IR AE walk is deliberately smooth: every old
+    pairwise sample differs by no more than 10%, so stale settle state
+    accepted a transitional EV and re-probed after every holdoff."""
+    conf = LUMA_CONF + "probe_holdoff_sec = 1\n"
+    stub.set_scene(luma=70, gain=4500, ev=1200000)
+    ric = Ric("proberestorewalk", conf)
+    if not ric.wait_running():
+        result(False, "probe restore walk: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    time.sleep(0.5)
+
+    mm = stub.mark()
+    stub.set_scene(luma=6, gain=8192, ev=50000000)
+    if not wait_for(lambda: "night" in stub.modes_since(mm), 4):
+        result(False, "probe restore walk: night entry", str(stub.modes_since(mm)))
+        ric.stop()
+        return
+    stub.set_scene(luma=72, gain=20000, ev=200000)
+    time.sleep(8 * POLL_MS / 1000.0)
+
+    gm = watch.mark()
+    stub.set_scene(luma=72, gain=14000, ev=140000)
+    if not wait_for(lambda: last_value(watch.since(gm), IRLED) == "0", 4):
+        result(False, "probe restore walk: dip lifts IR", str(watch.since(gm)))
+        ric.stop()
+        return
+
+    rm = watch.mark()
+    stub.set_scene(luma=4, gain=90000, ev=900000)
+    if not wait_for(lambda: last_value(watch.since(rm), IRLED) == "1", 4):
+        result(False, "probe restore walk: darkness restores IR", str(watch.since(rm)))
+        ric.stop()
+        return
+
+    walk = []
+    for gain in (30000, 27000, 24300, 21870, 19683, 17714, 15943, 14348,
+                 13000, 13000, 13000, 13000):
+        walk.append({"luma": 72, "gain": gain, "ev": gain * 10})
+    stub.set_scene_sequence(walk)
+    time.sleep((len(walk) + 10) * POLL_MS / 1000.0)
+
+    led_vals = [c for _, p, _, c in watch.since(rm) if p == IRLED]
+    result("0" not in led_vals,
+           "probe restore walk: settled return does not re-probe",
+           str(watch.since(rm)) + " " + ric.read_log()[-300:])
+    st = ric_status()
+    result(st is not None and st.get("state") == "night",
+           "probe restore walk: remains in night", str(st))
+    ric.stop()
+
+
 def scenario_probe_recheck(stub, watch):
     """IR wash can hide ambient light entirely: on a Wyze V3 the IR-lit
     scene reads EV 637 lit vs ~700 dark -- a 9% perturbation no dip
@@ -933,6 +990,12 @@ def scenario_ctrl(stub, watch):
         "ctrl: status carries exposure block",
         str(s),
     )
+    thresholds = ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "get-thresholds"})
+    result(
+        thresholds is not None and thresholds.get("probe_recheck_sec") == 0,
+        "ctrl: disruptive interval probe defaults off",
+        str(thresholds),
+    )
     ric.stop()
 
 
@@ -987,6 +1050,25 @@ def scenario_zero_exposure(stub, watch):
     ok = r is not None and r.get("state") == "night"
     ev_ok = wait_for(lambda: last_value(watch.since(gm), IRLED) == "1", 3)
     result(ok and ev_ok, "zero exposure: manual override still actuates", str(r))
+    ric.stop()
+
+
+def scenario_valid_zero_luma(stub, watch):
+    """An explicitly valid zero luma is a black frame, not missing data.
+    This is the first exposure sample on a cold T31 ISP."""
+    stub.set_scene(luma=0, gain=0, ev=0,
+                   valid_mask=EXPOSURE_VALID_AE_LUMA)
+    ric = Ric("valid-zero-luma", LUMA_CONF)
+    if not ric.wait_running():
+        result(False, "valid-zero-luma: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    mm = stub.mark()
+    ok = wait_for(lambda: "night" in stub.modes_since(mm), 4)
+    result(ok, "valid zero luma drives night",
+           str(stub.modes_since(mm)))
+    result("no valid gain, luma or ev" not in ric.read_log(),
+           "valid zero luma is not reported missing", ric.read_log()[-300:])
     ric.stop()
 
 
@@ -2399,6 +2481,7 @@ def main():
         scenario_probe_dark_restore,
         scenario_noir_luma_dawn,
         scenario_probe_slow_ae,
+        scenario_probe_restore_slow_ae,
         scenario_probe_recheck,
         scenario_recheck_rearm,
         scenario_ctrl,
@@ -2417,6 +2500,7 @@ def main():
         scenario_photo_interference,
         scenario_photo_no_ev,
         scenario_zero_exposure,
+        scenario_valid_zero_luma,
         scenario_partial_fields,
         scenario_adc,
         scenario_adc_dead,

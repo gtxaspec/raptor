@@ -560,6 +560,9 @@ static int mock_get_exposure(void *ctx, rss_exposure_t *exp)
 	exp->ev = 50000;
 	exp->wb_rgain = 256;
 	exp->wb_bgain = 192;
+	exp->valid_mask = RSS_EXPOSURE_VALID_TOTAL_GAIN | RSS_EXPOSURE_VALID_TIME |
+			  RSS_EXPOSURE_VALID_AE_LUMA | RSS_EXPOSURE_VALID_EV |
+			  RSS_EXPOSURE_VALID_WB_RGAIN | RSS_EXPOSURE_VALID_WB_BGAIN;
 	return RSS_OK;
 }
 

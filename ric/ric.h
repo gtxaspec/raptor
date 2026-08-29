@@ -150,7 +150,7 @@ typedef struct {
 	int probe_holdoff_sec; /* minimum spacing between failed probes (default 60) */
 	int probe_recheck_sec; /* probe anyway after this long in night with no dip:
 				* IR wash can hide ambient light from every AE
-				* metric (default 600, 0 = off) */
+				* metric (default 0/off; probing disturbs video) */
 
 	/* Gain trigger thresholds (legacy, trigger=gain only) */
 	int night_threshold; /* gain above this → night */
@@ -221,10 +221,11 @@ typedef struct {
 
 	/* Baseline settling: gc2053-class AE walks for many seconds after
 	 * the IR lights the scene; the cooldown extends until three
-	 * consecutive polls agree within 10% (walks step and can hold a
-	 * value briefly), within a hard cap, so the baseline reflects a
-	 * settled reading instead of a mid-walk value. */
+	 * consecutive gain and EV polls agree within 2%, within a hard cap,
+	 * so the baseline reflects a settled reading instead of a mid-walk
+	 * value. */
 	uint32_t settle_prev_gain;
+	uint32_t settle_prev_ev;
 	int settle_agree_run;
 	int settle_extend_left;
 

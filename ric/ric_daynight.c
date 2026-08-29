@@ -13,6 +13,8 @@
 #include <fcntl.h>
 #include <sys/ioctl.h>
 
+#include <raptor_hal.h>
+
 #include "ric.h"
 
 /* Backoff for day attempts after a failed verification, in polls
@@ -23,6 +25,13 @@
 /* Polls to let AE settle after an IR-off ambient probe lifts the
  * LEDs, before the luma reading is believed. */
 #define RIC_PROBE_SETTLE_POLLS 3
+
+/* A slow AE walk changes less than 10% per poll and fooled the old
+ * pairwise test into accepting a transition as a night baseline. Two
+ * percent still tolerates normal quantization/noise while rejecting the
+ * measured post-IR walk. */
+#define RIC_BASELINE_SETTLE_PCT		 2
+#define RIC_BASELINE_SETTLE_EXTEND_POLLS 17
 
 /* ── ADC via kernel device nodes ── */
 
@@ -398,6 +407,26 @@ void ric_force_mode(ric_state_t *st, ric_mode_t mode)
 	ric_set_mode(st, mode);
 }
 
+static void ric_baseline_settle_begin(ric_state_t *st)
+{
+	st->settle_prev_gain = 0;
+	st->settle_prev_ev = 0;
+	st->settle_agree_run = 0;
+	st->settle_extend_left = RIC_BASELINE_SETTLE_EXTEND_POLLS;
+}
+
+static bool ric_baseline_value_within(uint32_t previous, uint32_t current)
+{
+	if (previous == 0 || current == 0)
+		return false;
+
+	uint32_t difference = previous > current ? previous - current : current - previous;
+	uint32_t tolerance = (uint32_t)((uint64_t)previous * RIC_BASELINE_SETTLE_PCT / 100);
+	if (tolerance == 0)
+		tolerance = 1;
+	return difference <= tolerance;
+}
+
 /*
  * Re-arm the trigger machinery for a live trigger switch: every counter,
  * baseline and probe in flight describes the OLD trigger's view of the
@@ -417,9 +446,7 @@ void ric_trigger_rearm(ric_state_t *st)
 	st->day_count = 0;
 	st->night_count = 0;
 	st->cooldown_remaining = 3;
-	st->settle_prev_gain = 0;
-	st->settle_agree_run = 0;
-	st->settle_extend_left = 17;
+	ric_baseline_settle_begin(st);
 	st->night_gain_baseline = 0;
 	st->night_ev_baseline = 0;
 	st->night_detect_gain = 0;
@@ -459,9 +486,7 @@ void ric_set_mode(ric_state_t *st, ric_mode_t mode)
 	 * sampling itself extends while AE is still walking (see the
 	 * cooldown block in ric_poll_exposure). */
 	st->cooldown_remaining = 3;
-	st->settle_prev_gain = 0;
-	st->settle_agree_run = 0;
-	st->settle_extend_left = 17;
+	ric_baseline_settle_begin(st);
 	st->probe_recheck_polls = 0; /* re-armed when the baseline lands */
 	if (mode == RIC_MODE_DAY)
 		st->night_gain_baseline = 0;
@@ -534,6 +559,8 @@ void ric_poll_exposure(ric_state_t *st)
 
 	uint32_t total_gain = 0, ae_luma = 0;
 	uint32_t ev = 0;
+	uint32_t valid_mask = 0;
+	bool has_valid_mask = false;
 	uint16_t wb_rgain = 0, wb_bgain = 0;
 	cJSON *parsed = cJSON_Parse(resp);
 	if (!parsed) {
@@ -543,27 +570,34 @@ void ric_poll_exposure(ric_state_t *st)
 	total_gain = json_get_uint(parsed, "total_gain");
 	ae_luma = json_get_uint(parsed, "ae_luma");
 	ev = json_get_uint(parsed, "ev");
+	const cJSON *valid_item = cJSON_GetObjectItem(parsed, "valid_mask");
+	if (cJSON_IsNumber(valid_item)) {
+		valid_mask = (uint32_t)valid_item->valuedouble;
+		has_valid_mask = true;
+	}
 	wb_rgain = (uint16_t)json_get_uint(parsed, "wb_rgain");
 	wb_bgain = (uint16_t)json_get_uint(parsed, "wb_bgain");
 	cJSON_Delete(parsed);
 
 	/*
-	 * Zero means "this backend cannot answer for that field" -- the
-	 * exposure contract raptor-hal documents in hal_isp.c, not a
-	 * convention invented here. A live sensor never reports a mean luma
-	 * of exactly 0, so treating it as absent costs nothing real.
+	 * New HALs report field validity explicitly, because zero can be a real
+	 * reading (notably ae_luma on the first black frame of a cold T31 ISP).
+	 * Keep the old nonzero sentinel behavior for an rvd that predates the
+	 * validity mask so independently upgraded daemons remain compatible.
 	 *
 	 * The ADC trigger reads its own sensor and must not be starved by
 	 * missing exposure data -- it is the very fallback recommended
 	 * below for platforms without a readback.
 	 */
-	bool have_gain = total_gain > 0;
-	bool have_luma = ae_luma > 0;
-	bool have_ev = ev > 0;
+	bool have_gain =
+		has_valid_mask ? (valid_mask & RSS_EXPOSURE_VALID_TOTAL_GAIN) != 0 : total_gain > 0;
+	bool have_luma =
+		has_valid_mask ? (valid_mask & RSS_EXPOSURE_VALID_AE_LUMA) != 0 : ae_luma > 0;
+	bool have_ev = has_valid_mask ? (valid_mask & RSS_EXPOSURE_VALID_EV) != 0 : ev > 0;
 
 	if (st->settings.trigger != RIC_TRIGGER_ADC && !have_gain && !have_luma && !have_ev) {
 		if (!st->no_exposure_warned) {
-			RSS_WARN("no exposure data from rvd (gain, luma and ev all zero) -- "
+			RSS_WARN("no valid gain, luma or ev data from rvd -- "
 				 "holding %s mode. This platform's HAL has no exposure "
 				 "readback; use `raptorctl ric mode day|night`, or "
 				 "trigger=adc if the board has a photoresistor",
@@ -625,19 +659,22 @@ void ric_poll_exposure(ric_state_t *st)
 			 * settled gain then read as a permanent probe dip and the
 			 * IR blinked at every holdoff). AE walks step and can
 			 * hold a value briefly, so one quiet pair is not settled:
-			 * adopt only after three consecutive polls agree within
-			 * 10%, and give up at a hard cap rather than wait
+			 * adopt only after three consecutive gain and EV polls agree
+			 * within 2%, and give up at a hard cap rather than wait
 			 * forever. */
-			bool within =
-				st->settle_prev_gain > 0 && total_gain > 0 &&
-				total_gain <= st->settle_prev_gain + st->settle_prev_gain / 10 &&
-				total_gain >= st->settle_prev_gain - st->settle_prev_gain / 10;
+			bool gain_within = !have_gain || ric_baseline_value_within(
+								 st->settle_prev_gain, total_gain);
+			bool ev_within =
+				!have_ev || ric_baseline_value_within(st->settle_prev_ev, ev);
+			bool within = (have_gain || have_ev) && gain_within && ev_within;
 			st->settle_agree_run = within ? st->settle_agree_run + 1 : 0;
-			/* No gain reported (ADC-only platforms) = nothing to
-			 * settle: adopt immediately, the baseline stays absent. */
-			if (have_gain && st->settle_agree_run < 2 && st->settle_extend_left > 0) {
+			/* Settle every metric used by the dip detector. A platform
+			 * reporting neither has no baseline to qualify. */
+			if ((have_gain || have_ev) && st->settle_agree_run < 2 &&
+			    st->settle_extend_left > 0) {
 				st->settle_extend_left--;
 				st->settle_prev_gain = total_gain;
+				st->settle_prev_ev = ev;
 				st->cooldown_remaining = 1;
 				return;
 			}
@@ -664,6 +701,7 @@ void ric_poll_exposure(ric_state_t *st)
 		/* Every cooldown poll seeds the settling comparison above,
 		 * so the first evaluation has a real predecessor. */
 		st->settle_prev_gain = total_gain;
+		st->settle_prev_ev = ev;
 		return;
 	}
 
@@ -821,6 +859,7 @@ void ric_poll_exposure(ric_state_t *st)
 					/* Cooldown resamples the baseline once the
 					 * restored IR settles. */
 					st->cooldown_remaining = 3;
+					ric_baseline_settle_begin(st);
 					RSS_INFO("probe found darkness; IR restored, next "
 						 "probe in %ds",
 						 st->settings.probe_holdoff_sec);
