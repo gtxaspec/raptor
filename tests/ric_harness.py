@@ -143,6 +143,7 @@ class StubRvd:
 
     def __init__(self):
         self.scene = {}
+        self.scene_queue = []
         self.modes = []  # (monotonic, "day"|"night")
         self.fps_calls = []  # (monotonic, int value) from set-sensor-fps
         self.fps_error = False  # answer set-sensor-fps with an error
@@ -173,6 +174,13 @@ class StubRvd:
     def set_scene(self, **kw):
         with self.lock:
             self.scene = dict(kw)
+            self.scene_queue = []
+
+    def set_scene_sequence(self, scenes):
+        """Return one scripted exposure per query, then hold the last."""
+        with self.lock:
+            self.scene_queue = [dict(sc) for sc in scenes]
+            self.scene = dict(scenes[-1])
 
     def mark(self):
         with self.lock:
@@ -204,7 +212,10 @@ class StubRvd:
                 cmd = json.loads(req).get("cmd", "")
                 if cmd == "get-exposure":
                     with self.lock:
-                        sc = dict(self.scene)
+                        if self.scene_queue:
+                            sc = self.scene_queue.pop(0)
+                        else:
+                            sc = dict(self.scene)
                     resp = {
                         "total_gain": sc.get("gain", 0),
                         "exposure_us": sc.get("exposure_us", 10000),
@@ -1042,7 +1053,7 @@ def scenario_zero_exposure(stub, watch):
         "zero exposure holds mode (no phantom night)",
         str(modes),
     )
-    warns = len(re.findall(r"WARN.*no exposure data", ric.read_log()))
+    warns = len(re.findall(r"WARN.*no valid gain, luma or ev data", ric.read_log()))
     result(warns == 1, "zero exposure warns exactly once", "warns=%d" % warns)
     # Manual override must still work on such platforms.
     gm = watch.mark()
