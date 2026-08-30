@@ -134,13 +134,19 @@ static void load_config(ric_state_t *st)
 
 	/* Probe before the getter stores its default. An explicit runtime
 	 * setting is policy and wins over timing in thingino.json; otherwise
-	 * the device description may replace the fleet's 10ms default with
-	 * the actuator's measured pulse width. */
+	 * the device description may replace the fleet default with the
+	 * actuator's measured pulse width. */
 	c->pulse_ms_explicit = rss_config_get_str(cfg, "ircut", "pulse_ms", NULL) != NULL;
-	/* A zero pulse moves no filter, and holding the coil for seconds is
-	 * a heater. */
+	/* 100ms: 10ms measured 20/20 on one Wyze Cam3 yet intermittently
+	 * failed to move the filter on other units of the same model (day
+	 * state with the filter stuck in night = magenta video), and 100ms
+	 * measured reliable everywhere it has been tried. A coil rated for
+	 * a pulse shrugs off 100ms; a filter that missed its throw does
+	 * not recover until the next transition. Boards with a measured
+	 * timing still declare it in thingino.json. A zero pulse moves no
+	 * filter, and holding the coil for seconds is a heater. */
 	c->pulse_ms =
-		cfg_clamp("pulse_ms", rss_config_get_int(cfg, "ircut", "pulse_ms", 10), 1, 1000);
+		cfg_clamp("pulse_ms", rss_config_get_int(cfg, "ircut", "pulse_ms", 100), 1, 1000);
 
 	if (clamped_keys[0])
 		RSS_WARN("config values out of range, clamped: %s", clamped_keys);

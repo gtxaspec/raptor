@@ -1309,7 +1309,7 @@ def scenario_adc_dead(stub, watch):
 
 
 def scenario_pulse_width(stub, watch):
-    """pulse_ms drives the dual-GPIO coil pulse (default 10, the value
+    """pulse_ms drives the dual-GPIO coil pulse (default 100, the value
     the fleet's ircut script has always used; thingino-firmware #1380).
     100ms must measure as roughly 100ms; 10ms must measure clearly
     shorter. Drain-time stamps cannot resolve 10ms exactly, so the
