@@ -176,7 +176,10 @@ endif
 
 # System libs for HAL-linked daemons
 # Shim must come BEFORE Ingenic SDK libs — symbols must be resolved first.
-LDFLAGS_HAL := $(LDFLAGS_SYSROOT) $(SHIM_LIB) -limp -lalog -lpthread -lrt -lm -ldl -latomic
+# LIB_IMP may name a link-only SDK ABI library while the target image ships
+# another compatible libimp implementation (for example OpenIMP).
+LIB_IMP ?= -limp
+LDFLAGS_HAL := $(LDFLAGS_SYSROOT) $(SHIM_LIB) $(LIB_IMP) -lalog -lpthread -lrt -lm -ldl -latomic
 
 # IVS detection libs
 ifeq ($(IVS_DETECT),1)

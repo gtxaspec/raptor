@@ -120,7 +120,7 @@ static void rvd_stream_enable_refmode(rvd_state_t *st, int idx)
 {
 	rvd_stream_t *s = &st->streams[idx];
 
-	if (!s->ring || s->is_jpeg || s->enc_cfg.codec == RSS_CODEC_JPEG || !st->refmode)
+	if (!s->ring || s->is_jpeg || s->enc_cfg.codec == RSS_CODEC_JPEG || !s->refmode_eligible)
 		return;
 
 	if (st->refmode_shm && st->enc_shm_size[idx] > 0) {
@@ -1356,6 +1356,7 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 	rvd_stream_t *s = &st->streams[idx];
 	rss_config_t *cfg = st->cfg;
 	int ret;
+	s->refmode_eligible = false;
 
 	if (st->hal_caps && !st->hal_caps->has_framesource) {
 		/* No graph to build: the backend's encoder slot owns the
@@ -1563,6 +1564,20 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 		RSS_DEBUG("stream%d bind: %d stages", idx, chain_len);
 	}
 
+	if (!s->is_jpeg && s->enc_cfg.codec != RSS_CODEC_JPEG && st->refmode) {
+		if (st->refmode_shm) {
+			s->refmode_eligible = st->enc_shm_size[idx] > 0;
+		} else if (st->rmem_size > 0 && RSS_HAL_CALL(st->ops, enc_stream_is_rmem,
+							     st->hal_ctx, s->chn) == RSS_OK) {
+			s->refmode_eligible = true;
+		} else {
+			s->refmode_eligible = false;
+			RSS_INFO("stream%d: finalized encoder output is not rmem-backed; "
+				 "using embedded ring",
+				 idx);
+		}
+	}
+
 create_ring:
 	/* ── Create ring (or reuse existing across encoder restart) ── */
 	if (s->ring) {
@@ -1686,9 +1701,7 @@ create_ring:
 			/* Refmode: data region unused, minimal placeholder.
 			 * JPEG (paired channels and JPEG-codec streams) stays
 			 * embedded — needs full data region. */
-			if (!s->is_jpeg && s->enc_cfg.codec != RSS_CODEC_JPEG && st->refmode &&
-			    ((st->refmode_shm && st->enc_shm_size[idx] > 0) ||
-			     (!st->refmode_shm && st->rmem_size > 0)))
+			if (s->refmode_eligible)
 				data = 4096;
 
 			s->ring = rss_ring_create(ring_name, slots_cfg, data);
