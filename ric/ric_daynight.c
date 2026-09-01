@@ -731,8 +731,7 @@ void ric_poll_exposure(ric_state_t *st)
 		 */
 		want_night = have_luma
 				     ? ae_luma < (uint32_t)st->settings.night_luma
-				     : have_gain &&
-					       total_gain > (uint32_t)st->settings.night_gain;
+				     : have_gain && total_gain > (uint32_t)st->settings.night_gain;
 
 		/* Luma is trustworthy for the day direction only while no
 		 * IR bank pours light into the scene: none configured or
