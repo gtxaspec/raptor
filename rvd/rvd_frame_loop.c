@@ -155,7 +155,24 @@ void *rvd_encoder_thread(void *arg)
 					}
 				}
 				had_readers = true;
-				RSS_HAL_CALL(st->ops, enc_start, st->hal_ctx, s->chn);
+				/*
+				 * Marking the stream enabled after an enc_start
+				 * that failed leaves rvd's view and the
+				 * encoder's disagreeing, and the disagreement
+				 * surfaces somewhere else entirely: the IDR
+				 * check below is the next statement to run, so
+				 * the first visible symptom is
+				 * MI_ERR_VENC_CHN_NOT_STARTED against a channel
+				 * this loop believes it started. Report the
+				 * start failure where it happens, and retry.
+				 */
+				int sret = RSS_HAL_CALL(st->ops, enc_start, st->hal_ctx, s->chn);
+				if (sret != RSS_OK) {
+					RSS_WARN("jpeg chn %d: enc_start failed (%d), retrying",
+						 s->chn, sret);
+					usleep(100000);
+					continue;
+				}
 				s->enabled = true;
 				RSS_DEBUG("jpeg chn %d: started (%u consumers)", s->chn,
 					  rss_ring_reader_count(s->ring));
