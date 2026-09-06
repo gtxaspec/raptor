@@ -21,7 +21,7 @@ Checks:
 | Token | What it does |
 |-------|--------------|
 | `format` | diff-scoped `git-clang-format-19` (staged at commit, outgoing range at push), same exclusions as CI |
-| `json-gate` | no hand-written JSON in production C — calls `../json-gate.sh`, the same script `test-all.sh` stage 0 runs |
+| `json-gate` | no hand-written JSON in production C — calls `../json-gate.sh`, the same script `test-all.sh` stage 0 runs. Two rules over runs of concatenated string literals (`json-scan.py`): a run opening an object onto a quoted key, and a run carrying a JSON key separator together with a printf conversion. Falls back to the old single-line grep without python3 |
 | `ips` | refuses lab/private addresses (`10.x`, `192.168.x`) in touched files — the check CI cannot do for you |
 | `trailers` | refuses Signed-off-by / Co-authored-by / review-tag trailer lines, in the message at commit and across the range at push |
 
@@ -51,3 +51,8 @@ it always did.
   people learn to `--no-verify` by reflex.
 - `json-gate.sh` is the single source for the JSON rule; the suite
   and the hooks both call it. Never fork the pattern.
+- The JSON rule carries its own cases: `json-scan.py --selftest`, run
+  by `--tree` before it scans anything. It exists because the rule
+  under-matched for three weeks and only a tree-wide run ever noticed.
+  Add a case with every widening, and one for every near miss that
+  must stay silent.
