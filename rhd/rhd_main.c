@@ -54,6 +54,13 @@ static uint64_t jpeg_frame_utc(rss_ring_t *ring, const rss_ring_slot_t *meta)
 static const char *jpeg_ring_names[RHD_MAX_JPEG] = {"jpeg0",	"jpeg1",    "s1_jpeg0",
 						    "s1_jpeg1", "s2_jpeg0", "s2_jpeg1"};
 
+static int64_t rhd_now_ms(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
 /*
  * Open a JPEG ring slot and size the shared frame buffers for it.
  * Rings come and go with encoder idle management, so every consumer
@@ -73,6 +80,7 @@ static rss_ring_t *jpeg_ring_open_slot(rhd_server_t *srv, int j)
 	rss_ring_check_version(ring, jpeg_ring_names[j]);
 	srv->jpeg_rings[j] = ring;
 	srv->jpeg_read_seqs[j] = 0;
+	srv->jpeg_last_frame_ms[j] = rhd_now_ms();
 
 	uint32_t mfs = rss_ring_max_frame_size(ring);
 	uint32_t cap = mfs + RSS_JPEG_EXIF_MAX + RSS_JPEG_SIG_SEGMENT;
@@ -102,6 +110,55 @@ static rss_ring_t *jpeg_ring_open_slot(rhd_server_t *srv, int j)
 	RSS_TRACE("jpeg ring open (%s, %u byte frames)", jpeg_ring_names[j], mfs);
 	return ring;
 }
+
+/*
+ * Release a ring's demand, if held, and close it. The counters that track
+ * a ring's liveness live on the main loop's stack, so each caller resets
+ * its own beside the call.
+ */
+static void jpeg_ring_close_slot(rhd_server_t *srv, int j, bool *acquired)
+{
+	if (*acquired) {
+		rss_ring_release(srv->jpeg_rings[j]);
+		*acquired = false;
+	}
+	rss_ring_close(srv->jpeg_rings[j]);
+	srv->jpeg_rings[j] = NULL;
+}
+
+/*
+ * Ask whether this is still the ring we opened, and swap it for its
+ * successor if it is not.
+ *
+ * A restarted producer unlinks the name and creates a new file, leaving
+ * this handle on an orphan whose write_seq and incarnation are both
+ * frozen -- so a read returns EAGAIN rather than overflow, the restart
+ * signal a consumer is supposed to watch cannot fire, and nothing but
+ * the file's identity can tell the orphan from a ring that is merely
+ * quiet. rss_ring_stale() compares the inode we mapped against the one
+ * the name resolves to now, which is the question that survives.
+ */
+static bool jpeg_ring_recycle_if_stale(rhd_server_t *srv, int j, bool *acquired, bool wanted,
+				       int *idle, uint64_t *last_ws)
+{
+	if (!srv->jpeg_rings[j] || !rss_ring_stale(srv->jpeg_rings[j]))
+		return false;
+
+	RSS_DEBUG("jpeg ring replaced by a new producer, reopening (%s)", jpeg_ring_names[j]);
+	jpeg_ring_close_slot(srv, j, acquired);
+	*idle = 0;
+	*last_ws = 0;
+
+	if (jpeg_ring_open_slot(srv, j) && wanted) {
+		rss_ring_acquire(srv->jpeg_rings[j]);
+		*acquired = true;
+	}
+	return true;
+}
+
+/* How long a ring that owes a frame may stay quiet before its identity is
+ * worth a syscall. Longer than any frame interval rhd serves. */
+#define JPEG_QUIET_MS 1500
 
 /*
  * Park a /snap request. Demand on the ring is not signalled here: the main
@@ -349,6 +406,9 @@ static void snap_poll(rhd_server_t *srv)
 		int ret = srv->snap_buf ? rss_ring_read(ring, &c->snap_seq, srv->snap_buf,
 							srv->snap_buf_size, &len, &meta)
 					: -1;
+
+		if (ret == 0)
+			srv->jpeg_last_frame_ms[c->snap_stream] = now;
 
 		/* Lapped by the writer: resync onto the newest frame and retry. */
 		if (ret == RSS_EOVERFLOW) {
@@ -714,6 +774,8 @@ static void server_run(rhd_server_t *srv)
 							    &srv->jpeg_read_seqs[j], srv->frame_buf,
 							    srv->frame_buf_size, &len, &meta);
 				}
+				if (ret == 0)
+					srv->jpeg_last_frame_ms[j] = rhd_now_ms();
 				if (ret == 0 && len >= 2 && srv->frame_buf[0] == 0xFF &&
 				    srv->frame_buf[1] == 0xD8) {
 					if (srv->exif_timestamp) {
@@ -726,6 +788,28 @@ static void server_run(rhd_server_t *srv)
 					stream_mjpeg_frame(srv, j, srv->frame_buf, len);
 				}
 			}
+		}
+
+		/*
+		 * A ring someone is waiting on that has produced nothing for
+		 * longer than a frame interval gets asked whether its producer
+		 * has been replaced. The periodic sweep below asks the same
+		 * question, but only every twentieth pass: twenty seconds is
+		 * nothing to a recording and an age to someone watching the
+		 * preview they just changed.
+		 */
+		int64_t quiet_now = rhd_now_ms();
+		for (int j = 0; j < RHD_MAX_JPEG; j++) {
+			if (!srv->jpeg_rings[j] || !ring_wanted[j])
+				continue;
+			if (quiet_now - srv->jpeg_last_frame_ms[j] < JPEG_QUIET_MS)
+				continue;
+			/* Merely idle is the usual answer. Restart the clock
+			 * either way, so the question costs one shm_open per
+			 * quiet interval rather than one per pass. */
+			srv->jpeg_last_frame_ms[j] = quiet_now;
+			jpeg_ring_recycle_if_stale(srv, j, &ring_acquired[j], ring_wanted[j],
+						   &jpeg_idle[j], &jpeg_last_ws[j]);
 		}
 
 		snap_poll(srv);
@@ -969,28 +1053,12 @@ static void server_run(rhd_server_t *srv)
 		if (++jpeg_reconnect_tick >= 20) {
 			jpeg_reconnect_tick = 0;
 			for (int j = 0; j < RHD_MAX_JPEG; j++) {
-				/*
-				 * A restarted producer unlinks the name and creates a
-				 * new file, leaving this handle on an orphan whose
-				 * write_seq and incarnation are both frozen -- so
-				 * neither a read nor the idle counter below can tell
-				 * it from a ring that is merely quiet, and only the
-				 * file's identity can. Closing here falls into the
-				 * reopen below, in this same pass.
-				 */
-				if (srv->jpeg_rings[j] && rss_ring_stale(srv->jpeg_rings[j])) {
-					RSS_DEBUG("jpeg ring replaced by a new producer, "
-						  "reopening (%s)",
-						  jpeg_ring_names[j]);
-					if (ring_acquired[j]) {
-						rss_ring_release(srv->jpeg_rings[j]);
-						ring_acquired[j] = false;
-					}
-					rss_ring_close(srv->jpeg_rings[j]);
-					srv->jpeg_rings[j] = NULL;
-					jpeg_idle[j] = 0;
-					jpeg_last_ws[j] = 0;
-				}
+				/* Catches a ring nobody is waiting on, which the
+				 * prompt check above skips. */
+				if (jpeg_ring_recycle_if_stale(srv, j, &ring_acquired[j],
+							       ring_wanted[j], &jpeg_idle[j],
+							       &jpeg_last_ws[j]))
+					continue;
 
 				if (!srv->jpeg_rings[j]) {
 					if (jpeg_ring_open_slot(srv, j) && ring_wanted[j]) {
@@ -1022,12 +1090,7 @@ static void server_run(rhd_server_t *srv)
 				    !snap_waiting_on(srv, j)) { /* ~20s (10 ticks * 2s/tick) */
 					RSS_TRACE("jpeg ring idle, closing (%s)",
 						  jpeg_ring_names[j]);
-					if (ring_acquired[j]) {
-						rss_ring_release(srv->jpeg_rings[j]);
-						ring_acquired[j] = false;
-					}
-					rss_ring_close(srv->jpeg_rings[j]);
-					srv->jpeg_rings[j] = NULL;
+					jpeg_ring_close_slot(srv, j, &ring_acquired[j]);
 					jpeg_idle[j] = 0;
 				}
 			}
