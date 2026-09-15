@@ -169,6 +169,25 @@ static rss_rc_mode_t parse_rc_mode(const char *s)
 	return RSS_RC_VBR;
 }
 
+/* Parse the dual-sensor ISP input mode ([sensor0] dual_mode, T40) */
+static rss_dual_mode_t parse_dual_mode(const char *s)
+{
+	if (!s || !s[0])
+		return RSS_DUAL_MODE_DEFAULT;
+	if (strcasecmp(s, "allcached") == 0)
+		return RSS_DUAL_MODE_ALLCACHED;
+	if (strcasecmp(s, "singlecached") == 0)
+		return RSS_DUAL_MODE_SINGLECACHED;
+	if (strcasecmp(s, "direct") == 0)
+		return RSS_DUAL_MODE_DIRECT;
+	if (strcasecmp(s, "select") == 0)
+		return RSS_DUAL_MODE_SELECT;
+	if (strcasecmp(s, "bypass") == 0)
+		return RSS_DUAL_MODE_BYPASS;
+	RSS_WARN("unknown dual_mode '%s', using the platform default", s);
+	return RSS_DUAL_MODE_DEFAULT;
+}
+
 static const char *codec_str(rss_codec_t c)
 {
 	switch (c) {
@@ -731,6 +750,11 @@ int rvd_pipeline_init(rvd_state_t *st)
 			multi_cfg.mipi_switch.switch_gpio2 =
 				rss_config_get_int(cfg, "mipi_switch", "switch_gpio2", 0);
 		}
+
+		/* Dual-sensor ISP input mode (T40) */
+		multi_cfg.dual_mode =
+			parse_dual_mode(rss_config_get_str(cfg, "sensor0", "dual_mode", ""));
+		multi_cfg.dual_select = rss_config_get_int(cfg, "sensor0", "dual_select", 0);
 
 		RSS_INFO("multi-sensor mode: %d sensors", multi_cfg.sensor_count);
 	} else {
