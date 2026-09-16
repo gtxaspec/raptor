@@ -1803,10 +1803,9 @@ def scenario_ctrl_extras(stub, watch):
            "set-threshold: unknown key rejected", str(r))
     ric.stop()
 
-    # night_gain and day_gain_pct retune live too: a bright-luma scene
-    # goes night once its gain sits above a lowered night_gain, and the
-    # baseline ratio releases it once day_gain_pct is raised over the
-    # current gain fraction.
+    # Valid luma is authoritative: lowering night_gain must not turn a
+    # bright scene dark. If luma then becomes unavailable, night_gain is
+    # the fallback; day_gain_pct still controls the night baseline ratio.
     stub.set_scene(luma=120, gain=50000, ev=4000)
     ric = Ric("ctrlx2", LUMA_CONF)
     if not ric.wait_running():
@@ -1817,12 +1816,17 @@ def scenario_ctrl_extras(stub, watch):
     mm = stub.mark()
     ctrl_cmd(RUN_DIR + "/ric.sock",
              {"cmd": "set-threshold", "key": "night_gain", "value": 40000})
+    time.sleep(1.0)
+    result("night" not in stub.modes_since(mm),
+           "set-threshold: gain cannot overrule valid bright luma",
+           str(stub.modes_since(mm)))
+    stub.set_scene(luma=0, gain=50000, ev=4000)
     ok = wait_for(lambda: "night" in stub.modes_since(mm), 4)
-    result(ok, "set-threshold: night_gain drives the gain term live",
+    result(ok, "set-threshold: night_gain covers missing luma",
            str(stub.modes_since(mm)))
     time.sleep((3 + 1) * POLL_MS / 1000.0)  # cooldown: baseline = 50000
     # gain holds at 60% of baseline: below 25% never comes, 70% releases
-    stub.set_scene(luma=120, gain=30000, ev=4000)
+    stub.set_scene(luma=0, gain=30000, ev=4000)
     time.sleep(1.0)
     still_night = "day" not in stub.modes_since(mm)
     ctrl_cmd(RUN_DIR + "/ric.sock",
