@@ -8,6 +8,7 @@ extern SUITE(sdp_suite);
 extern SUITE(codec_suite);
 extern SUITE(ring_suite);
 extern SUITE(vui_suite);
+extern SUITE(ring_size_suite);
 extern SUITE(rsp_url_suite);
 extern SUITE(rsp_amf0_suite);
 extern SUITE(rsp_chunk_suite);
@@ -44,6 +45,7 @@ int main(int argc, char **argv)
 	RUN_SUITE(codec_suite);
 	RUN_SUITE(ring_suite);
 	RUN_SUITE(vui_suite);
+	RUN_SUITE(ring_size_suite);
 	RUN_SUITE(rsp_url_suite);
 	RUN_SUITE(rsp_amf0_suite);
 	RUN_SUITE(rsp_chunk_suite);
