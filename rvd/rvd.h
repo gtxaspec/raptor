@@ -38,6 +38,7 @@ typedef struct {
 	bool vbs_fallback_tried;    /* one-shot single-buffer fallback consumed */
 	int64_t started_us;	    /* last rvd_stream_start, for the fallback grace */
 	bool is_jpeg;		    /* true for snapshot channel */
+	bool refmode_eligible;	    /* finalized encoder output is externally referenceable */
 	bool jpeg_idle;		    /* true = stop encoder when no consumers */
 	int64_t pulse_next_us;	    /* jpeg_pulse: earliest next RecvPic start */
 	uintptr_t enc_buf_addrs[8]; /* refmode: unique virAddr bases seen */
