@@ -672,6 +672,27 @@ static void osd_pool_cb(const char *section, void *ud)
 	}
 }
 
+/* Read an int without rss_config_get_int's populate-on-miss side effect.
+ *
+ * rss_config_get_int stores the default back into the section when the key is
+ * absent, so a later read of the same key with a different default sees this
+ * first one instead of its own. That is wrong for a placeholder read taken
+ * before the real value is known: the OSD pool estimate below reads the stream
+ * dimensions with stand-in defaults (the sensor resolution is not queried until
+ * after HAL init), and load_stream_config reads them again with the
+ * sensor-derived default. A populating read here would pin every stream to the
+ * stand-in and quietly downscale a full-resolution sensor to it. */
+static int cfg_peek_int(rss_config_t *cfg, const char *section, const char *key, int def)
+{
+	const char *val = rss_config_get_str(cfg, section, key, NULL);
+	if (!val)
+		return def;
+
+	char *end;
+	long v = strtol(val, &end, 0);
+	return end == val ? def : (int)v;
+}
+
 int rvd_pipeline_init(rvd_state_t *st)
 {
 	rss_config_t *cfg = st->cfg;
@@ -806,16 +827,23 @@ int rvd_pipeline_init(rvd_state_t *st)
 	 * finds nothing once the previous instance has deinitialized) —
 	 * so unset stream dims fall back to a 4MP-class ceiling for POOL
 	 * sizing only. The streams themselves resolve their dims after
-	 * init from the sensor; the values stored by these reads are
-	 * display-only and never become configuration. */
+	 * init from the sensor, which is why these reads must not store
+	 * anything: rss_config_get_int populates the section on a miss,
+	 * and that is what used to pin every stream to the stand-in.
+	 * cfg_peek_int does not. */
 	{
 		int font_size = rss_config_get_int(cfg, "osd", "font_size", 24);
 		if (font_size < 10)
 			font_size = 10;
-		int main_w = rss_config_get_int(cfg, "stream0", "width", 2560);
-		int main_h = rss_config_get_int(cfg, "stream0", "height", 1440);
-		int sub_w = rss_config_get_int(cfg, "stream1", "width", 640);
-		int sub_h = rss_config_get_int(cfg, "stream1", "height", 360);
+		/* Placeholder dimensions for the estimate only — read without
+		 * populating, so the sensor's true resolution still reaches the
+		 * streams (see cfg_peek_int). They scale the sub-stream region as
+		 * a ratio of the main, so a stand-in that differs from the eventual
+		 * resolution only nudges the estimate, which carries headroom. */
+		int main_w = cfg_peek_int(cfg, "stream0", "width", 2560);
+		int main_h = cfg_peek_int(cfg, "stream0", "height", 1440);
+		int sub_w = cfg_peek_int(cfg, "stream1", "width", 640);
+		int sub_h = cfg_peek_int(cfg, "stream1", "height", 360);
 		bool has_sub = rss_config_get_bool(cfg, "stream1", "enabled", true);
 
 		uint32_t osd_pool = 0;
