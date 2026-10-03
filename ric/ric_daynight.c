@@ -1,8 +1,9 @@
 /*
  * ric_daynight.c -- IR-cut filter and day/night mode control
  *
- * Supports single GPIO (one pin toggles) and dual GPIO (two pins
- * pulsed for motor-driven IR-cut filters).
+ * Supports single GPIO (one pin toggles), dual GPIO (two pins pulsed
+ * for motor-driven IR-cut filters), and the tmi8152 character device
+ * (the driver drives the coil).
  */
 
 #include <errno.h>
@@ -274,13 +275,43 @@ void ric_set_isp_mode(ric_mode_t mode)
 }
 
 /*
+ * tmi8152 character device contract: exactly one byte per write, '1'
+ * to set the filter and '0' to remove it. The driver pulses the coil
+ * and serializes against the motor sharing its SPI bus, so neither
+ * timing nor polarity is configurable here.
+ */
+#define TMI8152_IRCUT_DEV "/dev/tmi8152_ir_cut"
+
+static void tmi_ircut_set(ric_mode_t pos)
+{
+	char val = pos == RIC_MODE_NIGHT ? '0' : '1';
+
+	int fd = open(TMI8152_IRCUT_DEV, O_WRONLY | O_CLOEXEC);
+	if (fd < 0) {
+		RSS_WARN("ircut: %s: cannot open: %s", TMI8152_IRCUT_DEV, strerror(errno));
+		return;
+	}
+	if (write(fd, &val, 1) != 1)
+		RSS_WARN("ircut: %s: write %c failed: %s", TMI8152_IRCUT_DEV, val, strerror(errno));
+	else
+		RSS_INFO("ircut: tmi8152=%c (%s)", val, pos == RIC_MODE_NIGHT ? "night" : "day");
+	close(fd);
+}
+
+/*
  * Drive the IR-cut filter alone. Exported for raptorctl's manual
  * control; a manual position lasts until the next mode switch
- * reasserts the automatic one. Returns -1 when no ircut pin exists.
+ * reasserts the automatic one. Returns -1 when the board has no
+ * filter ric can drive.
  */
 int ric_ircut_drive(ric_state_t *st, ric_mode_t pos)
 {
 	ric_config_t *c = &st->settings;
+
+	if (c->ircut_tmi) {
+		tmi_ircut_set(pos);
+		return 0;
+	}
 
 	if (c->gpio_ircut < 0)
 		return -1;

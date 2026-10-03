@@ -56,6 +56,11 @@ static void load_config(ric_state_t *st)
 
 	c->gpio_ircut = rss_config_get_int(cfg, "ircut", "gpio_ircut", -1);
 	c->gpio_ircut2 = rss_config_get_int(cfg, "ircut", "gpio_ircut2", -1);
+	/* The marker names a backend, not a line to export. */
+	if (c->gpio_ircut == RIC_IRCUT_TMI8152) {
+		c->ircut_tmi = true;
+		c->gpio_ircut = -1;
+	}
 	c->gpio_irled = rss_config_get_int(cfg, "ircut", "gpio_irled", -1);
 	c->gpio_irled2 = rss_config_get_int(cfg, "ircut", "gpio_irled2", -1);
 	/* These pair with manually configured pins; a pin discovered from
@@ -684,12 +689,13 @@ int main(int argc, char **argv)
 
 	static const char *trigger_names[] = {"luma", "gain", "adc", "photo"};
 	RSS_INFO("ric running (mode=%s, trigger=%s, gpio_ircut=%d, gpio_ircut2=%d, gpio_irled=%d, "
-		 "gpio_irled2=%d)",
+		 "gpio_irled2=%d%s)",
 		 st.settings.opmode == RIC_AUTO
 			 ? "auto"
 			 : (st.settings.opmode == RIC_FORCE_DAY ? "day" : "night"),
 		 trigger_names[st.settings.trigger], st.settings.gpio_ircut,
-		 st.settings.gpio_ircut2, st.settings.gpio_irled, st.settings.gpio_irled2);
+		 st.settings.gpio_ircut2, st.settings.gpio_irled, st.settings.gpio_irled2,
+		 st.settings.ircut_tmi ? ", ircut=tmi8152" : "");
 	if (st.settings.trigger == RIC_TRIGGER_ADC) {
 		RSS_DEBUG("  adc: channel=%d night=%d day=%d", st.settings.adc_channel,
 			  st.settings.adc_night, st.settings.adc_day);
