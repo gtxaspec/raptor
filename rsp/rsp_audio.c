@@ -153,7 +153,7 @@ rsp_audio_enc_t *rsp_audio_init(uint32_t input_codec, uint32_t sample_rate)
 
 	/* Init faac encoder at output rate (48kHz for RTMP compatibility) */
 	faac_params params;
-	faac_status status = faac_params_init(&params);
+	faac_status status = faac_params_init(&params, sizeof(params));
 	if (status != FAAC_OK) {
 		RSS_ERROR("rsp_audio: faac params init failed: %s", faac_strerror(status));
 		free(enc);
