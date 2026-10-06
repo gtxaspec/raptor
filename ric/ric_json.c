@@ -46,6 +46,7 @@
 #include "ric_json.h"
 
 #define GPIO_PIN_MAX 191
+#define TMI8152_DEV  999 /* fleet marker for the motor-driver char device */
 
 /*
  * Bound the read explicitly rather than by the size of whatever
@@ -100,7 +101,7 @@ static bool gpio_pin_pair(const char *s, const char *key, int *pin, int *pin2, b
 			RSS_WARN("gpio.%s \"%s\" is not pin notation -- ignored", key, s);
 		return false;
 	}
-	if (v == RIC_IRCUT_TMI8152) {
+	if (v == TMI8152_DEV) {
 		*tmi = true;
 		return false;
 	}
@@ -175,7 +176,7 @@ static bool ircut_object(const cJSON *item, int *pin, int *pin2, bool *active_lo
 {
 	const cJSON *p = cJSON_GetObjectItemCaseSensitive(item, "pin");
 	if (cJSON_IsNumber(p)) {
-		if (p->valueint == RIC_IRCUT_TMI8152) {
+		if (p->valueint == TMI8152_DEV) {
 			*tmi = true;
 			return false;
 		}
@@ -319,7 +320,7 @@ void ric_json_gpio_load(ric_config_t *c, const char *path)
 		int pin = -1, pin2 = -1;
 		bool alow = false;
 		if (cJSON_IsNumber(ircut)) {
-			if (ircut->valueint == RIC_IRCUT_TMI8152)
+			if (ircut->valueint == TMI8152_DEV)
 				c->ircut_tmi = true;
 			else if (valid_gpio(ircut->valueint))
 				pin = ircut->valueint;

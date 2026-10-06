@@ -11,13 +11,6 @@
 #include <rss_ipc.h>
 #include <rss_common.h>
 
-/*
- * Fleet marker, accepted wherever an IR-cut pin is configured: the
- * filter hangs off the tmi8152 motor-driver character device rather
- * than a GPIO line.
- */
-#define RIC_IRCUT_TMI8152 999
-
 /* Day/night state */
 typedef enum {
 	RIC_MODE_UNSET = -1, /* startup only: forces the first set through */
@@ -130,6 +123,7 @@ typedef struct {
 	/* GPIO pins (-1 = not used) */
 	int gpio_ircut;	 /* IR-cut filter pin (single GPIO mode) */
 	int gpio_ircut2; /* second pin for dual GPIO mode, -1 = single */
+	bool ircut_tmi; /* supersedes ircut pins; pulse_ms and ircut_active_low do not apply */
 	int gpio_irled;	 /* IR LED enable pin (ir850) */
 	int gpio_irled2; /* second IR LED pin (ir940), -1 = none */
 	/*
@@ -141,12 +135,6 @@ typedef struct {
 	bool ircut_active_low;	/* single-pin ircut driven inverted */
 	bool irled_active_low;	/* ir850 bank lights on 0 */
 	bool irled2_active_low; /* ir940 bank lights on 0 */
-	/*
-	 * Filter on the tmi8152 character device, which supersedes the
-	 * ircut pins: the driver owns the coil, so pulse width and
-	 * polarity are not ric's to express.
-	 */
-	bool ircut_tmi;
 	bool ir850_enabled;
 	bool ir940_enabled;
 	bool ir940_explicit; /* config carries an ir940 key (vs the default) */

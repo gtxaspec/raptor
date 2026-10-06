@@ -56,11 +56,7 @@ static void load_config(ric_state_t *st)
 
 	c->gpio_ircut = rss_config_get_int(cfg, "ircut", "gpio_ircut", -1);
 	c->gpio_ircut2 = rss_config_get_int(cfg, "ircut", "gpio_ircut2", -1);
-	/* The marker names a backend, not a line to export. */
-	if (c->gpio_ircut == RIC_IRCUT_TMI8152) {
-		c->ircut_tmi = true;
-		c->gpio_ircut = -1;
-	}
+	c->ircut_tmi = rss_config_get_bool(cfg, "ircut", "ircut_tmi8152", false);
 	c->gpio_irled = rss_config_get_int(cfg, "ircut", "gpio_irled", -1);
 	c->gpio_irled2 = rss_config_get_int(cfg, "ircut", "gpio_irled2", -1);
 	/* These pair with manually configured pins; a pin discovered from
