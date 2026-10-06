@@ -61,7 +61,12 @@ static int aac_init(rad_codec_ctx_t *ctx, rss_config_t *cfg, int sample_rate)
 	}
 
 	faac_params params;
-	faac_status status = faac_params_init(&params, sizeof(params));
+	/* caller_size arrived with faac ABI 2. */
+#if defined(FAAC_VERSION_MAJOR) && (FAAC_VERSION_MAJOR >= 2)
+	faac_status status = faac_params_init(&params, (uint32_t)sizeof(params));
+#else
+	faac_status status = faac_params_init(&params);
+#endif
 	if (status != FAAC_OK) {
 		free(st);
 		return -1;
