@@ -49,6 +49,14 @@ static int direct_write(const void *buf, uint32_t len, void *ctx)
 			if (errno == ENOSPC) {
 				RSS_ERROR("SD card full, stopping recording");
 				atomic_store(&st->recording, false);
+			} else {
+				/* Storage failed mid-segment (I/O error,
+				 * NFS soft-mount timeout): the file has
+				 * holes where the lost writes should be.
+				 * The current segment is poisoned; abort
+				 * it and let the normal flow start a
+				 * fresh one at the next keyframe. */
+				st->segment_write_error = true;
 			}
 			return -1;
 		}
@@ -80,6 +88,7 @@ static int clip_write(const void *buf, uint32_t len, void *ctx)
 			if (errno == EINTR)
 				continue;
 			RSS_ERROR("clip write error: %s", strerror(errno));
+			st->clip_write_error = true;
 			return -1;
 		}
 	}
@@ -110,6 +119,7 @@ static int tl_write(const void *buf, uint32_t len, void *ctx)
 			if (errno == EINTR)
 				continue;
 			RSS_ERROR("timelapse write error: %s", strerror(errno));
+			st->tl_write_error = true;
 			return -1;
 		}
 	}
@@ -210,8 +220,9 @@ static int start_segment(rmr_state_t *st)
 static void close_segment(rmr_state_t *st)
 {
 	if (st->mux) {
-		rmr_mux_finalize(st->mux);
-		if (st->sign_enabled)
+		if (!st->segment_write_error && rmr_mux_finalize(st->mux) < 0)
+			st->segment_write_error = true;
+		if (!st->segment_write_error && st->sign_enabled)
 			rmr_sign_stream_emit(&st->sign_seg, true, direct_write, st);
 		rmr_mux_destroy(st->mux);
 		st->mux = NULL;
@@ -222,9 +233,15 @@ static void close_segment(rmr_state_t *st)
 
 	if (fd >= 0) {
 		rmr_storage_close_segment(fd);
-		RSS_DEBUG("segment closed: %s (%" PRIu64 " frames, %" PRIu64 " bytes)",
-			  st->segment_path, st->frames_written, st->bytes_written);
+		if (st->segment_write_error)
+			RSS_WARN("segment aborted after write error, file kept: %s",
+				 st->segment_path);
+		else
+			RSS_DEBUG("segment closed: %s (%" PRIu64 " frames, %" PRIu64
+				  " bytes)",
+				  st->segment_path, st->frames_written, st->bytes_written);
 	}
+	st->segment_write_error = false;
 }
 
 /* ── Motion clip management ── */
@@ -250,6 +267,7 @@ static int open_clip(rmr_state_t *st)
 	st->clip_a_ts_base = -1;
 	st->clip_start_us = rss_timestamp_us();
 	st->clip_bytes = 0;
+	st->clip_write_error = false;
 
 	setup_mux_tracks(st->clip_mux, st);
 	if (st->sign_enabled)
@@ -265,18 +283,24 @@ static int open_clip(rmr_state_t *st)
 static void close_clip(rmr_state_t *st)
 {
 	if (st->clip_mux) {
-		rmr_mux_finalize(st->clip_mux);
-		if (st->sign_enabled)
+		if (!st->clip_write_error && rmr_mux_finalize(st->clip_mux) < 0)
+			st->clip_write_error = true;
+		if (!st->clip_write_error && st->sign_enabled)
 			rmr_sign_stream_emit(&st->sign_clip, true, clip_write, st);
 		rmr_mux_destroy(st->clip_mux);
 		st->clip_mux = NULL;
 	}
 	if (st->clip_fd >= 0) {
 		rmr_storage_close_segment(st->clip_fd);
-		RSS_DEBUG("motion clip closed: %s (%" PRIu64 " bytes)", st->clip_path,
-			  st->clip_bytes);
+		if (st->clip_write_error)
+			RSS_WARN("motion clip aborted after write error, file kept: %s",
+				 st->clip_path);
+		else
+			RSS_DEBUG("motion clip closed: %s (%" PRIu64 " bytes)", st->clip_path,
+				  st->clip_bytes);
 		st->clip_fd = -1;
 	}
+	st->clip_write_error = false;
 }
 
 /* ── Timelapse file management ── */
@@ -302,11 +326,16 @@ static void close_timelapse(rmr_state_t *st)
 	}
 	if (st->tl_fd >= 0) {
 		rmr_storage_close_segment(st->tl_fd);
-		RSS_INFO("timelapse file closed: %s (%u frames, %" PRIu64 " bytes)", st->tl_path,
-			 st->tl.frames_in_file, st->tl_bytes);
+		if (st->tl_write_error)
+			RSS_WARN("timelapse file aborted after write error, file kept: %s",
+				 st->tl_path);
+		else
+			RSS_INFO("timelapse file closed: %s (%u frames, %" PRIu64 " bytes)",
+				 st->tl_path, st->tl.frames_in_file, st->tl_bytes);
 		st->tl_fd = -1;
 	}
 	st->tl.file_day = 0;
+	st->tl_write_error = false;
 }
 
 static int open_timelapse(rmr_state_t *st, int32_t day)
@@ -334,6 +363,7 @@ static int open_timelapse(rmr_state_t *st, int32_t day)
 
 	st->tl_fd = fd;
 	st->tl_bytes = 0;
+	st->tl_write_error = false;
 
 	/* Fragment-per-sample: without a next sample to derive from, each
 	 * sample's declared duration must be the playback grid step or the
@@ -367,7 +397,12 @@ static void timelapse_write_sample(rmr_state_t *st, const uint8_t *data, uint32_
 	/* Every sample is a keyframe: fragment-per-sample keeps the file
 	 * valid to the last written frame and chains a signature box per
 	 * sample, mirroring the per-GOP pattern of the other writers. */
-	rmr_mux_flush_fragment(st->tl_mux);
+	if (rmr_mux_flush_fragment(st->tl_mux) < 0) {
+		/* Abort the poisoned file; the next sample reopens. */
+		st->tl_write_error = true;
+		close_timelapse(st);
+		return;
+	}
 	if (st->sign_enabled)
 		rmr_sign_stream_emit(&st->sign_tl, false, tl_write, st);
 
@@ -403,8 +438,9 @@ static void clip_write_video(rmr_state_t *st, const uint8_t *avcc, uint32_t avcc
 	};
 
 	if (is_key) {
-		rmr_mux_flush_fragment(st->clip_mux);
-		if (st->sign_enabled)
+		if (rmr_mux_flush_fragment(st->clip_mux) < 0)
+			st->clip_write_error = true;
+		if (st->sign_enabled && !st->clip_write_error)
 			rmr_sign_stream_emit(&st->sign_clip, false, clip_write, st);
 	}
 	rmr_mux_write_video(st->clip_mux, &vs);
@@ -1062,22 +1098,35 @@ static void record_loop(rmr_state_t *st)
 					st->segment_idr_requested = true;
 				}
 				if (meta.is_key) {
-					rmr_mux_flush_fragment(st->mux);
-					if (st->sign_enabled)
+					if (rmr_mux_flush_fragment(st->mux) < 0)
+						st->segment_write_error = true;
+					if (st->sign_enabled && !st->segment_write_error)
 						rmr_sign_stream_emit(&st->sign_seg, false,
 								     direct_write, st);
 					st->frames_since_flush = 0;
-					if (rmr_storage_should_rotate_at(
-						    st->storage, st->segment_start_rt_us, now_rt)) {
+					if (st->segment_write_error) {
+						/* The write stream broke (I/O
+						 * error, NFS timeout): stop
+						 * writing to this file (left in
+						 * place). The normal flow below
+						 * starts a fresh one at the next
+						 * keyframe. */
+						close_segment(st);
+					} else if (rmr_storage_should_rotate_at(
+							   st->storage, st->segment_start_rt_us,
+							   now_rt)) {
 						close_segment(st);
 						rmr_storage_enforce_limit(st->storage);
 					}
 				} else if (st->frames_since_flush >= 10) {
-					rmr_mux_flush_fragment(st->mux);
-					if (st->sign_enabled)
+					if (rmr_mux_flush_fragment(st->mux) < 0)
+						st->segment_write_error = true;
+					if (st->sign_enabled && !st->segment_write_error)
 						rmr_sign_stream_emit(&st->sign_seg, false,
 								     direct_write, st);
 					st->frames_since_flush = 0;
+					if (st->segment_write_error)
+						close_segment(st);
 				}
 			}
 
