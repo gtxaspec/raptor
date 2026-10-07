@@ -136,6 +136,7 @@ const struct help_entry help_entries[] = {
 	{"rod", "set-font-size <10-72>               Global font size"},
 	{"rod", "set-font-color <0xAARRGGBB>         Global text color"},
 	{"rod", "set-stroke-color <0xAARRGGBB>       Global stroke color"},
+	{"rod", "set-bg-color <0xAARRGGBB>           Global text background box (0 = off)"},
 	{"rod", "set-stroke-size <0-5>               Global stroke width"},
 	{"ric", "mode <auto|day|night>               Set day/night mode (GPIO + ISP)"},
 	{"ric", "isp-mode <day|night>                Set ISP mode only (no GPIO)"},

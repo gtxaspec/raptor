@@ -35,6 +35,7 @@ void load_config(rod_state_t *st)
 	c->font_size = rss_config_get_int(cfg, "osd", "font_size", 24);
 	c->font_color = parse_color(rss_config_get_str(cfg, "osd", "font_color", "0xFFFFFFFF"));
 	c->stroke_color = parse_color(rss_config_get_str(cfg, "osd", "stroke_color", "0xFF000000"));
+	c->bg_color = parse_color(rss_config_get_str(cfg, "osd", "background_color", "0x00000000"));
 	c->font_stroke = rss_config_get_int(cfg, "osd", "font_stroke", 1);
 	rss_strlcpy(c->time_format,
 		    rss_config_get_str(cfg, "osd", "time_format", "%Y-%m-%d %H:%M:%S"),
@@ -195,6 +196,12 @@ static void load_osd_section(const char *section, void *userdata)
 	if (sc_str) {
 		e->stroke_color = (uint32_t)strtoul(sc_str, NULL, 0);
 		e->has_stroke_color = true;
+	}
+
+	const char *bg_str = rss_config_get_str(cfg, section, "bg_color", NULL);
+	if (bg_str) {
+		e->bg_color = (uint32_t)strtoul(bg_str, NULL, 0);
+		e->has_bg_color = true;
 	}
 
 	ctx->count++;
