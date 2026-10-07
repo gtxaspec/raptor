@@ -15,6 +15,7 @@ typedef struct {
 	int segment_minutes;   /* segment duration (default 5) */
 	int segment_seconds;   /* nonzero overrides minutes (debug/test) */
 	int max_storage_mb;    /* 0 = unlimited */
+	uint64_t prealloc_bytes; /* 0 = grow organically (no reservation) */
 } rmr_storage_config_t;
 
 /* Create/destroy storage manager */
@@ -22,11 +23,15 @@ rmr_storage_t *rmr_storage_create(const rmr_storage_config_t *cfg);
 void rmr_storage_destroy(rmr_storage_t *st);
 
 /* Open a new segment file. Creates date directory if needed.
- * Returns fd on success, -1 on error. Writes path to path_out. */
+ * Recording happens under <name>.mp4.tmp; the final name appears
+ * only at close. Returns fd on success, -1 on error. Writes the
+ * final path to path_out. */
 int rmr_storage_open_segment(rmr_storage_t *st, char *path_out, int path_out_size);
 
-/* Close a segment file. */
-void rmr_storage_close_segment(int fd);
+/* Close a segment file: shrink the reservation to `bytes` written,
+ * fsync, then publish under the final name by rename(). `bytes` == 0
+ * discards the file. */
+void rmr_storage_close_segment(int fd, const char *path, uint64_t bytes);
 
 /* Next wall-clock boundary at a multiple of the segment length,
  * strictly after now_rt_us. Pure -- times injected for testability. */

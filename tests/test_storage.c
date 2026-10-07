@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 static bool same_dev_as_root(const char *path)
@@ -161,6 +162,143 @@ TEST storage_refuses_rootfs_autocreate(void)
 	PASS();
 }
 
+TEST storage_publishes_final_name_on_close(void)
+{
+	char dir[] = "/tmp/rmr_storage_test_XXXXXX";
+	ASSERT(mkdtemp(dir));
+
+	rmr_storage_config_t cfg = {.base_path = dir, .segment_minutes = 5};
+	rmr_storage_t *st = rmr_storage_create(&cfg);
+	ASSERT(st);
+
+	char path[256];
+	int fd = rmr_storage_open_segment(st, path, sizeof(path));
+	ASSERT(fd >= 0);
+
+	char tmp[300];
+	snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+	ASSERT_EQ(4, (int)write(fd, "data", 4));
+
+	/* In flight: only the .tmp twin exists. */
+	ASSERT(access(tmp, F_OK) == 0);
+	ASSERT(access(path, F_OK) != 0);
+
+	rmr_storage_close_segment(fd, path, 4);
+
+	/* Published: .mp4 with exactly the bytes written. */
+	struct stat s;
+	ASSERT(stat(path, &s) == 0);
+	ASSERT_EQ(4, (int)s.st_size);
+	ASSERT(access(tmp, F_OK) != 0);
+
+	rmr_storage_destroy(st);
+	snprintf(tmp, sizeof(tmp), "%s", path);
+	*strrchr(tmp, '/') = '\0';
+	rmdir(tmp);
+	rmdir(dir);
+	PASS();
+}
+
+TEST storage_discards_empty_segment(void)
+{
+	char dir[] = "/tmp/rmr_storage_test_XXXXXX";
+	ASSERT(mkdtemp(dir));
+
+	rmr_storage_config_t cfg = {.base_path = dir, .segment_minutes = 5};
+	rmr_storage_t *st = rmr_storage_create(&cfg);
+	ASSERT(st);
+
+	char path[256];
+	int fd = rmr_storage_open_segment(st, path, sizeof(path));
+	ASSERT(fd >= 0);
+
+	char tmp[300];
+	snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+	ASSERT(access(tmp, F_OK) == 0);
+
+	rmr_storage_close_segment(fd, path, 0);
+
+	/* Nothing written: no .mp4, no .tmp. */
+	ASSERT(access(path, F_OK) != 0);
+	ASSERT(access(tmp, F_OK) != 0);
+
+	rmr_storage_destroy(st);
+	rmdir(dir);
+	PASS();
+}
+
+TEST storage_prealloc_shrinks_on_close(void)
+{
+	char dir[] = "/tmp/rmr_storage_test_XXXXXX";
+	ASSERT(mkdtemp(dir));
+
+	rmr_storage_config_t cfg = {.base_path = dir, .segment_minutes = 5, .prealloc_bytes = 4096};
+	rmr_storage_t *st = rmr_storage_create(&cfg);
+	ASSERT(st);
+
+	char path[256];
+	int fd = rmr_storage_open_segment(st, path, sizeof(path));
+	ASSERT(fd >= 0);
+
+	/* Reservation is live while recording (metadata-only growth). */
+	char tmp[300];
+	snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+	struct stat s;
+	ASSERT(stat(tmp, &s) == 0);
+	ASSERT_EQ(4096, (int)s.st_size);
+
+	ASSERT_EQ(7, (int)write(fd, "payload", 7));
+	rmr_storage_close_segment(fd, path, 7);
+
+	/* Shrunk to the written size at publication. */
+	ASSERT(stat(path, &s) == 0);
+	ASSERT_EQ(7, (int)s.st_size);
+
+	rmr_storage_destroy(st);
+	snprintf(tmp, sizeof(tmp), "%s", path);
+	*strrchr(tmp, '/') = '\0';
+	rmdir(tmp);
+	rmdir(dir);
+	PASS();
+}
+
+TEST storage_sweeps_stale_tmp_on_first_use(void)
+{
+	char dir[] = "/tmp/rmr_storage_test_XXXXXX";
+	ASSERT(mkdtemp(dir));
+
+	/* Simulate an unclean shutdown: a date dir with a leftover .tmp
+	 * plus a clean .mp4 that must survive. */
+	time_t now = time(NULL);
+	struct tm tm;
+	localtime_r(&now, &tm);
+	char day[320], good[512], stale[512];
+	snprintf(day, sizeof(day), "%s/%04d-%02d-%02d", dir, tm.tm_year + 1900, tm.tm_mon + 1,
+		 tm.tm_mday);
+	ASSERT(mkdir(day, 0755) == 0);
+	snprintf(good, sizeof(good), "%s/10-00-00.mp4", day);
+	snprintf(stale, sizeof(stale), "%s/11-00-00.mp4.tmp", day);
+	FILE *g = fopen(good, "w"), *s = fopen(stale, "w");
+	ASSERT(good != NULL && g != NULL);
+	ASSERT(stale != NULL && s != NULL);
+	fclose(g);
+	fclose(s);
+
+	rmr_storage_config_t cfg = {.base_path = dir, .segment_minutes = 5};
+	rmr_storage_t *st = rmr_storage_create(&cfg);
+	ASSERT(st);
+	ASSERT(rmr_storage_available(st)); /* triggers the sweep */
+
+	ASSERT(access(stale, F_OK) != 0); /* gone */
+	ASSERT(access(good, F_OK) == 0);  /* kept */
+
+	rmr_storage_destroy(st);
+	unlink(good);
+	rmdir(day);
+	rmdir(dir);
+	PASS();
+}
+
 SUITE(storage_suite)
 {
 	RUN_TEST(storage_boundary_from_mid_period);
@@ -172,4 +310,8 @@ SUITE(storage_suite)
 	RUN_TEST(storage_available_existing_dir);
 	RUN_TEST(storage_autocreate_on_mounted_fs);
 	RUN_TEST(storage_refuses_rootfs_autocreate);
+	RUN_TEST(storage_publishes_final_name_on_close);
+	RUN_TEST(storage_discards_empty_segment);
+	RUN_TEST(storage_prealloc_shrinks_on_close);
+	RUN_TEST(storage_sweeps_stale_tmp_on_first_use);
 }
