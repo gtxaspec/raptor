@@ -95,6 +95,7 @@ const struct help_entry help_entries[] = {
 	{"rvd", "get-wb                              Show white balance settings"},
 	{"rvd", "get-isp                             Show all ISP settings"},
 	{"rvd", "get-exposure                        Show exposure info"},
+	{"rvd", "set-running-mode <day|night>        Set ISP mode only (no GPIO)"},
 	{"rsd", "clients                             List connected clients"},
 	{"rsd", "set-backchannel-codecs <list>       Offered talk-back codecs, e.g. pcmu,opus"
 		" (\"\" = all)"},
