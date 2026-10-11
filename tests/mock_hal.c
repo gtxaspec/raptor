@@ -421,6 +421,13 @@ static int mock_enc_get_rmem_info(void *ctx, uintptr_t *virt_base, uint32_t *siz
 	return RSS_OK;
 }
 
+static int mock_enc_stream_is_rmem(void *ctx, int chn)
+{
+	(void)ctx;
+	(void)chn;
+	return RSS_OK;
+}
+
 static int mock_enc_get_channel_attr(void *ctx, int chn, rss_video_config_t *cfg)
 {
 	rss_hal_ctx_t *hal = ctx;
@@ -753,6 +760,7 @@ static const rss_hal_ops_t mock_ops = {
 	.enc_request_idr = mock_enc_request_idr,
 	.enc_inject_stream_shm = mock_enc_inject_stream_shm,
 	.enc_get_rmem_info = mock_enc_get_rmem_info,
+	.enc_stream_is_rmem = mock_enc_stream_is_rmem,
 	.enc_set_rc_mode = (void *)mock_ok,
 	.enc_set_bitrate = (void *)mock_ok,
 	.enc_set_gop = (void *)mock_ok,
