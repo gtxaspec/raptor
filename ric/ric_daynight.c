@@ -712,11 +712,12 @@ void ric_poll_exposure(ric_state_t *st)
 		/*
 		 * Hybrid luma+gain algorithm (sensor-independent):
 		 *
-		 * Day → Night: ae_luma < night_luma.
+		 * Day -> Night: ae_luma < night_luma.
 		 *   No IR LEDs on in day mode, so ae_luma directly reflects
-		 *   ambient light. Works identically across all sensors.
+		 *   ambient light. If luma is unavailable, night_gain is the
+		 *   compatibility fallback for older HALs.
 		 *
-		 * Night → Day: total_gain < day_gain_pct% of night baseline.
+		 * Night -> Day: total_gain < day_gain_pct% of night baseline.
 		 *   When ambient light returns (dawn, lights on), the ISP
 		 *   drops gain because the scene is bright — even with IR
 		 *   LEDs still on. This ratio is sensor-independent because
@@ -724,11 +725,13 @@ void ric_poll_exposure(ric_state_t *st)
 		 *   ae_luma is NOT used here because IR illumination inflates
 		 *   it regardless of ambient light level.
 		 *
-		 * Each term is gated on its field being reported, so a
-		 * platform missing one runs on the other alone.
+		 * A reported luma value is authoritative for day-to-night.
+		 * Gain scales differ between sensors and SoC generations, so
+		 * gain must not overrule a valid bright-luma reading.
 		 */
-		want_night = (have_luma && ae_luma < (uint32_t)st->settings.night_luma) ||
-			     (have_gain && total_gain > (uint32_t)st->settings.night_gain);
+		want_night = have_luma
+				     ? ae_luma < (uint32_t)st->settings.night_luma
+				     : have_gain && total_gain > (uint32_t)st->settings.night_gain;
 
 		/* Luma is trustworthy for the day direction only while no
 		 * IR bank pours light into the scene: none configured or
