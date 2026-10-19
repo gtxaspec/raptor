@@ -254,14 +254,16 @@ static void rvd_apply_image_defaults(rvd_state_t *st)
 	int hflip = rss_config_get_int(cfg, img, "hflip", 0);
 	int vflip = rss_config_get_int(cfg, img, "vflip", 0);
 	int antiflicker = rss_config_get_int(cfg, multi ? "sensor0" : "sensor", "antiflicker", 2);
+	const rss_hal_caps_t *caps =
+		st->ops->get_caps ? st->ops->get_caps(st->hal_ctx) : NULL;
 
 	RSS_HAL_CALL(st->ops, isp_set_brightness, st->hal_ctx, brightness);
 	RSS_HAL_CALL(st->ops, isp_set_contrast, st->hal_ctx, contrast);
 	RSS_HAL_CALL(st->ops, isp_set_saturation, st->hal_ctx, saturation);
 	RSS_HAL_CALL(st->ops, isp_set_sharpness, st->hal_ctx, sharpness);
-	if (st->ops && st->ops->has_sinter) {
+	if (caps && caps->has_sinter) {
 		RSS_HAL_CALL(st->ops, isp_set_sinter_strength, st->hal_ctx, sinter);
-	} else if (st->ops && st->ops->has_module_control) {
+	} else if (caps && caps->has_module_control) {
 		/* Gen3 (T32/T33/T40/T41): direct SetSinterStrength is absent;
 		 * route the value through the module ratio array instead. */
 		RSS_HAL_CALL(st->ops, isp_set_module_control, st->hal_ctx, 0);
@@ -269,9 +271,9 @@ static void rvd_apply_image_defaults(rvd_state_t *st)
 	} else {
 		RSS_HAL_CALL(st->ops, isp_set_sinter_strength, st->hal_ctx, sinter);
 	}
-	if (st->ops && st->ops->has_temper) {
+	if (caps && caps->has_temper) {
 		RSS_HAL_CALL(st->ops, isp_set_temper_strength, st->hal_ctx, temper);
-	} else if (st->ops && st->ops->has_module_control) {
+	} else if (caps && caps->has_module_control) {
 		RSS_HAL_CALL(st->ops, isp_set_module_control, st->hal_ctx, 0);
 		RSS_HAL_CALL(st->ops, isp_set_temper_strength, st->hal_ctx, temper);
 	} else {
@@ -301,7 +303,7 @@ static void rvd_apply_image_defaults(rvd_state_t *st)
 	RSS_DEBUG("  hflip=%d vflip=%d antiflicker=%d bypass=%d (dpc/drc/defog: "
 		  "Gen3 routed via SetModule_Ratio%s)",
 		  hflip, vflip, antiflicker, ret == RSS_OK,
-		  (st->ops && st->ops->has_module_control) ? " yes" : " no");
+		  (caps && caps->has_module_control) ? " yes" : " no");
 }
 
 static int read_sensor_proc_int(int idx, const char *key, int base, int def);
