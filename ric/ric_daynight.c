@@ -686,7 +686,11 @@ void ric_poll_exposure(ric_state_t *st)
 			 * a false ratio-day at every dusk. A genuinely covered
 			 * lens now simply holds night on its own settled
 			 * baseline: no dip, no probe, no blinking, and the
-			 * day-verify latch still guards every real day attempt. */
+			 * day-verify latch still guards every real day attempt.
+			 * A night table that reports no gain (T41 class) simply
+			 * leaves the gain baseline at 0; the settled EV beside
+			 * it then carries the ratio and the probe (see the
+			 * day-exit gating below). */
 			st->night_gain_baseline = total_gain;
 			st->night_ev_baseline = ev;
 			st->probe_recheck_polls =
@@ -741,7 +745,19 @@ void ric_poll_exposure(ric_state_t *st)
 				(st->settings.gpio_irled2 >= 0 && st->settings.ir940_enabled);
 		bool ir_lit = ir_banks && st->current_mode == RIC_MODE_NIGHT && !st->probe_active;
 
-		if (have_gain && st->night_gain_baseline > 0) {
+		/* The ratio day exit needs a settled night reference, and
+		 * gain alone is not always one: T41-class night ISP tables
+		 * report total_gain as 0, so the baseline learns nothing
+		 * and both this ratio and the IR-off probe below stayed
+		 * gated forever -- a lit night had no exit. EV is reported
+		 * where gain is not, and it is the wider metric anyway
+		 * (AE can answer new light with exposure while gain sits
+		 * at its floor), so a platform offering either reference
+		 * runs the ratio on it. The probe dip below already
+		 * prefers EV the same way. */
+		bool gain_ref = have_gain && st->night_gain_baseline > 0;
+		bool ev_ref = have_ev && st->night_ev_baseline > 0;
+		if (gain_ref) {
 			/* The running max must not learn from a probe: with
 			 * the IR lifted a dark room reads ceiling gain, and
 			 * adopting it would both wreck the ratio and re-arm
@@ -752,11 +768,17 @@ void ric_poll_exposure(ric_state_t *st)
 					  "real dark reading)",
 					  st->night_gain_baseline, total_gain);
 				st->night_gain_baseline = total_gain;
-				st->night_ev_baseline = ev;
+				if (have_ev)
+					st->night_ev_baseline = ev;
 			}
 			uint32_t day_thr =
 				st->night_gain_baseline * (uint32_t)st->settings.day_gain_pct / 100;
 			want_day = (total_gain < day_thr);
+		}
+		if (ev_ref) {
+			uint32_t day_thr =
+				st->night_ev_baseline * (uint32_t)st->settings.day_gain_pct / 100;
+			want_day = want_day || ev < day_thr;
 		}
 		if (!ir_lit && have_luma && ae_luma >= (uint32_t)st->settings.night_luma)
 			want_day = true;
@@ -779,7 +801,7 @@ void ric_poll_exposure(ric_state_t *st)
 						  st->settings.poll_interval_ms;
 		}
 		if (st->current_mode == RIC_MODE_NIGHT && ir_banks &&
-		    st->settings.probe_gain_pct > 0 && st->night_gain_baseline > 0 &&
+		    st->settings.probe_gain_pct > 0 && (gain_ref || ev_ref) &&
 		    st->day_lockout_polls == 0) {
 			int hyst_polls = st->settings.hysteresis_sec;
 			if (!st->probe_active) {
@@ -872,9 +894,10 @@ void ric_poll_exposure(ric_state_t *st)
 			want_day = false;
 		}
 
-		snprintf(why, sizeof(why), "luma=%u/%d gain=%u/%d night baseline=%u x %d%%%s",
-			 ae_luma, st->settings.night_luma, total_gain, st->settings.night_gain,
-			 st->night_gain_baseline, st->settings.day_gain_pct,
+		snprintf(why, sizeof(why),
+			 "luma=%u/%d gain=%u/%d ev=%u night baseline g=%u e=%u x %d%%%s", ae_luma,
+			 st->settings.night_luma, total_gain, st->settings.night_gain, ev,
+			 st->night_gain_baseline, st->night_ev_baseline, st->settings.day_gain_pct,
 			 st->probe_active ? " (probing)" : "");
 	} else if (st->settings.trigger == RIC_TRIGGER_ADC) {
 		/*
