@@ -1266,6 +1266,32 @@ static int handle_isp_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 		return rss_ctrl_resp_json(resp, resp_size, r);
 	}
 
+	if (strcmp(cmd, "get-nr") == 0) {
+		/* Noise-reduction readback (Gen3 via GetModule_Ratio; may be
+		 * NOTSUP on generations lacking a getter). */
+		cJSON *r = cJSON_CreateObject();
+		uint8_t sinter = 0, temper = 0, dpc = 0, drc = 0, defog = 0;
+		int s = RSS_HAL_CALL(st->ops, isp_get_sinter_strength, st->hal_ctx, &sinter);
+		int t = RSS_HAL_CALL(st->ops, isp_get_temper_strength, st->hal_ctx, &temper);
+		int dp = RSS_HAL_CALL(st->ops, isp_get_dpc_strength, st->hal_ctx, &dpc);
+		int dr = RSS_HAL_CALL(st->ops, isp_get_drc_strength, st->hal_ctx, &drc);
+		int df = RSS_HAL_CALL(st->ops, isp_get_defog_strength, st->hal_ctx, &defog);
+		cJSON *mods = cJSON_AddObjectToObject(r, "modules");
+		if (mods) {
+			if (s == RSS_OK)
+				cJSON_AddNumberToObject(mods, "sinter", (double)sinter);
+			if (t == RSS_OK)
+				cJSON_AddNumberToObject(mods, "temper", (double)temper);
+			if (dp == RSS_OK)
+				cJSON_AddNumberToObject(mods, "dpc", (double)dpc);
+			if (dr == RSS_OK)
+				cJSON_AddNumberToObject(mods, "drc", (double)drc);
+			if (df == RSS_OK)
+				cJSON_AddNumberToObject(mods, "defog", (double)defog);
+		}
+		return rss_ctrl_resp_json(resp, resp_size, r);
+	}
+
 	if (strcmp(cmd, "set-running-mode") == 0) {
 		char mode_str[8];
 		if (rss_json_get_str(cmd_json, "value", mode_str, sizeof(mode_str)) == 0) {

@@ -259,8 +259,24 @@ static void rvd_apply_image_defaults(rvd_state_t *st)
 	RSS_HAL_CALL(st->ops, isp_set_contrast, st->hal_ctx, contrast);
 	RSS_HAL_CALL(st->ops, isp_set_saturation, st->hal_ctx, saturation);
 	RSS_HAL_CALL(st->ops, isp_set_sharpness, st->hal_ctx, sharpness);
-	RSS_HAL_CALL(st->ops, isp_set_sinter_strength, st->hal_ctx, sinter);
-	RSS_HAL_CALL(st->ops, isp_set_temper_strength, st->hal_ctx, temper);
+	if (st->ops && st->ops->has_sinter) {
+		RSS_HAL_CALL(st->ops, isp_set_sinter_strength, st->hal_ctx, sinter);
+	} else if (st->ops && st->ops->has_module_control) {
+		/* Gen3 (T32/T33/T40/T41): direct SetSinterStrength is absent;
+		 * route the value through the module ratio array instead. */
+		RSS_HAL_CALL(st->ops, isp_set_module_control, st->hal_ctx, 0);
+		RSS_HAL_CALL(st->ops, isp_set_sinter_strength, st->hal_ctx, sinter);
+	} else {
+		RSS_HAL_CALL(st->ops, isp_set_sinter_strength, st->hal_ctx, sinter);
+	}
+	if (st->ops && st->ops->has_temper) {
+		RSS_HAL_CALL(st->ops, isp_set_temper_strength, st->hal_ctx, temper);
+	} else if (st->ops && st->ops->has_module_control) {
+		RSS_HAL_CALL(st->ops, isp_set_module_control, st->hal_ctx, 0);
+		RSS_HAL_CALL(st->ops, isp_set_temper_strength, st->hal_ctx, temper);
+	} else {
+		RSS_HAL_CALL(st->ops, isp_set_temper_strength, st->hal_ctx, temper);
+	}
 	RSS_HAL_CALL(st->ops, isp_set_hue, st->hal_ctx, hue);
 	RSS_HAL_CALL(st->ops, isp_set_ae_comp, st->hal_ctx, ae_comp);
 	RSS_HAL_CALL(st->ops, isp_set_max_again, st->hal_ctx, max_again);
@@ -282,8 +298,10 @@ static void rvd_apply_image_defaults(rvd_state_t *st)
 	RSS_DEBUG("  sinter=%d temper=%d hue=%d ae_comp=%d", sinter, temper, hue, ae_comp);
 	RSS_DEBUG("  max_again=%d max_dgain=%d dpc=%d drc=%d", max_again, max_dgain, dpc, drc);
 	RSS_DEBUG("  highlight=%d backlight=%d defog=%d", highlight, backlight, defog);
-	RSS_DEBUG("  hflip=%d vflip=%d antiflicker=%d bypass=%d", hflip, vflip, antiflicker,
-		  ret == RSS_OK);
+	RSS_DEBUG("  hflip=%d vflip=%d antiflicker=%d bypass=%d (dpc/drc/defog: "
+		  "Gen3 routed via SetModule_Ratio%s)",
+		  hflip, vflip, antiflicker, ret == RSS_OK,
+		  (st->ops && st->ops->has_module_control) ? " yes" : " no");
 }
 
 static int read_sensor_proc_int(int idx, const char *key, int base, int def);
