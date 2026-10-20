@@ -97,6 +97,12 @@ typedef struct {
 	size_t aac_frag_expect; /* 0 = no fragment pending */
 	size_t aac_frag_len;
 	uint8_t aac_frag[RSD_BC_AAC_MAX_AU];
+	/* Decoded PCM waiting to fill one speaker frame. rad hands every
+	 * ring slot to the audio output as one frame, and the output drops
+	 * a frame longer than its 20 ms period, so slots are cut to exactly
+	 * that length; a remainder waits here for the next packet. */
+	int16_t frame[RSD_BC_RING_RATE / 50];
+	int frame_len;
 } rsd_bc_dec_t;
 
 /* An access unit inside one RTP payload (parse result). */

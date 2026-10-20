@@ -1,7 +1,8 @@
 /*
  * test_backchannel.c -- backchannel decode: G.711 expansion, L16 byte
- * order, and the per-PT dispatch policy (decode known payload types,
- * drop unknown ones, never publish raw bytes into the PCM ring).
+ * order, the per-PT dispatch policy (decode known payload types, drop
+ * unknown ones, never publish raw bytes into the PCM ring), and the
+ * 20 ms slot framing rad's audio output needs.
  */
 
 #include "greatest.h"
@@ -110,16 +111,110 @@ TEST bc_dispatch_pcma_publishes_doubled_pcm(void)
 
 TEST bc_dispatch_l16_swaps_network_order(void)
 {
-	const uint8_t in[] = {0x12, 0x34, 0x80, 0x00, 0xFF}; /* odd tail byte drops */
-	uint8_t out[64];
+	/* One 20 ms slot (320 samples) and an odd tail byte, which drops. */
+	uint8_t in[320 * 2 + 1] = {0x12, 0x34, 0x80, 0x00};
+	in[sizeof(in) - 1] = 0xFF;
+	uint8_t out[1024];
 	uint32_t len = 0;
 
 	ASSERT_EQ(0, bc_feed_and_read_mask("test_bc_l", 0, RSD_BC_PT_L16, in, sizeof(in), out,
 					   sizeof(out), &len, NULL));
-	ASSERT_EQ(4, (int)len);
+	ASSERT_EQ(320 * 2, (int)len);
 	const int16_t *pcm = (const int16_t *)out;
 	ASSERT_EQ(0x1234, pcm[0]);
 	ASSERT_EQ(-32768, pcm[1]);
+	ASSERT_EQ(0, pcm[2]);
+	PASS();
+}
+
+/* Run payloads through one decoder, as one RTP session would, and read
+ * back every slot it published: lengths into slot_len[], PCM appended to
+ * pcm. The ring is sized like rsd's speaker ring. Returns the slot count,
+ * or -1 on a ring setup failure. */
+static int bc_feed_all(const char *ring_name, uint8_t pt, const uint8_t *data, const size_t *lens,
+		       int n, uint32_t *slot_len, int max_slots, int16_t *pcm, size_t pcm_samples)
+{
+	rss_ring_t *w = rss_ring_create(ring_name, 16, 64 * 1024);
+	if (!w)
+		return -1;
+	rss_ring_t *rd = rss_ring_open(ring_name);
+	if (!rd) {
+		rss_ring_destroy(w);
+		return -1;
+	}
+
+	rsd_bc_dec_t dec;
+	rsd_bc_dec_init(&dec, 0);
+	for (int i = 0; i < n; i++) {
+		rsd_bc_handle(&dec, w, pt, 0, data, lens[i]);
+		data += lens[i];
+	}
+	rsd_bc_dec_deinit(&dec);
+
+	int slots = 0;
+	size_t used = 0;
+	uint64_t seq = 1;
+	uint8_t buf[4096];
+	uint32_t len = 0;
+	rss_ring_slot_t meta;
+	while (slots < max_slots && rss_ring_read(rd, &seq, buf, sizeof(buf), &len, &meta) == 0) {
+		slot_len[slots++] = len;
+		size_t samples = len / 2;
+		if (used + samples <= pcm_samples) {
+			memcpy(pcm + used, buf, len);
+			used += samples;
+		}
+	}
+
+	rss_ring_close(rd);
+	rss_ring_destroy(w);
+	return slots;
+}
+
+/* rad hands each slot to the audio output as one 20 ms frame and the
+ * output drops longer ones, so a 120 ms PCMU packet (what Scrypted's
+ * ONVIF intercom sends) must come out as six 20 ms slots, every sample
+ * kept -- not one 60 ms slot cut from it. */
+TEST bc_dispatch_long_pcmu_packet_is_reframed(void)
+{
+	uint8_t in[960];
+	memset(in, 0xFF, sizeof(in));
+	in[0] = 0x80;		   /* first sample: max positive */
+	in[sizeof(in) - 1] = 0x00; /* last sample: max negative */
+	size_t lens[] = {sizeof(in)};
+	uint32_t slot_len[16];
+	static int16_t pcm[960 * 2];
+
+	int slots = bc_feed_all("test_bc_long", 0, in, lens, 1, slot_len, 16, pcm, 960 * 2);
+	ASSERT_EQ(6, slots);
+	for (int i = 0; i < slots; i++)
+		ASSERT_EQ(320 * 2, (int)slot_len[i]);
+	ASSERT_EQ(32124, pcm[0]);
+	ASSERT_EQ(32124, pcm[1]);
+	ASSERT_EQ(-32124, pcm[960 * 2 - 1]);
+	PASS();
+}
+
+/* A packet that does not end on a 20 ms boundary leaves its remainder
+ * for the next packet, in order, rather than publishing a short slot. */
+TEST bc_dispatch_partial_frames_carry_over(void)
+{
+	uint8_t in[160];
+	memset(in, 0x80, 100);	    /* +32124 */
+	memset(in + 100, 0x00, 60); /* -32124 */
+	uint32_t slot_len[4];
+	static int16_t pcm[320];
+
+	size_t first[] = {100};
+	ASSERT_EQ(0, bc_feed_all("test_bc_part1", 0, in, first, 1, slot_len, 4, pcm, 320));
+
+	size_t both[] = {100, 60};
+	ASSERT_EQ(1, bc_feed_all("test_bc_part2", 0, in, both, 2, slot_len, 4, pcm, 320));
+	ASSERT_EQ(320 * 2, (int)slot_len[0]);
+	ASSERT_EQ(32124, pcm[0]);
+	ASSERT_EQ(32124, pcm[199]);
+	ASSERT_EQ(-32124, pcm[200]);
+	ASSERT_EQ(-32124, pcm[319]);
 	PASS();
 }
 
@@ -326,6 +421,8 @@ SUITE(backchannel_suite)
 	RUN_TEST(bc_dispatch_pcmu_publishes_doubled_pcm);
 	RUN_TEST(bc_dispatch_pcma_publishes_doubled_pcm);
 	RUN_TEST(bc_dispatch_l16_swaps_network_order);
+	RUN_TEST(bc_dispatch_long_pcmu_packet_is_reframed);
+	RUN_TEST(bc_dispatch_partial_frames_carry_over);
 	RUN_TEST(bc_dispatch_unknown_pt_drops);
 	RUN_TEST(bc_dispatch_empty_payload_is_noop);
 	RUN_TEST(bc_aac_parse_single_au);
