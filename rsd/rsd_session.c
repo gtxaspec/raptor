@@ -923,7 +923,11 @@ static void rsd_client_t_play(VSelf, Compy_Context *ctx, const Compy_Request *re
 	VSELF(rsd_client_t);
 	(void)req;
 
-	if (!self->video.nal && !self->video.jpeg && !self->audio.rtp) {
+	/* A session may carry only the ONVIF backchannel: with the
+	 * backchannel Require tag, PLAY also starts the client-to-server
+	 * audio, and talk-back clients such as Scrypted's ONVIF intercom
+	 * set up nothing else. */
+	if (!self->video.nal && !self->video.jpeg && !self->audio.rtp && !self->backchannel) {
 		compy_respond(ctx, COMPY_STATUS_METHOD_NOT_VALID_IN_THIS_STATE, "SETUP not done");
 		return;
 	}
