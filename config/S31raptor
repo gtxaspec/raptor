@@ -5,6 +5,13 @@ CONF=/etc/raptor.conf
 RUNDIR=/var/run/rss
 SHMDIR=/dev/shm
 
+# Re-exec under an exclusive lock so two runs cannot interleave. busybox
+# flock takes no -w; a run is bounded by stop_daemon's own waits anyway.
+if [ -z "$S31RAPTOR_LOCKED" ] && command -v flock >/dev/null 2>&1; then
+	mkdir -p "$RUNDIR"
+	S31RAPTOR_LOCKED=1 exec flock "$RUNDIR/.lock" "$0" "$@"
+fi
+
 # Read a boolean from raptor.conf: config_bool <section> <key> <default>
 config_bool() {
 	val=$(raptorctl config get "$1" "$2" 2>/dev/null | tr -d '\r\n')
@@ -133,18 +140,17 @@ stop_daemon() {
 	else
 		printf "  %-4s stopped\n" "$1"
 	fi
+	rm -f "$RUNDIR/$1.pid" "$RUNDIR/$1.sock"
 }
 
 stop() {
 	echo "Stopping Raptor Streaming System..."
 
 	# Stop consumers first, then producer (RVD) last
-	for d in rsr rsp rwd rmd rmr ric rhd rsd rod rad rvd; do
+	for d in rsr rsp rwd rmd rmr ric rhd rsd rsd-555 rod rad rvd; do
 		stop_daemon $d
 	done
 
-	# Clean up runtime files
-	rm -f "$RUNDIR"/*.pid "$RUNDIR"/*.sock
 	rm -f ${SHMDIR}/rss_ring_* ${SHMDIR}/rss_osd_*
 
 	echo "Done."
