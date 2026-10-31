@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include "rvd.h"
+#include "rvd_ring_size.h"
 
 #define RVD_PAGE_SIZE 4096u
 
@@ -1622,14 +1623,8 @@ create_ring:
 			uint32_t h = s->enc_cfg.height;
 			uint32_t q = (uint32_t)s->enc_cfg.init_qp;
 			uint32_t fps = s->enc_cfg.fps_num;
-			uint32_t divisor = (q >= 90) ? 6 : (q >= 70) ? 16 : 24;
-			uint32_t slots = (fps >= 9) ? 16 : (fps >= 3) ? 8 : 4;
-			uint32_t jpeg_max = w * h / divisor;
-			if (jpeg_max < 16384)
-				jpeg_max = 16384;
-			uint32_t data = jpeg_max * slots;
-			if (data > 4 * 1024 * 1024)
-				data = 4 * 1024 * 1024;
+			uint32_t slots = rvd_jpeg_ring_slots(fps);
+			uint32_t data = rvd_jpeg_ring_data(w, h, q, fps);
 
 			s->ring = rss_ring_create(ring_name, slots, data);
 			if (s->ring)
