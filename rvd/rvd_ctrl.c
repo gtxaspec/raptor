@@ -1177,16 +1177,21 @@ static int handle_isp_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 		rss_json_get_str(cmd_json, "mode", mode_str, sizeof(mode_str));
 		if (mode_str[0])
 			wb.mode = wb_mode_from_str(mode_str);
-		int r_gain, b_gain;
+		int r_gain, b_gain, g_gain;
 		if (rss_json_get_int(cmd_json, "r_gain", &r_gain) == 0)
 			wb.r_gain = (uint16_t)r_gain;
 		if (rss_json_get_int(cmd_json, "b_gain", &b_gain) == 0)
 			wb.b_gain = (uint16_t)b_gain;
+		/* isp_get_wb never fills green, so an absent g_gain stays 0 and
+		 * the HAL reads that as "keep the green already set". */
+		if (rss_json_get_int(cmd_json, "g_gain", &g_gain) == 0)
+			wb.g_gain = (uint16_t)g_gain;
 		int ret = RSS_HAL_CALL(st->ops, isp_set_wb, st->hal_ctx, &wb);
 		cJSON *r = cJSON_CreateObject();
 		cJSON_AddStringToObject(r, "status", ret == 0 ? "ok" : "error");
 		cJSON_AddStringToObject(r, "mode", wb_mode_str(wb.mode));
 		cJSON_AddNumberToObject(r, "r_gain", (double)wb.r_gain);
+		cJSON_AddNumberToObject(r, "g_gain", (double)wb.g_gain);
 		cJSON_AddNumberToObject(r, "b_gain", (double)wb.b_gain);
 		return rss_ctrl_resp_json(resp, resp_size, r);
 	}
@@ -1200,6 +1205,22 @@ static int handle_isp_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 		cJSON_AddNumberToObject(r, "r_gain", (double)wb.r_gain);
 		cJSON_AddNumberToObject(r, "g_gain", (double)wb.g_gain);
 		cJSON_AddNumberToObject(r, "b_gain", (double)wb.b_gain);
+		return rss_ctrl_resp_json(resp, resp_size, r);
+	}
+
+	/* The manual coefficients are a different control from the AWB gains
+	 * get-wb reports, on a different scale, so they get their own verb
+	 * rather than being folded into that answer. */
+	if (strcmp(cmd, "get-rgb-coefft") == 0) {
+		uint16_t rg = 0, gg = 0, bg = 0;
+		int ret = RSS_HAL_CALL(st->ops, isp_get_awb_rgb_coefft, st->hal_ctx, &rg, &gg, &bg);
+		if (ret != 0)
+			return rss_ctrl_resp_error(resp, resp_size, "not supported");
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddStringToObject(r, "status", "ok");
+		cJSON_AddNumberToObject(r, "r_coefft", (double)rg);
+		cJSON_AddNumberToObject(r, "g_coefft", (double)gg);
+		cJSON_AddNumberToObject(r, "b_coefft", (double)bg);
 		return rss_ctrl_resp_json(resp, resp_size, r);
 	}
 

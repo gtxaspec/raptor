@@ -202,6 +202,19 @@ static int rec_isp_set_wb(void *ctx, rss_wb_config_t *wb)
 	return rec.return_val;
 }
 
+/* The manual RGB coefficients, which are a different control from the AWB
+ * gains above and on a different scale. Only the T41 has a getter for them. */
+static uint16_t coefft_state[3];
+
+static int rec_isp_get_rgb_coefft(void *ctx, uint16_t *r, uint16_t *g, uint16_t *b)
+{
+	(void)ctx;
+	*r = coefft_state[0];
+	*g = coefft_state[1];
+	*b = coefft_state[2];
+	return 0;
+}
+
 /* ── Stubs for pipeline/OSD/IVS functions ── */
 
 int rvd_stream_init(rvd_state_t *st, int idx)
@@ -997,6 +1010,68 @@ TEST set_wb_gain_only_preserves_mode(void)
 	PASS();
 }
 
+TEST set_wb_passes_green_through(void)
+{
+	setup();
+	wb_state.mode = RSS_WB_MANUAL;
+	rec.return_val = 0;
+	call("{\"cmd\":\"set-wb\",\"mode\":\"manual\",\"r_gain\":400,\"b_gain\":200,\"g_gain\":"
+	     "333}");
+	ASSERT_EQ(400, wb_state.r_gain);
+	ASSERT_EQ(200, wb_state.b_gain);
+	ASSERT_EQm("green reaches the HAL", 333, wb_state.g_gain);
+	ASSERT(strstr(resp, "\"g_gain\":333") != NULL);
+	teardown();
+	PASS();
+}
+
+TEST set_wb_without_green_does_not_invent_one(void)
+{
+	setup();
+	/*
+	 * The real getter fills mode, red and blue and leaves green alone --
+	 * the vendor AWB gains carry no green -- so a request that names no
+	 * green must hand the HAL a zero and let it keep what the ISP has.
+	 * Writing any other value here is what crushed the green channel on
+	 * the T41, where manual WB goes to the RGB coefficients and zero is
+	 * black.
+	 */
+	wb_state.g_gain = 0;
+	rec.return_val = 0;
+	call("{\"cmd\":\"set-wb\",\"mode\":\"manual\",\"r_gain\":400,\"b_gain\":200}");
+	ASSERT_EQ(400, wb_state.r_gain);
+	ASSERT_EQ(200, wb_state.b_gain);
+	ASSERT_EQm("no green invented", 0, wb_state.g_gain);
+	teardown();
+	PASS();
+}
+
+TEST get_rgb_coefft_answers_notsup_without_the_op(void)
+{
+	setup();
+	/* The base mock has no coefficient getter, as every platform but the
+	 * T41 has none either: the verb must say so, not answer zeros. */
+	call("{\"cmd\":\"get-rgb-coefft\"}");
+	ASSERT(strstr(resp, "not supported") != NULL);
+	teardown();
+	PASS();
+}
+
+TEST get_rgb_coefft_reports_the_coefficients(void)
+{
+	setup();
+	ops.isp_get_awb_rgb_coefft = rec_isp_get_rgb_coefft;
+	coefft_state[0] = 1024;
+	coefft_state[1] = 512;
+	coefft_state[2] = 768;
+	call("{\"cmd\":\"get-rgb-coefft\"}");
+	ASSERT(strstr(resp, "\"r_coefft\":1024") != NULL);
+	ASSERT(strstr(resp, "\"g_coefft\":512") != NULL);
+	ASSERT(strstr(resp, "\"b_coefft\":768") != NULL);
+	teardown();
+	PASS();
+}
+
 TEST get_wb_returns_current_state(void)
 {
 	setup();
@@ -1273,6 +1348,10 @@ SUITE(ctrl_suite)
 	/* WB partial merge */
 	RUN_TEST(set_wb_mode_only_preserves_gains);
 	RUN_TEST(set_wb_gain_only_preserves_mode);
+	RUN_TEST(set_wb_passes_green_through);
+	RUN_TEST(set_wb_without_green_does_not_invent_one);
+	RUN_TEST(get_rgb_coefft_answers_notsup_without_the_op);
+	RUN_TEST(get_rgb_coefft_reports_the_coefficients);
 	RUN_TEST(get_wb_returns_current_state);
 
 	/* ISP roundtrip */
