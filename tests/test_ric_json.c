@@ -182,20 +182,46 @@ TEST ric_json_plain_form_resets_polarity(void)
 	PASS();
 }
 
-/* 999 is the tmi8152 motor-driver device, not a GPIO: unsupported,
- * never misread as a pin. */
-TEST ric_json_tmi8152_unsupported(void)
+/* 999 is the tmi8152 character device, not a GPIO: it selects that
+ * backend and leaves the pins unset, in every spelling the standard
+ * allows for an ircut value. */
+TEST ric_json_tmi8152_backend(void)
 {
 	ric_config_t c = fresh_config();
 	const char *j = "{\"gpio\":{\"ircut\":999}}";
 	write_fixture(j, strlen(j));
 	ric_json_gpio_load(&c, FIXTURE);
+	ASSERT(c.ircut_tmi);
 	ASSERT_EQ(-1, c.gpio_ircut);
+	ASSERT_EQ(-1, c.gpio_ircut2);
 	c = fresh_config();
 	const char *j2 = "{\"gpio\":{\"ircut\":\"999\"}}";
 	write_fixture(j2, strlen(j2));
 	ric_json_gpio_load(&c, FIXTURE);
+	ASSERT(c.ircut_tmi);
 	ASSERT_EQ(-1, c.gpio_ircut);
+	c = fresh_config();
+	const char *j3 = "{\"gpio\":{\"ircut\":{\"pin\":999}}}";
+	write_fixture(j3, strlen(j3));
+	ric_json_gpio_load(&c, FIXTURE);
+	ASSERT(c.ircut_tmi);
+	ASSERT_EQ(-1, c.gpio_ircut);
+	unlink(FIXTURE);
+	PASS();
+}
+
+/* raptor.conf is authoritative: a board whose file names a GPIO still
+ * uses the character device once the backend is selected. */
+TEST ric_json_tmi8152_conf_precedence(void)
+{
+	ric_config_t c = fresh_config();
+	c.ircut_tmi = true;
+	const char *j = "{\"gpio\":{\"ircut\":57,\"ir850\":8}}";
+	write_fixture(j, strlen(j));
+	ric_json_gpio_load(&c, FIXTURE);
+	ASSERT(c.ircut_tmi);
+	ASSERT_EQ(-1, c.gpio_ircut);
+	ASSERT_EQ(8, c.gpio_irled);
 	unlink(FIXTURE);
 	PASS();
 }
@@ -411,7 +437,8 @@ SUITE(ric_json_suite)
 	RUN_TEST(ric_json_object_extra_keys_ignored);
 	RUN_TEST(ric_json_object_without_pin_rejected);
 	RUN_TEST(ric_json_plain_form_resets_polarity);
-	RUN_TEST(ric_json_tmi8152_unsupported);
+	RUN_TEST(ric_json_tmi8152_backend);
+	RUN_TEST(ric_json_tmi8152_conf_precedence);
 	RUN_TEST(ric_json_suffix_rejected_whole);
 	RUN_TEST(ric_json_pair_trailing_garbage_rejected);
 	RUN_TEST(ric_json_string_disable_silent);

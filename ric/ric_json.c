@@ -16,10 +16,9 @@
  *                                 pulse width; first = day, second = night)
  *   "ir850": 8 / "ir940": 9      (IR LED GPIOs)
  *   -1 or ""                     (explicitly disabled, silent)
- * "ircut": 999 means the board's filter hangs off the tmi8152
- * motor-driver character device, which ric does not drive yet; that
- * is warned as unsupported, not misread as a pin. The retired o/O
- * drive-level suffix notation is rejected whole rather than
+ * "ircut": 999 selects the tmi8152 character-device backend instead
+ * of a pin, in either the integer or the string spelling. The retired
+ * o/O drive-level suffix notation is rejected whole rather than
  * half-read: strtol stopping at a suffix used to hold one coil of a
  * dual H-bridge asserted while the other pin was never exported.
  *
@@ -86,13 +85,14 @@ static bool gpio_object(const cJSON *item, const char *key, int *pin, bool *acti
 }
 
 /*
- * "N" or "N M", nothing else. Suffixed tokens and any other trailing
- * decoration reject the whole value: a half-read pair used to hold
- * one coil of a dual H-bridge asserted while the other pin was never
- * exported. "-1" and "" are the explicit-disable spellings and stay
- * silent; other unparseable strings warn.
+ * "N" or "N M", nothing else, with the tmi8152 marker reported
+ * through tmi rather than as a pin. Suffixed tokens and any other
+ * trailing decoration reject the whole value: a half-read pair used
+ * to hold one coil of a dual H-bridge asserted while the other pin
+ * was never exported. "-1" and "" are the explicit-disable spellings
+ * and stay silent; other unparseable strings warn.
  */
-static bool gpio_pin_pair(const char *s, const char *key, int *pin, int *pin2)
+static bool gpio_pin_pair(const char *s, const char *key, int *pin, int *pin2, bool *tmi)
 {
 	char *endp;
 	long v = strtol(s, &endp, 10);
@@ -102,9 +102,7 @@ static bool gpio_pin_pair(const char *s, const char *key, int *pin, int *pin2)
 		return false;
 	}
 	if (v == TMI8152_DEV) {
-		RSS_WARN("gpio.%s is the tmi8152 motor-driver device (999), which ric does not "
-			 "support yet -- IR-cut switching stays off",
-			 key);
+		*tmi = true;
 		return false;
 	}
 	if (!valid_gpio((int)v))
@@ -174,10 +172,14 @@ static bool ircut_object_mode_supported(const cJSON *item)
 	return true;
 }
 
-static bool ircut_object(const cJSON *item, int *pin, int *pin2, bool *active_low)
+static bool ircut_object(const cJSON *item, int *pin, int *pin2, bool *active_low, bool *tmi)
 {
 	const cJSON *p = cJSON_GetObjectItemCaseSensitive(item, "pin");
 	if (cJSON_IsNumber(p)) {
+		if (p->valueint == TMI8152_DEV) {
+			*tmi = true;
+			return false;
+		}
 		if (!valid_gpio(p->valueint))
 			goto bad;
 		*pin = p->valueint;
@@ -185,7 +187,7 @@ static bool ircut_object(const cJSON *item, int *pin, int *pin2, bool *active_lo
 		return true;
 	}
 	if (cJSON_IsString(p) && p->valuestring)
-		return gpio_pin_pair(p->valuestring, "ircut.pin", pin, pin2);
+		return gpio_pin_pair(p->valuestring, "ircut.pin", pin, pin2, tmi);
 	if (cJSON_IsArray(p))
 		return gpio_pin_array(p, pin, pin2);
 bad:
@@ -235,7 +237,8 @@ static void gpio_led_pin(const cJSON *gpio, const char *key, int *pin, bool *act
 
 void ric_json_gpio_load(ric_config_t *c, const char *path)
 {
-	if (c->gpio_ircut >= 0 && c->gpio_irled >= 0 && c->gpio_irled2 >= 0 && c->pulse_ms_explicit)
+	if ((c->gpio_ircut >= 0 || c->ircut_tmi) && c->gpio_irled >= 0 && c->gpio_irled2 >= 0 &&
+	    c->pulse_ms_explicit)
 		return;
 
 	FILE *f = fopen(path, "r");
@@ -313,23 +316,21 @@ void ric_json_gpio_load(ric_config_t *c, const char *path)
 	if (cJSON_IsObject(ircut) && ircut_object_ok)
 		ircut_object_timing(ircut, c);
 
-	if (c->gpio_ircut < 0) {
+	if (c->gpio_ircut < 0 && !c->ircut_tmi) {
 		int pin = -1, pin2 = -1;
 		bool alow = false;
 		if (cJSON_IsNumber(ircut)) {
 			if (ircut->valueint == TMI8152_DEV)
-				RSS_WARN("gpio.ircut is the tmi8152 motor-driver device (999), "
-					 "which ric does not support yet -- IR-cut switching "
-					 "stays off");
+				c->ircut_tmi = true;
 			else if (valid_gpio(ircut->valueint))
 				pin = ircut->valueint;
 			else if (ircut->valueint > GPIO_PIN_MAX)
 				RSS_WARN("gpio.ircut %d is out of range -- ignored",
 					 ircut->valueint);
 		} else if (cJSON_IsObject(ircut) && ircut_object_ok) {
-			ircut_object(ircut, &pin, &pin2, &alow);
+			ircut_object(ircut, &pin, &pin2, &alow, &c->ircut_tmi);
 		} else if (cJSON_IsString(ircut) && ircut->valuestring) {
-			gpio_pin_pair(ircut->valuestring, "ircut", &pin, &pin2);
+			gpio_pin_pair(ircut->valuestring, "ircut", &pin, &pin2, &c->ircut_tmi);
 		}
 		if (pin >= 0) {
 			/* The pin's source carries its polarity: a plain form is
@@ -349,10 +350,11 @@ void ric_json_gpio_load(ric_config_t *c, const char *path)
 
 	cJSON_Delete(root);
 
-	if (c->gpio_ircut >= 0 || c->gpio_irled >= 0)
-		RSS_INFO("GPIOs from %s: ircut=%d ircut2=%d irled=%d irled2=%d pulse=%dms%s%s%s",
+	if (c->gpio_ircut >= 0 || c->gpio_irled >= 0 || c->ircut_tmi)
+		RSS_INFO("GPIOs from %s: ircut=%d ircut2=%d irled=%d irled2=%d pulse=%dms%s%s%s%s",
 			 path, c->gpio_ircut, c->gpio_ircut2, c->gpio_irled, c->gpio_irled2,
-			 c->pulse_ms, c->ircut_active_low ? " ircut-active-low" : "",
+			 c->pulse_ms, c->ircut_tmi ? " ircut-tmi8152" : "",
+			 c->ircut_active_low ? " ircut-active-low" : "",
 			 c->irled_active_low ? " irled-active-low" : "",
 			 c->irled2_active_low ? " irled2-active-low" : "");
 }

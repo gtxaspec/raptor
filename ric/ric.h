@@ -123,6 +123,7 @@ typedef struct {
 	/* GPIO pins (-1 = not used) */
 	int gpio_ircut;	 /* IR-cut filter pin (single GPIO mode) */
 	int gpio_ircut2; /* second pin for dual GPIO mode, -1 = single */
+	bool ircut_tmi; /* supersedes ircut pins; pulse_ms and ircut_active_low do not apply */
 	int gpio_irled;	 /* IR LED enable pin (ir850) */
 	int gpio_irled2; /* second IR LED pin (ir940), -1 = none */
 	/*
