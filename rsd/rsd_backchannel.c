@@ -22,8 +22,8 @@
 
 #include "rsd_backchannel.h"
 
-/* G.711 payloads run at 8 kHz; cap one packet at 60 ms (480 samples)
- * so the doubled output stays a small stack buffer. */
+/* G.711 payloads run at 8 kHz; decode them 60 ms (480 samples) at a
+ * time so the doubled output stays a small stack buffer. */
 #define BC_G711_MAX_SAMPLES 480
 
 /* L16 cap per packet, in samples. Real senders use 20 ms ptime (320
@@ -289,23 +289,51 @@ static void bc_note_codec(rsd_bc_dec_t *d, uint8_t pt)
 	d->have_pt = true;
 }
 
-/* Decode one G.711 payload (mu- or A-law) and double 8 kHz → 16 kHz. */
+/* rad passes each speaker-ring slot to the audio output as one frame,
+ * and the output channel silently drops a frame longer than its 20 ms
+ * period. Re-frame decoded audio into exact 20 ms slots, as rac does
+ * for files. */
+#define BC_FRAME_SAMPLES (RSD_BC_RING_RATE / 50)
+
+static void bc_publish(rsd_bc_dec_t *d, rss_ring_t *ring, const int16_t *pcm, int samples)
+{
+	while (samples > 0) {
+		int take = BC_FRAME_SAMPLES - d->frame_len;
+		if (take > samples)
+			take = samples;
+		memcpy(d->frame + d->frame_len, pcm, (size_t)take * sizeof(*pcm));
+		d->frame_len += take;
+		pcm += take;
+		samples -= take;
+		if (d->frame_len == BC_FRAME_SAMPLES) {
+			rss_ring_publish(ring, (const uint8_t *)d->frame,
+					 (uint32_t)sizeof(d->frame), rss_timestamp_us(), 0, 0,
+					 RSS_SRC_SEQ_NONE);
+			d->frame_len = 0;
+		}
+	}
+}
+
+/* Decode one G.711 payload (mu- or A-law) and double 8 kHz → 16 kHz.
+ * Senders may pack more than 60 ms into a packet (Scrypted's ONVIF
+ * intercom sends 120 ms), so decode it all, a buffer at a time. */
 static void bc_handle_g711(rsd_bc_dec_t *d, rss_ring_t *ring, uint8_t pt, const uint8_t *payload,
 			   size_t len)
 {
 	int16_t pcm[BC_G711_MAX_SAMPLES * 2];
-	int n = (int)len;
-	if (n > BC_G711_MAX_SAMPLES)
-		n = BC_G711_MAX_SAMPLES;
-	for (int i = 0; i < n; i++) {
-		int16_t s =
-			(pt == 8) ? rsd_bc_alaw_decode(payload[i]) : rsd_bc_ulaw_decode(payload[i]);
-		pcm[i * 2] = s;
-		pcm[i * 2 + 1] = s;
+	while (len > 0) {
+		int n = len > BC_G711_MAX_SAMPLES ? BC_G711_MAX_SAMPLES : (int)len;
+		for (int i = 0; i < n; i++) {
+			int16_t s = (pt == 8) ? rsd_bc_alaw_decode(payload[i])
+					      : rsd_bc_ulaw_decode(payload[i]);
+			pcm[i * 2] = s;
+			pcm[i * 2 + 1] = s;
+		}
+		bc_publish(d, ring, pcm, n * 2);
+		payload += n;
+		len -= (size_t)n;
 	}
 	bc_note_codec(d, pt);
-	rss_ring_publish(ring, (const uint8_t *)pcm, (uint32_t)(n * 4), rss_timestamp_us(), 0, 0,
-			 RSS_SRC_SEQ_NONE);
 }
 
 /* L16/16000/1: network byte order to host, already at ring rate. */
@@ -320,8 +348,7 @@ static void bc_handle_l16(rsd_bc_dec_t *d, rss_ring_t *ring, const uint8_t *payl
 	for (int i = 0; i < n; i++)
 		pcm[i] = (int16_t)(((uint16_t)payload[i * 2] << 8) | payload[i * 2 + 1]);
 	bc_note_codec(d, RSD_BC_PT_L16);
-	rss_ring_publish(ring, (const uint8_t *)pcm, (uint32_t)(n * 2), rss_timestamp_us(), 0, 0,
-			 RSS_SRC_SEQ_NONE);
+	bc_publish(d, ring, pcm, n);
 }
 
 static bool bc_warn_due(rsd_bc_dec_t *d)
@@ -371,8 +398,7 @@ static void bc_handle_opus(rsd_bc_dec_t *d, rss_ring_t *ring, const uint8_t *pay
 		return;
 	}
 	bc_note_codec(d, RSD_BC_PT_OPUS);
-	rss_ring_publish(ring, (const uint8_t *)pcm, (uint32_t)(n * 2), rss_timestamp_us(), 0, 0,
-			 RSS_SRC_SEQ_NONE);
+	bc_publish(d, ring, pcm, n);
 }
 #endif /* RAPTOR_OPUS */
 
@@ -437,8 +463,7 @@ static void bc_aac_decode_au(rsd_bc_dec_t *d, rss_ring_t *ring, const uint8_t *a
 	if (samples <= 0)
 		return;
 	bc_note_codec(d, RSD_BC_PT_AAC);
-	rss_ring_publish(ring, (const uint8_t *)pcm, (uint32_t)(samples * 2), rss_timestamp_us(), 0,
-			 0, RSS_SRC_SEQ_NONE);
+	bc_publish(d, ring, pcm, samples);
 }
 
 static void bc_handle_aac(rsd_bc_dec_t *d, rss_ring_t *ring, uint32_t rtp_ts,
