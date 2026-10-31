@@ -2216,6 +2216,13 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 				     show, reg->layer + 1);
 		}
 		reg->shown = !!show;
+		/* Remember that this was asked for: the OSD check re-shows a
+		 * region that is not shown whenever its producer pushes a
+		 * frame, which would otherwise undo this on the next update. A
+		 * text element survived only because rod stops rendering it
+		 * when hidden, so nothing arrived to trigger the re-show; an
+		 * image kept its content and came straight back. */
+		reg->want_hidden = !show;
 		pthread_mutex_unlock(&st->osd_lock);
 
 		RSS_DEBUG("osd-show: stream %d %s %s", stream, region, show ? "on" : "off");

@@ -593,7 +593,7 @@ static void try_open_shm(rvd_state_t *st, int s, rvd_osd_region_t *reg)
 	if (!reg->shown && strcmp(reg->name, "privacy") == 0 && !st->privacy[s])
 		return;
 
-	if (!reg->shown) {
+	if (!reg->shown && !reg->want_hidden) {
 		if (STREAM_ISP_OSD(st, s)) {
 			int sensor = st->streams[s].sensor_idx;
 			int stream_w = st->streams[s].enc_cfg.width;
@@ -825,7 +825,7 @@ push_updates:
 			if (!reg->shown && strcmp(reg->name, "privacy") == 0 && !st->privacy[s])
 				continue;
 
-			if (!reg->shown) {
+			if (!reg->shown && !reg->want_hidden) {
 				if (STREAM_ISP_OSD(st, s)) {
 					int sensor = st->streams[s].sensor_idx;
 					int stream_w = st->streams[s].enc_cfg.width;

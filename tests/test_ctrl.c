@@ -275,11 +275,16 @@ void rvd_osd_calc_position(int sw, int sh, int rw, int rh, const char *p, int *x
 	*y = 0;
 }
 
+/* One region the osd-show tests can act on. Anything else is "not found",
+ * which is the answer for a name no stream carries. */
+static rvd_osd_region_t test_region;
+
 rvd_osd_region_t *rvd_osd_find_region(rvd_state_t *st, int s, const char *n)
 {
 	(void)st;
 	(void)s;
-	(void)n;
+	if (n && strcmp(n, "logo") == 0)
+		return &test_region;
 	return NULL;
 }
 
@@ -1072,6 +1077,48 @@ TEST get_rgb_coefft_reports_the_coefficients(void)
 	PASS();
 }
 
+/* ══════════════════════════════════════════════════════════════════
+ *  osd-show records intent, not just current visibility
+ * ══════════════════════════════════════════════════════════════════ */
+
+TEST osd_hide_marks_the_region_as_wanted_hidden(void)
+{
+	setup();
+	test_region = (rvd_osd_region_t){.active = true, .hal_handle = 1, .shown = true};
+	call("{\"cmd\":\"osd-show\",\"stream\":0,\"region\":\"logo\",\"show\":0}");
+	ASSERT_EQm("no longer shown", false, test_region.shown);
+	/*
+	 * Without this the OSD check re-shows any region that is not shown as
+	 * soon as its producer pushes a frame, so an image element came back
+	 * on the next update while a text one stayed hidden only because rod
+	 * stops rendering it.
+	 */
+	ASSERT_EQm("hide was deliberate", true, test_region.want_hidden);
+	teardown();
+	PASS();
+}
+
+TEST osd_show_clears_the_wanted_hidden_mark(void)
+{
+	setup();
+	test_region = (rvd_osd_region_t){
+		.active = true, .hal_handle = 1, .shown = false, .want_hidden = true};
+	call("{\"cmd\":\"osd-show\",\"stream\":0,\"region\":\"logo\",\"show\":1}");
+	ASSERT_EQm("shown again", true, test_region.shown);
+	ASSERT_EQm("no longer held hidden", false, test_region.want_hidden);
+	teardown();
+	PASS();
+}
+
+TEST osd_show_on_an_unknown_region_says_so(void)
+{
+	setup();
+	call("{\"cmd\":\"osd-show\",\"stream\":0,\"region\":\"nosuch\",\"show\":0}");
+	ASSERT(strstr(resp, "region not active") != NULL);
+	teardown();
+	PASS();
+}
+
 TEST get_wb_returns_current_state(void)
 {
 	setup();
@@ -1353,6 +1400,11 @@ SUITE(ctrl_suite)
 	RUN_TEST(get_rgb_coefft_answers_notsup_without_the_op);
 	RUN_TEST(get_rgb_coefft_reports_the_coefficients);
 	RUN_TEST(get_wb_returns_current_state);
+
+	/* osd-show intent */
+	RUN_TEST(osd_hide_marks_the_region_as_wanted_hidden);
+	RUN_TEST(osd_show_clears_the_wanted_hidden_mark);
+	RUN_TEST(osd_show_on_an_unknown_region_says_so);
 
 	/* ISP roundtrip */
 	RUN_TEST(isp_brightness_roundtrip);

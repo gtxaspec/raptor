@@ -59,6 +59,11 @@ typedef struct {
 	uint8_t *local_buf;
 	bool active;
 	bool shown;
+	/* Hidden because someone asked for it, as against not shown yet.
+	 * Pushing content re-shows a region that has never been shown, which
+	 * is how a region first appears; without this flag that same path
+	 * undoes an explicit hide on the next frame the producer sends. */
+	bool want_hidden;
 	int no_update_ticks;
 	int layer;
 } rvd_osd_region_t;
