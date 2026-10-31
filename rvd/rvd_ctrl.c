@@ -1182,8 +1182,9 @@ static int handle_isp_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 			wb.r_gain = (uint16_t)r_gain;
 		if (rss_json_get_int(cmd_json, "b_gain", &b_gain) == 0)
 			wb.b_gain = (uint16_t)b_gain;
-		/* isp_get_wb never fills green, so an absent g_gain stays 0 and
-		 * the HAL reads that as "keep the green already set". */
+		/* Manual on the T41 writes the RGB offsets, which do have a green.
+		 * An absent g_gain stays 0 and the HAL reads that as "keep the
+		 * green already set". */
 		if (rss_json_get_int(cmd_json, "g_gain", &g_gain) == 0)
 			wb.g_gain = (uint16_t)g_gain;
 		int ret = RSS_HAL_CALL(st->ops, isp_set_wb, st->hal_ctx, &wb);
@@ -1208,7 +1209,7 @@ static int handle_isp_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 		return rss_ctrl_resp_json(resp, resp_size, r);
 	}
 
-	/* The manual coefficients are a different control from the AWB gains
+	/* The RGB coefficients are a different control from the AWB gains
 	 * get-wb reports, on a different scale, so they get their own verb
 	 * rather than being folded into that answer. */
 	if (strcmp(cmd, "get-rgb-coefft") == 0) {
@@ -1216,6 +1217,28 @@ static int handle_isp_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 		int ret = RSS_HAL_CALL(st->ops, isp_get_awb_rgb_coefft, st->hal_ctx, &rg, &gg, &bg);
 		if (ret != 0)
 			return rss_ctrl_resp_error(resp, resp_size, "not supported");
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddStringToObject(r, "status", "ok");
+		cJSON_AddNumberToObject(r, "r_coefft", (double)rg);
+		cJSON_AddNumberToObject(r, "g_coefft", (double)gg);
+		cJSON_AddNumberToObject(r, "b_coefft", (double)bg);
+		return rss_ctrl_resp_json(resp, resp_size, r);
+	}
+
+	if (strcmp(cmd, "set-rgb-coefft") == 0) {
+		uint16_t rg = 0, gg = 0, bg = 0;
+		if (RSS_HAL_CALL(st->ops, isp_get_awb_rgb_coefft, st->hal_ctx, &rg, &gg, &bg) != 0)
+			return rss_ctrl_resp_error(resp, resp_size, "not supported");
+		int v;
+		if (rss_json_get_int(cmd_json, "r_coefft", &v) == 0)
+			rg = (uint16_t)v;
+		if (rss_json_get_int(cmd_json, "g_coefft", &v) == 0)
+			gg = (uint16_t)v;
+		if (rss_json_get_int(cmd_json, "b_coefft", &v) == 0)
+			bg = (uint16_t)v;
+		int ret = RSS_HAL_CALL(st->ops, isp_set_awb_rgb_coefft, st->hal_ctx, rg, gg, bg);
+		if (ret != 0)
+			return rss_ctrl_resp_error(resp, resp_size, "failed");
 		cJSON *r = cJSON_CreateObject();
 		cJSON_AddStringToObject(r, "status", "ok");
 		cJSON_AddNumberToObject(r, "r_coefft", (double)rg);
@@ -1268,7 +1291,6 @@ static int handle_isp_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 		cJSON_AddNumberToObject(r, "defog_strength", (double)dfg);
 		cJSON_AddStringToObject(r, "wb_mode", wb.mode == RSS_WB_MANUAL ? "manual" : "auto");
 		cJSON_AddNumberToObject(r, "wb_r", (double)wb.r_gain);
-		cJSON_AddNumberToObject(r, "wb_g", (double)wb.g_gain);
 		cJSON_AddNumberToObject(r, "wb_b", (double)wb.b_gain);
 		return rss_ctrl_resp_json(resp, resp_size, r);
 	}

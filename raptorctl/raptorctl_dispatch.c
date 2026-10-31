@@ -112,11 +112,14 @@ static const struct cmd_arg args_privacy[] = {{"value", A_STR}, {"channel", A_IN
 static const struct cmd_arg args_rc_mode[] = {
 	{"channel", A_INT}, {"mode", A_STR}, {"bitrate", A_INT}, {NULL, A_END}};
 
-/* g_gain comes after b_gain, not in RGB order: `set-wb <mode> <r> <b>` is the
- * form already in use and on every platform but the T41 it still works, so the
- * third gain had to append rather than take blue's place. */
+/* g_gain appends after b_gain rather than taking blue's place: `set-wb
+ * <mode> <r> <b>` is the form already in use everywhere. */
 static const struct cmd_arg args_wb[] = {
 	{"mode", A_STR}, {"r_gain", A_INT}, {"b_gain", A_INT}, {"g_gain", A_INT}, {NULL, A_END}};
+
+/* The AWB RGB channel offset: a post-AWB trim, not white balance. */
+static const struct cmd_arg args_coefft[] = {
+	{"r_coefft", A_INT}, {"g_coefft", A_INT}, {"b_coefft", A_INT}, {NULL, A_END}};
 
 static const struct cmd_arg args_position[] = {
 	{"element", A_STR}, {"pos", A_STR}, {"stream", A_INT}, {NULL, A_END}};
@@ -262,6 +265,7 @@ static const struct cmd_def cmd_table[] = {
 	/* White balance */
 	{"set-wb", NULL, 1, args_wb},
 	{"get-rgb-coefft", NULL, 0, args_none},
+	{"set-rgb-coefft", NULL, 1, args_coefft},
 
 	/* Sentinel */
 	{NULL, NULL, 0, NULL},
