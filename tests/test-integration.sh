@@ -1219,9 +1219,9 @@ for sec in desc.split("m=")[1:]:
 if not ctl:
     print("NO_CONTROL"); sys.exit(0)
 
-# A backchannel-only session has nothing to play: set up the video
-# track first, exactly as a real ONVIF client does, then the
-# sendonly track beside it.
+# Set up the video track first, as some ONVIF clients do, then the
+# sendonly track beside it. The backchannel-only session that other
+# clients open is covered by the next test.
 s.sendall(f"SETUP {base}/video RTSP/1.0\r\nCSeq: 2\r\n"
           f"Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n\r\n".encode())
 vsetup, buf = rsp(s, buf)
@@ -1288,6 +1288,100 @@ if [ "${BC_SEQ:-0}" -gt 0 ] 2>/dev/null; then
     pass "backchannel audio reaches the speaker ring ($BC_SEQ frames published)"
 else
     fail "backchannel speaker ring" "rsd published nothing (write_seq=${BC_SEQ:-none})"
+fi
+
+# ── ONVIF backchannel-only session: PLAY is accepted ──
+# Talk-back clients that already receive video elsewhere (Scrypted's
+# ONVIF intercom, for one) open a separate session that sets up only
+# the sendonly track, then PLAY. With the backchannel Require tag the
+# ONVIF Streaming Specification defines PLAY as also starting the
+# client-to-server audio, so this PLAY must succeed and the audio must
+# reach the speaker ring.
+BC_ONLY_BEFORE=$(timeout 5 "$OUT/ringdump" speaker 2>&1 |
+                 sed -n 's/.*Write seq: *\([0-9]*\).*/\1/p' | head -1)
+python3 - > "$LOG_DIR/backchannel-only.out" 2>&1 <<'BCO_EOF' &
+import socket, struct, sys, time
+
+def rsp(sock, buf):
+    while b"\r\n\r\n" not in buf[0]:
+        d = sock.recv(4096)
+        if not d:
+            return "", buf
+        buf[0] += d
+    head, _, rest = buf[0].partition(b"\r\n\r\n")
+    txt = head.decode(errors="replace")
+    clen = 0
+    for line in txt.split("\r\n"):
+        if line.lower().startswith("content-length:"):
+            clen = int(line.split(":", 1)[1])
+    while len(rest) < clen:
+        rest += sock.recv(4096)
+    body, buf[0] = rest[:clen], rest[clen:]
+    return txt + "\r\n\r\n" + body.decode(errors="replace"), buf
+
+REQ = "Require: www.onvif.org/ver20/backchannel\r\n"
+s = socket.create_connection(("127.0.0.1", 15554), timeout=10)
+buf = [b""]
+base = "rtsp://127.0.0.1:15554/stream0"
+s.sendall(f"DESCRIBE {base} RTSP/1.0\r\nCSeq: 1\r\nAccept: application/sdp\r\n{REQ}\r\n".encode())
+desc, buf = rsp(s, buf)
+ctl = None
+for sec in desc.split("m=")[1:]:
+    if "a=sendonly" in sec:
+        for line in sec.split("\n"):
+            if line.strip().startswith("a=control:"):
+                ctl = line.strip().split(":", 1)[1]
+if not ctl:
+    print("NO_CONTROL"); sys.exit(0)
+
+url = ctl if ctl.startswith("rtsp") else base + "/" + ctl
+s.sendall(f"SETUP {url} RTSP/1.0\r\nCSeq: 2\r\n"
+          f"Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n{REQ}\r\n".encode())
+setup, buf = rsp(s, buf)
+sid = ""
+for line in setup.split("\r\n"):
+    if line.lower().startswith("session:"):
+        sid = line.split(":", 1)[1].split(";")[0].strip()
+if " 200 " not in setup.split("\r\n")[0]:
+    print("SETUP_FAILED"); sys.exit(0)
+
+s.sendall(f"PLAY {base} RTSP/1.0\r\nCSeq: 3\r\nSession: {sid}\r\n{REQ}"
+          f"Range: npt=0.000-\r\n\r\n".encode())
+play, buf = rsp(s, buf)
+print("PLAY=" + play.split("\r\n")[0])
+if " 200 " not in play.split("\r\n")[0]:
+    sys.exit(0)
+
+seq = ts = 0
+for _ in range(50):
+    rtp = struct.pack("!BBHII", 0x80, 0, seq & 0xFFFF, ts, 0x5EED1234) + b"\xff" * 160
+    s.sendall(b"\x24" + struct.pack("!BH", 0, len(rtp)) + rtp)
+    seq += 1; ts += 160
+    time.sleep(0.005)
+print("SENT=50", flush=True)
+time.sleep(6.0)
+s.close()
+BCO_EOF
+BC_ONLY_PID=$!
+BC_ONLY_SEQ=0
+for _ in $(seq 1 40); do
+    BC_ONLY_SEQ=$(timeout 5 "$OUT/ringdump" speaker 2>&1 |
+                  sed -n 's/.*Write seq: *\([0-9]*\).*/\1/p' | head -1)
+    [ "${BC_ONLY_SEQ:-0}" -gt "${BC_ONLY_BEFORE:-0}" ] 2>/dev/null && break
+    sleep 0.25
+done
+wait $BC_ONLY_PID 2>/dev/null
+BC_ONLY_OUT=$(cat "$LOG_DIR/backchannel-only.out" 2>/dev/null)
+
+if echo "$BC_ONLY_OUT" | grep -q "PLAY=RTSP/1.0 200"; then
+    pass "backchannel-only session: PLAY accepted"
+else
+    fail "backchannel-only PLAY" "$(echo "$BC_ONLY_OUT" | grep -E 'PLAY=|FAILED|NO_' | head -1)"
+fi
+if [ "${BC_ONLY_SEQ:-0}" -gt "${BC_ONLY_BEFORE:-0}" ] 2>/dev/null; then
+    pass "backchannel-only audio reaches the speaker ring (write_seq ${BC_ONLY_BEFORE:-0} -> $BC_ONLY_SEQ)"
+else
+    fail "backchannel-only speaker ring" "write_seq stayed at ${BC_ONLY_BEFORE:-none}"
 fi
 
 # ── Backchannel multi-codec offer: every advertised PT must decode ──
