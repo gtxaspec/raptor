@@ -12,6 +12,14 @@ if [ "$1" != watch ] && [ -z "$S31RAPTOR_LOCKED" ] && command -v flock >/dev/nul
 	S31RAPTOR_LOCKED=1 exec flock "$RUNDIR/.lock" "$0" "$@"
 fi
 
+# Environment the daemons read at start, set per camera (for example
+# RSS_SCL_RING_DIV for the Infinity6C HAL). Every assignment is exported.
+if [ -r /etc/default/raptor ]; then
+	set -a
+	. /etc/default/raptor
+	set +a
+fi
+
 # Executables here run with "stop" before any daemon goes down and with
 # "start" once the stack is up. They are for processes outside the stack that
 # call into the video pipeline: those must be off it while rvd tears it down
