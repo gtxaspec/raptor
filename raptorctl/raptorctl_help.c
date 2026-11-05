@@ -79,6 +79,7 @@ const struct help_entry help_entries[] = {
 	{"rvd", "set-hue <val>                       ISP hue (0-255)"},
 	{"rvd", "set-sinter <val>                    Spatial NR (0-255)"},
 	{"rvd", "set-temper <val>                    Temporal NR (0-255)"},
+	{"rvd", "get-nr                              Show NR state (Gen3 supported)"},
 	{"rvd", "set-hflip <0|1>                     Horizontal flip"},
 	{"rvd", "set-vflip <0|1>                     Vertical flip"},
 	{"rvd", "set-antiflicker <0|1|2>             Off/50Hz/60Hz"},
