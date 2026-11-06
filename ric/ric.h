@@ -195,11 +195,16 @@ typedef struct {
 
 	/* Anti-flap: cooldown after mode switch + gain baseline */
 	int cooldown_remaining;	      /* polls remaining before evaluating transitions */
-	uint32_t night_gain_baseline; /* total_gain sampled after IR LEDs stabilize */
+	uint32_t night_gain_baseline; /* total_gain sampled after IR LEDs stabilize (stays
+				       * 0 where the platform reports no gain in night
+				       * mode -- T41 class) */
 	uint32_t night_ev_baseline;   /* EV at the same settled moment: the probe dip
 				       * watches EV where it exists, because AE can
 				       * answer new light with exposure alone while
-				       * gain sits pinned at its floor (Wyze V3) */
+				       * gain sits pinned at its floor (Wyze V3); on
+				       * gain-less night tables (T41 class) it doubles
+				       * as the reference for the night→day ratio and
+				       * the probe arm */
 	uint32_t night_detect_gain;   /* gain at the moment night was detected */
 
 	/* Ratio-triggered day switches are verified once the IR is off:
