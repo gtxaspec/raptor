@@ -69,6 +69,7 @@ typedef struct {
 	int64_t segment_start_rt_us;	/* wall clock at open (boundary math) */
 	int64_t segment_boundary_rt_us; /* next wall-clock split point */
 	bool segment_idr_requested;	/* one sharpening IDR per boundary */
+	bool segment_write_error;	/* write/flush failure: abort file at close */
 
 	/* Pre-buffer for motion clips (main thread only) */
 	rmr_prebuf_t *video_pb;
@@ -86,6 +87,7 @@ typedef struct {
 	int64_t clip_a_ts_base; /* ring ts mapping base for clip_a_dts steering */
 	int64_t clip_start_us;	/* wall clock when clip opened */
 	uint64_t clip_bytes;
+	bool clip_write_error;	/* write/flush failure: abort file at close */
 
 	/* Timelapse (main thread only) */
 	bool tl_enabled; /* [timelapse] enabled, runtime-togglable */
@@ -97,6 +99,7 @@ typedef struct {
 	uint64_t tl_bytes;
 	uint64_t tl_frames_total;
 	int64_t tl_last_err_us; /* rate-limits open/write failure warns */
+	bool tl_write_error;	/* write/flush failure: abort file at close */
 
 	/* Frame read buffer (main thread only) */
 	uint8_t *frame_buf;
