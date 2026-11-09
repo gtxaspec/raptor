@@ -96,6 +96,8 @@ static const struct cmd_arg args_enc_crop[] = {{"channel", A_INT}, {"enable", A_
 					       {"y", A_INT},	   {"w", A_INT},      {"h", A_INT},
 					       {NULL, A_END}};
 
+static const struct cmd_arg args_zoom[] = {{"factor_mille", A_INT}, {NULL, A_END}};
+
 static const struct cmd_arg args_resolution[] = {
 	{"channel", A_INT}, {"width", A_INT}, {"height", A_INT}, {NULL, A_END}};
 
@@ -178,6 +180,7 @@ static const struct cmd_def cmd_table[] = {
 	{"set-enc-denoise", NULL, 5, args_enc_denoise},
 	{"set-gdr", NULL, 3, args_gdr},
 	{"set-enc-crop", NULL, 6, args_enc_crop},
+	{"set-zoom", NULL, 1, args_zoom},
 
 	/* Video encoder: channel-only get commands (struct/custom response) */
 	{"get-bitrate", NULL, 1, args_ch},
@@ -193,6 +196,7 @@ static const struct cmd_def cmd_table[] = {
 	{"get-enc-denoise", NULL, 1, args_ch},
 	{"get-gdr", NULL, 1, args_ch},
 	{"get-enc-crop", NULL, 1, args_ch},
+	{"get-zoom", NULL, 0, args_none},
 	{"get-roi", NULL, 2, args_ch_idx},
 	{"request-pskip", NULL, 1, args_ch},
 	{"request-gdr", NULL, 2, args_ch_val},

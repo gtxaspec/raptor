@@ -21,6 +21,8 @@
 #include <sys/cachectl.h>
 #endif
 
+void rvd_apply_persisted_zoom(rvd_state_t *st);
+
 #define RVD_STATS_INTERVAL_US 30000000 /* 30s */
 #define RVD_REAP_INTERVAL_US  10000000 /* 10s */
 #define RVD_UTC_INTERVAL_US   5000000  /* 5s — UTC mapping refresh */
@@ -474,8 +476,16 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running)
 	}
 
 	int64_t last_vbs_check = rss_timestamp_us();
+	int64_t zoom_start = rss_timestamp_us();
+	int zoom_done = 0;
 
 	while (rss_running(running)) {
+		/* Apply a persisted zoom once the streams have settled. At init the
+		 * pipeline is full resolution, so this is always a shrink. */
+		if (!zoom_done && rss_timestamp_us() - zoom_start >= 2500000) {
+			zoom_done = 1;
+			rvd_apply_persisted_zoom(st);
+		}
 		/* A stream that never produces a frame is the visible face
 		 * of two silent failures: the tx-isp driver refusing the
 		 * multi-buffer schedule, and rmem too small for the buffer

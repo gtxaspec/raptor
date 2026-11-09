@@ -56,6 +56,12 @@ static rss_wb_mode_t wb_mode_from_str(const char *s)
 
 /* ── Helpers ── */
 
+/* ISP front-crop zoom; defined in rvd_pipeline.c (it reads the sensor
+ * proc registry, which lives there). Layout of the struct it operates on
+ * mirrors IMPISPFrontCrop byte-for-byte. */
+int rvd_apply_zoom(rvd_state_t *st, int factor_mille);
+int rvd_get_zoom(void *out);
+
 /*
  * Sub-handler return convention:
  *   > 0  = handled, return value is response byte count
@@ -1170,6 +1176,41 @@ static int handle_isp_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 #undef ISP_SET_N
 #undef ISP_SET
 
+	/* ── ISP front-crop zoom: one call covers every stream, crop is
+	 * upstream of the frame-source/encoder splits. factor_mille is a
+	 * milli-int (raptor-common has no double getter): 1000 = off,
+	 * 2500 = 2.5x, 8000 = 8x. ── */
+	if (strcmp(cmd, "set-zoom") == 0) {
+		int factor_mille;
+		if (rss_json_get_int(cmd_json, "factor_mille", &factor_mille) != 0)
+			return rss_ctrl_resp_error(resp, resp_size, "need factor_mille");
+		int ret = rvd_apply_zoom(st, factor_mille);
+		return fmt_hal_result(resp, resp_size, ret);
+	}
+
+	if (strcmp(cmd, "get-zoom") == 0) {
+		/* Layout mirror of IMPISPFrontCrop (imp/imp_isp.h T31 1.1.5) —
+		 * see rvd_pipeline.c. HAL op takes void * and casts. */
+		struct fc_mirror {
+			bool enable;
+			unsigned int top;
+			unsigned int left;
+			unsigned int width;
+			unsigned int height;
+		} fc = {0};
+		int ret = rvd_get_zoom(&fc);
+		if (ret != 0)
+			return fmt_hal_result(resp, resp_size, ret);
+		cJSON *r = cJSON_CreateObject();
+		cJSON_AddStringToObject(r, "status", "ok");
+		cJSON_AddBoolToObject(r, "enable", fc.enable);
+		cJSON_AddNumberToObject(r, "top", (double)fc.top);
+		cJSON_AddNumberToObject(r, "left", (double)fc.left);
+		cJSON_AddNumberToObject(r, "width", (double)fc.width);
+		cJSON_AddNumberToObject(r, "height", (double)fc.height);
+		return rss_ctrl_resp_json(resp, resp_size, r);
+	}
+
 	if (strcmp(cmd, "set-wb") == 0) {
 		rss_wb_config_t wb = {0};
 		RSS_HAL_CALL(st->ops, isp_get_wb, st->hal_ctx, &wb);
@@ -1458,8 +1499,7 @@ static int find_jpeg_for_video_ctrl(rvd_state_t *st, int video_idx)
  * Returns 0 on success, or positive response length on failure
  * (error already written to resp).
  */
-static int do_stream_restart_ex(rvd_state_t *st, int chn, char *resp, int resp_size,
-				bool recreate_fs)
+int do_stream_restart_ex(rvd_state_t *st, int chn, char *resp, int resp_size, bool recreate_fs)
 {
 	int jpeg = find_jpeg_for_video_ctrl(st, chn);
 	bool has_ivs = (st->streams[chn].fs_chn == st->ivs_fs_chn && atomic_load(&st->ivs_active));
