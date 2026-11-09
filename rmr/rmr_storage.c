@@ -13,18 +13,24 @@
 #include <stdlib.h>
 #include <string.h>
 #include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <time.h>
 #include <unistd.h>
 
+#define RMR_TMP_SUFFIX	   ".tmp"
+#define RMR_TMP_SUFFIX_LEN (sizeof(RMR_TMP_SUFFIX) - 1)
+
 struct rmr_storage {
 	char base_path[256];
 	int segment_minutes;
 	int segment_seconds;
 	int max_storage_mb;
+	uint64_t prealloc_bytes;   /* segment reservation, 0 = none        */
 	bool refuse_logged;	   /* rootfs auto-create refusal logged once */
+	bool swept;		   /* stale .tmp sweep done once            */
 	int64_t last_wait_warn_us; /* rate-limit for the waiting log       */
 };
 
@@ -41,6 +47,7 @@ rmr_storage_t *rmr_storage_create(const rmr_storage_config_t *cfg)
 	st->segment_minutes = cfg->segment_minutes > 0 ? cfg->segment_minutes : 5;
 	st->segment_seconds = cfg->segment_seconds;
 	st->max_storage_mb = cfg->max_storage_mb;
+	st->prealloc_bytes = cfg->prealloc_bytes;
 
 	return st;
 }
@@ -65,22 +72,68 @@ int rmr_storage_open_segment(rmr_storage_t *st, char *path_out, int path_out_siz
 		 tm.tm_mon + 1, tm.tm_mday);
 	rss_mkdir_p(dir);
 
-	/* Filename: HH-MM-SS.mp4 */
+	/* Final name: HH-MM-SS.mp4. Recording happens under a .tmp twin
+	 * of that name; the .mp4 appears only when the segment closes
+	 * cleanly (rename), so a power loss mid-segment can never leave
+	 * a truncated .mp4 behind for players and NVR importers to trip
+	 * over — only the .tmp, which is swept at the next start. */
 	snprintf(path_out, path_out_size, "%s/%02d-%02d-%02d.mp4", dir, tm.tm_hour, tm.tm_min,
 		 tm.tm_sec);
 
-	int fd = open(path_out, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-	if (fd < 0)
-		RSS_ERROR("failed to open segment: %s", path_out);
+	char tmp_path[320];
+	snprintf(tmp_path, sizeof(tmp_path), "%s" RMR_TMP_SUFFIX, path_out);
+
+	int fd = open(tmp_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	if (fd < 0) {
+		RSS_ERROR("failed to open segment: %s", tmp_path);
+		return -1;
+	}
+
+	/* Optional reservation. ftruncate, never fallocate: vfat rejects
+	 * fallocate (EOPNOTSUPP) and exfat-nofuse does not implement it,
+	 * while their truncate-growth path (fat_cont_expand) only writes
+	 * metadata — the reserved clusters are never touched, so a later
+	 * power loss cannot splice garbage from an old recording into
+	 * this one, and a yanked card keeps its old data intact. A
+	 * failed reservation (e.g. card nearly full) only logs: the
+	 * segment still records, growing organically. */
+	if (st->prealloc_bytes > 0 && ftruncate(fd, (off_t)st->prealloc_bytes) != 0)
+		RSS_WARN("segment prealloc of %llu bytes failed (%s): growing organically",
+			 (unsigned long long)st->prealloc_bytes, strerror(errno));
 
 	return fd;
 }
 
-void rmr_storage_close_segment(int fd)
+void rmr_storage_close_segment(int fd, const char *path, uint64_t bytes)
 {
-	if (fd >= 0) {
-		fsync(fd);
+	if (fd < 0)
+		return;
+
+	if (bytes == 0) {
+		/* Nothing worth publishing — discard the .tmp. */
 		close(fd);
+		if (path) {
+			char tmp_path[320];
+			snprintf(tmp_path, sizeof(tmp_path), "%s" RMR_TMP_SUFFIX, path);
+			unlink(tmp_path);
+		}
+		return;
+	}
+
+	/* Shrink the reservation to what was actually written, flush,
+	 * then publish under the final name. rename() is atomic; a
+	 * crash before it loses only the in-flight segment. */
+	if (ftruncate(fd, (off_t)bytes) != 0)
+		RSS_ERROR("failed to shrink segment to %llu bytes: %s", (unsigned long long)bytes,
+			  strerror(errno));
+	fsync(fd);
+	close(fd);
+
+	if (path) {
+		char tmp_path[320];
+		snprintf(tmp_path, sizeof(tmp_path), "%s" RMR_TMP_SUFFIX, path);
+		if (rename(tmp_path, path) != 0)
+			RSS_ERROR("failed to publish segment %s: %s", path, strerror(errno));
 	}
 }
 
@@ -159,21 +212,90 @@ static bool storage_try_create(rmr_storage_t *st)
 	return true;
 }
 
+/* YYYY-MM-DD only — deliberately not clips/, timelapse/, or anything
+ * user-created; each storage instance sweeps its own date dirs. */
+static bool is_date_dir(const char *name)
+{
+	if (strlen(name) != 10 || name[4] != '-' || name[7] != '-')
+		return false;
+	for (int i = 0; i < 10; i++) {
+		if (i == 4 || i == 7)
+			continue;
+		if (name[i] < '0' || name[i] > '9')
+			return false;
+	}
+	return true;
+}
+
+/*
+ * Remove .tmp leftovers from an unclean shutdown. rmr is the only
+ * writer and this runs before the first segment of the current run
+ * opens, so any .tmp found is garbage from a previous run.
+ */
+static void sweep_stale_tmp(rmr_storage_t *st)
+{
+	int removed = 0;
+
+	DIR *d = opendir(st->base_path);
+	if (!d)
+		return;
+
+	struct dirent *ent;
+	while ((ent = readdir(d)) != NULL) {
+		if (!is_date_dir(ent->d_name))
+			continue;
+
+		char day_dir[320];
+		snprintf(day_dir, sizeof(day_dir), "%s/%s", st->base_path, ent->d_name);
+
+		DIR *dd = opendir(day_dir);
+		if (!dd)
+			continue;
+		struct dirent *fe;
+		while ((fe = readdir(dd)) != NULL) {
+			size_t len = strlen(fe->d_name);
+			if (len < 5 + RMR_TMP_SUFFIX_LEN + 4)
+				continue; /* shorter than HH-MM-SS.mp4.tmp */
+			if (strcmp(fe->d_name + len - 4 - RMR_TMP_SUFFIX_LEN,
+				   ".mp4" RMR_TMP_SUFFIX) != 0)
+				continue;
+
+			char fpath[512];
+			snprintf(fpath, sizeof(fpath), "%s/%s", day_dir, fe->d_name);
+			if (unlink(fpath) == 0)
+				removed++;
+		}
+		closedir(dd);
+	}
+	closedir(d);
+
+	if (removed > 0)
+		RSS_INFO("removed %d partial recording(s) left by an unclean shutdown", removed);
+}
+
 bool rmr_storage_available(rmr_storage_t *st)
 {
 	if (!st)
 		return false;
-	if (access(st->base_path, W_OK) == 0)
-		return true;
-	if (storage_try_create(st))
-		return true;
 
-	int64_t now = rss_timestamp_us();
-	if (now - st->last_wait_warn_us >= 60000000LL) {
-		RSS_WARN("waiting for storage: %s", st->base_path);
-		st->last_wait_warn_us = now;
+	bool ok = access(st->base_path, W_OK) == 0 || storage_try_create(st);
+	if (!ok) {
+		int64_t now = rss_timestamp_us();
+		if (now - st->last_wait_warn_us >= 60000000LL) {
+			RSS_WARN("waiting for storage: %s", st->base_path);
+			st->last_wait_warn_us = now;
+		}
+		return false;
 	}
-	return false;
+
+	/* First time the media is seen this run: clear whatever an
+	 * unclean shutdown left behind. rmr is the only writer and no
+	 * segment is open yet, so no .tmp can be in flight. */
+	if (!st->swept) {
+		st->swept = true;
+		sweep_stale_tmp(st);
+	}
+	return true;
 }
 
 /* ── Storage cleanup ── */
