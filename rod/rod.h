@@ -83,9 +83,11 @@ typedef struct {
 	int font_size;
 	uint32_t color;
 	uint32_t stroke_color;
+	uint32_t bg_color;
 	int stroke_size;
 	bool has_color;
 	bool has_stroke_color;
+	bool has_bg_color;
 	int align;
 	char position[32];
 	int max_chars;
@@ -136,6 +138,7 @@ typedef struct {
 	int font_size;
 	uint32_t font_color;
 	uint32_t stroke_color;
+	uint32_t bg_color;
 	int font_stroke;
 	char time_format[64];
 	int frame_rate;
@@ -179,10 +182,12 @@ void rod_render_deinit(rod_state_t *st, int stream_idx, int font_idx);
 rod_glyph_t *rod_glyph_lookup(rod_font_t *font, uint32_t codepoint);
 void rod_draw_text(rod_state_t *st, int stream_idx, int font_idx, uint8_t *buf, uint32_t buf_w,
 		   uint32_t buf_h, const char *text, int align, uint32_t color,
-		   uint32_t stroke_color, int stroke_size);
+		   uint32_t stroke_color, int stroke_size, uint32_t bg_color);
 int rod_load_logo(const char *path, int expected_w, int expected_h, uint8_t **out_data);
 void rod_draw_rect_outline(uint8_t *buf, uint32_t buf_w, uint32_t buf_h, int x0, int y0, int x1,
 			   int y1, uint32_t color_bgra, int thickness);
+void rod_draw_rect_fill(uint8_t *buf, uint32_t buf_w, uint32_t buf_h, int x0, int y0, int x1,
+			int y1, uint32_t color_bgra);
 
 /* rod_receipt.c -- receipt element */
 void rod_receipt_add_line(rod_element_t *e, const char *line);
