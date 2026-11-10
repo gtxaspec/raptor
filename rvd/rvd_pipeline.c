@@ -227,6 +227,196 @@ static const char *rc_mode_str(rss_rc_mode_t m)
 static void load_stream_config(rss_config_t *cfg, const char *section, rvd_stream_t *s,
 			       int default_w, int default_h, int default_fps, int default_br);
 
+/* ── Digital zoom (framesource crop) ──
+ *
+ * The T31 ISP and framesource scalers are downscale-only, so zoom crops a
+ * sensor window and streams it at that window's size; it cannot upscale back
+ * to full resolution. The chosen factor is persisted in RVD_ZOOM_FILE (the
+ * *applied* factor) and, after a restart, re-applied once the streams are up
+ * (rvd_apply_persisted_zoom) as a shrink from the full-resolution init.
+ * Zoom-in shrinks the buffers in place; zoom-out would have to grow them and
+ * freezes the encoder on this SoC, so the caller restarts the streamer and the
+ * fresh init builds at full size before shrinking to the target. */
+#define RVD_ZOOM_FILE "/run/raptor-zoom"
+
+struct rvd_front_crop {
+	bool enable;
+	unsigned int top;
+	unsigned int left;
+	unsigned int width;
+	unsigned int height;
+};
+
+/* Forward decls: defined further down, read via the sensor proc registry. */
+static int find_active_sensor_proc_index(void);
+static int read_sensor_proc_int(int idx, const char *key, int base, int def);
+
+static int rvd_zoom_read(void)
+{
+	int f = 1000;
+	FILE *fp = fopen(RVD_ZOOM_FILE, "r");
+	if (fp) {
+		if (fscanf(fp, "%d", &f) != 1)
+			f = 1000;
+		fclose(fp);
+	}
+	if (f < 1000)
+		f = 1000;
+	if (f > 8000)
+		f = 8000;
+	return f;
+}
+
+static void rvd_zoom_rect(int factor, int sw, int sh, struct rvd_front_crop *fc)
+{
+	if (factor <= 1000 || sw <= 0 || sh <= 0) {
+		fc->enable = false;
+		fc->top = 0;
+		fc->left = 0;
+		fc->width = (unsigned)(sw > 0 ? sw : 0);
+		fc->height = (unsigned)(sh > 0 ? sh : 0);
+		return;
+	}
+	unsigned cw = ((unsigned)sw * 1000u / (unsigned)factor) & ~3u;
+	unsigned ch = ((unsigned)sh * 1000u / (unsigned)factor) & ~3u;
+	fc->enable = true;
+	fc->width = cw;
+	fc->height = ch;
+	fc->left = (unsigned)((sw - (int)cw) / 2) & ~3u;
+	fc->top = (unsigned)((sh - (int)ch) / 2) & ~3u;
+}
+
+int rvd_get_zoom(void *out)
+{
+	if (!out)
+		return RSS_ERR_INVAL;
+	int proc_idx = find_active_sensor_proc_index();
+	int sw = read_sensor_proc_int(proc_idx, "width", 10, 0);
+	int sh = read_sensor_proc_int(proc_idx, "height", 10, 0);
+	rvd_zoom_rect(rvd_zoom_read(), sw, sh, (struct rvd_front_crop *)out);
+	return 0;
+}
+
+static void rvd_zoom_write(int factor)
+{
+	FILE *fp = fopen(RVD_ZOOM_FILE, "w");
+	if (!fp)
+		return;
+	fprintf(fp, "%d\n", factor);
+	fclose(fp);
+}
+
+/* rvd_ctrl.c: hot-restart a video stream (+ paired JPEG/IVS) in place. */
+extern int do_stream_restart_ex(rvd_state_t *st, int chn, char *resp, int resp_size,
+				bool recreate_fs);
+
+/* Zoom in (shrink buffers) hot-restarts the affected streams in place, which
+ * T31 handles fine. Zoom out (grow buffers) cannot grow them back in place
+ * without freezing the encoder, so this only reports it; the caller restarts
+ * the streamer and rvd_apply_persisted_zoom shrinks from the fresh full-size
+ * init to the persisted target. /run/raptor-zoom tracks only the applied
+ * factor, so the caller's grow/shrink decision stays correct. */
+int rvd_apply_zoom(rvd_state_t *st, int factor_mille)
+{
+	if (factor_mille < 1000)
+		factor_mille = 1000;
+	if (factor_mille > 8000)
+		factor_mille = 8000;
+
+	int proc_idx = find_active_sensor_proc_index();
+	int sw = read_sensor_proc_int(proc_idx, "width", 10, 0);
+	int sh = read_sensor_proc_int(proc_idx, "height", 10, 0);
+	if (sw <= 0 || sh <= 0)
+		return RSS_ERR_INVAL;
+
+	struct rvd_front_crop fc;
+	rvd_zoom_rect(factor_mille, sw, sh, &fc);
+
+	/* Current live output of the widest (main) video stream. */
+	unsigned cur_w = 0, cur_h = 0;
+	for (int i = 0; i < st->stream_count; i++) {
+		if (st->streams[i].is_jpeg)
+			continue;
+		if (st->streams[i].enc_cfg.width >= cur_w) {
+			cur_w = st->streams[i].enc_cfg.width;
+			cur_h = st->streams[i].enc_cfg.height;
+		}
+	}
+
+	unsigned req_w = fc.enable ? fc.width : (unsigned)sw;
+	unsigned req_h = fc.enable ? fc.height : (unsigned)sh;
+	bool grow = (req_w > cur_w) || (req_h > cur_h);
+
+	/* /run/raptor-zoom mirrors the *applied* factor, so the direction check
+	 * in zoom.cgi stays correct. Grow is not applied here, so it is not
+	 * persisted either — the caller persists the target before it restarts. */
+	if (grow) {
+		/* Growing needs a clean re-init. The caller (zoom.cgi) restarts the
+		 * streamer; restarting from here via a fork of the init script leaves
+		 * every daemon down, so only report. */
+		RSS_INFO("zoom %d needs a streamer restart (not applied in place)", factor_mille);
+		return RSS_OK;
+	}
+
+	/* Shrink in place via the set-resolution hot-restart path. */
+	rvd_zoom_write(factor_mille);
+	int rc = RSS_OK;
+	for (int i = 0; i < st->stream_count; i++) {
+		rvd_stream_t *s = &st->streams[i];
+		if (s->is_jpeg)
+			continue;
+
+		unsigned ow = (unsigned)rss_config_get_int(st->cfg, s->cfg_sect, "width", sw);
+		unsigned oh = (unsigned)rss_config_get_int(st->cfg, s->cfg_sect, "height", sh);
+		unsigned out_w = fc.enable ? fc.width : ow;
+		unsigned out_h = fc.enable ? fc.height : oh;
+
+		if (out_w > ow)
+			out_w = ow;
+		if (out_h > oh)
+			out_h = oh;
+		out_w &= ~1u;
+		out_h &= ~1u;
+
+		s->enc_cfg.width = out_w;
+		s->enc_cfg.height = out_h;
+		s->fs_cfg.width = out_w;
+		s->fs_cfg.height = out_h;
+		s->fs_cfg.crop.enable = fc.enable;
+		if (fc.enable) {
+			s->fs_cfg.crop.x = (int)fc.left;
+			s->fs_cfg.crop.y = (int)fc.top;
+			s->fs_cfg.crop.w = (int)fc.width;
+			s->fs_cfg.crop.h = (int)fc.height;
+		} else {
+			s->fs_cfg.crop.x = 0;
+			s->fs_cfg.crop.y = 0;
+			s->fs_cfg.crop.w = 0;
+			s->fs_cfg.crop.h = 0;
+		}
+		s->fs_cfg.scaler.enable = (out_w != fc.width || out_h != fc.height);
+		s->fs_cfg.scaler.out_width = (int)out_w;
+		s->fs_cfg.scaler.out_height = (int)out_h;
+
+		int r = do_stream_restart_ex(st, i, NULL, 0, true);
+		if (r)
+			rc = r;
+	}
+
+	return rc;
+}
+
+/* Apply the persisted zoom once, after streams are up. At init the pipeline is
+ * full resolution, so this is always a shrink — the operation T31 handles. */
+void rvd_apply_persisted_zoom(rvd_state_t *st)
+{
+	int f = rvd_zoom_read();
+	if (f > 1000) {
+		RSS_INFO("zoom: applying persisted factor %d after startup", f);
+		rvd_apply_zoom(st, f);
+	}
+}
+
 /* ── ISP tuning defaults from [image], shared by every backend whose
  * table carries the isp ops (the v4l2 backend inherits them). ── */
 static void rvd_apply_image_defaults(rvd_state_t *st)
@@ -1212,6 +1402,9 @@ int rvd_pipeline_init(rvd_state_t *st)
 			}
 		}
 	}
+
+	/* Zoom is applied after streams are up (rvd_apply_persisted_zoom), never
+	 * at init: creating a cropped framesource at startup crashes rvd. */
 
 	/* ── 4b. Enable crop + scaler for streams ── */
 	if (sensor_w > 0 && sensor_h > 0) {
