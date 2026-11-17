@@ -422,7 +422,7 @@ static int rvd_pipeline_init_novatek(rvd_state_t *st)
 	st->jpeg_count = 0;
 	st->refmode = false;
 	st->refmode_shm = false;
-	st->osd_enabled = false;
+	st->osd_enabled = rss_config_get_bool(st->cfg, "osd", "enabled", true);
 	st->use_isp_osd = false;
 	st->ivs_enabled = false;
 	atomic_store(&st->ivs_active, false);
@@ -499,14 +499,19 @@ static int rvd_pipeline_init_novatek(rvd_state_t *st)
 		}
 	}
 
-	if (rss_config_get_bool(st->cfg, "osd", "enabled", true) ||
-	    rss_config_get_bool(st->cfg, "motion", "enabled", false))
-		RSS_WARN("Novatek backend has no OSD/IVS yet; they are disabled");
+	if (rss_config_get_bool(st->cfg, "motion", "enabled", false))
+		RSS_WARN("Novatek backend has no IVS yet; motion is disabled");
 
 	for (int i = 0; i < st->stream_count; i++) {
 		ret = rvd_stream_init(st, i);
 		if (ret != RSS_OK)
 			return ret;
+		/* Encoder stamps: the no-framesource path skips OSD setup. */
+		if (st->osd_enabled && !st->streams[i].is_jpeg) {
+			RSS_HAL_CALL(st->ops, osd_create_group, st->hal_ctx, st->streams[i].chn);
+			rvd_osd_init_stream(st, i);
+			RSS_HAL_CALL(st->ops, osd_start, st->hal_ctx, st->streams[i].chn);
+		}
 		RSS_INFO("stream%d: HDAL capture -> ISP -> %s %ux%u", i,
 			 st->streams[i].is_jpeg				  ? "JPEG"
 			 : st->streams[i].enc_cfg.codec == RSS_CODEC_H265 ? "H.265"
