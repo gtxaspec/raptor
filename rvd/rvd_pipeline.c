@@ -403,6 +403,66 @@ static int rvd_pipeline_init_v4l2(rvd_state_t *st)
 	return RSS_OK;
 }
 
+#ifdef PLATFORM_NA51055
+/*
+ * Novatek HDAL: like v4l2 there is no framesource; the backend's encoder
+ * slot owns capture -> ISP -> encoder. The sensor is whatever nvt_sen_*
+ * module the board loaded, its pins come from /etc/sensor, so an empty
+ * sensor config is the normal case.
+ */
+static int rvd_pipeline_init_novatek(rvd_state_t *st)
+{
+	rss_multi_sensor_config_t multi_cfg = {0};
+	rvd_stream_t *stream = &st->streams[0];
+	const char *model = rss_config_get_str(st->cfg, "sensor", "model", NULL);
+	int ret;
+
+	st->sensor_count = 1;
+	st->stream_count = 1;
+	st->jpeg_count = 0;
+	st->refmode = false;
+	st->refmode_shm = false;
+	st->osd_enabled = false;
+	st->use_isp_osd = false;
+	st->ivs_enabled = false;
+	atomic_store(&st->ivs_active, false);
+
+	if (model && model[0]) {
+		rss_strlcpy(multi_cfg.sensors[0].name, model, sizeof(multi_cfg.sensors[0].name));
+		multi_cfg.sensor_count = 1;
+	}
+	ret = RSS_HAL_CALL(st->ops, init, st->hal_ctx, &multi_cfg);
+	if (ret != RSS_OK) {
+		RSS_FATAL("HAL init failed: %d", ret);
+		return ret;
+	}
+	st->hal_initialized = true;
+
+	load_stream_config(st->cfg, "stream0", stream, 1920, 1080, 30, 8000000);
+	stream->fs_chn = 0;
+	stream->chn = 0;
+	stream->sensor_idx = 0;
+	rss_strlcpy(stream->cfg_sect, "stream0", sizeof(stream->cfg_sect));
+	st->sensor_base_fps_num = stream->enc_cfg.fps_num;
+	st->sensor_base_fps_den = stream->enc_cfg.fps_den;
+
+	if (rss_config_get_bool(st->cfg, "stream1", "enabled", true) ||
+	    rss_config_get_bool(st->cfg, "jpeg", "enabled", true) ||
+	    rss_config_get_bool(st->cfg, "osd", "enabled", true) ||
+	    rss_config_get_bool(st->cfg, "motion", "enabled", false))
+		RSS_WARN("Novatek backend exposes stream0 only; sub/JPEG/OSD/IVS are disabled");
+
+	ret = rvd_stream_init(st, 0);
+	if (ret != RSS_OK)
+		return ret;
+	st->pipeline_ready = true;
+	RSS_INFO("pipeline ready: HDAL capture -> ISP -> %s %ux%u -> main ring",
+		 stream->enc_cfg.codec == RSS_CODEC_H265 ? "H.265" : "H.264", stream->enc_cfg.width,
+		 stream->enc_cfg.height);
+	return RSS_OK;
+}
+#endif
+
 /* Load one stream's config from INI section */
 static void load_stream_config(rss_config_t *cfg, const char *section, rvd_stream_t *s,
 			       int default_w, int default_h, int default_fps, int default_br)
@@ -703,6 +763,11 @@ int rvd_pipeline_init(rvd_state_t *st)
 
 	/* ── 1. Create HAL ── */
 	const char *backend = rss_config_get_str(cfg, "system", "video_backend", "imp");
+#ifdef PLATFORM_NA51055
+	/* "imp" is the shipped config's word for the native backend. */
+	if (strcasecmp(backend, "imp") == 0)
+		backend = "novatek";
+#endif
 	st->hal_ctx = rss_hal_create_backend(backend);
 	if (!st->hal_ctx) {
 		if (strcasecmp(backend, "imp") != 0)
@@ -717,6 +782,10 @@ int rvd_pipeline_init(rvd_state_t *st)
 	st->hal_caps = st->ops->get_caps ? st->ops->get_caps(st->hal_ctx) : NULL;
 	if (strcasecmp(backend, "v4l2") == 0)
 		return rvd_pipeline_init_v4l2(st);
+#ifdef PLATFORM_NA51055
+	if (strcasecmp(backend, "novatek") == 0)
+		return rvd_pipeline_init_novatek(st);
+#endif
 
 	/* ── 2. Sensor config ── */
 	rss_multi_sensor_config_t multi_cfg = {0};

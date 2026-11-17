@@ -6,7 +6,7 @@
 # First run takes a few minutes (downloads). Subsequent runs are fast.
 #
 # Usage: ./build-standalone.sh <platform> [options]
-#   platform: t10, t20, t21, t23, t30, t31, t32, t33, t40, t41, a1
+#   platform: t10, t20, t21, t23, t30, t31, t32, t33, t40, t41, a1, na51055
 #
 # Options:
 #   --no-tls       Disable TLS (no RTSPS/WebRTC)
@@ -28,7 +28,10 @@
 #   --libc=TYPE    uclibc (default), musl, or glibc
 #
 # Environment:
-#   CROSS_COMPILE  Override cross-compiler prefix (skip toolchain download)
+#   CROSS_COMPILE  Override cross-compiler prefix (skip toolchain download);
+#                  required for na51055 (e.g. a thingino build's host/bin/arm-linux-)
+#   HDAL_DIR       na51055 only: Novatek vendor files, with include/ (HDAL
+#                  headers) and lib/ (libhdal and friends)
 #   JOBS           Override parallel job count (default: nproc)
 
 set -e
@@ -144,7 +147,7 @@ JOBS="${JOBS:-$(nproc)}"
 
 usage() {
     echo "Usage: $0 <platform> [options]"
-    echo "  platform: t10, t20, t21, t23, t30, t31, t32, t33, t40, t41, a1"
+    echo "  platform: t10, t20, t21, t23, t30, t31, t32, t33, t40, t41, a1, na51055"
     echo ""
     echo "Options:"
     echo "  --no-tls       Disable TLS/WebRTC"
@@ -172,7 +175,7 @@ usage() {
 
 for arg in "$@"; do
     case "$arg" in
-        t10|t20|t21|t23|t30|t31|t32|t33|t40|t41|a1) PLATFORM="$arg" ;;
+        t10|t20|t21|t23|t30|t31|t32|t33|t40|t41|a1|na51055) PLATFORM="$arg" ;;
         --no-tls)    OPT_TLS= ;;
         --alt)       OPT_ALT=1 ;;
         --no-aac)    OPT_AAC= ;;
@@ -197,6 +200,32 @@ for arg in "$@"; do
         *)           echo "Unknown option: $arg"; usage ;;
     esac
 done
+
+# Novatek is ARM: its deps live apart from the MIPS ones so switching
+# platforms never mixes architectures in one sysroot.
+case "$PLATFORM" in
+    na51055)
+        VENDOR=novatek
+        DEPS_DIR="$SCRIPT_DIR/.deps-$PLATFORM"
+        SYSROOT_DIR="$DEPS_DIR/sysroot"
+        LOG_DIR="$DEPS_DIR/logs"
+        OPUS_HOST=arm-linux
+        MESON_CPU_FAMILY=arm
+        MESON_CPU=armv7
+        CMAKE_PROC=arm
+        if [ "$OPT_IVS" = 1 ]; then
+            echo "ERROR: --ivs is Ingenic-only"
+            exit 1
+        fi
+        ;;
+    *)
+        VENDOR=ingenic
+        OPUS_HOST=mipsel-linux
+        MESON_CPU_FAMILY=mips
+        MESON_CPU=mips32
+        CMAKE_PROC=mips
+        ;;
+esac
 
 if [ "$OPT_CLEAN_ALL" = 1 ]; then
     echo "Removing all deps and build artifacts..."
@@ -251,6 +280,7 @@ case "$PLATFORM" in
     t40)     SDK_VERSION=1.3.1;  GCC_VER=7.2.0 ;;
     t41)     SDK_VERSION=1.2.5;  GCC_VER=7.2.0 ;;
     a1)      SDK_VERSION=1.7.0;  GCC_VER=7.2.0 ;;
+    na51055) SDK_VERSION=HDAL ;;
 esac
 
 # ── Toolchain ──
@@ -265,6 +295,12 @@ setup_toolchain() {
         CROSS_COMPILE="${gcc_path%gcc}"
         echo "Using existing toolchain: ${CROSS_COMPILE}gcc"
         return
+    fi
+
+    if [ "$VENDOR" = novatek ]; then
+        echo "ERROR: na51055 has no toolchain download; set CROSS_COMPILE"
+        echo "  (e.g. a thingino NT98529 build's output/.../host/bin/arm-linux-)"
+        exit 1
     fi
 
     ARCH=$(uname -m)
@@ -437,6 +473,17 @@ build_ingenic_lib() {
     fi
 }
 
+build_novatek_hdal() {
+    if [ -z "$HDAL_DIR" ] || [ ! -f "$HDAL_DIR/include/hdal.h" ] || [ ! -f "$HDAL_DIR/lib/libhdal.so" ]; then
+        echo "ERROR: na51055 needs HDAL_DIR with include/hdal.h and lib/libhdal.so"
+        exit 1
+    fi
+    echo "Installing Novatek HDAL from $HDAL_DIR"
+    cp -f "$HDAL_DIR"/lib/*.so "$SYSROOT_DIR/usr/lib/"
+    mkdir -p "$SYSROOT_DIR/usr/include/hdal"
+    cp -f "$HDAL_DIR"/include/*.h "$SYSROOT_DIR/usr/include/hdal/"
+}
+
 build_libc_shim() {
     # Build both .a (preferred — statically linked into HAL daemons via
     # --whole-archive + --export-dynamic) and .so (fallback for musl where
@@ -565,7 +612,7 @@ build_opus() {
     fi
     local shared_flag="--disable-static --enable-shared"
     [ "$OPT_STATIC" = 1 ] && shared_flag="--enable-static --disable-shared"
-    run opus-configure ./configure --host=mipsel-linux --prefix="$SYSROOT_DIR/usr" \
+    run opus-configure ./configure --host=$OPUS_HOST --prefix="$SYSROOT_DIR/usr" \
         $shared_flag --disable-doc --disable-extra-programs \
         CC="${CROSS_COMPILE}gcc"
     run opus-build make -j"$JOBS"
@@ -592,8 +639,8 @@ ar = '${CROSS_COMPILE}ar'
 strip = '${CROSS_COMPILE}strip'
 [host_machine]
 system = 'linux'
-cpu_family = 'mips'
-cpu = 'mips32'
+cpu_family = '$MESON_CPU_FAMILY'
+cpu = '$MESON_CPU'
 endian = 'little'
 MESON
     local libtype=shared
@@ -809,7 +856,7 @@ build_libsrt() {
         -DCMAKE_C_COMPILER="${CROSS_COMPILE}gcc" \
         -DCMAKE_CXX_COMPILER="${CROSS_COMPILE}g++" \
         -DCMAKE_SYSTEM_NAME=Linux \
-        -DCMAKE_SYSTEM_PROCESSOR=mips \
+        -DCMAKE_SYSTEM_PROCESSOR=$CMAKE_PROC \
         -DCMAKE_FIND_ROOT_PATH="$SYSROOT_DIR" \
         -DCMAKE_INSTALL_PREFIX="$SYSROOT_DIR/usr" \
         -DENABLE_APPS=OFF \
@@ -859,6 +906,7 @@ build_raptor_hal() {
         PLATFORM="$PLATFORM_UPPER" \
         CROSS_COMPILE="$CROSS_COMPILE" \
         INGENIC_HEADERS="$src/ingenic-headers" \
+        HDAL_INCLUDE="$SYSROOT_DIR/usr/include/hdal" \
         $([ "$OPT_DEBUG" = 1 ] && echo "DEBUG=1") \
         $([ "$OPT_IVS" = 1 ] && echo "CXX=${CROSS_COMPILE}g++ JZDL_INCLUDE=$src/ingenic-headers/Txx/jzdl PERSONDET=1") \
         -j"$JOBS"
@@ -897,14 +945,19 @@ build_compy() {
     mkdir -p "$SYSROOT_DIR/usr/include/compy"
     cp -f "$src/include/compy.h" "$SYSROOT_DIR/usr/include/"
     cp -a "$src/include/compy/"* "$SYSROOT_DIR/usr/include/compy/"
-    # Header-only transitive deps
+    # Header-only transitive deps: fetched into the build dir, or taken
+    # from the seed when FETCHCONTENT_SOURCE_DIR pointed cmake there.
+    local depsrc
     for dep in slice99 datatype99 interface99 metalang99; do
-        [ -d "$builddir/_deps/${dep}-src" ] && \
-            cp -f "$builddir/_deps/${dep}-src/"*.h "$SYSROOT_DIR/usr/include/"
+        depsrc="$builddir/_deps/${dep}-src"
+        [ -d "$depsrc" ] || depsrc="$src/build/_deps/${dep}-src"
+        [ -d "$depsrc" ] || continue
+        cp -f "$depsrc/"*.h "$SYSROOT_DIR/usr/include/" 2>/dev/null || true
+        if [ "$dep" = metalang99 ] && [ -d "$depsrc/include" ]; then
+            cp -f "$depsrc/include/metalang99.h" "$SYSROOT_DIR/usr/include/"
+            cp -a "$depsrc/include/metalang99" "$SYSROOT_DIR/usr/include/"
+        fi
     done
-    [ -d "$builddir/_deps/metalang99-src/include" ] && \
-        cp -f "$builddir/_deps/metalang99-src/include/metalang99.h" "$SYSROOT_DIR/usr/include/" && \
-        cp -a "$builddir/_deps/metalang99-src/include/metalang99" "$SYSROOT_DIR/usr/include/"
 
     cd "$SCRIPT_DIR"
 }
@@ -924,8 +977,8 @@ setup_toolchain
 mkdir -p "$SYSROOT_DIR/usr/lib" "$SYSROOT_DIR/usr/include" "$SYSROOT_DIR/lib" "$LOG_DIR"
 
 # Clone all repos
-clone_repo ingenic-lib  https://github.com/gtxaspec/ingenic-lib     "$INGENIC_LIB_VERSION"
-clone_repo raptor-hal   https://github.com/gtxaspec/raptor-hal       "$RAPTOR_HAL_VERSION"  submodules
+[ "$VENDOR" = ingenic ] && clone_repo ingenic-lib https://github.com/gtxaspec/ingenic-lib "$INGENIC_LIB_VERSION"
+clone_repo raptor-hal   https://github.com/gtxaspec/raptor-hal       "$RAPTOR_HAL_VERSION"  $([ "$VENDOR" = ingenic ] && echo submodules)
 clone_repo raptor-ipc   https://github.com/gtxaspec/raptor-ipc       "$RAPTOR_IPC_VERSION"
 clone_repo raptor-common https://github.com/gtxaspec/raptor-common   "$RAPTOR_COMMON_VERSION"
 clone_repo compy        https://github.com/gtxaspec/compy            "$COMPY_VERSION"
@@ -949,8 +1002,12 @@ fi
 [ "$OPT_SRT" = 1 ] && clone_repo srt https://github.com/Haivision/srt "$LIBSRT_VERSION"
 
 # Build deps in order
-build_ingenic_lib
-build_libc_shim
+if [ "$VENDOR" = novatek ]; then
+    build_novatek_hdal
+else
+    build_ingenic_lib
+    build_libc_shim
+fi
 [ "$OPT_TLS" = 1 ]  && build_mbedtls
 [ "$OPT_OPUS" = 1 ] && build_opus
 [ "$OPT_AAC" = 1 ]  && build_faac
@@ -985,7 +1042,7 @@ echo ""
 # "resolution sub id not in object file". ccache makes the
 # recompile cheap; determinism is worth more than incrementality
 # in a standalone build.
-find "$SCRIPT_DIR" -name '*.o' -not -path "$DEPS_DIR/*" -delete
+find "$SCRIPT_DIR" -name '*.o' -not -path "$SCRIPT_DIR/.deps*" -delete
 
 echo "Building raptor daemons..."
 
@@ -998,6 +1055,9 @@ if [ "$PLATFORM" = "a1" ]; then
     if [ "$OPT_RFS" != 1 ]; then
         echo "WARNING: --no-rfs on A1 leaves no video producer (RFS is A1's source)"
     fi
+elif [ "$VENDOR" = novatek ]; then
+    # Video only so far: the HDAL backend has no audio, OSD, IR or IVS.
+    TARGETS="rvd rsd rhd rmr raptorctl ringdump rverify"
 else
     TARGETS="rvd rsd rad rhd rod ric rmr rmd rwc raptorctl ringdump rac rverify"
 fi
@@ -1035,10 +1095,11 @@ make -j"$JOBS" \
     PLATFORM="$PLATFORM_UPPER" \
     CROSS_COMPILE="$CROSS_COMPILE" \
     SYSROOT="$SYSROOT_DIR" \
-    HAL_DIR=".deps/raptor-hal" \
-    IPC_DIR=".deps/raptor-ipc" \
-    COMMON_DIR=".deps/raptor-common" \
-    COMPY_DIR=".deps/compy" \
+    HAL_DIR="${DEPS_DIR#$SCRIPT_DIR/}/raptor-hal" \
+    IPC_DIR="${DEPS_DIR#$SCRIPT_DIR/}/raptor-ipc" \
+    COMMON_DIR="${DEPS_DIR#$SCRIPT_DIR/}/raptor-common" \
+    COMPY_DIR="${DEPS_DIR#$SCRIPT_DIR/}/compy" \
+    HDAL_INCLUDE="$SYSROOT_DIR/usr/include/hdal" \
     LIB_HAL_VIDEO="$HAL_VIDEO" \
     LIB_HAL_AUDIO="$HAL_AUDIO" \
     LIB_IPC="$LINK_IPC" \

@@ -6,7 +6,7 @@
 #   make clean
 #
 # Required:
-#   PLATFORM       - Target SoC: T10, T20, T21, T23, T30, T31, T32, T33, T40, T41, A1
+#   PLATFORM       - Target SoC: T10, T20, T21, T23, T30, T31, T32, T33, T40, T41, A1, NA51055
 #   CROSS_COMPILE  - Cross-compiler prefix
 
 ifeq ($(filter clean distclean build,$(MAKECMDGOALS)),)
@@ -175,8 +175,12 @@ LINK_STDCXX := -lstdc++
 endif
 
 # System libs for HAL-linked daemons
+ifeq ($(PLATFORM),NA51055)
+LDFLAGS_HAL := $(LDFLAGS_SYSROOT) -lvendor_isp -lhdal -lpthread -lrt -lm -ldl -latomic
+else
 # Shim must come BEFORE Ingenic SDK libs — symbols must be resolved first.
 LDFLAGS_HAL := $(LDFLAGS_SYSROOT) $(SHIM_LIB) -limp -lalog -lpthread -lrt -lm -ldl -latomic
+endif
 
 # IVS detection libs
 ifeq ($(IVS_DETECT),1)
@@ -253,6 +257,7 @@ build-raptor-hal:
 	@echo "  BUILD   raptor-hal"
 	$(Q)$(MAKE) -C $(HAL_DIR) PLATFORM=$(PLATFORM) CROSS_COMPILE=$(CROSS_COMPILE) \
 		$(if $(DEBUG),DEBUG=1,) \
+		$(if $(HDAL_INCLUDE),HDAL_INCLUDE=$(HDAL_INCLUDE),) \
 		$(if $(filter 1,$(V4L2_OPENIMP)),V4L2_OPENIMP=1,)
 
 $(LIB_HAL_VIDEO_FILE) $(LIB_HAL_AUDIO_FILE): build-raptor-hal
