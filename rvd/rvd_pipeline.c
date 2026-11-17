@@ -446,19 +446,34 @@ static int rvd_pipeline_init_novatek(rvd_state_t *st)
 	st->sensor_base_fps_num = stream->enc_cfg.fps_num;
 	st->sensor_base_fps_den = stream->enc_cfg.fps_den;
 
-	if (rss_config_get_bool(st->cfg, "stream1", "enabled", true) ||
-	    rss_config_get_bool(st->cfg, "jpeg", "enabled", true) ||
+	/* The sub stream is a second ISP output scaled from the same capture. */
+	if (rss_config_get_bool(st->cfg, "stream1", "enabled", true)) {
+		rvd_stream_t *sub = &st->streams[1];
+
+		load_stream_config(st->cfg, "stream1", sub, 640, 360, stream->enc_cfg.fps_num,
+				   1000000);
+		sub->fs_chn = 1;
+		sub->chn = 1;
+		sub->sensor_idx = 0;
+		rss_strlcpy(sub->cfg_sect, "stream1", sizeof(sub->cfg_sect));
+		st->stream_count = 2;
+	}
+
+	if (rss_config_get_bool(st->cfg, "jpeg", "enabled", true) ||
 	    rss_config_get_bool(st->cfg, "osd", "enabled", true) ||
 	    rss_config_get_bool(st->cfg, "motion", "enabled", false))
-		RSS_WARN("Novatek backend exposes stream0 only; sub/JPEG/OSD/IVS are disabled");
+		RSS_WARN("Novatek backend has no JPEG/OSD/IVS yet; they are disabled");
 
-	ret = rvd_stream_init(st, 0);
-	if (ret != RSS_OK)
-		return ret;
+	for (int i = 0; i < st->stream_count; i++) {
+		ret = rvd_stream_init(st, i);
+		if (ret != RSS_OK)
+			return ret;
+		RSS_INFO("stream%d: HDAL capture -> ISP -> %s %ux%u -> %s ring", i,
+			 st->streams[i].enc_cfg.codec == RSS_CODEC_H265 ? "H.265" : "H.264",
+			 st->streams[i].enc_cfg.width, st->streams[i].enc_cfg.height,
+			 i == 0 ? "main" : "sub");
+	}
 	st->pipeline_ready = true;
-	RSS_INFO("pipeline ready: HDAL capture -> ISP -> %s %ux%u -> main ring",
-		 stream->enc_cfg.codec == RSS_CODEC_H265 ? "H.265" : "H.264", stream->enc_cfg.width,
-		 stream->enc_cfg.height);
 	return RSS_OK;
 }
 #endif
