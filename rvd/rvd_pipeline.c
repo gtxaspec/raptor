@@ -437,6 +437,7 @@ static int rvd_pipeline_init_novatek(rvd_state_t *st)
 		return ret;
 	}
 	st->hal_initialized = true;
+	rvd_apply_image_defaults(st);
 
 	load_stream_config(st->cfg, "stream0", stream, 1920, 1080, 30, 8000000);
 	stream->fs_chn = 0;
