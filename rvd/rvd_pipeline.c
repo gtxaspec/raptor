@@ -460,19 +460,58 @@ static int rvd_pipeline_init_novatek(rvd_state_t *st)
 		st->stream_count = 2;
 	}
 
-	if (rss_config_get_bool(st->cfg, "jpeg", "enabled", true) ||
-	    rss_config_get_bool(st->cfg, "osd", "enabled", true) ||
+	/* JPEG snapshots: one per video stream, each its own ISP output and
+	 * encoder channel after the video ones, as on the IMP path. */
+	for (int j = 0; j < RVD_MAX_JPEG; j++)
+		st->jpeg_streams[j] = -1;
+	if (rss_config_get_bool(st->cfg, "jpeg", "enabled", true)) {
+		int def_quality = rss_config_get_int(st->cfg, "jpeg", "quality", 75);
+		int def_fps = rss_config_get_int(st->cfg, "jpeg", "fps", 1);
+		int video_count = st->stream_count;
+
+		for (int v = 0; v < video_count && st->jpeg_count < RVD_MAX_JPEG; v++) {
+			const char *sect = st->streams[v].cfg_sect;
+			rvd_stream_t *js = &st->streams[st->stream_count];
+			int quality, fps;
+
+			if (!rss_config_get_bool(st->cfg, sect, "jpeg", true))
+				continue;
+			quality = rss_config_get_int(st->cfg, sect, "jpeg_quality", def_quality);
+			quality = quality < 1 ? 1 : quality > 100 ? 100 : quality;
+			fps = rss_config_get_int(st->cfg, sect, "jpeg_fps", def_fps);
+			if (fps < 1)
+				fps = 1;
+			js->enc_cfg = (rss_video_config_t){
+				.codec = RSS_CODEC_JPEG,
+				.width = st->streams[v].enc_cfg.width,
+				.height = st->streams[v].enc_cfg.height,
+				.fps_num = (uint32_t)fps,
+				.fps_den = 1,
+				.init_qp = (int16_t)quality,
+			};
+			js->fs_chn = st->streams[v].fs_chn;
+			js->chn = video_count + st->jpeg_count;
+			js->sensor_idx = 0;
+			rss_strlcpy(js->cfg_sect, sect, sizeof(js->cfg_sect));
+			js->is_jpeg = true;
+			js->jpeg_idle = rss_config_get_bool(st->cfg, "jpeg", "idle", true);
+			st->jpeg_streams[st->jpeg_count++] = st->stream_count++;
+		}
+	}
+
+	if (rss_config_get_bool(st->cfg, "osd", "enabled", true) ||
 	    rss_config_get_bool(st->cfg, "motion", "enabled", false))
-		RSS_WARN("Novatek backend has no JPEG/OSD/IVS yet; they are disabled");
+		RSS_WARN("Novatek backend has no OSD/IVS yet; they are disabled");
 
 	for (int i = 0; i < st->stream_count; i++) {
 		ret = rvd_stream_init(st, i);
 		if (ret != RSS_OK)
 			return ret;
-		RSS_INFO("stream%d: HDAL capture -> ISP -> %s %ux%u -> %s ring", i,
-			 st->streams[i].enc_cfg.codec == RSS_CODEC_H265 ? "H.265" : "H.264",
-			 st->streams[i].enc_cfg.width, st->streams[i].enc_cfg.height,
-			 i == 0 ? "main" : "sub");
+		RSS_INFO("stream%d: HDAL capture -> ISP -> %s %ux%u", i,
+			 st->streams[i].is_jpeg				  ? "JPEG"
+			 : st->streams[i].enc_cfg.codec == RSS_CODEC_H265 ? "H.265"
+									  : "H.264",
+			 st->streams[i].enc_cfg.width, st->streams[i].enc_cfg.height);
 	}
 	st->pipeline_ready = true;
 	return RSS_OK;
