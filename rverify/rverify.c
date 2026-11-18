@@ -186,45 +186,48 @@ static uint32_t be32(const uint8_t *p)
 }
 
 /* rmr fills the 'gps ' index in moov after signing (rmr_gps.h): check
- * that every entry names a GPS record box, then zero the payload so the
- * genesis span hashes as signed. The records carry the signatures. */
-static void gps_index(uint8_t *data, size_t len)
+ * that every entry names a GPS record box, in file order, then zero the
+ * payload so the genesis span hashes as signed. The records carry the
+ * signatures. Returns 1 for a bad index. */
+static int gps_index(uint8_t *data, size_t len)
 {
 	size_t pos = 0;
 	while (pos + 8 <= len) {
 		uint32_t size = be32(data + pos);
 		if (size < 8 || size > len - pos)
-			return;
+			return 0;
 		if (!memcmp(data + pos + 4, "moov", 4))
 			break;
 		pos += size;
 	}
 	if (pos + 8 > len)
-		return;
+		return 0;
 	size_t end = pos + be32(data + pos);
 	for (size_t c = pos + 8; c + 8 <= end;) {
 		uint32_t size = be32(data + c);
 		if (size < 8 || size > end - c)
-			return;
+			return 0;
 		if (!memcmp(data + c + 4, "gps ", 4) && size >= 16) {
 			uint32_t count = be32(data + c + 12);
-			uint32_t room = (size - 16) / 8, bad = 0;
+			uint32_t room = (size - 16) / 8, bad = 0, prev = 0;
 			if (count > room)
 				count = room, bad++;
 			for (uint32_t i = 0; i < count; i++) {
 				uint32_t off = be32(data + c + 16 + 8 * i);
 				uint32_t rsz = be32(data + c + 20 + 8 * i);
-				if (rsz < 16 || off > len || rsz > len - off ||
+				if (rsz < 16 || off > len || rsz > len - off || off <= prev ||
 				    memcmp(data + off + 4, "freeGPS ", 8) != 0)
 					bad++;
+				prev = off;
 			}
 			printf("gps records: %u%s\n", count,
 			       bad ? "  FAIL - index entries not pointing at records" : "");
 			memset(data + c + 8, 0, size - 8);
-			return;
+			return bad ? 1 : 0;
 		}
 		c += size;
 	}
+	return 0;
 }
 
 int main(int argc, char **argv)
@@ -296,13 +299,13 @@ int main(int argc, char **argv)
 		return rc;
 	}
 
-	gps_index(data, len);
+	unsigned gps_bad = (unsigned)gps_index(data, len);
 
 	/* Walk top-level boxes, verifying each signed span */
 	uint8_t prev_sig[64] = {0};
 	size_t span_start = 0;
 	size_t pos = 0;
-	unsigned box_count = 0, failures = 0;
+	unsigned box_count = 0, failures = gps_bad;
 	bool saw_final = false;
 
 	while (pos + 8 <= len) {
