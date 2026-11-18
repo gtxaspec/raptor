@@ -20,6 +20,7 @@ build/
 test_enc
 scripts/
 rmd/rmd
+rtd/rtd
 rwd/rwd
 rwc/rwc
 rfs/rfs

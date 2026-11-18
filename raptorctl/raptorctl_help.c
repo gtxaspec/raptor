@@ -171,6 +171,7 @@ const struct help_entry help_entries[] = {
 	{"rmr", "timelapse-snap                      Capture one sample now"},
 	{"rmd", "sensitivity <0-4>                   Set motion sensitivity"},
 	{"rmd", "skip-frames <N>                      Set IVS skip frame count"},
+	{"rtd", "status                              Show GPS fix and acceleration"},
 	{NULL, "test-motion [sec]                   Trigger clip recording (default 10s)"},
 	{"rsp", "start                               Start push stream"},
 	{"rsp", "stop                                Stop push stream"},

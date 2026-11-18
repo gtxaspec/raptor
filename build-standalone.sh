@@ -1057,9 +1057,9 @@ if [ "$PLATFORM" = "a1" ]; then
     fi
 elif [ "$VENDOR" = novatek ]; then
     # The HDAL backend has no IR or IVS yet.
-    TARGETS="rvd rsd rad rhd rod rmr raptorctl ringdump rac rverify"
+    TARGETS="rvd rsd rad rhd rod rmr rtd raptorctl ringdump rac rverify"
 else
-    TARGETS="rvd rsd rad rhd rod ric rmr rmd rwc raptorctl ringdump rac rverify"
+    TARGETS="rvd rsd rad rhd rod ric rmr rmd rtd rwc raptorctl ringdump rac rverify"
 fi
 [ "$OPT_RFS" = 1 ] && TARGETS="$TARGETS rfs"
 [ "$OPT_TLS" = 1 ] && TARGETS="$TARGETS rwd rsp"
