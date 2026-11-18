@@ -9,6 +9,8 @@
 
 #include <rss_common.h>
 
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,8 +26,18 @@ struct rmr_storage {
 	int segment_minutes;
 	int segment_seconds;
 	int max_storage_mb;
-	bool refuse_logged;	   /* rootfs auto-create refusal logged once */
-	int64_t last_wait_warn_us; /* rate-limit for the waiting log       */
+	int scan_interval;     /* quota rescan cadence, seconds; -1 = never */
+	int64_t last_scan_us;  /* last completed quota scan */
+	bool scanning;	       /* scan in progress (monitor thread only) */
+	bool monitor_running;  /* monitor thread alive */
+	bool monitor_started;  /* stop flag for the monitor thread */
+	pthread_t monitor_tid; /* monitor thread handle */
+	pthread_mutex_t monitor_lock;
+	pthread_cond_t monitor_cond;
+	atomic_uint_fast64_t rotations; /* bumped by the record loop on rotation */
+	uint64_t seen_rotations;	/* last rotation count the monitor saw */
+	bool refuse_logged;		/* rootfs auto-create refusal logged once */
+	int64_t last_wait_warn_us;	/* rate-limit for the waiting log       */
 };
 
 rmr_storage_t *rmr_storage_create(const rmr_storage_config_t *cfg)
@@ -38,15 +50,19 @@ rmr_storage_t *rmr_storage_create(const rmr_storage_config_t *cfg)
 		return NULL;
 
 	snprintf(st->base_path, sizeof(st->base_path), "%s", cfg->base_path);
-	st->segment_minutes = cfg->segment_minutes > 0 ? cfg->segment_minutes : 5;
 	st->segment_seconds = cfg->segment_seconds;
 	st->max_storage_mb = cfg->max_storage_mb;
+	st->scan_interval = cfg->scan_interval != 0 ? cfg->scan_interval : 60; /* default 60s */
+	st->segment_minutes = cfg->segment_minutes > 0 ? cfg->segment_minutes : 5;
 
 	return st;
 }
 
 void rmr_storage_destroy(rmr_storage_t *st)
 {
+	if (!st)
+		return;
+	rmr_storage_stop_monitor(st);
 	free(st);
 }
 
@@ -265,6 +281,17 @@ int rmr_storage_enforce_limit(rmr_storage_t *st)
 	if (!st || st->max_storage_mb <= 0)
 		return 0;
 
+	/* Runs on the monitor thread only. The scan stats every file on
+	 * the medium — hundreds of ms on NFS — and used to run on the
+	 * record loop on every rotation, stalling the ring reader past
+	 * headroom and triggering the overflow skip-to-IDR that users
+	 * see as missing frames between segments. */
+	int64_t now = rss_timestamp_us();
+	if (st->scan_interval < 0)
+		return 0;
+	if (st->last_scan_us > 0 && now - st->last_scan_us < (int64_t)st->scan_interval * 1000000LL)
+		return 0;
+
 	int64_t max_bytes = (int64_t)st->max_storage_mb * 1024 * 1024;
 	int deleted = 0;
 
@@ -313,9 +340,83 @@ int rmr_storage_enforce_limit(rmr_storage_t *st)
 
 	free_names(days, day_count);
 
+	st->last_scan_us = now;
+
 	if (deleted > 0)
 		RSS_INFO("storage cleanup: deleted %d files (%.1f MB remaining)", deleted,
 			 (double)total / (1024.0 * 1024.0));
 
 	return deleted;
+}
+
+/* Monitor thread: owns the quota scan. Wakes on segment rotations
+ * (condvar signal) and at the scan interval, so the record loop
+ * never stats the medium. Holds no frames and no ring references
+ * — it only walks the recording filesystem. */
+static void *rmr_storage_monitor(void *arg)
+{
+	rmr_storage_t *st = arg;
+
+	pthread_mutex_lock(&st->monitor_lock);
+	while (st->monitor_running) {
+		uint64_t rot = atomic_load(&st->rotations);
+		if (rot != st->seen_rotations) {
+			st->seen_rotations = rot;
+			st->scanning = true;
+			pthread_mutex_unlock(&st->monitor_lock);
+			rmr_storage_enforce_limit(st);
+			pthread_mutex_lock(&st->monitor_lock);
+			st->scanning = false;
+		}
+		struct timespec ts;
+		clock_gettime(CLOCK_REALTIME, &ts);
+		ts.tv_sec += st->scan_interval > 0 ? st->scan_interval : 60;
+		pthread_cond_timedwait(&st->monitor_cond, &st->monitor_lock, &ts);
+	}
+	pthread_mutex_unlock(&st->monitor_lock);
+	return NULL;
+}
+
+void rmr_storage_note_rotation(rmr_storage_t *st)
+{
+	if (!st)
+		return;
+	atomic_fetch_add(&st->rotations, 1);
+	pthread_mutex_lock(&st->monitor_lock);
+	pthread_cond_signal(&st->monitor_cond);
+	pthread_mutex_unlock(&st->monitor_lock);
+}
+
+void rmr_storage_start_monitor(rmr_storage_t *st)
+{
+	if (!st || st->monitor_started)
+		return;
+	if (st->max_storage_mb <= 0 || st->scan_interval < 0) {
+		st->monitor_started = true; /* nothing to monitor */
+		return;
+	}
+	pthread_mutex_init(&st->monitor_lock, NULL);
+	pthread_cond_init(&st->monitor_cond, NULL);
+	st->monitor_running = true;
+	st->monitor_started = true;
+	if (pthread_create(&st->monitor_tid, NULL, rmr_storage_monitor, st) != 0) {
+		RSS_ERROR("storage monitor thread failed to start");
+		st->monitor_running = false;
+		pthread_mutex_destroy(&st->monitor_lock);
+		pthread_cond_destroy(&st->monitor_cond);
+	}
+}
+
+void rmr_storage_stop_monitor(rmr_storage_t *st)
+{
+	if (!st || !st->monitor_running)
+		return;
+	pthread_mutex_lock(&st->monitor_lock);
+	st->monitor_running = false;
+	pthread_cond_broadcast(&st->monitor_cond);
+	pthread_mutex_unlock(&st->monitor_lock);
+	pthread_join(st->monitor_tid, NULL);
+	pthread_mutex_destroy(&st->monitor_lock);
+	pthread_cond_destroy(&st->monitor_cond);
+	st->monitor_started = false;
 }

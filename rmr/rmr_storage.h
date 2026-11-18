@@ -15,6 +15,7 @@ typedef struct {
 	int segment_minutes;   /* segment duration (default 5) */
 	int segment_seconds;   /* nonzero overrides minutes (debug/test) */
 	int max_storage_mb;    /* 0 = unlimited */
+	int scan_interval;     /* quota rescan cadence, seconds; -1 = never */
 } rmr_storage_config_t;
 
 /* Create/destroy storage manager */
@@ -42,8 +43,18 @@ int rmr_storage_segment_len_sec(rmr_storage_t *st);
 bool rmr_storage_should_rotate_at(rmr_storage_t *st, int64_t start_rt_us, int64_t now_rt_us);
 
 /* Delete oldest recordings until total size is under max_storage_mb.
- * Returns number of files deleted, or -1 on error. */
+ * Internal: runs on the storage monitor thread only. */
 int rmr_storage_enforce_limit(rmr_storage_t *st);
+
+/* Record loop calls this after closing a segment; the monitor thread
+ * wakes and rescans the quota at most once per scan interval
+ * (recording.quota_scan_sec: default 60, 0 = every rotation,
+ * -1 = never scan). Never blocks the caller. */
+void rmr_storage_note_rotation(rmr_storage_t *st);
+
+/* Start/stop the storage monitor thread that owns quota scanning. */
+void rmr_storage_start_monitor(rmr_storage_t *st);
+void rmr_storage_stop_monitor(rmr_storage_t *st);
 
 /* Check if storage path is mounted and writable. */
 bool rmr_storage_available(rmr_storage_t *st);

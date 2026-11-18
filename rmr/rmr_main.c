@@ -1070,7 +1070,7 @@ static void record_loop(rmr_state_t *st)
 					if (rmr_storage_should_rotate_at(
 						    st->storage, st->segment_start_rt_us, now_rt)) {
 						close_segment(st);
-						rmr_storage_enforce_limit(st->storage);
+						rmr_storage_note_rotation(st->storage);
 					}
 				} else if (st->frames_since_flush >= 10) {
 					rmr_mux_flush_fragment(st->mux);
@@ -1379,12 +1379,14 @@ int main(int argc, char **argv)
 		.segment_minutes = rss_config_get_int(dctx.cfg, "recording", "segment_minutes", 5),
 		.segment_seconds = rss_config_get_int(dctx.cfg, "recording", "segment_seconds", 0),
 		.max_storage_mb = rss_config_get_int(dctx.cfg, "recording", "max_storage_mb", 0),
+		.scan_interval = rss_config_get_int(dctx.cfg, "recording", "quota_scan_sec", 60),
 	};
 	st.storage = rmr_storage_create(&scfg);
 	if (!st.storage) {
 		RSS_FATAL("storage init failed");
 		goto cleanup;
 	}
+	rmr_storage_start_monitor(st.storage);
 
 	/* Control socket */
 	rss_mkdir_p(RSS_RUN_DIR);
