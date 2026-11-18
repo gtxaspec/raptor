@@ -297,7 +297,7 @@ static void update_osd(rtd_state_t *st, const rtd_record_t *r, int64_t now)
 {
 	char v[32];
 	bool fix = r->flags & RTD_F_FIX;
-	/* read each time: raptorctl config set telematics speed_unit is live */
+	/* read each time: set-speed-unit changes it live */
 	st->unit =
 		strcmp(rss_config_get_str(st->cfg, "telematics", "speed_unit", "kmh"), "mph") == 0
 			? UNIT_MPH
@@ -398,6 +398,16 @@ static int ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size,
 		rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, st->cfg, st->config_path);
 	if (common >= 0)
 		return common;
+
+	char cmd[32] = "", val[16] = "";
+	rss_json_get_str(cmd_json, "cmd", cmd, sizeof(cmd));
+	if (strcmp(cmd, "set-speed-unit") == 0) {
+		rss_json_get_str(cmd_json, "value", val, sizeof(val));
+		if (strcmp(val, "kmh") != 0 && strcmp(val, "mph") != 0)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "kmh or mph");
+		rss_config_set_str(st->cfg, "telematics", "speed_unit", val);
+		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+	}
 
 	const rtd_record_t *r = &st->last;
 	cJSON *o = cJSON_CreateObject();

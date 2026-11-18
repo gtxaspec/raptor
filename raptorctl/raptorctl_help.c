@@ -172,6 +172,7 @@ const struct help_entry help_entries[] = {
 	{"rmd", "sensitivity <0-4>                   Set motion sensitivity"},
 	{"rmd", "skip-frames <N>                      Set IVS skip frame count"},
 	{"rtd", "status                              Show GPS fix and acceleration"},
+	{"rtd", "set-speed-unit <kmh|mph>            OSD speed unit (live)"},
 	{NULL, "test-motion [sec]                   Trigger clip recording (default 10s)"},
 	{"rsp", "start                               Start push stream"},
 	{"rsp", "stop                                Stop push stream"},
