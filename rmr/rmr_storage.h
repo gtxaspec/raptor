@@ -16,6 +16,8 @@ typedef struct {
 	int segment_seconds;   /* nonzero overrides minutes (debug/test) */
 	int max_storage_mb;    /* 0 = unlimited */
 	int scan_interval;     /* quota rescan cadence, seconds; -1 = never */
+	int rotate_fsync;      /* fsync on segment close (default true);
+				* false relies on flushes + close() flush */
 } rmr_storage_config_t;
 
 /* Create/destroy storage manager */
@@ -26,8 +28,30 @@ void rmr_storage_destroy(rmr_storage_t *st);
  * Returns fd on success, -1 on error. Writes path to path_out. */
 int rmr_storage_open_segment(rmr_storage_t *st, char *path_out, int path_out_size);
 
-/* Close a segment file. */
-void rmr_storage_close_segment(int fd);
+/* Close a segment file. fsyncs first when the storage's rotate_fsync
+ * policy is on (default), so the segment content is durable before the
+ * fd disappears. */
+void rmr_storage_close_segment(rmr_storage_t *st, int fd);
+
+/* Open the NEXT segment's file and pre-build its filename now, so the
+ * rotation critical path is finalize + fsync + fd swap instead of
+ * directory scan + create + first-byte latency. Returns fd on success,
+ * -1 on error. Writes path to path_out. Call near the END of a segment
+ * (at a keyframe); adopt the fd via rmr_storage_activate_segment. */
+int rmr_storage_preopen_segment(rmr_storage_t *st, char *path_out, int path_out_size);
+
+/* Adopt a preopened fd as the active segment. The caller keeps using
+ * the fd; the storage layer just makes its create durable (fsync now
+ * that activation is on the rotation path, not the write path) and
+ * clears its pending slot. */
+void rmr_storage_activate_segment(rmr_storage_t *st, int fd);
+
+/* True when a preopened fd is waiting to be adopted. */
+bool rmr_storage_preopen_ready(const rmr_storage_t *st);
+
+/* Close and remove a pending preopened fd and its (never written)
+ * file. No-op when nothing is pending. */
+void rmr_storage_discard_preopen(rmr_storage_t *st);
 
 /* Next wall-clock boundary at a multiple of the segment length,
  * strictly after now_rt_us. Pure -- times injected for testability. */

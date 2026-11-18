@@ -180,18 +180,32 @@ static void setup_mux_tracks(rmr_mux_t *mux, rmr_state_t *st)
 
 static int start_segment(rmr_state_t *st)
 {
-	int fd = rmr_storage_open_segment(st->storage, st->segment_path, sizeof(st->segment_path));
-	if (fd < 0)
-		return -1;
+	int fd;
+	char path[sizeof(st->segment_path)];
+
+	if (st->next_fd >= 0) {
+		/* Pre-opened at the last keyframe: the expensive part
+		 * (directory scan + open + first-byte latency) already
+		 * ran off the hot path. Adopt it. */
+		fd = st->next_fd;
+		snprintf(path, sizeof(path), "%s", st->next_path);
+		st->next_fd = -1;
+		rmr_storage_activate_segment(st->storage, fd);
+	} else {
+		fd = rmr_storage_open_segment(st->storage, path, sizeof(path));
+		if (fd < 0)
+			return -1;
+	}
 
 	st->mux = rmr_mux_create(direct_write, st);
 	if (!st->mux) {
-		rmr_storage_close_segment(fd);
+		rmr_storage_close_segment(st->storage, fd);
 		return -1;
 	}
 
 	setup_mux_tracks(st->mux, st);
 	st->segment_fd = fd;
+	snprintf(st->segment_path, sizeof(st->segment_path), "%s", path);
 	if (st->sign_enabled)
 		rmr_sign_stream_begin(&st->sign_seg, &st->sign_key);
 	rmr_mux_start(st->mux);
@@ -221,10 +235,48 @@ static void close_segment(rmr_state_t *st)
 	st->segment_fd = -1;
 
 	if (fd >= 0) {
-		rmr_storage_close_segment(fd);
+		rmr_storage_close_segment(st->storage, fd);
 		RSS_DEBUG("segment closed: %s (%" PRIu64 " frames, %" PRIu64 " bytes)",
 			  st->segment_path, st->frames_written, st->bytes_written);
 	}
+}
+
+/*
+ * Keyframe-aligned rotation. The boundary keyframe goes into the NEW
+ * file: the old one ends on the last non-key frame and the new one
+ * starts on a key, so the split is gapless by construction. The
+ * critical path is finalize(old) + fsync(old) + fd swap; everything
+ * else (directory scan, open, naming) ran earlier via the preopen.
+ */
+static bool rotate_segment(rmr_state_t *st)
+{
+	char path[sizeof(st->next_path)];
+	int fd = rmr_storage_preopen_segment(st->storage, path, sizeof(path));
+	if (fd < 0)
+		return false;
+
+	close_segment(st);
+	st->next_fd = fd;
+	snprintf(st->next_path, sizeof(st->next_path), "%s", path);
+	if (start_segment(st) < 0) {
+		/* start_segment consumed the fd (adopted + closed on its
+		 * own failure path); next attempt falls back to open. */
+		return false;
+	}
+	return true;
+}
+
+static void discard_next_fd(rmr_state_t *st)
+{
+	if (st->next_fd >= 0) {
+		/* fd is also tracked as the storage layer's pending
+		 * preopen; discard there so it is closed exactly once
+		 * and the pending state is cleared. */
+		rmr_storage_discard_preopen(st->storage);
+		st->next_fd = -1;
+	}
+	/* Storage-side pending slot not adopted by any start. */
+	rmr_storage_discard_preopen(st->storage);
 }
 
 /* ── Motion clip management ── */
@@ -240,7 +292,7 @@ static int open_clip(rmr_state_t *st)
 
 	st->clip_mux = rmr_mux_create(clip_write, st);
 	if (!st->clip_mux) {
-		rmr_storage_close_segment(fd);
+		rmr_storage_close_segment(st->clip_storage, fd);
 		return -1;
 	}
 
@@ -272,7 +324,7 @@ static void close_clip(rmr_state_t *st)
 		st->clip_mux = NULL;
 	}
 	if (st->clip_fd >= 0) {
-		rmr_storage_close_segment(st->clip_fd);
+		rmr_storage_close_segment(st->clip_storage, st->clip_fd);
 		RSS_DEBUG("motion clip closed: %s (%" PRIu64 " bytes)", st->clip_path,
 			  st->clip_bytes);
 		st->clip_fd = -1;
@@ -301,7 +353,7 @@ static void close_timelapse(rmr_state_t *st)
 		st->tl_mux = NULL;
 	}
 	if (st->tl_fd >= 0) {
-		rmr_storage_close_segment(st->tl_fd);
+		rmr_storage_close_segment(st->tl_storage, st->tl_fd);
 		RSS_INFO("timelapse file closed: %s (%u frames, %" PRIu64 " bytes)", st->tl_path,
 			 st->tl.frames_in_file, st->tl_bytes);
 		st->tl_fd = -1;
@@ -328,7 +380,7 @@ static int open_timelapse(rmr_state_t *st, int32_t day)
 
 	st->tl_mux = rmr_mux_create(tl_write, st);
 	if (!st->tl_mux) {
-		rmr_storage_close_segment(fd);
+		rmr_storage_close_segment(st->tl_storage, fd);
 		return -1;
 	}
 
@@ -766,6 +818,7 @@ static void record_loop(rmr_state_t *st)
 				standby = true;
 				if (st->mux) {
 					close_segment(st);
+					discard_next_fd(st);
 					was_recording = false;
 				}
 				if (st->clip_mux)
@@ -1027,6 +1080,7 @@ static void record_loop(rmr_state_t *st)
 		/* Handle stop transition */
 		if (was_recording && !rec) {
 			close_segment(st);
+			discard_next_fd(st);
 			was_recording = false;
 			v_ts_base = -1;
 			a_dts_counter = 0;
@@ -1067,9 +1121,21 @@ static void record_loop(rmr_state_t *st)
 						rmr_sign_stream_emit(&st->sign_seg, false,
 								     direct_write, st);
 					st->frames_since_flush = 0;
+					/* Gapless: keep the next segment's file
+					 * pre-opened (fd + name staged at a
+					 * keyframe, off the write path) so the
+					 * boundary rotation is finalize + fsync +
+					 * fd swap. */
+					if (st->next_fd < 0 &&
+					    !rmr_storage_preopen_ready(st->storage)) {
+						char pp[256];
+						if (rmr_storage_preopen_segment(st->storage, pp,
+										sizeof(pp)) >= 0)
+							RSS_DEBUG("preopened next segment: %s", pp);
+					}
 					if (rmr_storage_should_rotate_at(
 						    st->storage, st->segment_start_rt_us, now_rt)) {
-						close_segment(st);
+						rotate_segment(st);
 						rmr_storage_note_rotation(st->storage);
 					}
 				} else if (st->frames_since_flush >= 10) {
@@ -1239,6 +1305,7 @@ int main(int argc, char **argv)
 	st.segment_fd = -1;
 	st.clip_fd = -1;
 	st.tl_fd = -1;
+	st.next_fd = -1;
 	st.tl_enabled = tl_enabled;
 	rmr_tl_init(&st.tl, rss_config_get_int(dctx.cfg, "timelapse", "interval", 10),
 		    rss_config_get_int(dctx.cfg, "timelapse", "playback_fps", 30),
@@ -1380,6 +1447,7 @@ int main(int argc, char **argv)
 		.segment_seconds = rss_config_get_int(dctx.cfg, "recording", "segment_seconds", 0),
 		.max_storage_mb = rss_config_get_int(dctx.cfg, "recording", "max_storage_mb", 0),
 		.scan_interval = rss_config_get_int(dctx.cfg, "recording", "quota_scan_sec", 60),
+		.rotate_fsync = rss_config_get_bool(dctx.cfg, "recording", "rotate_fsync", true),
 	};
 	st.storage = rmr_storage_create(&scfg);
 	if (!st.storage) {

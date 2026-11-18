@@ -27,6 +27,7 @@ struct rmr_storage {
 	int segment_seconds;
 	int max_storage_mb;
 	int scan_interval;     /* quota rescan cadence, seconds; -1 = never */
+	int rotate_fsync;      /* fsync on segment close (default true) */
 	int64_t last_scan_us;  /* last completed quota scan */
 	bool scanning;	       /* scan in progress (monitor thread only) */
 	bool monitor_running;  /* monitor thread alive */
@@ -36,6 +37,9 @@ struct rmr_storage {
 	pthread_cond_t monitor_cond;
 	atomic_uint_fast64_t rotations; /* bumped by the record loop on rotation */
 	uint64_t seen_rotations;	/* last rotation count the monitor saw */
+	bool preopen_fd_valid;		/* a preopened fd is pending */
+	int preopen_fd;			/* fd opened before the boundary */
+	char preopen_path[256];		/* its filename, pre-built */
 	bool refuse_logged;		/* rootfs auto-create refusal logged once */
 	int64_t last_wait_warn_us;	/* rate-limit for the waiting log       */
 };
@@ -51,9 +55,10 @@ rmr_storage_t *rmr_storage_create(const rmr_storage_config_t *cfg)
 
 	snprintf(st->base_path, sizeof(st->base_path), "%s", cfg->base_path);
 	st->segment_seconds = cfg->segment_seconds;
-	st->max_storage_mb = cfg->max_storage_mb;
 	st->scan_interval = cfg->scan_interval != 0 ? cfg->scan_interval : 60; /* default 60s */
 	st->segment_minutes = cfg->segment_minutes > 0 ? cfg->segment_minutes : 5;
+	st->rotate_fsync = cfg->rotate_fsync != 0;
+	st->preopen_fd = -1;
 
 	return st;
 }
@@ -63,17 +68,18 @@ void rmr_storage_destroy(rmr_storage_t *st)
 	if (!st)
 		return;
 	rmr_storage_stop_monitor(st);
+	rmr_storage_discard_preopen(st);
 	free(st);
 }
 
-int rmr_storage_open_segment(rmr_storage_t *st, char *path_out, int path_out_size)
+/* Refactored out of open_segment: same file-naming and creation, but
+ * the caller decides whether to fsync, and preopens pass the
+ * upcoming boundary as name_time (a fresh create uses now). */
+static int open_segment_fd(rmr_storage_t *st, char *path_out, int path_out_size, bool fsync_now,
+			   time_t name_time)
 {
-	if (!st)
-		return -1;
-
-	time_t now = time(NULL);
 	struct tm tm;
-	localtime_r(&now, &tm);
+	localtime_r(&name_time, &tm);
 
 	/* Create date directory: {base}/YYYY-MM-DD/ */
 	char dir[320];
@@ -86,16 +92,85 @@ int rmr_storage_open_segment(rmr_storage_t *st, char *path_out, int path_out_siz
 		 tm.tm_sec);
 
 	int fd = open(path_out, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-	if (fd < 0)
+	if (fd < 0) {
 		RSS_ERROR("failed to open segment: %s", path_out);
+		return fd;
+	}
+
+	if (fsync_now)
+		fsync(fd);
 
 	return fd;
 }
 
-void rmr_storage_close_segment(int fd)
+int rmr_storage_open_segment(rmr_storage_t *st, char *path_out, int path_out_size)
+{
+	if (!st)
+		return -1;
+
+	return open_segment_fd(st, path_out, path_out_size, st->rotate_fsync, time(NULL));
+}
+
+int rmr_storage_preopen_segment(rmr_storage_t *st, char *path_out, int path_out_size)
+{
+	if (!st)
+		return -1;
+	if (st->preopen_fd_valid) {
+		if (path_out && path_out_size > 0)
+			snprintf(path_out, path_out_size, "%s", st->preopen_path);
+		return st->preopen_fd;
+	}
+
+	/* Name the file for its content time — the upcoming rotation
+	 * boundary — not the preopen time: preopen runs at the first
+	 * keyframe after a rotation, up to a segment ahead. */
+	time_t name_time = (time_t)(rmr_storage_next_boundary((int64_t)time(NULL) * 1000000LL,
+							      rmr_storage_segment_len_sec(st)) /
+				    1000000LL);
+
+	int fd = open_segment_fd(st, st->preopen_path, sizeof(st->preopen_path), false, name_time);
+	if (fd < 0)
+		return -1;
+
+	st->preopen_fd = fd;
+	st->preopen_fd_valid = true;
+
+	if (path_out && path_out_size > 0)
+		snprintf(path_out, path_out_size, "%s", st->preopen_path);
+
+	return fd;
+}
+
+void rmr_storage_activate_segment(rmr_storage_t *st, int fd)
+{
+	if (!st)
+		return;
+	if (st->preopen_fd_valid && fd == st->preopen_fd) {
+		st->preopen_fd_valid = false;
+		fsync(st->preopen_fd);
+	}
+}
+
+bool rmr_storage_preopen_ready(const rmr_storage_t *st)
+{
+	return st && st->preopen_fd_valid;
+}
+
+void rmr_storage_discard_preopen(rmr_storage_t *st)
+{
+	if (!st || !st->preopen_fd_valid)
+		return;
+	close(st->preopen_fd);
+	st->preopen_fd = -1;
+	st->preopen_fd_valid = false;
+	unlink(st->preopen_path);
+}
+
+void rmr_storage_close_segment(rmr_storage_t *st, int fd)
 {
 	if (fd >= 0) {
-		fsync(fd);
+		if (!st || st->rotate_fsync)
+			fsync(fd);
 		close(fd);
 	}
 }
@@ -339,8 +414,6 @@ int rmr_storage_enforce_limit(rmr_storage_t *st)
 	}
 
 	free_names(days, day_count);
-
-	st->last_scan_us = now;
 
 	if (deleted > 0)
 		RSS_INFO("storage cleanup: deleted %d files (%.1f MB remaining)", deleted,
