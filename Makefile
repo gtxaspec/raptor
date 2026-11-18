@@ -417,10 +417,10 @@ rlatency:
 	$(Q)$(MAKE) -C rlatency CC="$(CC)" CFLAGS="$(CFLAGS)" \
 		LDFLAGS="$(LDFLAGS)" Q="$(Q)"
 
-rverify: $(LIB_COMMON_FILE)
+rverify: $(LIB_IPC_FILE) $(LIB_COMMON_FILE)
 	@echo "  BUILD   rverify"
 	$(Q)$(MAKE) -C rverify CC="$(CC)" CFLAGS="$(CFLAGS)" \
-		LIBS="$(LIB_COMMON)" LDFLAGS="$(LDFLAGS)" Q="$(Q)"
+		LIBS="$(LIB_COMMON) $(LIB_IPC)" LDFLAGS="$(LDFLAGS)" Q="$(Q)"
 
 # -- Collect binaries --
 
