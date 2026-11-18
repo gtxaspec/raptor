@@ -1056,8 +1056,8 @@ if [ "$PLATFORM" = "a1" ]; then
         echo "WARNING: --no-rfs on A1 leaves no video producer (RFS is A1's source)"
     fi
 elif [ "$VENDOR" = novatek ]; then
-    # Video only so far: the HDAL backend has no audio, IR or IVS.
-    TARGETS="rvd rsd rhd rod rmr raptorctl ringdump rverify"
+    # The HDAL backend has no IR or IVS yet.
+    TARGETS="rvd rsd rad rhd rod rmr raptorctl ringdump rac rverify"
 else
     TARGETS="rvd rsd rad rhd rod ric rmr rmd rwc raptorctl ringdump rac rverify"
 fi
