@@ -186,6 +186,8 @@ sei_timecode = true
 sign = true
 sign_key = __LOG_DIR__/sign.key
 
+[telematics]
+gps_replay = __LOG_DIR__/drive.nmea
 [ring]
 refmode = true
 
@@ -195,6 +197,22 @@ CONF
 
 sed -i "s|__LOG_DIR__|$LOG_DIR|g" "$LOG_DIR/test.conf"
 mkdir -p "$LOG_DIR/rec"
+
+# A minute of driving for rtd to replay: RMC + GGA per second, valid
+# checksums, moving north-east at a steady 36 km/h.
+python3 - "$LOG_DIR/drive.nmea" <<'NMEA_EOF'
+import sys
+from functools import reduce
+def s(body):
+    return "$%s*%02X\n" % (body, reduce(lambda a, c: a ^ ord(c), body, 0))
+with open(sys.argv[1], "w") as f:
+    for i in range(60):
+        t = "1200%02d.000" % i
+        lat = "3403.%04d" % (1000 + i * 3)
+        lon = "11814.%04d" % (6000 - i * 3)
+        f.write(s("GNGGA,%s,%s,N,%s,W,1,09,0.9,80.0,M,-33.0,M,," % (t, lat, lon)))
+        f.write(s("GNRMC,%s,A,%s,N,%s,W,19.44,45.0,181126,,,A" % (t, lat, lon)))
+NMEA_EOF
 
 CONFIG="$LOG_DIR/test.conf"
 
@@ -217,7 +235,7 @@ rm -f /var/run/rss/*.pid /var/run/rss/*.sock 2>/dev/null
 rm -f /dev/shm/rss_ring_* /dev/shm/rss_osd_* 2>/dev/null
 
 # Kill any lingering daemons from previous runs
-for d in rvd rsd rhd rod ric rmr rwd; do
+for d in rvd rsd rhd rod ric rtd rmr rwd; do
     pkill -f "asan-out/$d" 2>/dev/null || true
 done
 sleep 0.5
@@ -295,6 +313,7 @@ start_daemon rsr "$OUT/rsr" -c "$CONFIG" -f -d
 # Optional daemons (may exit immediately if disabled in config — that's OK)
 start_daemon rod "$OUT/rod" -c "$CONFIG" -f -d
 start_daemon ric "$OUT/ric" -c "$CONFIG" -f -d
+start_daemon rtd "$OUT/rtd" -c "$CONFIG" -f -d
 start_daemon rmr "$OUT/rmr" -c "$CONFIG" -f -d
 
 # Let daemons settle
@@ -1026,6 +1045,14 @@ fi
 check_contains "rmr sign-status" "fingerprint" "$OUT/raptorctl" rmr sign-status
 check_contains "rmr export-pubkey" "pubkey" "$OUT/raptorctl" rmr export-pubkey
 
+echo ""
+echo "=== Telematics ==="
+check_contains "rtd replays a GPS fix" '"fix":true' "$OUT/raptorctl" rtd status
+check_contains "rmr attached the telematics ring" '"gps":true' "$OUT/raptorctl" rmr status
+check_contains "rtd set-speed-unit mph" "ok" "$OUT/raptorctl" rtd set-speed-unit mph
+check_contains "rtd rejects an unknown speed unit" "error" "$OUT/raptorctl" rtd set-speed-unit knots
+"$OUT/raptorctl" rtd set-speed-unit kmh > /dev/null 2>&1
+
 # ── Wall-clock-aligned rotation ──
 # Segments run at 10s granularity for the suite. Other legs bounce the
 # pipeline (producer restart, rmr disable), and a segment opened on
@@ -1083,6 +1110,55 @@ if [ -n "$REC_FILE" ] && [ -x "$OUT/rverify" ]; then
     fi
 else
     skip "signed recording verification" "no recording or rverify missing"
+fi
+
+# This run's segments carry rtd's replayed track: indexed GPS records
+# that keep the signature chain intact. A doctored index (the one part
+# rmr writes after signing) must fail verification. The largest segment
+# is a full one; the newest can be a second long when the disable above
+# lands just after a rotation.
+GPS_FILE=$(find "$LOG_DIR/rec" -name '*.mp4' -not -path '*/timelapse/*' \
+    -newer "$LOG_DIR/.suite-start" -printf '%s %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
+if [ -n "$GPS_FILE" ] && [ -x "$OUT/rverify" ]; then
+    "$OUT/rverify" -k "$LOG_DIR/sign.key.pub" "$GPS_FILE" > "$LOG_DIR/rverify-gps.log" 2>&1
+    GPS_RC=$?
+    GPS_N=$(sed -n 's/^gps records: \([0-9]*\).*/\1/p' "$LOG_DIR/rverify-gps.log")
+    if [ "$GPS_RC" = 0 ] && [ "${GPS_N:-0}" -ge 3 ]; then
+        pass "recording carries $GPS_N signed GPS records"
+    else
+        fail "recording carries signed GPS records" "rc=$GPS_RC records=${GPS_N:-none}"
+    fi
+    if command -v exiftool > /dev/null 2>&1; then
+        EXIF_N=$(exiftool -ee -n -GPSLatitude "$GPS_FILE" 2>/dev/null | grep -c 'GPS Latitude')
+        if [ "$EXIF_N" -ge 3 ] && [ "$EXIF_N" = "${GPS_N:-0}" ]; then
+            pass "ExifTool reads the GPS track ($EXIF_N points)"
+        else
+            fail "ExifTool reads the GPS track" "exiftool=$EXIF_N rverify=${GPS_N:-none}"
+        fi
+    else
+        skip "ExifTool reads the GPS track" "exiftool not installed"
+    fi
+    if python3 - "$GPS_FILE" "$LOG_DIR/gps-tampered.mp4" <<'GPSIDX_EOF'
+import struct, sys
+d = bytearray(open(sys.argv[1], "rb").read())
+moov = d.index(b"moov") - 4
+i = d.index(b"gps ", moov) - 4
+first = struct.unpack(">I", d[i + 16:i + 20])[0]
+d[i + 16:i + 20] = struct.pack(">I", first + 1)
+open(sys.argv[2], "wb").write(d)
+GPSIDX_EOF
+    then
+        if "$OUT/rverify" -k "$LOG_DIR/sign.key.pub" "$LOG_DIR/gps-tampered.mp4" \
+            > "$LOG_DIR/rverify-gps-tamper.log" 2>&1; then
+            fail "doctored GPS index rejected" "rverify passed it"
+        else
+            pass "doctored GPS index rejected"
+        fi
+    else
+        fail "doctored GPS index rejected" "could not build the tampered copy"
+    fi
+else
+    skip "GPS records in recordings" "no recording or rverify missing"
 fi
 "$OUT/raptorctl" rmr enable > /dev/null 2>&1
 

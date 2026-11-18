@@ -53,7 +53,7 @@ rm -f "$OUT/.build-ok"
 if [ "$1" = "clean" ]; then
     rm -f "$OUT"/*.o "$OUT"/*.a "$OUT"/rss_build_info.c
     rm -f "$OUT"/rvd "$OUT"/rsd "$OUT"/rad "$OUT"/rhd "$OUT"/rod "$OUT"/ric
-    rm -f "$OUT"/rmd "$OUT"/rmr "$OUT"/rwc "$OUT"/rwd "$OUT"/rsp "$OUT"/rsr
+    rm -f "$OUT"/rmd "$OUT"/rtd "$OUT"/rmr "$OUT"/rwc "$OUT"/rwd "$OUT"/rsp "$OUT"/rsr
     rm -f "$OUT"/raptorctl "$OUT"/ringdump "$OUT"/rac "$OUT"/create_rings
     rm -rf "$OUT"/mbedtls-build "$OUT"/mbedtls-install "$OUT"/compy-build "$OUT"/srt-build "$OUT"/srt-install
     echo "Cleaned asan-out/ (deps kept — use distclean to remove)"
@@ -355,6 +355,13 @@ $CC $CFLAGS -c "$RAPTOR_DIR/rmd/rmd_actions.c" -o "$OUT/rmd_actions.o"
 $CC -o "$OUT/rmd" "$OUT/rmd_main.o" "$OUT/rmd_actions.o" $LIBS $LDFLAGS
 echo "  -> rmd"
 
+echo "=== RTD ==="
+$CC $CFLAGS -c "$RAPTOR_DIR/rtd/rtd_main.c" -o "$OUT/rtd_main.o"
+$CC $CFLAGS -c "$RAPTOR_DIR/rtd/rtd_nmea.c" -o "$OUT/rtd_nmea.o"
+$CC $CFLAGS -c "$RAPTOR_DIR/rtd/rtd_accel.c" -o "$OUT/rtd_accel.o"
+$CC -o "$OUT/rtd" "$OUT/rtd_main.o" "$OUT/rtd_nmea.o" "$OUT/rtd_accel.o" $LIBS -lm $LDFLAGS
+echo "  -> rtd"
+
 echo "=== ROD ==="
 # Compile libschrift's single .c directly into rod — avoids depending on
 # a system-wide install (CI runs on fresh ubuntu-latest with nothing in
@@ -384,12 +391,13 @@ echo "  -> rod"
 echo "=== RMR ==="
 $CC $CFLAGS -c "$RAPTOR_DIR/rmr/rmr_main.c" -o "$OUT/rmr_main.o"
 $CC $CFLAGS -c "$RAPTOR_DIR/rmr/rmr_mux.c" -o "$OUT/rmr_mux.o"
+$CC $CFLAGS -c "$RAPTOR_DIR/rmr/rmr_gps.c" -o "$OUT/rmr_gps.o"
 $CC $CFLAGS -c "$RAPTOR_DIR/rmr/rmr_nal.c" -o "$OUT/rmr_nal.o"
 $CC $CFLAGS -c "$RAPTOR_DIR/rmr/rmr_prebuf.c" -o "$OUT/rmr_prebuf.o"
 $CC $CFLAGS -c "$RAPTOR_DIR/rmr/rmr_sign.c" -o "$OUT/rmr_sign.o"
 $CC $CFLAGS -c "$RAPTOR_DIR/rmr/rmr_storage.c" -o "$OUT/rmr_storage.o"
 $CC $CFLAGS -c "$RAPTOR_DIR/rmr/rmr_timelapse.c" -o "$OUT/rmr_timelapse.o"
-$CC -o "$OUT/rmr" "$OUT"/rmr_main.o "$OUT"/rmr_mux.o "$OUT"/rmr_nal.o "$OUT"/rmr_prebuf.o "$OUT"/rmr_sign.o "$OUT"/rmr_storage.o "$OUT"/rmr_timelapse.o $LIBS $LDFLAGS
+$CC -o "$OUT/rmr" "$OUT"/rmr_main.o "$OUT"/rmr_mux.o "$OUT"/rmr_gps.o "$OUT"/rmr_nal.o "$OUT"/rmr_prebuf.o "$OUT"/rmr_sign.o "$OUT"/rmr_storage.o "$OUT"/rmr_timelapse.o $LIBS $LDFLAGS
 echo "  -> rmr"
 
 echo "=== RSP ==="
@@ -528,4 +536,4 @@ touch "$OUT/.build-ok"
 
 echo ""
 echo "Done. All binaries in asan-out/"
-ls -1 "$OUT"/rvd "$OUT"/rsd "$OUT"/rad "$OUT"/rhd "$OUT"/rod "$OUT"/ric "$OUT"/rmd "$OUT"/rmr "$OUT"/rwd "$OUT"/rwc "$OUT"/rsp "$OUT"/rsr "$OUT"/raptorctl "$OUT"/ringdump "$OUT"/rac "$OUT"/create_rings 2>/dev/null | while read f; do echo "  $(basename $f)"; done
+ls -1 "$OUT"/rvd "$OUT"/rsd "$OUT"/rad "$OUT"/rhd "$OUT"/rod "$OUT"/ric "$OUT"/rmd "$OUT"/rtd "$OUT"/rmr "$OUT"/rwd "$OUT"/rwc "$OUT"/rsp "$OUT"/rsr "$OUT"/raptorctl "$OUT"/ringdump "$OUT"/rac "$OUT"/create_rings 2>/dev/null | while read f; do echo "  $(basename $f)"; done
