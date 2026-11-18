@@ -339,7 +339,6 @@ static int open_clip(rmr_state_t *st)
 	if (st->sign_enabled)
 		rmr_sign_stream_emit(&st->sign_clip, false, clip_write, st);
 
-	/* the pre-roll's records, oldest first */
 	int64_t since = st->clip_start_us - ((int64_t)st->prebuffer_sec + 1) * 1000000;
 	unsigned n = st->tele_hist_n < 8 ? st->tele_hist_n : 8;
 	for (unsigned i = st->tele_hist_n - n; i < st->tele_hist_n; i++)

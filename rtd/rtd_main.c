@@ -199,7 +199,7 @@ static void gps_read(rtd_state_t *st, int64_t now)
 			} else if (st->line_len < sizeof(st->line) - 1) {
 				st->line[st->line_len++] = c;
 			} else {
-				st->line_len = 0; /* overlong: drop it */
+				st->line_len = 0;
 			}
 		}
 	}
@@ -377,7 +377,6 @@ static void publish(rtd_state_t *st, int64_t now)
 	}
 	st->impact = false;
 	st->peak_dev = 0.0f;
-	/* the next epoch's peak starts from the current reading */
 	memcpy(st->peak, st->rest, sizeof(st->peak));
 
 	rss_ring_publish(st->ring, (const uint8_t *)&r, sizeof(r), now, 0, 0, RSS_SRC_SEQ_NONE);
@@ -494,7 +493,6 @@ int main(int argc, char **argv)
 	while (*st.running) {
 		now = rss_timestamp_us();
 
-		/* Next wakeup: accel sample, pending epoch, own-clock epoch */
 		int64_t wake = st.last_publish_us + (st.replay ? 1000000 : EPOCH_MAX_US);
 		if (st.epoch_due_us && st.epoch_due_us < wake)
 			wake = st.epoch_due_us;
