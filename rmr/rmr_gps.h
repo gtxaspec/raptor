@@ -1,7 +1,7 @@
 /*
  * rmr_gps.h -- GPS and g-sensor records in recordings
  *
- * Each telemetry record from rtd becomes a top-level 'free' box in the
+ * Each telematics record from rtd becomes a top-level 'free' box in the
  * Novatek dashcam layout ("freeGPS "), which ExifTool, dashcam players
  * and GPX converters read:
  *

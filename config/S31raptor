@@ -58,7 +58,7 @@ daemon_section() {
 		ric) echo "ircut" ;;
 		rmr) echo "recording" ;;
 		rmd) echo "motion" ;;
-		rtd) echo "telemetry" ;;
+		rtd) echo "telematics" ;;
 		rwd) echo "webrtc" ;;
 		rwc) echo "webcam" ;;
 		rsp) echo "push" ;;

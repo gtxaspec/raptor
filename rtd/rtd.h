@@ -1,8 +1,8 @@
 /*
- * rtd.h -- RTD (Raptor Telemetry Daemon) records
+ * rtd.h -- RTD (Raptor Telematics Daemon) records
  *
  * rtd publishes one record per GPS epoch (1 Hz, or once a second on
- * its own clock while the receiver is silent) on the "telemetry" ring.
+ * its own clock while the receiver is silent) on the "telematics" ring.
  * rmr embeds the records in recordings; anything else may read them.
  */
 
@@ -12,7 +12,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define RTD_RING	"telemetry"
+#define RTD_RING	"telematics"
 #define RTD_REC_VERSION 1
 
 #define RTD_F_GPS	0x01 /* receiver talking */

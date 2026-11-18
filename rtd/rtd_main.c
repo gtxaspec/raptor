@@ -1,11 +1,11 @@
 /*
- * rtd_main.c -- RTD (Raptor Telemetry Daemon)
+ * rtd_main.c -- RTD (Raptor Telematics Daemon)
  *
  * Reads a GPS receiver (NMEA) and an accelerometer, both described in
  * /etc/thingino.json, and once a second:
- *   - publishes an rtd_record_t on the "telemetry" ring (rmr records it)
+ *   - publishes an rtd_record_t on the "telematics" ring (rmr records it)
  *   - feeds rod template variables for the OSD
- * An acceleration spike beyond [telemetry] impact_g starts an rmr event
+ * An acceleration spike beyond [telematics] impact_g starts an rmr event
  * clip and raises %event%.
  */
 
@@ -297,6 +297,11 @@ static void update_osd(rtd_state_t *st, const rtd_record_t *r, int64_t now)
 {
 	char v[32];
 	bool fix = r->flags & RTD_F_FIX;
+	/* read each time: raptorctl config set telematics speed_unit is live */
+	st->unit =
+		strcmp(rss_config_get_str(st->cfg, "telematics", "speed_unit", "kmh"), "mph") == 0
+			? UNIT_MPH
+			: UNIT_KMH;
 	double speed = r->speed_kn * (st->unit == UNIT_MPH ? 1.150779 : 1.852);
 
 	snprintf(v, sizeof(v), "%d", fix ? (int)lround(speed) : 0);
@@ -434,18 +439,15 @@ int main(int argc, char **argv)
 	int acc_bus, acc_addr;
 	load_hw(&st, &acc_bus, &acc_addr);
 
-	const char *s = rss_config_get_str(st.cfg, "telemetry", "gps_device", "");
+	const char *s = rss_config_get_str(st.cfg, "telematics", "gps_device", "");
 	if (s[0])
 		rss_strlcpy(st.gps_dev, s, sizeof(st.gps_dev));
-	const char *replay = rss_config_get_str(st.cfg, "telemetry", "gps_replay", "");
-	st.impact_g = strtof(rss_config_get_str(st.cfg, "telemetry", "impact_g", "1.5"), NULL);
-	st.impact_clip = rss_config_get_bool(st.cfg, "telemetry", "impact_clip", true);
-	st.impact_clip_sec = rss_config_get_int(st.cfg, "telemetry", "impact_clip_sec", 30);
-	st.osd = rss_config_get_bool(st.cfg, "telemetry", "osd", true);
-	st.unit = strcmp(rss_config_get_str(st.cfg, "telemetry", "speed_unit", "kmh"), "mph") == 0
-			  ? UNIT_MPH
-			  : UNIT_KMH;
-	int hz = rss_config_get_int(st.cfg, "telemetry", "accel_hz", 50);
+	const char *replay = rss_config_get_str(st.cfg, "telematics", "gps_replay", "");
+	st.impact_g = strtof(rss_config_get_str(st.cfg, "telematics", "impact_g", "1.5"), NULL);
+	st.impact_clip = rss_config_get_bool(st.cfg, "telematics", "impact_clip", true);
+	st.impact_clip_sec = rss_config_get_int(st.cfg, "telematics", "impact_clip_sec", 30);
+	st.osd = rss_config_get_bool(st.cfg, "telematics", "osd", true);
+	int hz = rss_config_get_int(st.cfg, "telematics", "accel_hz", 50);
 	st.accel_period_us = 1000000 / (hz < 1 ? 1 : hz > 400 ? 400 : hz);
 
 	if (replay[0]) {

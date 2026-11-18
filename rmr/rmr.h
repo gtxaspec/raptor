@@ -35,7 +35,7 @@ typedef struct {
 	bool audio_enabled;
 	int mode;	   /* RMR_MODE_* */
 	bool sei_timecode; /* embed ST 0604 UTC SEI per frame */
-	bool gps;	   /* embed rtd telemetry records */
+	bool gps;	   /* embed rtd telematics records */
 
 	/* Provenance signing */
 	bool sign_enabled;
@@ -112,7 +112,7 @@ typedef struct {
 	/* Audio read buffer (main thread only) */
 	uint8_t audio_buf[8192];
 
-	/* Telemetry (main thread only) */
+	/* Telematics (main thread only) */
 	rss_ring_t *tele_ring;
 	uint64_t tele_read_seq;
 	int64_t tele_retry_us;

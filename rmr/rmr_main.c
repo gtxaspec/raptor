@@ -154,7 +154,7 @@ static uint32_t gps_capacity(int sec)
 	return (uint32_t)sec + 120; /* boundary waits for an IDR, pre-roll */
 }
 
-static void telemetry_poll(rmr_state_t *st)
+static void telematics_poll(rmr_state_t *st)
 {
 	if (!st->gps)
 		return;
@@ -171,7 +171,7 @@ static void telemetry_poll(rmr_state_t *st)
 		if (!st->tele_ring)
 			return;
 		st->tele_read_seq = atomic_load(&rss_ring_get_header(st->tele_ring)->write_seq);
-		RSS_INFO("telemetry ring attached");
+		RSS_INFO("telematics ring attached");
 	}
 
 	rtd_record_t r;
@@ -881,7 +881,7 @@ static void record_loop(rmr_state_t *st)
 			RSS_INFO("storage available: resuming");
 		}
 
-		telemetry_poll(st);
+		telematics_poll(st);
 
 		/* Lazy audio ring attach — retry every ~2s until found */
 		if (st->audio_enabled && !st->audio_ring && ++audio_retry >= 50) {
