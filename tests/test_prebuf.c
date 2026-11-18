@@ -218,6 +218,29 @@ TEST prebuf_data_wrap(void)
 	PASS();
 }
 
+TEST prebuf_data_overrun(void)
+{
+	/* 8 slots but room for only 3 frames: the data region wraps before
+	 * the slot cap, and frames whose bytes were reused must be dropped,
+	 * not replayed. Frames 0-2 sit at 0, 40, 80; frame 3 wraps to 0. */
+	rmr_prebuf_t *pb = rmr_prebuf_create(8, 128);
+	ASSERT(pb);
+	for (int i = 0; i < 6; i++) {
+		uint8_t frame[40];
+		memset(frame, 0x40 + i, sizeof(frame));
+		rmr_prebuf_push(pb, frame, sizeof(frame), i * 1000, 0);
+	}
+	/* frames 3,4,5 at 0,40,80 are all that hold their own bytes */
+	ASSERT_EQ(3u, rmr_prebuf_count(pb));
+	uint32_t oldest = rmr_prebuf_write_idx(pb) - rmr_prebuf_count(pb);
+	struct iter_ctx ic = {0};
+	ASSERT_EQ(3, rmr_prebuf_iterate(pb, oldest, data_iter_cb, &ic));
+	for (int i = 0; i < 3; i++)
+		ASSERT_EQ((uint8_t)(0x43 + i), ic.data[i]);
+	rmr_prebuf_destroy(pb);
+	PASS();
+}
+
 SUITE(prebuf_suite)
 {
 	RUN_TEST(prebuf_push_count);
@@ -229,4 +252,5 @@ SUITE(prebuf_suite)
 	RUN_TEST(prebuf_iterate_data);
 	RUN_TEST(prebuf_no_keyframe);
 	RUN_TEST(prebuf_data_wrap);
+	RUN_TEST(prebuf_data_overrun);
 }
