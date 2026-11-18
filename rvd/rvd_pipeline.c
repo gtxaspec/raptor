@@ -1924,6 +1924,13 @@ void rvd_stream_deinit(rvd_state_t *st, int idx)
 	if (!s->ring)
 		return;
 	if (st->hal_caps && !st->hal_caps->has_framesource) {
+		/* The OSD thread discovers ROD's regions on graphless streams
+		 * too; release them before the channel goes. */
+		if (st->osd_enabled && !s->is_jpeg) {
+			pthread_mutex_lock(&st->osd_lock);
+			rvd_osd_deinit_stream(st, idx);
+			pthread_mutex_unlock(&st->osd_lock);
+		}
 		RSS_HAL_CALL(st->ops, enc_destroy_channel, st->hal_ctx, s->chn);
 		RSS_DEBUG("stream%d backend deinit complete", idx);
 		return;
