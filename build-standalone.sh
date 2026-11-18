@@ -1126,7 +1126,7 @@ make -j"$JOBS" \
 
 # Collect binaries
 mkdir -p "$SCRIPT_DIR/build"
-for d in rvd rsd rad rhd rod ric rmr rmd rfs rwc rwd rsp rsr rsd-555 raptorctl ringdump rac rverify; do
+for d in rvd rsd rad rhd rod ric rmr rmd rtd rfs rwc rwd rsp rsr rsd-555 raptorctl ringdump rac rverify; do
     [ -f "$SCRIPT_DIR/$d/$d" ] && cp -f "$SCRIPT_DIR/$d/$d" "$SCRIPT_DIR/build/"
 done
 
