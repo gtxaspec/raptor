@@ -42,6 +42,7 @@ static int direct_write(const void *buf, uint32_t len, void *ctx)
 			p += n;
 			remaining -= (uint32_t)n;
 			st->bytes_written += (uint64_t)n;
+			st->segment_bytes += (uint64_t)n;
 		} else if (n < 0) {
 			if (errno == EINTR)
 				continue;
@@ -118,6 +119,78 @@ static int tl_write(const void *buf, uint32_t len, void *ctx)
 	return 0;
 }
 
+/* ── GPS records ── */
+
+#define TELE_RETRY_US 5000000
+
+static void gps_write(rmr_mux_t *mux, rmr_write_fn fn, uint64_t *file_off, rmr_state_t *st,
+		      const rtd_record_t *r)
+{
+	uint8_t box[RMR_GPS_BOX_SIZE];
+	rmr_gps_build(box, r);
+	uint64_t off = *file_off;
+	if (fn(box, sizeof(box), st) == 0)
+		rmr_mux_gps_add(mux, off);
+}
+
+/* Fill the moov index; must run before the fd closes. Not hashed: the
+ * signature chain covers the index as written (zeroed). */
+static void gps_patch_index(rmr_mux_t *mux, int fd)
+{
+	uint8_t *buf;
+	uint32_t len;
+	uint64_t off;
+	if (rmr_mux_gps_index(mux, RMR_GPS_BOX_SIZE, &buf, &len, &off) < 0)
+		return;
+	if (pwrite(fd, buf, len, (off_t)off) != (ssize_t)len)
+		RSS_WARN("GPS index write failed: %s", strerror(errno));
+	free(buf);
+}
+
+static uint32_t gps_capacity(int sec)
+{
+	if (sec <= 0 || sec > 3600)
+		sec = 3600;
+	return (uint32_t)sec + 120; /* boundary waits for an IDR, pre-roll */
+}
+
+static void telemetry_poll(rmr_state_t *st)
+{
+	if (!st->gps)
+		return;
+	int64_t now = rss_timestamp_us();
+	if (st->tele_ring && rss_ring_stale(st->tele_ring)) {
+		rss_ring_close(st->tele_ring);
+		st->tele_ring = NULL;
+	}
+	if (!st->tele_ring) {
+		if (now < st->tele_retry_us)
+			return;
+		st->tele_retry_us = now + TELE_RETRY_US;
+		st->tele_ring = rss_ring_open(RTD_RING);
+		if (!st->tele_ring)
+			return;
+		st->tele_read_seq = atomic_load(&rss_ring_get_header(st->tele_ring)->write_seq);
+		RSS_INFO("telemetry ring attached");
+	}
+
+	rtd_record_t r;
+	uint32_t len;
+	rss_ring_slot_t meta;
+	int ret;
+	while ((ret = rss_ring_read(st->tele_ring, &st->tele_read_seq, (uint8_t *)&r, sizeof(r),
+				    &len, &meta)) == 0 ||
+	       ret == RSS_EOVERFLOW) {
+		if (ret == RSS_EOVERFLOW || len != sizeof(r) || r.version != RTD_REC_VERSION)
+			continue;
+		st->tele_hist[st->tele_hist_n++ % 8] = r;
+		if (st->mux)
+			gps_write(st->mux, direct_write, &st->segment_bytes, st, &r);
+		if (st->clip_mux)
+			gps_write(st->clip_mux, clip_write, &st->clip_bytes, st, &r);
+	}
+}
+
 /* ── Segment management ── */
 
 static void setup_mux_video_track_dur(rmr_mux_t *mux, rmr_state_t *st, uint32_t default_duration)
@@ -191,7 +264,10 @@ static int start_segment(rmr_state_t *st)
 	}
 
 	setup_mux_tracks(st->mux, st);
+	if (st->gps)
+		rmr_mux_enable_gps(st->mux, gps_capacity(rmr_storage_segment_len_sec(st->storage)));
 	st->segment_fd = fd;
+	st->segment_bytes = 0;
 	if (st->sign_enabled)
 		rmr_sign_stream_begin(&st->sign_seg, &st->sign_key);
 	rmr_mux_start(st->mux);
@@ -213,6 +289,8 @@ static void close_segment(rmr_state_t *st)
 		rmr_mux_finalize(st->mux);
 		if (st->sign_enabled)
 			rmr_sign_stream_emit(&st->sign_seg, true, direct_write, st);
+		if (st->segment_fd >= 0)
+			gps_patch_index(st->mux, st->segment_fd);
 		rmr_mux_destroy(st->mux);
 		st->mux = NULL;
 	}
@@ -252,11 +330,22 @@ static int open_clip(rmr_state_t *st)
 	st->clip_bytes = 0;
 
 	setup_mux_tracks(st->clip_mux, st);
+	if (st->gps)
+		rmr_mux_enable_gps(st->clip_mux,
+				   gps_capacity(st->clip_length_sec + st->prebuffer_sec));
 	if (st->sign_enabled)
 		rmr_sign_stream_begin(&st->sign_clip, &st->sign_key);
 	rmr_mux_start(st->clip_mux);
 	if (st->sign_enabled)
 		rmr_sign_stream_emit(&st->sign_clip, false, clip_write, st);
+
+	/* the pre-roll's records, oldest first */
+	int64_t since = st->clip_start_us - ((int64_t)st->prebuffer_sec + 1) * 1000000;
+	unsigned n = st->tele_hist_n < 8 ? st->tele_hist_n : 8;
+	for (unsigned i = st->tele_hist_n - n; i < st->tele_hist_n; i++)
+		if (st->tele_hist[i % 8].ts_us >= since)
+			gps_write(st->clip_mux, clip_write, &st->clip_bytes, st,
+				  &st->tele_hist[i % 8]);
 
 	RSS_INFO("motion clip started: %s", st->clip_path);
 	return 0;
@@ -268,6 +357,8 @@ static void close_clip(rmr_state_t *st)
 		rmr_mux_finalize(st->clip_mux);
 		if (st->sign_enabled)
 			rmr_sign_stream_emit(&st->sign_clip, true, clip_write, st);
+		if (st->clip_fd >= 0)
+			gps_patch_index(st->clip_mux, st->clip_fd);
 		rmr_mux_destroy(st->clip_mux);
 		st->clip_mux = NULL;
 	}
@@ -614,6 +705,7 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		cJSON_AddNumberToObject(r, "bytes", (double)st->bytes_written);
 		cJSON_AddBoolToObject(r, "sign", st->sign_enabled);
 		cJSON_AddBoolToObject(r, "sei_timecode", st->sei_timecode);
+		cJSON_AddBoolToObject(r, "gps", st->tele_ring != NULL);
 		cJSON_AddBoolToObject(r, "timelapse", st->tl_enabled);
 		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 	}
@@ -788,6 +880,8 @@ static void record_loop(rmr_state_t *st)
 			standby = false;
 			RSS_INFO("storage available: resuming");
 		}
+
+		telemetry_poll(st);
 
 		/* Lazy audio ring attach — retry every ~2s until found */
 		if (st->audio_enabled && !st->audio_ring && ++audio_retry >= 50) {
@@ -1246,6 +1340,7 @@ int main(int argc, char **argv)
 	st.stream_idx = rss_config_get_int(dctx.cfg, "recording", "stream", 0);
 	st.audio_enabled = rss_config_get_bool(dctx.cfg, "recording", "audio", true);
 	st.sei_timecode = rss_config_get_bool(dctx.cfg, "recording", "sei_timecode", true);
+	st.gps = rss_config_get_bool(dctx.cfg, "recording", "gps", true);
 	st.sign_enabled = rss_config_get_bool(dctx.cfg, "recording", "sign", true);
 	if (st.sign_enabled) {
 		const char *key_path = rss_config_get_str(dctx.cfg, "recording", "sign_key",
@@ -1461,6 +1556,8 @@ cleanup:
 	}
 	if (st.audio_ring)
 		rss_ring_close(st.audio_ring);
+	if (st.tele_ring)
+		rss_ring_close(st.tele_ring);
 	if (st.video_pb)
 		rmr_prebuf_destroy(st.video_pb);
 	if (st.audio_pb)

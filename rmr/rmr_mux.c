@@ -79,6 +79,12 @@ struct rmr_mux {
 
 	/* Total bytes written (for mfra offsets) */
 	uint64_t bytes_written;
+
+	/* GPS record index ('gps ' in moov), see rmr_gps.h */
+	uint32_t gps_max;
+	uint32_t gps_count;
+	uint64_t gps_box_off;
+	uint32_t *gps_offs;
 };
 
 /* ── Big-endian write helpers ── */
@@ -731,6 +737,15 @@ static int write_moov(rmr_mux_t *m)
 
 	write_mvhd(m, m->has_video ? m->video.timescale : m->audio.sample_rate, next_track);
 
+	/* Readers only honour the GPS index directly after mvhd. Payload is
+	 * zero until rmr_mux_gps_index() hands it over for patching. */
+	if (m->gps_max) {
+		m->gps_box_off = m->bytes_written + m->box_len;
+		uint32_t gps_off = bb_box_begin(m, "gps ");
+		bb_zeros(m, 8 + 8 * m->gps_max);
+		bb_box_end(m, gps_off);
+	}
+
 	if (m->has_video)
 		write_trak(m, 1, false);
 	if (m->has_audio)
@@ -923,6 +938,7 @@ void rmr_mux_destroy(rmr_mux_t *mux)
 	free(mux->v_data);
 	free(mux->a_data);
 	free(mux->box_buf);
+	free(mux->gps_offs);
 	free(mux);
 }
 
@@ -1102,4 +1118,43 @@ int rmr_mux_finalize(rmr_mux_t *mux)
 	w32(mux->box_buf + mux->box_len - 8, mfra_size);
 
 	return bb_flush(mux);
+}
+
+int rmr_mux_enable_gps(rmr_mux_t *mux, uint32_t max_records)
+{
+	if (!mux || !max_records || mux->gps_max)
+		return -1;
+	mux->gps_offs = calloc(max_records, sizeof(*mux->gps_offs));
+	if (!mux->gps_offs)
+		return -1;
+	mux->gps_max = max_records;
+	return 0;
+}
+
+void rmr_mux_gps_add(rmr_mux_t *mux, uint64_t file_off)
+{
+	if (!mux || mux->gps_count >= mux->gps_max || file_off > UINT32_MAX)
+		return;
+	mux->gps_offs[mux->gps_count++] = (uint32_t)file_off;
+}
+
+int rmr_mux_gps_index(rmr_mux_t *mux, uint32_t rec_size, uint8_t **buf, uint32_t *len,
+		      uint64_t *file_off)
+{
+	if (!mux || !mux->gps_max || !mux->gps_box_off)
+		return -1;
+	uint32_t n = 8 + 8 * mux->gps_max;
+	uint8_t *p = calloc(1, n);
+	if (!p)
+		return -1;
+	w32(p, 0x101);
+	w32(p + 4, mux->gps_count);
+	for (uint32_t i = 0; i < mux->gps_count; i++) {
+		w32(p + 8 + 8 * i, mux->gps_offs[i]);
+		w32(p + 12 + 8 * i, rec_size);
+	}
+	*buf = p;
+	*len = n;
+	*file_off = mux->gps_box_off + 8;
+	return 0;
 }

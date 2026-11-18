@@ -102,4 +102,16 @@ int rmr_mux_flush_fragment(rmr_mux_t *mux);
 /* Write mfra box for random access (optional, call before destroy). */
 int rmr_mux_finalize(rmr_mux_t *mux);
 
+/*
+ * GPS record index (layout in rmr_gps.h). enable before rmr_mux_start
+ * to reserve room for max_records; the caller writes each record box
+ * itself and reports its file offset. rmr_mux_gps_index returns the
+ * filled payload (malloc'd) and where it goes in the file, for a
+ * pwrite once the file is otherwise complete.
+ */
+int rmr_mux_enable_gps(rmr_mux_t *mux, uint32_t max_records);
+void rmr_mux_gps_add(rmr_mux_t *mux, uint64_t file_off);
+int rmr_mux_gps_index(rmr_mux_t *mux, uint32_t rec_size, uint8_t **buf, uint32_t *len,
+		      uint64_t *file_off);
+
 #endif /* RMR_MUX_H */

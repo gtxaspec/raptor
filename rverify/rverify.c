@@ -180,6 +180,53 @@ static int verify_jpeg(const uint8_t *data, size_t len, const uint8_t *pub)
 	return 1;
 }
 
+static uint32_t be32(const uint8_t *p)
+{
+	return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
+}
+
+/* rmr fills the 'gps ' index in moov after signing (rmr_gps.h): check
+ * that every entry names a GPS record box, then zero the payload so the
+ * genesis span hashes as signed. The records carry the signatures. */
+static void gps_index(uint8_t *data, size_t len)
+{
+	size_t pos = 0;
+	while (pos + 8 <= len) {
+		uint32_t size = be32(data + pos);
+		if (size < 8 || size > len - pos)
+			return;
+		if (!memcmp(data + pos + 4, "moov", 4))
+			break;
+		pos += size;
+	}
+	if (pos + 8 > len)
+		return;
+	size_t end = pos + be32(data + pos);
+	for (size_t c = pos + 8; c + 8 <= end;) {
+		uint32_t size = be32(data + c);
+		if (size < 8 || size > end - c)
+			return;
+		if (!memcmp(data + c + 4, "gps ", 4) && size >= 16) {
+			uint32_t count = be32(data + c + 12);
+			uint32_t room = (size - 16) / 8, bad = 0;
+			if (count > room)
+				count = room, bad++;
+			for (uint32_t i = 0; i < count; i++) {
+				uint32_t off = be32(data + c + 16 + 8 * i);
+				uint32_t rsz = be32(data + c + 20 + 8 * i);
+				if (rsz < 16 || off > len || rsz > len - off ||
+				    memcmp(data + off + 4, "freeGPS ", 8) != 0)
+					bad++;
+			}
+			printf("gps records: %u%s\n", count,
+			       bad ? "  FAIL - index entries not pointing at records" : "");
+			memset(data + c + 8, 0, size - 8);
+			return;
+		}
+		c += size;
+	}
+}
+
 int main(int argc, char **argv)
 {
 	const char *key_arg = NULL;
@@ -248,6 +295,8 @@ int main(int argc, char **argv)
 		free(data);
 		return rc;
 	}
+
+	gps_index(data, len);
 
 	/* Walk top-level boxes, verifying each signed span */
 	uint8_t prev_sig[64] = {0};

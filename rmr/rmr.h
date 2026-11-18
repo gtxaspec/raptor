@@ -14,6 +14,7 @@
 #include <stdint.h>
 #include <stdatomic.h>
 
+#include "rmr_gps.h"
 #include "rmr_mux.h"
 #include "rmr_nal.h"
 #include "rmr_prebuf.h"
@@ -34,6 +35,7 @@ typedef struct {
 	bool audio_enabled;
 	int mode;	   /* RMR_MODE_* */
 	bool sei_timecode; /* embed ST 0604 UTC SEI per frame */
+	bool gps;	   /* embed rtd telemetry records */
 
 	/* Provenance signing */
 	bool sign_enabled;
@@ -64,6 +66,7 @@ typedef struct {
 	rmr_mux_t *mux;
 	rmr_storage_t *storage;
 	int segment_fd;
+	uint64_t segment_bytes; /* file offset for GPS records */
 	char segment_path[256];
 	int64_t segment_start_us;
 	int64_t segment_start_rt_us;	/* wall clock at open (boundary math) */
@@ -108,6 +111,13 @@ typedef struct {
 
 	/* Audio read buffer (main thread only) */
 	uint8_t audio_buf[8192];
+
+	/* Telemetry (main thread only) */
+	rss_ring_t *tele_ring;
+	uint64_t tele_read_seq;
+	int64_t tele_retry_us;
+	rtd_record_t tele_hist[8]; /* recent records, for clip pre-roll */
+	unsigned tele_hist_n;
 
 	/* Control */
 	rss_ctrl_t *ctrl;
