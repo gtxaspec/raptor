@@ -76,6 +76,7 @@ void *rvd_encoder_thread(void *arg)
 	int64_t last_pub_warn_us = 0;
 	int poll_errors = 0;
 	int empty_polls = 0;
+	int start_errors = 0;
 	int64_t last_stats = rss_timestamp_us();
 	int64_t last_reap = last_stats;
 	int64_t last_utc = 0; /* 0 = publish on first frame */
@@ -169,11 +170,19 @@ void *rvd_encoder_thread(void *arg)
 				 */
 				int sret = RSS_HAL_CALL(st->ops, enc_start, st->hal_ctx, s->chn);
 				if (sret != RSS_OK) {
-					RSS_WARN("jpeg chn %d: enc_start failed (%d), retrying",
-						 s->chn, sret);
+					/* Latched: the retry runs at the loop's 100ms
+					 * cadence, so warning every pass would put ten
+					 * lines a second in the log for as long as the
+					 * channel stays broken. Say it once, and again
+					 * only after it has worked since. */
+					if (++start_errors == 1)
+						RSS_WARN("jpeg chn %d: enc_start failed (%d), "
+							 "retrying",
+							 s->chn, sret);
 					usleep(100000);
 					continue;
 				}
+				start_errors = 0;
 				s->enabled = true;
 				RSS_DEBUG("jpeg chn %d: started (%u consumers)", s->chn,
 					  rss_ring_reader_count(s->ring));

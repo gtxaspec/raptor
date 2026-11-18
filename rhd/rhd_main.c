@@ -194,7 +194,7 @@ static bool handle_snapshot(rhd_client_t *c, int stream, rss_ring_t *ring)
 
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
-	c->snap_deadline = ts.tv_sec * 1000 + ts.tv_nsec / 1000000 + RHD_SNAP_TIMEOUT_MS;
+	c->snap_deadline = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000 + RHD_SNAP_TIMEOUT_MS;
 
 	return true; /* the main loop completes it or times it out */
 }
@@ -381,7 +381,7 @@ static void snap_poll(rhd_server_t *srv)
 {
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
-	int64_t now = ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+	int64_t now = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 
 	for (int i = srv->client_count - 1; i >= 0; i--) {
 		rhd_client_t *c = srv->clients[i];
@@ -1021,7 +1021,7 @@ static void server_run(rhd_server_t *srv)
 		{
 			struct timespec ts;
 			clock_gettime(CLOCK_MONOTONIC, &ts);
-			int64_t now = ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+			int64_t now = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 			for (int i = srv->client_count - 1; i >= 0; i--) {
 				rhd_client_t *c = srv->clients[i];
 				if (c->send_buf && (now - c->send_start) > RHD_SEND_TIMEOUT_MS) {
