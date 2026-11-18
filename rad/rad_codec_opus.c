@@ -25,12 +25,12 @@ static int opus_init_codec(rad_codec_ctx_t *ctx, rss_config_t *cfg, int sample_r
 		return -1;
 	}
 
-	int bitrate = rss_config_get_int(cfg, "audio", "bitrate", 32000);
+	int bitrate = rss_config_get_int(cfg, RAD_CFG_SECTION(ctx), "bitrate", 32000);
 	if (bitrate > 256000)
 		bitrate = 256000;
 	opus_encoder_ctl(st->enc, OPUS_SET_BITRATE(bitrate));
 
-	int complexity = rss_config_get_int(cfg, "audio", "opus_complexity", 5);
+	int complexity = rss_config_get_int(cfg, RAD_CFG_SECTION(ctx), "opus_complexity", 5);
 	if (complexity < 0)
 		complexity = 0;
 	if (complexity > 10)
