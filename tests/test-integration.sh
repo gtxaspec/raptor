@@ -238,7 +238,7 @@ fi
 echo "=== Backend selection tests ==="
 if "$OUT/rvd" -c "$V4L2_CONFIG" -f -d > "$LOG_DIR/rvd-v4l2-disabled.log" 2>&1; then
     fail "disabled V4L2 backend is rejected" "rvd unexpectedly exited successfully"
-elif grep -q "V4L2/OpenIMP backend requested but Raptor was built without V4L2_OPENIMP=1" \
+elif grep -q "video_backend 'v4l2' is not in this build" \
         "$LOG_DIR/rvd-v4l2-disabled.log"; then
     pass "disabled V4L2 backend is rejected with an explicit message"
 else
