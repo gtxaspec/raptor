@@ -5,7 +5,7 @@
  * Novatek dashcam layout ("freeGPS "), which ExifTool, dashcam players
  * and GPX converters read:
  *
- *   0x00 u32 BE size (256)   0x04 'free'   0x08 'GPS '   0x0c u32 LE 0xf0
+ *   0x00 u32 BE size (256)   0x04 'free'   0x08 'GPS '   0x0c u32 LE 0x2c
  *   0x10 i32 LE hour, minute, second, year - 2000, month, day (UTC)
  *   0x28 'A' or 'V', 'N'/'S', 'E'/'W', 0
  *   0x2c f32 LE latitude, longitude as NMEA ddmm.mmmm

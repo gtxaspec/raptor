@@ -299,9 +299,9 @@ static void update_osd(rtd_state_t *st, const rtd_record_t *r, int64_t now)
 	bool fix = r->flags & RTD_F_FIX;
 	double speed = r->speed_kn * (st->unit == UNIT_MPH ? 1.150779 : 1.852);
 
-	snprintf(v, sizeof(v), "%03d", fix ? (int)lround(speed) : 0);
+	snprintf(v, sizeof(v), "%d", fix ? (int)lround(speed) : 0);
 	rod_var(st, "speed", v, now);
-	rod_var(st, "unit", st->unit == UNIT_MPH ? "MPH" : "KM/H", now);
+	rod_var(st, "unit", st->unit == UNIT_MPH ? "mph" : "Km/h", now);
 	snprintf(v, sizeof(v), "%c:%.3f", r->lat < 0 ? 'S' : 'N', fix ? fabs(r->lat) : 0.0);
 	rod_var(st, "lat", v, now);
 	snprintf(v, sizeof(v), "%c:%.3f", r->lon < 0 ? 'W' : 'E', fix ? fabs(r->lon) : 0.0);

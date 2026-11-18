@@ -43,7 +43,7 @@ void rmr_gps_build(uint8_t box[RMR_GPS_BOX_SIZE], const rtd_record_t *r)
 	memset(box, 0, RMR_GPS_BOX_SIZE);
 	box[2] = RMR_GPS_BOX_SIZE >> 8;
 	memcpy(box + 4, "freeGPS ", 8);
-	le32(box + 0x0c, 0xf0);
+	le32(box + 0x0c, 0x2c); /* stock: the 0x10..0x3c fields */
 
 	if (r->flags & RTD_F_TIME) {
 		time_t t = (time_t)(r->utc_us / 1000000);
