@@ -431,6 +431,7 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running)
 	/* Start per-channel encoder threads */
 	for (int i = 0; i < st->stream_count; i++)
 		rvd_stream_start(st, i);
+	rvd_apply_flip(st); /* T41: flip only sticks once channels run */
 
 	/* OSD update thread */
 	pthread_t osd_tid = 0;

@@ -191,6 +191,9 @@ int rvd_stream_restart_vbs_fallback(rvd_state_t *st, int chn);
 int rvd_stream_start(rvd_state_t *st, int idx);
 void rvd_stream_stop(rvd_state_t *st, int idx);
 
+/* Re-apply [image] hflip/vflip once every channel runs (the T41 ignores it earlier). */
+void rvd_apply_flip(rvd_state_t *st);
+
 /* Republish geometry and rate into the ring header; rsd's SDP reads it. */
 void rvd_stream_publish_info(rvd_state_t *st, int idx);
 
