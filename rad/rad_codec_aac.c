@@ -24,6 +24,13 @@
 #include <faac.h>
 #include <rss_ipc.h>
 
+/* faac ABI 3 (faac 3.0) renamed FAAC_OBJ_LOW. */
+#if defined(FAAC_VERSION_MAJOR) && FAAC_VERSION_MAJOR >= 3
+#define RAD_FAAC_OBJ_LC FAAC_OBJ_LC
+#else
+#define RAD_FAAC_OBJ_LC FAAC_OBJ_LOW
+#endif
+
 typedef struct {
 	faac_encoder *handle;
 	int frame_fill;	     /* samples fed into the current encoder frame */
@@ -49,7 +56,7 @@ static int aac_init(rad_codec_ctx_t *ctx, rss_config_t *cfg, int sample_rate)
 	/* HE-AAC needs Fs >= 32kHz (the Fs/2 SBR core collapses below);
 	 * clamp an explicit request rather than failing encoder open. */
 	const char *profile = rss_config_get_str(cfg, "audio", "aac_profile", "lc");
-	enum faac_object_type object = FAAC_OBJ_LOW;
+	enum faac_object_type object = RAD_FAAC_OBJ_LC;
 	if (strcmp(profile, "he") == 0) {
 		if (sample_rate >= 32000) {
 			object = FAAC_OBJ_HE_AAC_V1;
@@ -75,15 +82,27 @@ static int aac_init(rad_codec_ctx_t *ctx, rss_config_t *cfg, int sample_rate)
 		return -1;
 	}
 	params.sample_rate = (uint32_t)sample_rate;
+	params.object_type = object;
+	params.bandwidth = 0; /* derive cutoff from bit_rate */
+	params.input_format = FAAC_INPUT_16BIT;
+#if FAAC_VERSION_MAJOR >= 3
+	/* ABI 3: bit_rate is whole-stream (same value for mono), raw is
+	 * MPEG-4 by definition, TNS/PNS are flags. Keep PNS on and TNS
+	 * off, as the ABI 2 setup below had it. Rate control stays ABR,
+	 * the default. */
+	params.channels = 1;
+	params.stereo_mode = FAAC_STEREO_LR;
+	params.flags = FAAC_FLAG_PNS;
+	params.bit_rate = (uint32_t)bitrate;
+	params.stream_format = FAAC_STREAM_RAW;
+#else
 	params.num_channels = 1;
 	params.mpeg_version = FAAC_MPEG4;
-	params.object_type = object;
 	params.joint_mode = FAAC_JOINT_NONE;
 	params.use_tns = false;
 	params.bit_rate = (uint32_t)bitrate; /* per channel; mono */
-	params.bandwidth = 0;		     /* derive cutoff from bit_rate */
 	params.output_format = FAAC_STREAM_RAW;
-	params.input_format = FAAC_INPUT_16BIT;
+#endif
 
 	status = faac_encoder_open(&params, &st->handle);
 	if (status != FAAC_OK) {

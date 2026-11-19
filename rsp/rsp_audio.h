@@ -24,9 +24,11 @@ typedef struct rsp_audio_enc rsp_audio_enc_t;
  * Initialize the audio transcoder.
  * input_codec: ring codec ID
  * sample_rate: ring sample rate (e.g. 16000)
+ * aac_aot:     ring AAC object type (2 = LC, 5 = HE-AAC v1); only read
+ *              when input_codec is AAC
  * Returns context on success, NULL on failure.
  */
-rsp_audio_enc_t *rsp_audio_init(uint32_t input_codec, uint32_t sample_rate);
+rsp_audio_enc_t *rsp_audio_init(uint32_t input_codec, uint32_t sample_rate, uint8_t aac_aot);
 
 /*
  * Transcode one ring audio frame to AAC.

@@ -20,7 +20,8 @@
 #include <opus/opus.h>
 #endif
 #ifdef RAPTOR_AAC
-#include <aacdec.h>
+#include <faad3.h>
+#include <rss_aac.h>
 #endif
 
 #include "rwd.h"
@@ -1070,7 +1071,7 @@ static int rwd_l16_to_pcmu(const uint8_t *data, uint32_t len, uint8_t *out, int 
  * or 0 on failure. Output is native-endian 16-bit mono. */
 static int rwd_decode_to_pcm(uint32_t codec, const uint8_t *data, uint32_t len,
 #ifdef RAPTOR_AAC
-			     HAACDecoder aac_dec,
+			     faad_decoder *aac_dec,
 #endif
 			     int16_t *pcm, int pcm_max)
 {
@@ -1108,19 +1109,14 @@ static int rwd_decode_to_pcm(uint32_t codec, const uint8_t *data, uint32_t len,
 		if (!aac_dec)
 			return 0;
 		{
-			unsigned char *inp = (unsigned char *)data;
-			int left = (int)len;
-			int err = AACDecode(aac_dec, &inp, &left, pcm);
-			if (err != 0)
+			/* The decoder downmixes to mono; a frame larger than
+			 * pcm_max is refused (OUTPUT_TOO_SMALL), never cut. */
+			uint32_t used = 0, written = 0;
+			if (faad_decode_frame(aac_dec, data, len, &used, pcm,
+					      (uint32_t)pcm_max * sizeof(int16_t), &written,
+					      NULL) != FAAD_OK)
 				return 0;
-			AACFrameInfo info;
-			AACGetLastFrameInfo(aac_dec, &info);
-			pcm_samples = info.outputSamps;
-			if (info.nChans == 2) {
-				pcm_samples /= 2;
-				for (int i = 0; i < pcm_samples; i++)
-					pcm[i] = (pcm[i * 2] + pcm[i * 2 + 1]) / 2;
-			}
+			pcm_samples = (int)(written / sizeof(int16_t));
 		}
 		break;
 #endif
@@ -1167,7 +1163,7 @@ void *rwd_audio_reader_thread(void *arg)
 	OpusEncoder *opus_enc = NULL;
 #endif
 #ifdef RAPTOR_AAC
-	HAACDecoder aac_dec = NULL;
+	faad_decoder *aac_dec = NULL;
 #endif
 
 	while (rss_running(srv->running)) {
@@ -1204,10 +1200,7 @@ void *rwd_audio_reader_thread(void *arg)
 			}
 #endif
 #ifdef RAPTOR_AAC
-			if (aac_dec) {
-				AACFreeDecoder(aac_dec);
-				aac_dec = NULL;
-			}
+			faad_decoder_close(&aac_dec);
 #endif
 			need_transcode = false;
 
@@ -1293,26 +1286,29 @@ void *rwd_audio_reader_thread(void *arg)
 #endif
 #ifdef RAPTOR_AAC
 			if (need_transcode && audio_codec == RWD_CODEC_AAC) {
-				aac_dec = AACInitDecoder();
-				if (aac_dec) {
-					/* HE-AAC v1 (profile 5) carries an LC core
-					 * at HALF the output rate; Helix indexes its
-					 * scalefactor-band tables by the core rate
-					 * and detects SBR from the fill element,
-					 * doubling the output back. Its raw-params
-					 * check also requires AAC_PROFILE_LC. */
-					AACFrameInfo fi = {0};
-					fi.nChans = 1;
-					fi.sampRateCore = (audio_profile == 5) ? sample_rate / 2
-									       : sample_rate;
-					fi.profile = AAC_PROFILE_LC;
-					int perr = AACSetRawBlockParams(aac_dec, 0, &fi);
-					if (perr != 0)
-						RSS_WARN("media: AAC raw params rejected: %d",
-							 perr);
-				} else {
-					RSS_WARN("media: AAC decoder init failed");
+				/* Raw mono AUs; the ASC is the one rad
+				 * signals, so HE-AAC v1 (profile 5) decodes
+				 * its half-rate core through SBR back up to
+				 * the ring rate. */
+				uint8_t asc[RSS_AAC_ASC_MAX];
+				int asc_len = rss_aac_asc(audio_profile == RSS_AAC_AOT_SBR
+								  ? RSS_AAC_AOT_SBR
+								  : RSS_AAC_AOT_LC,
+							  (int)sample_rate, 1, asc);
+				faad_config dc;
+				faad_status ds = faad_config_init(&dc, (uint32_t)sizeof(dc));
+				if (ds == FAAD_OK) {
+					dc.stream_format = FAAD_STREAM_RAW;
+					dc.output_format = FAAD_OUTPUT_16BIT;
+					dc.downmix_mode = FAAD_DOWNMIX_MONO;
+					ds = asc_len > 0 ? faad_decoder_open(&dc, asc,
+									     (uint32_t)asc_len,
+									     &aac_dec)
+							 : FAAD_ERR_UNSUPPORTED;
 				}
+				if (ds != FAAD_OK)
+					RSS_WARN("media: AAC decoder init failed: %s",
+						 faad_strerror(ds));
 			}
 #endif
 
@@ -1482,8 +1478,9 @@ void *rwd_audio_reader_thread(void *arg)
 				/* Decode → accumulate → encode Opus in 20ms frames.
 				 * Each Opus frame advances RTP ts by 960 (48kHz × 20ms).
 				 * Decode directly into pcm_accum to avoid a temp buffer.
-				 * The AAC decoder writes a full frame regardless of
-				 * pcm_max: 1024 samples, or 2048 with SBR (HE-AAC). */
+				 * The AAC decoder refuses a frame that does not fit
+				 * pcm_max, so keep room for a full one: 1024
+				 * samples, or 2048 with SBR (HE-AAC). */
 				int space = 4096 - pcm_accum_fill;
 				if (space >= 2048) {
 					int n = rwd_decode_to_pcm(audio_codec, audio_buf, length,
@@ -1548,8 +1545,7 @@ void *rwd_audio_reader_thread(void *arg)
 		opus_encoder_destroy(opus_enc);
 #endif
 #ifdef RAPTOR_AAC
-	if (aac_dec)
-		AACFreeDecoder(aac_dec);
+	faad_decoder_close(&aac_dec);
 #endif
 	RSS_DEBUG("media: audio reader exiting");
 	return NULL;
