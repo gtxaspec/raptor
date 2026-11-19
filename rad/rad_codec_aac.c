@@ -87,12 +87,12 @@ static int aac_init(rad_codec_ctx_t *ctx, rss_config_t *cfg, int sample_rate)
 	params.input_format = FAAC_INPUT_16BIT;
 #if FAAC_VERSION_MAJOR >= 3
 	/* ABI 3: bit_rate is whole-stream (same value for mono), raw is
-	 * MPEG-4 by definition, TNS/PNS are flags. Keep PNS on and TNS
-	 * off, as the ABI 2 setup below had it. Rate control stays ABR,
-	 * the default. */
+	 * MPEG-4 by definition, TNS/PNS are flags. Both on: 3.0 gates TNS
+	 * per frame, so it costs nothing measurable when it doesn't help.
+	 * Rate control stays ABR, the default. */
 	params.channels = 1;
 	params.stereo_mode = FAAC_STEREO_LR;
-	params.flags = FAAC_FLAG_PNS;
+	params.flags = FAAC_FLAG_TNS | FAAC_FLAG_PNS;
 	params.bit_rate = (uint32_t)bitrate;
 	params.stream_format = FAAC_STREAM_RAW;
 #else

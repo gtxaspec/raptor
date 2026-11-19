@@ -307,8 +307,8 @@ $CC -o "$OUT/rhd" "$OUT/rhd_main.o" "$OUT/rhd_http.o" "$OUT/rhd_audio.o" $LIBS $
 echo "  -> rhd"
 
 echo "=== RSD ==="
-# FAAC 3.0 from the clone -- not packaged in Debian/Ubuntu due to
-# licensing. One meson build gives both libraries: libfaad3 for the
+# FAAC 3.0 from the clone -- 3.0 is not in Debian/Ubuntu yet. One
+# meson build gives both libraries: libfaad3 for the
 # backchannel here, libfaac for rad below. Both compile under the
 # sanitizers on purpose -- the decoder eats network data.
 FAAC_BUILD="$OUT/faac-build"

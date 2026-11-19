@@ -177,11 +177,11 @@ rsp_audio_enc_t *rsp_audio_init(uint32_t input_codec, uint32_t sample_rate, uint
 	 * select HE anyway. */
 #if FAAC_VERSION_MAJOR >= 3
 	/* ABI 3: whole-stream bit_rate (same value for mono), raw is
-	 * MPEG-4, TNS/PNS are flags (PNS on, TNS off, as before). */
+	 * MPEG-4, TNS/PNS are flags (both on). */
 	params.channels = 1;
 	params.object_type = FAAC_OBJ_LC;
 	params.stereo_mode = FAAC_STEREO_LR;
-	params.flags = FAAC_FLAG_PNS;
+	params.flags = FAAC_FLAG_TNS | FAAC_FLAG_PNS;
 	params.bit_rate = 128000;
 	params.stream_format = FAAC_STREAM_RAW;
 #else
