@@ -86,6 +86,26 @@ static void load_config(ric_state_t *st)
 	int period = rss_config_get_int(cfg, "ircut", "pwm_period_ns", 50000);
 	c->pwm_period_ns = cfg_clamp("pwm_period_ns", period, 100, 1000000000);
 
+	/* IR level ladder: "10,20,40,70,100", ascending percents. */
+	const char *levels = rss_config_get_str(cfg, "ircut", "ir_levels", "");
+	c->ir_level_count = 0;
+	for (const char *p = levels ? levels : ""; *p && c->ir_level_count < RIC_IR_LEVELS_MAX;) {
+		char *end;
+		long v = strtol(p, &end, 10);
+		if (end == p)
+			break;
+		if (v >= 1 && v <= 100 &&
+		    (c->ir_level_count == 0 || v > c->ir_levels[c->ir_level_count - 1]))
+			c->ir_levels[c->ir_level_count++] = (int)v;
+		else
+			RSS_WARN("ir_levels: %ld dropped (need 1-100, ascending)", v);
+		for (p = end; *p == ',' || *p == ' '; p++)
+			;
+	}
+	c->ir_step_gain =
+		cfg_clamp("ir_step_gain", rss_config_get_int(cfg, "ircut", "ir_step_gain", 16000),
+			  0, INT_MAX);
+
 	c->ir850_enabled = rss_config_get_bool(cfg, "ircut", "ir850", true);
 	/* Probed before the get, because the getters store their default into
 	 * the config on a miss (for config-get-section) and the key would
@@ -289,7 +309,7 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		if (rss_json_get_str(cmd_json, "value", val, sizeof(val)) != 0 ||
 		    (strcmp(val, "on") != 0 && strcmp(val, "off") != 0))
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value on|off");
-		if (ric_irled_drive(st, bank940, strcmp(val, "on") == 0) < 0)
+		if (ric_irled_manual(st, bank940, strcmp(val, "on") == 0) < 0)
 			return rss_ctrl_resp_error(
 				resp_buf, resp_buf_size,
 				bank940 ? "no ir940 pin or PWM channel configured"
@@ -495,6 +515,11 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 				return rss_ctrl_resp_error(resp_buf, resp_buf_size, "range 1-1000");
 			c->pulse_ms = val;
 			cfg_key = "pulse_ms";
+		} else if (strcmp(key, "ir_step_gain") == 0) {
+			if (val < 0)
+				return rss_ctrl_resp_error(resp_buf, resp_buf_size, "must be >= 0");
+			c->ir_step_gain = val;
+			cfg_key = "ir_step_gain";
 		} else {
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "unknown key");
 		}
@@ -586,6 +611,12 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		cJSON_AddNumberToObject(r, "adc_night", c->adc_night);
 		cJSON_AddNumberToObject(r, "adc_day", c->adc_day);
 		cJSON_AddNumberToObject(r, "pulse_ms", c->pulse_ms);
+		if (c->ir_level_count > 0) {
+			cJSON *lv = cJSON_AddArrayToObject(r, "ir_levels");
+			for (int i = 0; lv && i < c->ir_level_count; i++)
+				cJSON_AddItemToArray(lv, cJSON_CreateNumber(c->ir_levels[i]));
+			cJSON_AddNumberToObject(r, "ir_step_gain", c->ir_step_gain);
+		}
 		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 	}
 
@@ -628,6 +659,11 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 									       : "night");
 		cJSON_AddStringToObject(r, "state",
 					st->current_mode == RIC_MODE_DAY ? "day" : "night");
+		/* The ladder's rung, where a ladder runs: what ric lights
+		 * the bank at, not what a manual ir850 command left. */
+		if (ric_ir_ladder_on(&st->settings) && st->current_mode == RIC_MODE_NIGHT)
+			cJSON_AddNumberToObject(r, "ir_level",
+						st->settings.ir_levels[st->ir_level_idx]);
 		cJSON *sub = exp_resp[0] ? cJSON_Parse(exp_resp) : NULL;
 		if (sub)
 			cJSON_AddItemToObject(r, "exposure", sub);
@@ -756,6 +792,10 @@ int main(int argc, char **argv)
 		RSS_DEBUG("  pwm: period=%dns irled level=%d%% irled2 level=%d%%",
 			  st.settings.pwm_period_ns, st.settings.pwm_irled_level,
 			  st.settings.pwm_irled2_level);
+	if (ric_ir_ladder_on(&st.settings))
+		RSS_DEBUG("  ir ladder: %d levels from %d%%, step gain %d",
+			  st.settings.ir_level_count, st.settings.ir_levels[0],
+			  st.settings.ir_step_gain);
 	if (st.settings.trigger == RIC_TRIGGER_ADC) {
 		RSS_DEBUG("  adc: channel=%d night=%d day=%d", st.settings.adc_channel,
 			  st.settings.adc_night, st.settings.adc_day);

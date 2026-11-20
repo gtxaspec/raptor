@@ -428,9 +428,12 @@ int ric_ircut_drive(ric_state_t *st, ric_mode_t pos)
  * A PWM bank is lit at its level, a percentage of the period, and dark
  * at duty 0 with the channel left enabled: the level of a disabled
  * channel's output is the driver's choice, and not every driver idles
- * low.
+ * low. Its level is the bank's own (pwm_irled_level), except that an
+ * ir850 bank with an IR level ladder is lit by ric on the ladder's
+ * current rung; a manual "on" has no night to read a rung from and
+ * stays on the bank's own level.
  */
-int ric_irled_drive(ric_state_t *st, bool bank940, bool on)
+static int irled_drive(ric_state_t *st, bool bank940, bool on, bool manual)
 {
 	ric_config_t *c = &st->settings;
 	int pin = bank940 ? c->gpio_irled2 : c->gpio_irled;
@@ -438,6 +441,8 @@ int ric_irled_drive(ric_state_t *st, bool bank940, bool on)
 
 	if (pwm >= 0) {
 		int level = bank940 ? c->pwm_irled2_level : c->pwm_irled_level;
+		if (!manual && !bank940 && ric_ir_ladder_on(c))
+			level = c->ir_levels[st->ir_level_idx];
 		long long duty = on ? (long long)c->pwm_period_ns * level / 100 : 0;
 		pwm_write(pwm, "duty_cycle", duty);
 		RSS_INFO("%s: pwm %d duty_cycle=%lld of %dns (%s)", bank940 ? "ir940" : "ir850",
@@ -451,6 +456,18 @@ int ric_irled_drive(ric_state_t *st, bool bank940, bool on)
 	gpio_set(pin, raw);
 	RSS_INFO("%s: gpio %d=%d (%s)", bank940 ? "ir940" : "ir850", pin, raw, on ? "on" : "off");
 	return 0;
+}
+
+/* ric's own drive: transitions, the probe, the enable flags, the ladder. */
+int ric_irled_drive(ric_state_t *st, bool bank940, bool on)
+{
+	return irled_drive(st, bank940, on, false);
+}
+
+/* raptorctl ric ir850|ir940 on|off. */
+int ric_irled_manual(ric_state_t *st, bool bank940, bool on)
+{
+	return irled_drive(st, bank940, on, true);
 }
 
 static void ric_set_gpio(ric_state_t *st, ric_mode_t mode)
@@ -542,6 +559,59 @@ static bool ric_baseline_value_within(uint32_t previous, uint32_t current)
 }
 
 /*
+ * IR level ladder ([ircut] ir_levels, a PWM ir850 bank): night starts
+ * on the lowest rung and climbs one rung at a time while the IR-lit
+ * gain says the scene is still dark on this one -- the least IR that
+ * does the job, so a near wall is not floodlit to light the far scene.
+ * Only up within a night: a brighter scene is the day trigger's
+ * business, and a ladder that also stepped down would hunt. Every
+ * climb re-arms the cooldown, so the night baseline the day ratio
+ * compares against is sampled on the rung the night settles on. The
+ * rung is lit by a sysfs write that returns before ric goes on, so the
+ * cooldown counts from a scene already on the new rung.
+ */
+static bool ric_ir_ladder_can_climb(const ric_state_t *st)
+{
+	const ric_config_t *c = &st->settings;
+
+	return st->current_mode == RIC_MODE_NIGHT && !st->probe_active && c->ir850_enabled &&
+	       ric_ir_ladder_on(c) && st->ir_level_idx + 1 < c->ir_level_count;
+}
+
+static void ric_ir_ladder_climb(ric_state_t *st, uint32_t total_gain)
+{
+	const ric_config_t *c = &st->settings;
+
+	st->ir_level_idx++;
+	st->ir_step_run = 0;
+	RSS_INFO("ir850: gain %u over ir_step_gain %d, stepping up to %d%%", total_gain,
+		 c->ir_step_gain, c->ir_levels[st->ir_level_idx]);
+	ric_irled_drive(st, false, true);
+	st->cooldown_remaining = 3;
+	ric_baseline_settle_begin(st);
+	st->night_gain_baseline = 0;
+	st->night_ev_baseline = 0;
+	st->day_count = 0;
+	st->probe_dip_run = 0;
+}
+
+/* The scene darkening on through the night: climb once the gain has
+ * stayed over ir_step_gain for hysteresis_sec polls. True when it
+ * climbed, which ends the poll. */
+static bool ric_ir_ladder_poll(ric_state_t *st, bool have_gain, uint32_t total_gain)
+{
+	if (!have_gain || !ric_ir_ladder_can_climb(st) ||
+	    total_gain <= (uint32_t)st->settings.ir_step_gain) {
+		st->ir_step_run = 0;
+		return false;
+	}
+	if (++st->ir_step_run < st->settings.hysteresis_sec)
+		return false;
+	ric_ir_ladder_climb(st, total_gain);
+	return true;
+}
+
+/*
  * Re-arm the trigger machinery for a live trigger switch: every counter,
  * baseline and probe in flight describes the OLD trigger's view of the
  * scene. Baselines zeroed here resample inside the CURRENT regime once
@@ -585,6 +655,11 @@ void ric_set_mode(ric_state_t *st, ric_mode_t mode)
 	if (mode == st->current_mode)
 		return;
 
+	/* Every night starts on the ladder's lowest rung. */
+	if (mode == RIC_MODE_NIGHT) {
+		st->ir_level_idx = 0;
+		st->ir_step_run = 0;
+	}
 	ric_set_gpio(st, mode);
 	ric_set_isp_mode(mode);
 	ric_apply_night_fps(st, mode);
@@ -668,7 +743,12 @@ void ric_poll_exposure(ric_state_t *st)
 	}
 	rvd_note_good_query(st);
 
-	if (st->settings.opmode != RIC_AUTO)
+	/* A forced mode stops here, except a forced night with an IR ladder
+	 * to run: the operator chose the mode, not the brightness, and
+	 * "mode night" must not leave the scene on the lowest rung. */
+	bool ladder_only =
+		st->settings.opmode == RIC_FORCE_NIGHT && ric_ir_ladder_on(&st->settings);
+	if (st->settings.opmode != RIC_AUTO && !ladder_only)
 		return;
 
 	uint32_t total_gain = 0, ae_luma = 0;
@@ -708,6 +788,11 @@ void ric_poll_exposure(ric_state_t *st)
 	bool have_luma =
 		has_valid_mask ? (valid_mask & RSS_EXPOSURE_VALID_AE_LUMA) != 0 : ae_luma > 0;
 	bool have_ev = has_valid_mask ? (valid_mask & RSS_EXPOSURE_VALID_EV) != 0 : ev > 0;
+
+	if (ladder_only) {
+		ric_ir_ladder_poll(st, have_gain, total_gain);
+		return;
+	}
 
 	/* A hard zero from the gain field while night mode is active is the
 	 * vendor dead-readback signature, not a real floor: day mode on the
@@ -808,6 +893,13 @@ void ric_poll_exposure(ric_state_t *st)
 				st->cooldown_remaining = 1;
 				return;
 			}
+			/* A settled reading still dark on this rung climbs
+			 * the IR ladder instead of becoming the baseline. */
+			if (have_gain && total_gain > (uint32_t)st->settings.ir_step_gain &&
+			    ric_ir_ladder_can_climb(st)) {
+				ric_ir_ladder_climb(st, total_gain);
+				return;
+			}
 			/* Adopt the settled reading as-is. The old 10%-of-trigger
 			 * floor clamp assumed a far-below-trigger baseline meant
 			 * IR bouncing off a covered lens; a Wyze V3 disproved it
@@ -834,6 +926,9 @@ void ric_poll_exposure(ric_state_t *st)
 		st->settle_prev_ev = ev;
 		return;
 	}
+
+	if (ric_ir_ladder_poll(st, have_gain, total_gain))
+		return;
 
 	bool want_night = false, want_day = false;
 	char why[128];

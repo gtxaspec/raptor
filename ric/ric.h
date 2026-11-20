@@ -150,6 +150,18 @@ typedef struct {
 	bool pwm_irled2_level_explicit; /* raptor.conf overrides device metadata */
 	int pwm_period_ns;		/* period for both banks */
 
+	/*
+	 * IR level ladder for the ir850 bank when it is a PWM bank:
+	 * brightness steps in percent of the period, ascending. Every
+	 * night starts on the first and climbs while the IR-lit gain stays
+	 * above ir_step_gain. No levels = the one level, pwm_irled_level.
+	 * A GPIO bank has no level to set and ignores both keys.
+	 */
+#define RIC_IR_LEVELS_MAX 8
+	int ir_levels[RIC_IR_LEVELS_MAX];
+	int ir_level_count;
+	int ir_step_gain;
+
 	bool ir850_enabled;
 	bool ir940_enabled;
 	bool ir940_explicit; /* config carries an ir940 key (vs the default) */
@@ -208,6 +220,13 @@ static inline bool ric_irled_present(const ric_config_t *c, bool bank940)
 	return c->gpio_irled >= 0 || c->pwm_irled >= 0;
 }
 
+/* The IR level ladder runs on the ir850 bank, and only where there is
+ * a level to set: on a PWM channel. */
+static inline bool ric_ir_ladder_on(const ric_config_t *c)
+{
+	return c->ir_level_count > 0 && c->pwm_irled >= 0;
+}
+
 /* Global state */
 typedef struct {
 	ric_config_t settings;
@@ -248,6 +267,11 @@ typedef struct {
 	int probe_holdoff_polls; /* suppress probes while > 0 */
 	int probe_dip_run;	 /* consecutive dip polls before a probe fires */
 	int probe_recheck_polls; /* countdown to the next interval recheck */
+
+	/* IR level ladder: the rung in use (index into ir_levels), and the
+	 * run of polls that found the scene still dark on it. */
+	int ir_level_idx;
+	int ir_step_run;
 
 	/* Baseline settling: gc2053-class AE walks for many seconds after
 	 * the IR lights the scene; the cooldown extends until three
@@ -298,6 +322,7 @@ void ric_set_isp_mode(ric_mode_t mode);
 void ric_apply_night_fps(ric_state_t *st, ric_mode_t mode);
 int ric_ircut_drive(ric_state_t *st, ric_mode_t pos);
 int ric_irled_drive(ric_state_t *st, bool bank940, bool on);
+int ric_irled_manual(ric_state_t *st, bool bank940, bool on);
 void ric_poll_exposure(ric_state_t *st);
 bool ric_adc_start(ric_state_t *st);
 void ric_adc_cleanup(ric_state_t *st);
