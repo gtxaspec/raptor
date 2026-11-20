@@ -1120,8 +1120,9 @@ fi
 GPS_FILE=$(find "$LOG_DIR/rec" -name '*.mp4' -not -path '*/timelapse/*' \
     -newer "$LOG_DIR/.suite-start" -printf '%s %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
 if [ -n "$GPS_FILE" ] && [ -x "$OUT/rverify" ]; then
-    "$OUT/rverify" -k "$LOG_DIR/sign.key.pub" "$GPS_FILE" > "$LOG_DIR/rverify-gps.log" 2>&1
-    GPS_RC=$?
+    GPS_RC=0
+    "$OUT/rverify" -k "$LOG_DIR/sign.key.pub" "$GPS_FILE" > "$LOG_DIR/rverify-gps.log" 2>&1 ||
+        GPS_RC=$?
     GPS_N=$(sed -n 's/^gps records: \([0-9]*\).*/\1/p' "$LOG_DIR/rverify-gps.log")
     if [ "$GPS_RC" = 0 ] && [ "${GPS_N:-0}" -ge 3 ]; then
         pass "recording carries $GPS_N signed GPS records"
@@ -1129,7 +1130,7 @@ if [ -n "$GPS_FILE" ] && [ -x "$OUT/rverify" ]; then
         fail "recording carries signed GPS records" "rc=$GPS_RC records=${GPS_N:-none}"
     fi
     if command -v exiftool > /dev/null 2>&1; then
-        EXIF_N=$(exiftool -ee -n -GPSLatitude "$GPS_FILE" 2>/dev/null | grep -c 'GPS Latitude')
+        EXIF_N=$(exiftool -ee -n -GPSLatitude "$GPS_FILE" 2>/dev/null | grep -c 'GPS Latitude' || true)
         if [ "$EXIF_N" -ge 3 ] && [ "$EXIF_N" = "${GPS_N:-0}" ]; then
             pass "ExifTool reads the GPS track ($EXIF_N points)"
         else
@@ -1137,6 +1138,47 @@ if [ -n "$GPS_FILE" ] && [ -x "$OUT/rverify" ]; then
         fi
     else
         skip "ExifTool reads the GPS track" "exiftool not installed"
+    fi
+    GPS_LISTED=$("$OUT/rverify" -g -k "$LOG_DIR/sign.key.pub" "$GPS_FILE" 2>/dev/null |
+        grep -c '  signed$' || true)
+    if [ "$GPS_LISTED" = "${GPS_N:-x}" ]; then
+        pass "rverify -g lists every GPS record as signed ($GPS_LISTED)"
+    else
+        fail "rverify -g lists every GPS record as signed" "listed=$GPS_LISTED records=${GPS_N:-none}"
+    fi
+    # A moved point fails its span; a cut file is truncation, not tampering
+    if python3 - "$GPS_FILE" "$LOG_DIR/gps-moved.mp4" "$LOG_DIR/gps-cut.mp4" <<'GPSMOD_EOF'
+import struct, sys
+d = bytearray(open(sys.argv[1], "rb").read())
+recs = []
+i = 0
+while True:
+    i = d.find(b"freeGPS ", i)
+    if i < 0:
+        break
+    recs.append(i - 4)
+    i += 8
+o = recs[1] + 0x80 + 0x10
+d[o:o + 8] = struct.pack("<d", struct.unpack("<d", d[o:o + 8])[0] + 0.01)
+open(sys.argv[2], "wb").write(d)
+open(sys.argv[3], "wb").write(open(sys.argv[1], "rb").read()[:recs[-1] + 100])
+GPSMOD_EOF
+    then
+        MOVED=$("$OUT/rverify" -g -k "$LOG_DIR/sign.key.pub" "$LOG_DIR/gps-moved.mp4" 2>&1 || true)
+        if echo "$MOVED" | grep -q '  FAILED$' && echo "$MOVED" | grep -q 'RESULT: TAMPERED'; then
+            pass "moved GPS point fails its span"
+        else
+            fail "moved GPS point fails its span" "see rverify -g output"
+        fi
+        CUT=$("$OUT/rverify" -g -k "$LOG_DIR/sign.key.pub" "$LOG_DIR/gps-cut.mp4" 2>&1 || true)
+        if echo "$CUT" | grep -q 'past the end of the file' &&
+            echo "$CUT" | grep -q 'RESULT: VERIFIED'; then
+            pass "cut recording is truncated, not tampered"
+        else
+            fail "cut recording is truncated, not tampered" "$(echo "$CUT" | tail -1)"
+        fi
+    else
+        fail "GPS edit legs" "could not build the modified copies"
     fi
     if python3 - "$GPS_FILE" "$LOG_DIR/gps-tampered.mp4" <<'GPSIDX_EOF'
 import struct, sys

@@ -9,7 +9,9 @@
  *
  * With a public key (-k) each signature is verified; without one the
  * tool still checks hash consistency and reports the key fingerprint
- * needed. -t additionally dumps embedded ST 0604 timecodes.
+ * needed. -t additionally dumps embedded ST 0604 timecodes. -g lists
+ * the GPS/g-sensor records (rmr/rmr_gps.h) with the verdict of the span
+ * that signs each one.
  *
  * JPEG input (RHD signed snapshots) verifies the trailing APP15
  * signature segment and reports the EXIF capture time instead.
@@ -185,11 +187,180 @@ static uint32_t be32(const uint8_t *p)
 	return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
 }
 
+static uint32_t le32(const uint8_t *p)
+{
+	return p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
+static float lef32(const uint8_t *p)
+{
+	uint32_t v = le32(p);
+	float f;
+	memcpy(&f, &v, sizeof(f));
+	return f;
+}
+
+static double lef64(const uint8_t *p)
+{
+	uint64_t v = le32(p) | (uint64_t)le32(p + 4) << 32;
+	double d;
+	memcpy(&d, &v, sizeof(d));
+	return d;
+}
+
+/* ── GPS records (-g) ── */
+
+enum { GPS_UNSIGNED, GPS_SIGNED, GPS_HASH_OK, GPS_FAILED };
+
+typedef struct {
+	size_t off;
+	uint32_t size;
+} gps_rec_t;
+
+typedef struct {
+	size_t start, end;
+	int status;
+} span_t;
+
+/* Records come from the index (raptor and stock files) and from the
+ * top-level walk (raptor files whose index was never filled), so the
+ * list can hold duplicates until dump_gps sorts it. */
+static gps_rec_t *gps_recs;
+static size_t gps_n, gps_cap;
+static span_t *spans;
+static size_t span_n, span_cap;
+
+static void gps_add(size_t off, uint32_t size)
+{
+	if (gps_n == gps_cap) {
+		size_t cap = gps_cap ? gps_cap * 2 : 256;
+		gps_rec_t *p = realloc(gps_recs, cap * sizeof(*p));
+		if (!p)
+			return;
+		gps_recs = p;
+		gps_cap = cap;
+	}
+	gps_recs[gps_n++] = (gps_rec_t){.off = off, .size = size};
+}
+
+static void span_add(size_t start, size_t end, int status)
+{
+	if (span_n == span_cap) {
+		size_t cap = span_cap ? span_cap * 2 : 64;
+		span_t *p = realloc(spans, cap * sizeof(*p));
+		if (!p)
+			return;
+		spans = p;
+		span_cap = cap;
+	}
+	spans[span_n++] = (span_t){.start = start, .end = end, .status = status};
+}
+
+static int span_status(size_t off)
+{
+	for (size_t i = 0; i < span_n; i++)
+		if (off >= spans[i].start && off < spans[i].end)
+			return spans[i].status;
+	return GPS_UNSIGNED;
+}
+
+static int rec_cmp(const void *a, const void *b)
+{
+	size_t x = ((const gps_rec_t *)a)->off, y = ((const gps_rec_t *)b)->off;
+	return x < y ? -1 : x > y;
+}
+
+/* NMEA ddmm.mmmm with hemisphere letter to signed degrees */
+static double nmea_deg(float v, uint8_t hemi)
+{
+	int d = (int)(v / 100.0f);
+	double deg = d + (v - d * 100.0) / 60.0;
+	return (hemi == 'S' || hemi == 'W') ? -deg : deg;
+}
+
+static void dump_gps(const uint8_t *data)
+{
+	static const char *const verdict[] = {"unsigned", "signed", "hash ok", "FAILED"};
+
+	qsort(gps_recs, gps_n, sizeof(*gps_recs), rec_cmp);
+	size_t n = 0;
+	for (size_t i = 0; i < gps_n; i++)
+		if (n == 0 || gps_recs[i].off != gps_recs[n - 1].off)
+			gps_recs[n++] = gps_recs[i];
+	gps_n = n;
+
+	printf("gps track: %zu record%s\n", gps_n, gps_n == 1 ? "" : "s");
+	printf("  %-20s %11s %12s %6s %4s %4s %20s  %s\n", "time (UTC)", "latitude", "longitude",
+	       "km/h", "crs", "sats", "accel g (x y z)", "span");
+	for (size_t i = 0; i < gps_n; i++) {
+		const uint8_t *b = data + gps_recs[i].off;
+		const uint8_t *x = b + 0x80;
+		bool ext = gps_recs[i].size >= 0xc0 && !memcmp(x, "RTDx", 4) && x[4] == 1;
+		char when[24] = "-", lat[16] = "-", lon[16] = "-", acc[24] = "-";
+		double speed = 0, course = 0;
+		int sats = -1;
+		bool fix, impact = false;
+
+		if (ext) {
+			uint8_t flags = x[5];
+			fix = flags & 0x02;
+			impact = flags & 0x10;
+			sats = x[6];
+			int64_t utc = (int64_t)(le32(x + 8) | (uint64_t)le32(x + 12) << 32);
+			if (flags & 0x04) {
+				time_t t = (time_t)(utc / 1000000);
+				struct tm tm;
+				gmtime_r(&t, &tm);
+				strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", &tm);
+			}
+			if (fix) {
+				snprintf(lat, sizeof(lat), "%.6f", lef64(x + 0x10));
+				snprintf(lon, sizeof(lon), "%.6f", lef64(x + 0x18));
+				speed = lef32(x + 0x24) * 1.852;
+				course = lef32(x + 0x28);
+			}
+			if (flags & 0x08)
+				snprintf(acc, sizeof(acc), "%+.2f %+.2f %+.2f", lef32(x + 0x30),
+					 lef32(x + 0x34), lef32(x + 0x38));
+		} else {
+			fix = b[0x28] == 'A';
+			if (le32(b + 0x1c) || le32(b + 0x20))
+				snprintf(when, sizeof(when), "%04u-%02u-%02u %02u:%02u:%02u",
+					 2000 + le32(b + 0x1c), le32(b + 0x20), le32(b + 0x24),
+					 le32(b + 0x10), le32(b + 0x14), le32(b + 0x18));
+			if (fix) {
+				snprintf(lat, sizeof(lat), "%.6f",
+					 nmea_deg(lef32(b + 0x2c), b[0x29]));
+				snprintf(lon, sizeof(lon), "%.6f",
+					 nmea_deg(lef32(b + 0x30), b[0x2a]));
+				speed = lef32(b + 0x34) * 1.852;
+				course = lef32(b + 0x38);
+			}
+			if (le32(b + 0x3c) || le32(b + 0x40) || le32(b + 0x44))
+				snprintf(acc, sizeof(acc), "%+.2f %+.2f %+.2f",
+					 (int32_t)le32(b + 0x3c) / 256.0,
+					 (int32_t)le32(b + 0x40) / 256.0,
+					 (int32_t)le32(b + 0x44) / 256.0);
+		}
+		char sat[8] = "-";
+		if (sats >= 0)
+			snprintf(sat, sizeof(sat), "%d", sats);
+		if (fix)
+			printf("  %-20s %11s %12s %6.1f %4.0f %4s %20s  %s%s\n", when, lat, lon,
+			       speed, course, sat, acc, verdict[span_status(gps_recs[i].off)],
+			       impact ? "  IMPACT" : "");
+		else
+			printf("  %-20s %11s %12s %6s %4s %4s %20s  %s%s\n", when, "no fix", "", "",
+			       "", sat, acc, verdict[span_status(gps_recs[i].off)],
+			       impact ? "  IMPACT" : "");
+	}
+}
+
 /* rmr fills the 'gps ' index in moov after signing (rmr_gps.h): check
  * that every entry names a GPS record box, in file order, then zero the
  * payload so the genesis span hashes as signed. The records carry the
  * signatures. Returns 1 for a bad index. */
-static int gps_index(uint8_t *data, size_t len)
+static int gps_index(uint8_t *data, size_t len, bool collect)
 {
 	size_t pos = 0;
 	while (pos + 8 <= len) {
@@ -209,19 +380,28 @@ static int gps_index(uint8_t *data, size_t len)
 			return 0;
 		if (!memcmp(data + c + 4, "gps ", 4) && size >= 16) {
 			uint32_t count = be32(data + c + 12);
-			uint32_t room = (size - 16) / 8, bad = 0, prev = 0;
+			uint32_t room = (size - 16) / 8, bad = 0, past = 0, prev = 0;
 			if (count > room)
 				count = room, bad++;
 			for (uint32_t i = 0; i < count; i++) {
 				uint32_t off = be32(data + c + 16 + 8 * i);
 				uint32_t rsz = be32(data + c + 20 + 8 * i);
-				if (rsz < 16 || off > len || rsz > len - off || off <= prev ||
-				    memcmp(data + off + 4, "freeGPS ", 8) != 0)
+				if (rsz >= 16 && off > prev && (off > len || rsz > len - off)) {
+					past++; /* truncated file: the record never landed */
+				} else if (rsz < 16 || off <= prev ||
+					   memcmp(data + off + 4, "freeGPS ", 8) != 0) {
 					bad++;
+				} else if (collect) {
+					gps_add(off, rsz);
+				}
 				prev = off;
 			}
 			printf("gps records: %u%s\n", count,
 			       bad ? "  FAIL - index entries not pointing at records" : "");
+			if (past)
+				printf("note: %u indexed gps record%s past the end of the file "
+				       "(truncated)\n",
+				       past, past == 1 ? "" : "s");
 			memset(data + c + 8, 0, size - 8);
 			return bad ? 1 : 0;
 		}
@@ -236,6 +416,7 @@ int main(int argc, char **argv)
 	const char *path = NULL;
 	bool dump_tc = false;
 	bool verbose_tc = false;
+	bool show_gps = false;
 
 	for (int i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "-k") && i + 1 < argc)
@@ -244,6 +425,8 @@ int main(int argc, char **argv)
 			dump_tc = true;
 		else if (!strcmp(argv[i], "-T"))
 			dump_tc = verbose_tc = true;
+		else if (!strcmp(argv[i], "-g"))
+			show_gps = true;
 		else if (argv[i][0] == '-')
 			goto usage;
 		else
@@ -252,10 +435,11 @@ int main(int argc, char **argv)
 	if (!path) {
 	usage:
 		fprintf(stderr,
-			"usage: rverify [-k pubkey_hex|pubkey_file] [-t|-T] file.{mp4,jpg}\n"
+			"usage: rverify [-k pubkey_hex|pubkey_file] [-t|-T] [-g] file.{mp4,jpg}\n"
 			"  -k  verify signatures against this Ed25519 public key\n"
 			"  -t  summarize embedded ST 0604 timecodes (mp4)\n"
 			"  -T  dump every timecode (mp4)\n"
+			"  -g  list GPS/g-sensor records and the verdict of their span (mp4)\n"
 			"JPEG input: verifies the RHD snapshot signature and\n"
 			"reports the EXIF capture time.\n");
 		return 2;
@@ -299,7 +483,7 @@ int main(int argc, char **argv)
 		return rc;
 	}
 
-	unsigned gps_bad = (unsigned)gps_index(data, len);
+	unsigned gps_bad = (unsigned)gps_index(data, len, show_gps);
 
 	/* Walk top-level boxes, verifying each signed span */
 	uint8_t prev_sig[64] = {0};
@@ -326,6 +510,10 @@ int main(int argc, char **argv)
 		}
 		if (box_size < hdr || box_size > len - pos)
 			break; /* truncated/corrupt box — trailing data */
+
+		if (show_gps && !memcmp(type, "free", 4) && box_size >= 0x48 &&
+		    !memcmp(data + pos + 8, "GPS ", 4))
+			gps_add(pos, (uint32_t)box_size);
 
 		if (!memcmp(type, "uuid", 4) && box_size == RMR_SIGN_BOX_SIZE &&
 		    pos + RMR_SIGN_BOX_SIZE <= len && !memcmp(data + pos + 8, sign_uuid, 16)) {
@@ -369,6 +557,10 @@ int main(int argc, char **argv)
 			       (flags & RMR_SIGN_FLAG_FINAL) ? " final" : "", verdict);
 			if (!hash_ok || !sig_ok)
 				failures++;
+			span_add(span_start, pos,
+				 !hash_ok || !sig_ok ? GPS_FAILED
+				 : have_key	     ? GPS_SIGNED
+						     : GPS_HASH_OK);
 			if (flags & RMR_SIGN_FLAG_FINAL)
 				saw_final = true;
 
@@ -378,6 +570,11 @@ int main(int argc, char **argv)
 
 		pos += box_size;
 	}
+
+	if (show_gps)
+		dump_gps(data);
+	free(gps_recs);
+	free(spans);
 
 	if (box_count == 0) {
 		printf("no raptor signature boxes found\n");
