@@ -1148,9 +1148,13 @@ void *rwd_audio_reader_thread(void *arg)
 
 	/* PCM decode/accumulation buffer for transcoding (handles non-aligned
 	 * frame sizes like AAC's 1024 samples vs Opus's 320/960) */
-	int16_t pcm_accum[4096]; /* AAC writes 1024, or 2048 with SBR */
+	enum { PCM_ACCUM = 4096 };
+	int16_t pcm_accum[PCM_ACCUM];
 	int pcm_accum_fill = 0;
 #ifdef RAPTOR_OPUS
+	/* Free room an accumulating decode needs: the AAC decoder sets
+	 * it from its max_output_bytes, other codecs truncate to fit. */
+	int pcm_reserve = 2048;
 	int opus_frame_size = 0;  /* valid Opus frame size for current sample rate */
 	uint32_t opus_rtp_ts = 0; /* running RTP timestamp for Opus output */
 	bool opus_rtp_ts_init = false;
@@ -1186,6 +1190,7 @@ void *rwd_audio_reader_thread(void *arg)
 			idle_count = 0;
 			pcm_accum_fill = 0;
 #ifdef RAPTOR_OPUS
+			pcm_reserve = 2048;
 			opus_rtp_ts = 0;
 			opus_rtp_ts_init = false;
 #endif
@@ -1306,9 +1311,22 @@ void *rwd_audio_reader_thread(void *arg)
 									     &aac_dec)
 							 : FAAD_ERR_UNSUPPORTED;
 				}
-				if (ds != FAAD_OK)
+				/* faad_decode_frame() wants the lifetime
+				 * bound, implicit SBR/PS included. */
+				faad_stream_info di = {.struct_size = sizeof(di)};
+				if (ds == FAAD_OK)
+					ds = faad_decoder_get_info(aac_dec, &di);
+				if (ds == FAAD_OK && di.max_output_bytes > sizeof(pcm_accum))
+					ds = FAAD_ERR_OUTPUT_TOO_SMALL;
+				if (ds == FAAD_OK) {
+#ifdef RAPTOR_OPUS
+					pcm_reserve = (int)(di.max_output_bytes / sizeof(int16_t));
+#endif
+				} else {
 					RSS_WARN("media: AAC decoder init failed: %s",
 						 faad_strerror(ds));
+					faad_decoder_close(&aac_dec);
+				}
 			}
 #endif
 
@@ -1432,7 +1450,7 @@ void *rwd_audio_reader_thread(void *arg)
 #ifdef RAPTOR_AAC
 								  aac_dec,
 #endif
-								  pcm_accum, 4096);
+								  pcm_accum, PCM_ACCUM);
 					int step = (sample_rate > 8000) ? sample_rate / 8000 : 1;
 					n -= n % step;
 					enc_len = n / step;
@@ -1478,11 +1496,10 @@ void *rwd_audio_reader_thread(void *arg)
 				/* Decode → accumulate → encode Opus in 20ms frames.
 				 * Each Opus frame advances RTP ts by 960 (48kHz × 20ms).
 				 * Decode directly into pcm_accum to avoid a temp buffer.
-				 * The AAC decoder refuses a frame that does not fit
-				 * pcm_max, so keep room for a full one: 1024
-				 * samples, or 2048 with SBR (HE-AAC). */
-				int space = 4096 - pcm_accum_fill;
-				if (space >= 2048) {
+				 * The AAC decoder refuses a capacity below its
+				 * max_output_bytes, so keep pcm_reserve free. */
+				int space = PCM_ACCUM - pcm_accum_fill;
+				if (space >= pcm_reserve) {
 					int n = rwd_decode_to_pcm(audio_codec, audio_buf, length,
 #ifdef RAPTOR_AAC
 								  aac_dec,

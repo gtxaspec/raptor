@@ -138,6 +138,8 @@ struct rsp_audio_enc {
 #endif
 #ifdef RAPTOR_AAC
 	faad_decoder *aac_dec;
+	int16_t *aac_pcm;     /* sized from the decoder's max_output_bytes */
+	uint32_t aac_pcm_cap; /* bytes */
 #endif
 };
 
@@ -254,11 +256,25 @@ rsp_audio_enc_t *rsp_audio_init(uint32_t input_codec, uint32_t sample_rate, uint
 				     ? faad_decoder_open(&dc, asc, (uint32_t)asc_len, &enc->aac_dec)
 				     : FAAD_ERR_UNSUPPORTED;
 		}
-		if (ds != FAAD_OK)
+		/* faad_decode_frame() wants the lifetime bound, implicit
+		 * SBR/PS included, so the buffer comes from the decoder. */
+		faad_stream_info di = {.struct_size = sizeof(di)};
+		if (ds == FAAD_OK)
+			ds = faad_decoder_get_info(enc->aac_dec, &di);
+		if (ds == FAAD_OK) {
+			enc->aac_pcm = malloc(di.max_output_bytes);
+			if (enc->aac_pcm)
+				enc->aac_pcm_cap = di.max_output_bytes;
+			else
+				ds = FAAD_ERR_NO_MEMORY;
+		}
+		if (ds != FAAD_OK) {
 			RSS_WARN("rsp_audio: AAC decoder init failed: %s", faad_strerror(ds));
-		else
-			RSS_DEBUG("rsp_audio: AAC decoder ready (raw, aot %d, %uHz)", aot,
-				  sample_rate);
+			faad_decoder_close(&enc->aac_dec);
+		} else {
+			RSS_DEBUG("rsp_audio: AAC decoder ready (raw, aot %d, %uHz, %u B PCM)", aot,
+				  sample_rate, enc->aac_pcm_cap);
+		}
 	}
 #endif
 
@@ -324,16 +340,19 @@ static int decode_to_pcm(rsp_audio_enc_t *enc, const uint8_t *data, uint32_t len
 		if (!enc->aac_dec)
 			return 0;
 		{
-			/* Mono downmix is configured, so written bytes are
-			 * mono samples; pcm_max bounds the capacity and a
-			 * frame that cannot fit is refused, not truncated. */
+			/* Decode into the decoder-sized buffer. Mono downmix
+			 * is configured, so written bytes are mono samples;
+			 * pcm_max caps what is handed on. */
 			uint32_t used = 0, written = 0;
-			faad_status ds = faad_decode_frame(enc->aac_dec, data, len, &used, pcm,
-							   (uint32_t)pcm_max * sizeof(int16_t),
-							   &written, NULL);
+			faad_status ds =
+				faad_decode_frame(enc->aac_dec, data, len, &used, enc->aac_pcm,
+						  enc->aac_pcm_cap, &written, NULL);
 			if (ds != FAAD_OK)
 				return 0;
 			samples = (int)(written / sizeof(int16_t));
+			if (samples > pcm_max)
+				samples = pcm_max;
+			memcpy(pcm, enc->aac_pcm, (size_t)samples * sizeof(int16_t));
 		}
 		break;
 #endif
@@ -498,6 +517,7 @@ void rsp_audio_free(rsp_audio_enc_t *enc)
 #endif
 #ifdef RAPTOR_AAC
 	faad_decoder_close(&enc->aac_dec);
+	free(enc->aac_pcm);
 #endif
 	free(enc->pcm_buf);
 	free(enc->aac_buf);

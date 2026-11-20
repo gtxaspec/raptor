@@ -19,6 +19,7 @@
 
 #include <ctype.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "rsd_backchannel.h"
@@ -200,6 +201,9 @@ void rsd_bc_dec_deinit(rsd_bc_dec_t *d)
 		faad_decoder_close(&dec);
 		d->aac = NULL;
 	}
+	free(d->aac_pcm);
+	d->aac_pcm = NULL;
+	d->aac_pcm_cap = 0;
 #endif
 	(void)d;
 }
@@ -406,24 +410,33 @@ static void bc_aac_decode_au(rsd_bc_dec_t *d, rss_ring_t *ring, const uint8_t *a
 			st = asc_len > 0 ? faad_decoder_open(&cfg, asc, (uint32_t)asc_len, &dec)
 					 : FAAD_ERR_UNSUPPORTED;
 		}
-		if (st != FAAD_OK) {
-			RSS_WARN("backchannel: AAC decoder init failed: %s", faad_strerror(st));
+		/* faad_decode_frame() wants the lifetime bound, implicit
+		 * SBR/PS included, so the buffer comes from the decoder. */
+		faad_stream_info info = {.struct_size = sizeof(info)};
+		if (st == FAAD_OK)
+			st = faad_decoder_get_info(dec, &info);
+		int16_t *pcm = st == FAAD_OK ? malloc(info.max_output_bytes) : NULL;
+		if (!pcm) {
+			RSS_WARN("backchannel: AAC decoder init failed: %s",
+				 st != FAAD_OK ? faad_strerror(st) : "out of memory");
+			faad_decoder_close(&dec);
 			d->aac_dead = true;
 			return;
 		}
 		d->aac = dec;
+		d->aac_pcm = pcm;
+		d->aac_pcm_cap = info.max_output_bytes;
 		d->aac_off_format = false;
 	}
 
 	/* The ASC does not stop a hostile AU from carrying a CPE or an
 	 * implicit SBR extension. Mono downmix folds any CPE; SBR would
 	 * double the rate, and such frames are dropped below rather than
-	 * published at the wrong speed. The buffer covers 2048 samples
-	 * in two channels, above the decoder's mono-downmix bound. */
-	int16_t pcm[2048 * 2];
+	 * published at the wrong speed. */
+	int16_t *pcm = d->aac_pcm;
 	uint32_t used = 0, written = 0, flags = 0;
-	faad_status st = faad_decode_frame(d->aac, au, (uint32_t)au_len, &used, pcm,
-					   (uint32_t)sizeof(pcm), &written, &flags);
+	faad_status st = faad_decode_frame(d->aac, au, (uint32_t)au_len, &used, pcm, d->aac_pcm_cap,
+					   &written, &flags);
 	if (st != FAAD_OK) {
 		if (bc_warn_due(d))
 			RSS_WARN("backchannel: AAC decode failed: %s", faad_strerror(st));
