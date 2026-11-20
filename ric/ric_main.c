@@ -63,6 +63,29 @@ static void load_config(ric_state_t *st)
 	c->ircut_active_low = rss_config_get_bool(cfg, "ircut", "gpio_ircut_active_low", false);
 	c->irled_active_low = rss_config_get_bool(cfg, "ircut", "gpio_irled_active_low", false);
 	c->irled2_active_low = rss_config_get_bool(cfg, "ircut", "gpio_irled2_active_low", false);
+
+	/* A bank on a PWM output: the channel instead of a pin. The levels
+	 * are probed before their getters store the default, as pulse_ms is
+	 * below: an explicit level is policy and wins over a pwm_level in
+	 * thingino.json. */
+	c->pwm_irled = rss_config_get_int(cfg, "ircut", "pwm_irled", -1);
+	c->pwm_irled2 = rss_config_get_int(cfg, "ircut", "pwm_irled2", -1);
+	const char *level = rss_config_get_str(cfg, "ircut", "pwm_irled_level", NULL);
+	c->pwm_irled_level_explicit = level != NULL;
+	level = rss_config_get_str(cfg, "ircut", "pwm_irled2_level", NULL);
+	c->pwm_irled2_level_explicit = level != NULL;
+	int pct = rss_config_get_int(cfg, "ircut", "pwm_irled_level", 100);
+	c->pwm_irled_level = cfg_clamp("pwm_irled_level", pct, 1, 100);
+	pct = rss_config_get_int(cfg, "ircut", "pwm_irled2_level", 100);
+	c->pwm_irled2_level = cfg_clamp("pwm_irled2_level", pct, 1, 100);
+	/* 50000ns = 20kHz: a night exposure spans hundreds of periods, so
+	 * every sensor row integrates the same light and the picture does
+	 * not band, and the switching sits above hearing. Under 100ns the
+	 * whole-percent levels stop being distinct duties; a second is
+	 * already a blinker. */
+	int period = rss_config_get_int(cfg, "ircut", "pwm_period_ns", 50000);
+	c->pwm_period_ns = cfg_clamp("pwm_period_ns", period, 100, 1000000000);
+
 	c->ir850_enabled = rss_config_get_bool(cfg, "ircut", "ir850", true);
 	/* Probed before the get, because the getters store their default into
 	 * the config on a miss (for config-get-section) and the key would
@@ -160,9 +183,37 @@ static void load_config(ric_state_t *st)
 			 c->photo.ev_day, c->photo.ev_night, c->photo.ev_deep);
 }
 
-/* Pins may also be auto-discovered from the thingino device file
- * when raptor.conf leaves them at -1 (see ric_json.c). */
+/* Pins and PWM channels may also be auto-discovered from the thingino
+ * device file when raptor.conf leaves them at -1 (see ric_json.c). */
 #define THINGINO_JSON "/etc/thingino.json"
+
+/*
+ * A bank is driven one way. Run after discovery, when both sources
+ * have spoken: discovery gives a bank a pin or a channel and never
+ * both, so a bank holding both got them from raptor.conf, and there
+ * the channel wins. Polarity is a pin's property here -- an inverted
+ * PWM output is the pwmchip's own polarity attribute, which ric does
+ * not touch -- so a flag that would be silently meaningless is named
+ * and dropped.
+ */
+static void settle_pwm_bank(const char *bank, const char *pin_key, int *pin, int pwm,
+			    bool *active_low)
+{
+	if (pwm < 0)
+		return;
+	if (*pin >= 0) {
+		RSS_WARN("%s has both %s = %d and a PWM channel (%d) -- driving the PWM "
+			 "channel, the pin is left alone",
+			 bank, pin_key, *pin, pwm);
+		*pin = -1;
+	}
+	if (*active_low) {
+		RSS_WARN("%s is on PWM channel %d: active_low describes a pin and is not "
+			 "applied to a PWM bank",
+			 bank, pwm);
+		*active_low = false;
+	}
+}
 
 /* ── Control socket ── */
 
@@ -239,9 +290,10 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		    (strcmp(val, "on") != 0 && strcmp(val, "off") != 0))
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value on|off");
 		if (ric_irled_drive(st, bank940, strcmp(val, "on") == 0) < 0)
-			return rss_ctrl_resp_error(resp_buf, resp_buf_size,
-						   bank940 ? "no ir940 pin configured"
-							   : "no ir850 pin configured");
+			return rss_ctrl_resp_error(
+				resp_buf, resp_buf_size,
+				bank940 ? "no ir940 pin or PWM channel configured"
+					: "no ir850 pin or PWM channel configured");
 		RSS_INFO("manual %s -> %s", cmd, val);
 		cJSON *r = cJSON_CreateObject();
 		cJSON_AddStringToObject(r, "status", "ok");
@@ -608,6 +660,10 @@ int main(int argc, char **argv)
 	st.current_mode = RIC_MODE_DAY;
 	load_config(&st);
 	ric_json_gpio_load(&st.settings, THINGINO_JSON);
+	settle_pwm_bank("ir850", "gpio_irled", &st.settings.gpio_irled, st.settings.pwm_irled,
+			&st.settings.irled_active_low);
+	settle_pwm_bank("ir940", "gpio_irled2", &st.settings.gpio_irled2, st.settings.pwm_irled2,
+			&st.settings.irled2_active_low);
 
 	/* The only IR bank a board has must light by default. ir940 defaults
 	 * to off as the opt-in second bank, which left a 940nm-only board
@@ -615,7 +671,7 @@ int main(int argc, char **argv)
 	 * found in the field on a wuuk y0510. Decided here, after discovery,
 	 * because that is when the bank topology is finally known; only the
 	 * shipped default is overridden, an explicit ir940 key keeps its say. */
-	if (st.settings.gpio_irled < 0 && st.settings.gpio_irled2 >= 0 &&
+	if (!ric_irled_present(&st.settings, false) && ric_irled_present(&st.settings, true) &&
 	    !st.settings.ir940_enabled && !st.settings.ir940_explicit) {
 		st.settings.ir940_enabled = true;
 		RSS_INFO("940nm is the only IR bank; enabling it "
@@ -683,13 +739,23 @@ int main(int argc, char **argv)
 	}
 
 	static const char *trigger_names[] = {"luma", "gain", "adc", "photo"};
+	/* PWM banks join the line only on a board that has one. */
+	char pwm_banks[64] = "";
+	if (st.settings.pwm_irled >= 0 || st.settings.pwm_irled2 >= 0)
+		snprintf(pwm_banks, sizeof(pwm_banks), ", pwm_irled=%d, pwm_irled2=%d",
+			 st.settings.pwm_irled, st.settings.pwm_irled2);
 	RSS_INFO("ric running (mode=%s, trigger=%s, gpio_ircut=%d, gpio_ircut2=%d, gpio_irled=%d, "
-		 "gpio_irled2=%d)",
+		 "gpio_irled2=%d%s)",
 		 st.settings.opmode == RIC_AUTO
 			 ? "auto"
 			 : (st.settings.opmode == RIC_FORCE_DAY ? "day" : "night"),
 		 trigger_names[st.settings.trigger], st.settings.gpio_ircut,
-		 st.settings.gpio_ircut2, st.settings.gpio_irled, st.settings.gpio_irled2);
+		 st.settings.gpio_ircut2, st.settings.gpio_irled, st.settings.gpio_irled2,
+		 pwm_banks);
+	if (pwm_banks[0])
+		RSS_DEBUG("  pwm: period=%dns irled level=%d%% irled2 level=%d%%",
+			  st.settings.pwm_period_ns, st.settings.pwm_irled_level,
+			  st.settings.pwm_irled2_level);
 	if (st.settings.trigger == RIC_TRIGGER_ADC) {
 		RSS_DEBUG("  adc: channel=%d night=%d day=%d", st.settings.adc_channel,
 			  st.settings.adc_night, st.settings.adc_day);

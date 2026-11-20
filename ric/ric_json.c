@@ -15,6 +15,14 @@
  *                                (dual-coil pair with its hardware
  *                                 pulse width; first = day, second = night)
  *   "ir850": 8 / "ir940": 9      (IR LED GPIOs)
+ *   "ir850": {"pwm_channel": 2, "pwm_level": 60}
+ *                                (IR LED bank on a PWM output, for a
+ *                                 board with no pin to switch: the
+ *                                 channel on pwmchip0 and the duty when
+ *                                 lit, in percent. Only an object with
+ *                                 no usable "pin" reads this way: one
+ *                                 that has a pin is a GPIO bank,
+ *                                 whatever else it carries)
  *   -1 or ""                     (explicitly disabled, silent)
  * "ircut": 999 means the board's filter hangs off the tmi8152
  * motor-driver character device, which ric does not drive yet; that
@@ -211,9 +219,48 @@ static void ircut_object_timing(const cJSON *item, ric_config_t *c)
 	c->pulse_ms = (delay_us + 999) / 1000;
 }
 
-/* ir850/ir940: a bare number or the {pin, active_low} object. */
-static void gpio_led_pin(const cJSON *gpio, const char *key, int *pin, bool *active_low)
+/* One LED bank's fields in ric_config_t. */
+typedef struct {
+	int *pin;
+	bool *active_low;
+	int *pwm;
+	int *level;
+	bool level_explicit;
+} led_bank_t;
+
+/*
+ * An LED object with a pwm_channel and no usable pin: the bank hangs on
+ * a PWM output. Consulted only when the pin is missing, so an object
+ * that has a pin stays the GPIO bank it has always been, whatever PWM
+ * keys ride along (the webui may save a pwm_level beside a pin). The
+ * level is device metadata like the ircut's delay_us: an explicit
+ * raptor.conf level wins over it. Polarity is copied for the caller to
+ * judge; it is a pin's property and is not applied to a channel.
+ */
+static bool pwm_object(const cJSON *item, const char *key, const led_bank_t *bank)
 {
+	const cJSON *ch = cJSON_GetObjectItemCaseSensitive(item, "pwm_channel");
+	if (!cJSON_IsNumber(ch) || ch->valueint < 0)
+		return false;
+	*bank->pwm = ch->valueint;
+	*bank->active_low = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(item, "active_low"));
+	const cJSON *level = cJSON_GetObjectItemCaseSensitive(item, "pwm_level");
+	if (!level || bank->level_explicit)
+		return true;
+	if (!cJSON_IsNumber(level) || level->valuedouble < 1 || level->valuedouble > 100) {
+		RSS_WARN("gpio.%s pwm_level must be in 1..100 -- using %d%%", key, *bank->level);
+		return true;
+	}
+	*bank->level = level->valueint;
+	return true;
+}
+
+/* ir850/ir940: a bare number, the {pin, active_low} object, or the
+ * {pwm_channel, pwm_level} object of a bank with no pin. */
+static void gpio_led_pin(const cJSON *gpio, const char *key, const led_bank_t *bank)
+{
+	int *pin = bank->pin;
+	bool *active_low = bank->active_low;
 	const cJSON *item = cJSON_GetObjectItemCaseSensitive(gpio, key);
 	if (cJSON_IsNumber(item)) {
 		if (valid_gpio(item->valueint)) {
@@ -224,7 +271,12 @@ static void gpio_led_pin(const cJSON *gpio, const char *key, int *pin, bool *act
 		}
 		/* negative = explicitly disabled, silent */
 	} else if (cJSON_IsObject(item)) {
-		gpio_object(item, key, pin, active_low);
+		const cJSON *p = cJSON_GetObjectItemCaseSensitive(item, "pin");
+		bool has_pin = cJSON_IsNumber(p) && valid_gpio(p->valueint);
+		/* gpio_object also owns the warning for an object that is
+		 * neither: no usable pin and no pwm_channel. */
+		if (has_pin || !pwm_object(item, key, bank))
+			gpio_object(item, key, pin, active_low);
 	} else if (cJSON_IsString(item) && item->valuestring && item->valuestring[0] &&
 		   strcmp(item->valuestring, "-1") != 0) {
 		RSS_WARN("gpio.%s \"%s\": the standard form for an LED pin is a bare number -- "
@@ -235,7 +287,8 @@ static void gpio_led_pin(const cJSON *gpio, const char *key, int *pin, bool *act
 
 void ric_json_gpio_load(ric_config_t *c, const char *path)
 {
-	if (c->gpio_ircut >= 0 && c->gpio_irled >= 0 && c->gpio_irled2 >= 0 && c->pulse_ms_explicit)
+	if (c->gpio_ircut >= 0 && ric_irled_present(c, false) && ric_irled_present(c, true) &&
+	    c->pulse_ms_explicit)
 		return;
 
 	FILE *f = fopen(path, "r");
@@ -341,11 +394,25 @@ void ric_json_gpio_load(ric_config_t *c, const char *path)
 		}
 	}
 
-	if (c->gpio_irled < 0)
-		gpio_led_pin(gpio, "ir850", &c->gpio_irled, &c->irled_active_low);
+	/* A bank raptor.conf set either way, pin or channel, is not looked
+	 * up: what it finds here are only the banks it left alone. */
+	if (!ric_irled_present(c, false)) {
+		const led_bank_t bank = {&c->gpio_irled, &c->irled_active_low, &c->pwm_irled,
+					 &c->pwm_irled_level, c->pwm_irled_level_explicit};
+		gpio_led_pin(gpio, "ir850", &bank);
+		if (c->pwm_irled >= 0)
+			RSS_INFO("ir850 from %s: PWM channel %d, lit at %d%%", path, c->pwm_irled,
+				 c->pwm_irled_level);
+	}
 
-	if (c->gpio_irled2 < 0)
-		gpio_led_pin(gpio, "ir940", &c->gpio_irled2, &c->irled2_active_low);
+	if (!ric_irled_present(c, true)) {
+		const led_bank_t bank = {&c->gpio_irled2, &c->irled2_active_low, &c->pwm_irled2,
+					 &c->pwm_irled2_level, c->pwm_irled2_level_explicit};
+		gpio_led_pin(gpio, "ir940", &bank);
+		if (c->pwm_irled2 >= 0)
+			RSS_INFO("ir940 from %s: PWM channel %d, lit at %d%%", path, c->pwm_irled2,
+				 c->pwm_irled2_level);
+	}
 
 	cJSON_Delete(root);
 

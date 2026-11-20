@@ -134,6 +134,22 @@ typedef struct {
 	bool ircut_active_low;	/* single-pin ircut driven inverted */
 	bool irled_active_low;	/* ir850 bank lights on 0 */
 	bool irled2_active_low; /* ir940 bank lights on 0 */
+
+	/*
+	 * PWM channels on pwmchip0 (-1 = not used), for a bank wired to a
+	 * PWM output instead of a pin: there is nothing to switch, lit is a
+	 * duty cycle. A bank is one or the other; given both by raptor.conf
+	 * the channel is driven and the pin is dropped. The active_low
+	 * flags above describe pins and are not applied to a channel.
+	 */
+	int pwm_irled;			/* ir850 bank's channel */
+	int pwm_irled2;			/* ir940 bank's channel */
+	int pwm_irled_level;		/* ir850 duty when lit, % of the period (1-100) */
+	int pwm_irled2_level;		/* ir940 duty when lit */
+	bool pwm_irled_level_explicit;	/* raptor.conf overrides device metadata */
+	bool pwm_irled2_level_explicit; /* raptor.conf overrides device metadata */
+	int pwm_period_ns;		/* period for both banks */
+
 	bool ir850_enabled;
 	bool ir940_enabled;
 	bool ir940_explicit; /* config carries an ir940 key (vs the default) */
@@ -183,6 +199,14 @@ typedef struct {
 	int pulse_ms;
 	bool pulse_ms_explicit; /* raptor.conf overrides device metadata */
 } ric_config_t;
+
+/* A bank exists when it has something to drive: a pin or a PWM channel. */
+static inline bool ric_irled_present(const ric_config_t *c, bool bank940)
+{
+	if (bank940)
+		return c->gpio_irled2 >= 0 || c->pwm_irled2 >= 0;
+	return c->gpio_irled >= 0 || c->pwm_irled >= 0;
+}
 
 /* Global state */
 typedef struct {
