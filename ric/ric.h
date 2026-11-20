@@ -202,6 +202,12 @@ typedef struct {
 				       * gain sits pinned at its floor (Wyze V3) */
 	uint32_t night_detect_gain;   /* gain at the moment night was detected */
 
+	/* Some vendor builds stop reporting total_gain once the ISP enters
+	 * night running mode (T41/GC8613: reads 0 in night, nonzero floor in
+	 * day on the same scene). While set, the gain field is treated as
+	 * absent and day exits run on luma plus EV probes. */
+	bool gain_dead;
+
 	/* Ratio-triggered day switches are verified once the IR is off:
 	 * a covered lens under IR is optically identical to a bright
 	 * scene, and only the post-switch reading separates them. */
