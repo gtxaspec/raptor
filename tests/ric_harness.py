@@ -2625,6 +2625,153 @@ def scenario_live_trigger_switch(stub, watch):
     ric.stop()
 
 
+def scenario_luma_day_gain_gate(stub, watch):
+    """Luma alone must not declare day in a scene the day side rejects
+    at once: at ceiling gain AE still lifts a dim room's luma over
+    night_luma. With no IR bank lit the luma day test runs, but only
+    once gain is at or under half of night_gain."""
+    conf = LUMA_CONF + "ir850 = false\nir940 = false\n"
+    stub.set_scene(luma=70, gain=4500, ev=1200000)
+    ric = Ric("lumagate", conf)
+    if not ric.wait_running():
+        result(False, "luma-gate: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    time.sleep(0.5)
+
+    mm = stub.mark()
+    stub.set_scene(luma=6, gain=8192, ev=50000000)
+    if not wait_for(lambda: "night" in stub.modes_since(mm), 4):
+        result(False, "luma-gate: night entry", str(stub.modes_since(mm)))
+        ric.stop()
+        return
+    time.sleep((3 + 3) * POLL_MS / 1000.0)  # cooldown -> baseline
+
+    # dim room: luma over night_luma (20), gain over half of night_gain
+    mm2 = stub.mark()
+    stub.set_scene(luma=30, gain=60000, ev=50000000)
+    time.sleep(8 * POLL_MS / 1000.0)
+    result("day" not in stub.modes_since(mm2),
+           "luma-gate: luma at ceiling gain does not declare day",
+           str(stub.modes_since(mm2)))
+    # the same luma with gain at half of night_gain is a day
+    stub.set_scene(luma=30, gain=40000, ev=50000000)
+    ok = wait_for(lambda: "day" in stub.modes_since(mm2), 4)
+    result(ok, "luma-gate: luma declares day once gain is at half of night_gain",
+           ric.read_log()[-300:])
+    time.sleep((3 + 2) * POLL_MS / 1000.0)
+    result("day verification failed" not in ric.read_log()
+           and "night" not in stub.modes_since(mm2),
+           "luma-gate: that day passes its verification and holds",
+           str(stub.modes_since(mm2)))
+    ric.stop()
+
+
+def scenario_day_verify_gain(stub, watch):
+    """The post-switch verification reverts on either half of the night
+    test, not on luma only: a day whose scene then reads gain over
+    night_gain with luma still over night_luma is taken back at the
+    verification, with the backoff, instead of two polls later without
+    one."""
+    stub.set_scene(luma=120, gain=500, ev=4000)
+    ric = Ric("verifygain", LUMA_CONF)
+    if not ric.wait_running():
+        result(False, "verify-gain: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    time.sleep(0.5)
+
+    mm = stub.mark()
+    stub.set_scene(luma=5, gain=20000, ev=100000)
+    if not wait_for(lambda: "night" in stub.modes_since(mm), 4):
+        result(False, "verify-gain: night entry", str(stub.modes_since(mm)))
+        ric.stop()
+        return
+    time.sleep((3 + 3) * POLL_MS / 1000.0)  # cooldown -> baseline 20000
+
+    mm2 = stub.mark()
+    stub.set_scene(luma=5, gain=4000, ev=100000)  # ratio day
+    if not wait_for(lambda: "day" in stub.modes_since(mm2), 4):
+        result(False, "verify-gain: ratio day", ric.read_log()[-300:])
+        ric.stop()
+        return
+    # IR off: luma holds over night_luma, gain runs over night_gain
+    stub.set_scene(luma=30, gain=90000, ev=100000)
+    ok = wait_for(lambda: "day verification failed" in ric.read_log(), 3)
+    result(ok and "gain 90000/80000" in ric.read_log(),
+           "verify-gain: the gain half fails the verification",
+           ric.read_log()[-400:])
+    ok = wait_for(lambda: "night" in stub.modes_since(mm2), 3)
+    result(ok, "verify-gain: the day is reverted", str(stub.modes_since(mm2)))
+    ric.stop()
+
+
+def scenario_day_trial(stub, watch):
+    """A day the night test takes back within RIC_DAY_LOCKOUT_FIRST (30)
+    polls failed as surely as one the verification caught, since AE can
+    still be walking when the verification samples: it arms the same
+    lockout. A day that outlives its trial is not a failure, and the
+    night after it arms nothing."""
+    poll = 100
+    stub.set_scene(luma=120, gain=500, ev=4000)
+    ric = Ric("daytrial", LUMA_CONF, poll_ms=poll)
+    if not ric.wait_running():
+        result(False, "day-trial: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    time.sleep(0.5)
+
+    def night(tag):
+        mark = stub.mark()
+        stub.set_scene(luma=5, gain=20000, ev=100000)
+        if not wait_for(lambda: "night" in stub.modes_since(mark), 4):
+            result(False, "day-trial: %s" % tag, str(stub.modes_since(mark)))
+            return False
+        time.sleep(8 * poll / 1000.0)  # cooldown -> baseline 20000
+        return True
+
+    def ratio_day(mark):
+        stub.set_scene(luma=60, gain=4000, ev=100000)
+        return wait_for(lambda: "day" in stub.modes_since(mark), 6)
+
+    if not night("night entry"):
+        ric.stop()
+        return
+    mm = stub.mark()
+    if not ratio_day(mm):
+        result(False, "day-trial: first day", ric.read_log()[-300:])
+        ric.stop()
+        return
+    # the verification (3 polls in) sees a bright scene and passes; the
+    # scene goes dark right after it, so the day lasts a handful of polls
+    time.sleep(5 * poll / 1000.0)
+    if not night("short day taken back"):
+        ric.stop()
+        return
+    result(ric.read_log().count("day lasted only") == 1,
+           "day-trial: a day taken back inside its trial is named",
+           ric.read_log()[-400:])
+    mm2 = stub.mark()
+    stub.set_scene(luma=60, gain=4000, ev=100000)
+    time.sleep(12 * poll / 1000.0)
+    result("day" not in stub.modes_since(mm2),
+           "day-trial: the next day attempt is held off",
+           str(stub.modes_since(mm2)))
+    ok = wait_for(lambda: "day" in stub.modes_since(mm2), 5)
+    result(ok, "day-trial: the lockout ends and the day is taken",
+           ric.read_log()[-300:])
+
+    # this day outlives the trial; the night after it arms nothing
+    time.sleep((30 + 8) * poll / 1000.0)
+    if not night("night after a day that stuck"):
+        ric.stop()
+        return
+    result(ric.read_log().count("day lasted only") == 1,
+           "day-trial: a day that outlived its trial is not a failure",
+           ric.read_log()[-400:])
+    ric.stop()
+
+
 def main():
     setup_sandbox()
     stub = StubRvd()
@@ -2688,6 +2835,9 @@ def main():
         scenario_photo_threshold_order,
         scenario_live_bank_policy,
         scenario_live_trigger_switch,
+        scenario_luma_day_gain_gate,
+        scenario_day_verify_gain,
+        scenario_day_trial,
     ]
     only = os.environ.get("RIC_SCENARIO", "")
     if only:

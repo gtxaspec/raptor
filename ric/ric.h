@@ -214,6 +214,11 @@ typedef struct {
 	bool day_verify_pending;
 	int day_lockout_polls; /* suppress day attempts while > 0 */
 	int day_lockout_next;  /* doubling backoff, 0 = start over */
+	/* A day the night test takes back within RIC_DAY_LOCKOUT_FIRST
+	 * polls failed as surely as one the verification caught: AE can
+	 * still be walking up when the verification samples. */
+	bool day_on_trial;
+	int day_age_polls;
 
 	/* IR-off ambient probe (night, luma trigger): compressed-gain
 	 * sensors floor total_gain in a lit scene long before the day
