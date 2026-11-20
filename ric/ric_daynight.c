@@ -456,6 +456,7 @@ void ric_trigger_rearm(ric_state_t *st)
 	st->day_verify_pending = false;
 	st->day_lockout_polls = 0;
 	st->day_lockout_next = 0;
+	st->day_on_trial = false;
 	st->probe_active = false;
 	st->probe_polls_left = 0;
 	st->probe_holdoff_polls = 0;
@@ -493,6 +494,22 @@ void ric_set_mode(ric_state_t *st, ric_mode_t mode)
 	st->probe_recheck_polls = 0; /* re-armed when the baseline lands */
 	if (mode == RIC_MODE_DAY)
 		st->night_gain_baseline = 0;
+	else
+		st->day_on_trial = false; /* a trial ends with its day */
+}
+
+/*
+ * A day attempt failed: hold off the next one, doubling up to
+ * RIC_DAY_LOCKOUT_MAX. Returns the hold, in polls.
+ */
+static int ric_day_lockout_arm(ric_state_t *st)
+{
+	int hold = st->day_lockout_next ? st->day_lockout_next : RIC_DAY_LOCKOUT_FIRST;
+
+	st->day_lockout_polls = hold;
+	st->day_lockout_next = hold * 2 > RIC_DAY_LOCKOUT_MAX ? RIC_DAY_LOCKOUT_MAX : hold * 2;
+	st->day_on_trial = false;
+	return hold;
 }
 
 /*
@@ -510,6 +527,12 @@ static void ric_debounce(ric_state_t *st, bool want_night, bool want_day, uint32
 			if (st->night_count >= st->settings.hysteresis_sec) {
 				RSS_DEBUG("night detected (%s for %ds)", why,
 					  st->settings.hysteresis_sec);
+				if (st->settings.trigger == RIC_TRIGGER_LUMA && st->day_on_trial) {
+					int hold = ric_day_lockout_arm(st);
+					RSS_WARN("day lasted only %d polls -- the scene was dark "
+						 "without IR; next day attempt in %d polls",
+						 st->day_age_polls, hold);
+				}
 				st->night_detect_gain = total_gain;
 				ric_set_mode(st, RIC_MODE_NIGHT);
 			}
@@ -523,8 +546,13 @@ static void ric_debounce(ric_state_t *st, bool want_night, bool want_day, uint32
 			if (st->day_count >= st->settings.hysteresis_sec) {
 				RSS_DEBUG("day detected (%s for %ds)", why,
 					  st->settings.hysteresis_sec);
-				if (st->settings.trigger == RIC_TRIGGER_LUMA)
+				if (st->settings.trigger == RIC_TRIGGER_LUMA) {
 					st->day_verify_pending = true;
+					/* An automatic day only: the startup day and a
+					 * forced one are not attempts that can fail. */
+					st->day_on_trial = true;
+					st->day_age_polls = 0;
+				}
 				ric_set_mode(st, RIC_MODE_DAY);
 			}
 		} else {
@@ -640,6 +668,13 @@ void ric_poll_exposure(ric_state_t *st)
 		st->settings.trigger = RIC_TRIGGER_LUMA;
 	}
 
+	/* A day that outlives its trial has stuck: the backoff starts over. */
+	if (st->current_mode == RIC_MODE_DAY && st->day_on_trial &&
+	    ++st->day_age_polls >= RIC_DAY_LOCKOUT_FIRST) {
+		st->day_on_trial = false;
+		st->day_lockout_next = 0;
+	}
+
 	/* Cooldown after mode switch: wait for IR LEDs / ISP to stabilize.
 	 * After cooldown in night mode, sample total_gain as baseline for
 	 * the auto-calibrating night→day transition. */
@@ -648,26 +683,27 @@ void ric_poll_exposure(ric_state_t *st)
 		if (st->cooldown_remaining == 0 && st->current_mode == RIC_MODE_DAY &&
 		    st->day_verify_pending) {
 			st->day_verify_pending = false;
-			if (have_luma && ae_luma < (uint32_t)st->settings.night_luma) {
+			/* Either half of the day-side night test: AE lifts a
+			 * dim room's luma over night_luma at ceiling gain, so
+			 * luma alone passes a room the gain half sends straight
+			 * back to night. */
+			bool dark_luma = have_luma && ae_luma < (uint32_t)st->settings.night_luma;
+			bool dark_gain =
+				have_gain && total_gain > (uint32_t)st->settings.night_gain;
+			if (dark_luma || dark_gain) {
 				/* The scene reads night-dark with the IR off: the
 				 * "day" was the LED's own light bouncing back (a
 				 * covered lens, a point-blank surface). Revert and
 				 * back off so this cannot oscillate; a covered
 				 * lens re-checks rarely instead of blinking. */
-				int hold = st->day_lockout_next ? st->day_lockout_next
-								: RIC_DAY_LOCKOUT_FIRST;
+				int hold = ric_day_lockout_arm(st);
 				RSS_WARN("day verification failed: scene reads night-dark "
-					 "without IR (luma %u < %d) -- the day was IR "
-					 "reflection; reverting, next attempt in %d polls",
-					 ae_luma, st->settings.night_luma, hold);
-				st->day_lockout_polls = hold;
-				st->day_lockout_next = hold * 2 > RIC_DAY_LOCKOUT_MAX
-							       ? RIC_DAY_LOCKOUT_MAX
-							       : hold * 2;
+					 "without IR (luma %u/%d, gain %u/%d) -- the day was "
+					 "IR reflection; reverting, next attempt in %d polls",
+					 ae_luma, st->settings.night_luma, total_gain,
+					 st->settings.night_gain, hold);
 				st->night_detect_gain = total_gain;
 				ric_set_mode(st, RIC_MODE_NIGHT);
-			} else {
-				st->day_lockout_next = 0;
 			}
 		}
 		if (st->cooldown_remaining == 0 && st->current_mode == RIC_MODE_NIGHT) {
@@ -780,7 +816,14 @@ void ric_poll_exposure(ric_state_t *st)
 				st->night_gain_baseline * (uint32_t)st->settings.day_gain_pct / 100;
 			want_day = (total_gain < day_thr);
 		}
-		if (!ir_lit && have_luma && ae_luma >= (uint32_t)st->settings.night_luma)
+		/* ...and never into a day the day-side gain test undoes at
+		 * once: at ceiling gain AE still lifts a dim room's luma over
+		 * night_luma, so on luma alone an IR-off probe there switched
+		 * to day, and day mode went straight back to night. The probe
+		 * reads with the IR-cut still out, and the filter costs the
+		 * scene its own IR in day mode, hence half of night_gain. */
+		if (!ir_lit && have_luma && ae_luma >= (uint32_t)st->settings.night_luma &&
+		    (!have_gain || total_gain <= (uint32_t)st->settings.night_gain / 2))
 			want_day = true;
 
 		/* IR-off ambient probe: compressed-gain sensors (T20 class)
