@@ -174,6 +174,58 @@ static void blit_glyph(uint8_t *buf, uint32_t buf_w, uint32_t buf_h, const rod_g
 }
 
 /*
+ * Alpha-blend a solid-color rectangle into a BGRA buffer (source-over).
+ */
+static void blit_rect(uint8_t *buf, uint32_t buf_w, uint32_t buf_h, int x0, int y0, int x1, int y1,
+		      uint8_t b, uint8_t g, uint8_t r, uint8_t a)
+{
+	if (x0 < 0)
+		x0 = 0;
+	if (y0 < 0)
+		y0 = 0;
+	if (x1 >= (int)buf_w)
+		x1 = (int)buf_w - 1;
+	if (y1 >= (int)buf_h)
+		y1 = (int)buf_h - 1;
+	for (int y = y0; y <= y1; y++) {
+		for (int x = x0; x <= x1; x++) {
+			uint8_t *dst = buf + (y * buf_w + x) * 4;
+			uint8_t inv = 255 - a;
+			dst[0] = (uint8_t)((b * a + dst[0] * inv) / 255);
+			dst[1] = (uint8_t)((g * a + dst[1] * inv) / 255);
+			dst[2] = (uint8_t)((r * a + dst[2] * inv) / 255);
+			dst[3] = (uint8_t)(a + (dst[3] * inv) / 255);
+		}
+	}
+}
+
+/*
+ * Fill a rectangle in a BGRA buffer with an opaque copy of color.
+ */
+void rod_draw_rect_fill(uint8_t *buf, uint32_t buf_w, uint32_t buf_h, int x0, int y0, int x1,
+			int y1, uint32_t color_bgra)
+{
+	uint8_t b = (uint8_t)(color_bgra & 0xFF);
+	uint8_t g = (uint8_t)((color_bgra >> 8) & 0xFF);
+	uint8_t r = (uint8_t)((color_bgra >> 16) & 0xFF);
+	uint8_t a = (uint8_t)((color_bgra >> 24) & 0xFF);
+
+	for (int y = y0; y <= y1; y++) {
+		if (y < 0 || y >= (int)buf_h)
+			continue;
+		for (int x = x0; x <= x1; x++) {
+			if (x < 0 || x >= (int)buf_w)
+				continue;
+			uint8_t *dst = buf + (y * buf_w + x) * 4;
+			dst[0] = b;
+			dst[1] = g;
+			dst[2] = r;
+			dst[3] = a;
+		}
+	}
+}
+
+/*
  * Draw a text string at pen position, advancing per glyph.
  * Returns final pen_x (for measuring).
  */
@@ -210,7 +262,7 @@ static int measure_text(rod_font_t *f, const char *text)
 
 void rod_draw_text(rod_state_t *st, int stream_idx, int font_idx, uint8_t *buf, uint32_t buf_w,
 		   uint32_t buf_h, const char *text, int align, uint32_t color,
-		   uint32_t stroke_color, int stroke_size)
+		   uint32_t stroke_color, int stroke_size, uint32_t bg_color)
 {
 	rod_font_t *f = &st->fonts[stream_idx][font_idx];
 	int stroke = stroke_size;
@@ -235,6 +287,21 @@ void rod_draw_text(rod_state_t *st, int stream_idx, int font_idx, uint8_t *buf, 
 
 	if (pen_x < pad)
 		pen_x = pad;
+
+	/* Semi-transparent background box behind the text (prudynt-style).
+	 * Drawn before stroke/text so glyphs blend on top of it. */
+	if (bg_color != 0 && text_w > 0) {
+		uint8_t bg_a = (uint8_t)((bg_color >> 24) & 0xFF);
+		if (bg_a != 0) {
+			int box_x0 = pen_x - pad;
+			int box_x1 = pen_x + text_w + pad;
+			int box_y0 = 0;
+			int box_y1 = (int)buf_h - 1;
+			blit_rect(buf, buf_w, buf_h, box_x0, box_y0, box_x1, box_y1,
+				  (uint8_t)(bg_color & 0xFF), (uint8_t)((bg_color >> 8) & 0xFF),
+				  (uint8_t)((bg_color >> 16) & 0xFF), bg_a);
+		}
+	}
 
 	if (stroke > 0) {
 		uint8_t s_b = (uint8_t)(stroke_color & 0xFF);

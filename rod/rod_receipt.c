@@ -113,19 +113,12 @@ void rod_render_receipt(rod_state_t *st, rod_element_t *e, int s)
 		line_h = 16;
 
 	uint32_t bg = e->receipt.bg_color;
-	if (bg) {
-		uint32_t fill_h = (uint32_t)(e->receipt.count * line_h);
-		if (fill_h > bh)
-			fill_h = bh;
-		uint8_t *p = buf;
-		for (uint32_t i = 0; i < bw * fill_h; i++) {
-			p[0] = (uint8_t)(bg & 0xFF);
-			p[1] = (uint8_t)((bg >> 8) & 0xFF);
-			p[2] = (uint8_t)((bg >> 16) & 0xFF);
-			p[3] = (uint8_t)((bg >> 24) & 0xFF);
-			p += 4;
-		}
-	}
+	if (bg)
+		rod_draw_rect_fill(buf, bw, bh, 0, 0, (int)bw - 1,
+				   (int)(e->receipt.count * line_h) > (int)bh
+					   ? (int)bh - 1
+					   : (int)(e->receipt.count * line_h) - 1,
+				   bg);
 
 	/* Draw lines from oldest to newest */
 	int start = (e->receipt.head - e->receipt.count + ROD_RECEIPT_MAX_LINES) %
@@ -146,7 +139,7 @@ void rod_render_receipt(rod_state_t *st, rod_element_t *e, int s)
 			row_h = (int)bh - y_offset;
 
 		rod_draw_text(st, s, es->font_idx, row_buf, bw, row_h, line, e->align, col, scol,
-			      ssz);
+			      ssz, 0);
 
 		y_offset += line_h;
 	}

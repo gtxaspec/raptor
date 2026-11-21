@@ -36,9 +36,10 @@ static void render_text_element(rod_state_t *st, rod_element_t *e, int s, const 
 	uint32_t col = e->has_color ? e->color : st->settings.font_color;
 	uint32_t scol = e->has_stroke_color ? e->stroke_color : st->settings.stroke_color;
 	int ssz = e->stroke_size >= 0 ? e->stroke_size : st->settings.font_stroke;
+	uint32_t bg = e->has_bg_color ? e->bg_color : st->settings.bg_color;
 
 	rod_draw_text(st, s, es->font_idx, buf, es->width, es->height, text, e->align, col, scol,
-		      ssz);
+		      ssz, bg);
 	rss_osd_publish(es->shm);
 }
 
