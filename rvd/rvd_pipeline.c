@@ -286,6 +286,25 @@ static void rvd_apply_image_defaults(rvd_state_t *st)
 		  ret == RSS_OK);
 }
 
+/* Re-apply [image] hflip/vflip once the framesource channels run. On the T41 the
+ * ISP's SetHVFLIP is not honoured while rvd_apply_image_defaults runs (before any
+ * channel is enabled): the call is made, but get-isp reads 0/0 afterwards and the
+ * picture stays unflipped. Called from rvd_frame_loop after every channel started.
+ * Single sensor only; multi-sensor setups use the per-sensor isp_set_*flip_n path. */
+void rvd_apply_flip(rvd_state_t *st)
+{
+	if (st->sensor_count > 1)
+		return;
+	int hflip = rss_config_get_int(st->cfg, "image", "hflip", 0);
+	int vflip = rss_config_get_int(st->cfg, "image", "vflip", 0);
+	if (!hflip && !vflip)
+		return;
+	int hr = RSS_HAL_CALL(st->ops, isp_set_hflip, st->hal_ctx, hflip);
+	int vr = RSS_HAL_CALL(st->ops, isp_set_vflip, st->hal_ctx, vflip);
+	RSS_INFO("flip applied after stream start: hflip=%d (%d) vflip=%d (%d)", hflip, hr, vflip,
+		 vr);
+}
+
 static int read_sensor_proc_int(int idx, const char *key, int base, int def);
 static int find_active_sensor_proc_index(void);
 static void load_sensor_from_section(rss_config_t *cfg, const char *section,
