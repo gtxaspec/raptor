@@ -70,6 +70,11 @@ typedef struct {
 	int64_t segment_boundary_rt_us; /* next wall-clock split point */
 	bool segment_idr_requested;	/* one sharpening IDR per boundary */
 
+	/* Gapless rotation: next segment's fd + filename pre-opened at
+	 * the last keyframe before the boundary (main thread only). */
+	int next_fd;
+	char next_path[256];
+
 	/* Pre-buffer for motion clips (main thread only) */
 	rmr_prebuf_t *video_pb;
 	rmr_prebuf_t *audio_pb;
