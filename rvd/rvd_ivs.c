@@ -26,6 +26,7 @@
 #include <unistd.h>
 
 #include "rvd.h"
+#include "rvd_ivs_rate.h"
 
 #ifdef IVS_DETECT
 /* FrameSource direct access — for JZDL standalone inference.
@@ -117,6 +118,7 @@ int rvd_ivs_start(rvd_state_t *st)
 		jp.conf_threshold =
 			rss_config_get_int(cfg, "motion", "conf_threshold", 40) / 100.0f;
 		jp.nms_threshold = rss_config_get_int(cfg, "motion", "nms_threshold", 50) / 100.0f;
+		st->jzdl_interval_ms = rss_config_get_int(cfg, "motion", "detect_interval_ms", 0);
 
 		st->jzdl_handle = hal_jzdl_create(&jp);
 		if (st->jzdl_handle) {
@@ -532,7 +534,11 @@ static void *rvd_jzdl_thread(void *arg)
 	rvd_state_t *st = arg;
 	int fs = st->ivs_fs_chn;
 
-	RSS_INFO("JZDL inference thread started (fs_chn=%d)", fs);
+	rvd_ivs_rate_t rate;
+	rvd_ivs_rate_init(&rate, st->jzdl_interval_ms);
+
+	RSS_INFO("JZDL inference thread started (fs_chn=%d, interval %d ms)", fs,
+		 st->jzdl_interval_ms);
 
 	/* Enable frame depth so GetFrame works alongside encoder binding.
 	 * Must be > 0 for GetFrame to return frames. */
@@ -544,6 +550,11 @@ static void *rvd_jzdl_thread(void *arg)
 		int ret = IMP_FrameSource_GetFrame(fs, &frame);
 		if (ret != 0 || !frame) {
 			usleep(100000);
+			continue;
+		}
+
+		if (!rvd_ivs_rate_due(&rate, rss_timestamp_us())) {
+			IMP_FrameSource_ReleaseFrame(fs, frame);
 			continue;
 		}
 

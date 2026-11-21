@@ -172,6 +172,7 @@ struct rvd_state {
 	bool ivs_base_move; /* true = base_move algo (vs move) */
 	bool ivs_jzdl;	    /* true = standalone JZDL inference */
 	void *jzdl_handle;  /* opaque JZDL context */
+	int jzdl_interval_ms; /* [motion] detect_interval_ms, 0 = every frame */
 	int ivs_grid_x;	    /* move detection grid columns */
 	int ivs_grid_y;	    /* move detection grid rows */
 	int ivs_roi_count;  /* total ROI count for move detection */
