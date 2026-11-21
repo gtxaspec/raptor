@@ -22,7 +22,8 @@ static const char *find_daemon_for_section(const char *section)
 		{"rtsp", "rsd"},       {"http", "rhd"},	      {"osd", "rod"},
 		{"ircut", "ric"},      {"recording", "rmr"},  {"motion", "rmd"},
 		{"webrtc", "rwd"},     {"webtorrent", "rwd"}, {"webcam", "rwc"},
-		{"filesource", "rfs"}, {"log", "rvd"},	      {NULL, NULL},
+		{"filesource", "rfs"}, {"log", "rvd"},	      {"audio2", "rad"},
+		{"audio3", "rad"},     {NULL, NULL},
 	};
 	for (int i = 0; map[i].section; i++) {
 		if (strcmp(section, map[i].section) == 0)

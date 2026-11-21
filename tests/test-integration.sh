@@ -1959,6 +1959,84 @@ then
 else
     fail "aac ring intervals sit on the 1024-sample grid" "chunk-grid weave (60/60/80ms) or no frames"
 fi
+
+# ── Extra audio outputs: one capture, several codecs ──
+# [audio2] / [audio3] feed the same PCM to further encoders publishing to
+# rings "audio2" / "audio3", on demand by default (encoded only while a
+# consumer holds the ring). Real camera layout: "audio" AAC always on,
+# "audio2" Opus for live view, "audio3" low-rate AAC for recording. The
+# primary ring must carry on unchanged.
+AX_CONF="$LOG_DIR/test-audio-extra.conf"
+sed 's/^codec = l16/codec = aac/' "$CONFIG" > "$AX_CONF"
+printf '\n[audio2]\ncodec = opus\n\n[audio3]\ncodec = aac\nbitrate = 32000\n' >> "$AX_CONF"
+pkill -f "$OUT/rad" 2>/dev/null || true
+sleep 1
+start_daemon rad "$OUT/rad" -c "$AX_CONF" -f -d
+sleep 4
+AX_STATUS=$("$OUT/raptorctl" rad status 2>/dev/null || true)
+if echo "$AX_STATUS" | grep -q '"codec":"aac"' &&
+   echo "$AX_STATUS" | grep -q '"ring":"audio2","codec":"opus","on_demand":true' &&
+   echo "$AX_STATUS" | grep -q '"ring":"audio3","codec":"aac","on_demand":true'; then
+    pass "rad status lists audio aac + audio2 opus + audio3 aac (on demand)"
+else
+    fail "rad status lists audio aac + audio2 opus + audio3 aac (on demand)" "$AX_STATUS"
+fi
+if echo "$AX_STATUS" | grep -q '"running":true'; then
+    fail "extra outputs paused with no readers" "$AX_STATUS"
+else
+    pass "extra outputs paused with no readers"
+fi
+A1_N=$("$OUT/ringdump" audio -f -n 10 2>&1 | grep -c 'dt=' || true)
+if [ "$A1_N" -ge 5 ]; then
+    pass "primary audio ring publishes with extra outputs configured"
+else
+    fail "primary audio ring publishes with extra outputs configured" "$A1_N frames"
+fi
+# ringdump acquires the ring, which wakes an on-demand encoder
+A2_DTS=$("$OUT/ringdump" audio2 -f -n 40 2>&1 | sed -n 's/.*dt=\([0-9]*\).*/\1/p' | tail -30)
+if [ -n "$A2_DTS" ] && python3 - <<PYEOF3
+import sys
+dts = [int(x) for x in """$A2_DTS""".split()]
+bad = [d for d in dts if abs(d - 20000) > 1500]
+print(f"audio2 (opus) ring: {len(dts)} intervals, ideal 20000us, off-grid: {bad}")
+sys.exit(1 if bad or len(dts) < 20 else 0)
+PYEOF3
+then
+    pass "audio2 ring carries Opus on the 20ms grid when acquired"
+else
+    fail "audio2 ring carries Opus on the 20ms grid when acquired" "no frames or off-grid"
+fi
+A3_DTS=$("$OUT/ringdump" audio3 -f -n 25 2>&1 | sed -n 's/.*dt=\([0-9]*\).*/\1/p' | tail -20)
+if [ -n "$A3_DTS" ] && python3 - <<PYEOF4
+import sys
+dts = [int(x) for x in """$A3_DTS""".split()]
+ideal = 1024 * 1000000 // 16000
+bad = [d for d in dts if abs(d - ideal) > 1500]
+print(f"audio3 (aac) ring: {len(dts)} intervals, ideal {ideal}us, off-grid: {bad}")
+sys.exit(1 if bad or len(dts) < 10 else 0)
+PYEOF4
+then
+    pass "audio3 ring carries AAC on the 1024-sample grid when acquired"
+else
+    fail "audio3 ring carries AAC on the 1024-sample grid when acquired" "no frames or off-grid"
+fi
+sleep 1
+AX_STATUS=$("$OUT/raptorctl" rad status 2>/dev/null || true)
+if echo "$AX_STATUS" | grep -q '"running":true'; then
+    fail "extra outputs pause again after readers release" "$AX_STATUS"
+else
+    pass "extra outputs pause again after readers release"
+fi
+# audio-restart rebuilds all outputs
+"$OUT/raptorctl" rad audio-restart >/dev/null 2>&1 || true
+sleep 3
+A3_N=$("$OUT/ringdump" audio3 -f -n 10 2>&1 | grep -c 'dt=' || true)
+if [ "$A3_N" -ge 5 ]; then
+    pass "audio3 ring comes back after audio-restart"
+else
+    fail "audio3 ring comes back after audio-restart" "$A3_N frames"
+fi
+
 pkill -f "$OUT/rad" 2>/dev/null || true
 sleep 1
 start_daemon rad "$OUT/rad" -c "$CONFIG" -f -d
