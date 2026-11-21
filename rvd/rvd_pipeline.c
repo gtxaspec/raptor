@@ -1448,9 +1448,27 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 				pbuf = (pbuf + RVD_PAGE_SIZE - 1) & ~(RVD_PAGE_SIZE - 1);
 				s->enc_cfg.buf_size = pbuf;
 			}
-			/* Allegro (T31/T40/T41): leave SDK defaults.
-			 * SetMaxStreamCnt consumes extra rmem and can
-			 * starve JPEG bufshare channels. */
+			/* Allegro (T31/T40/T41): the SDK default is just 2 output
+			 * stream buffers (hardcoded in IMP_Encoder_CreateChn when
+			 * SetMaxStreamCnt was never called). In refmode the ring
+			 * is metadata-only - those 2 buffers are the real depth
+			 * behind ring.main_slots. Expose an opt-in key to raise
+			 * it; extra buffers cost rmem (one buf_size stride each)
+			 * and can starve JPEG bufshare channels on tight builds. */
+			int msc = rss_config_get_int(st->cfg, s->cfg_sect,
+						     "max_stream_cnt", 0);
+			if (msc > 0) {
+				if (msc > RSS_RING_MAX_REF_BUFS) {
+					RSS_WARN("stream%d: max_stream_cnt %d > "
+						 "%d, clamping",
+						 idx, msc, RSS_RING_MAX_REF_BUFS);
+					msc = RSS_RING_MAX_REF_BUFS;
+				}
+				s->enc_cfg.max_stream_cnt = (uint8_t)msc;
+				RSS_WARN("stream%d: SDK stream buffers -> %d "
+					 "(default 2, extra rmem)",
+					 idx, msc);
+			}
 
 			/* SHM injection path: create named SHM and inject */
 			if (st->refmode_shm) {
