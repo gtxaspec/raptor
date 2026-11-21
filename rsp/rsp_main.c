@@ -310,7 +310,8 @@ static void push_loop(rsp_state_t *st)
 							      st->audio_sample_rate) &&
 				    !st->audio_enc) {
 					st->audio_enc = rsp_audio_init(st->audio_codec,
-								       st->audio_sample_rate);
+								       st->audio_sample_rate,
+								       st->audio_profile);
 				}
 
 				/* Send audio header if already connected */
@@ -693,7 +694,8 @@ int main(int argc, char **argv)
 			st.audio_profile = ahdr->profile;
 			RSS_INFO("audio: codec=%u rate=%u", st.audio_codec, st.audio_sample_rate);
 			if (rsp_audio_needs_transcode(st.audio_codec, st.audio_sample_rate)) {
-				st.audio_enc = rsp_audio_init(st.audio_codec, st.audio_sample_rate);
+				st.audio_enc = rsp_audio_init(st.audio_codec, st.audio_sample_rate,
+							      st.audio_profile);
 				if (!st.audio_enc)
 					RSS_WARN("audio transcode init failed, audio disabled");
 			}

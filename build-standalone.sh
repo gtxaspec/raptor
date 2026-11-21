@@ -110,7 +110,7 @@ RAPTOR_COMMON_VERSION=HEAD
 MBEDTLS_VERSION=v3.6.6
 JZ_CRYPTO_VERSION=HEAD
 OPUS_VERSION=1.6.1
-FAAC_VERSION=b92b7f81e53b1027107c900b11609abf32a1fb1a
+FAAC_VERSION=63f5a05b590b958e263be5a6998de7b8dcfda100 # faac-3.0 (libfaac + libfaad3)
 HELIX_VERSION=05f2fb0045cc294b4e0d1a1a9747b89c22c1fea4
 SCHRIFT_VERSION=24737d2922b23df4a5692014f5ba03da0c296112
 MUSL_SHIM_VERSION=HEAD
@@ -215,7 +215,6 @@ if [ "$OPT_CLEAN" = 1 ]; then
     done
     rm -rf "$DEPS_DIR/compy/build-cross" "$DEPS_DIR/mbedtls/build-cross"
     rm -rf "$DEPS_DIR/faac/build-cross" "$DEPS_DIR/opus/config.status"
-    rm -f "$DEPS_DIR/ESP8266Audio/src/libhelix-aac/"*.o
     rm -f "$DEPS_DIR/ESP8266Audio/src/libhelix-mp3/"*.o
     rm -f "$DEPS_DIR/libschrift/schrift.o" "$DEPS_DIR/libschrift/libschrift.so" "$DEPS_DIR/libschrift/libschrift.a"
     rm -f "$DEPS_DIR/uclibc_shim.o" "$DEPS_DIR/musl_shim.o"
@@ -576,9 +575,9 @@ build_opus() {
 build_faac() {
     local src="$DEPS_DIR/faac"
     if [ "$OPT_STATIC" = 1 ]; then
-        [ -f "$SYSROOT_DIR/usr/lib/libfaac.a" ] && return
+        [ -f "$SYSROOT_DIR/usr/lib/libfaac.a" ] && [ -f "$SYSROOT_DIR/usr/lib/libfaad3.a" ] && return
     else
-        [ -f "$SYSROOT_DIR/usr/lib/libfaac.so" ] && return
+        [ -f "$SYSROOT_DIR/usr/lib/libfaac.so" ] && [ -f "$SYSROOT_DIR/usr/lib/libfaad3.so" ] && return
     fi
 
     echo "Building faac..."
@@ -602,6 +601,9 @@ MESON
     run faac-setup meson setup build-cross --cross-file "$crossfile" \
         --prefix="$SYSROOT_DIR/usr" \
         -Dfrontend=false -Dmax-channels=2 \
+        -Dencoder=true -Ddecoder=true -Dmuxer=false -Dresampler=false \
+        -Dmuxer-video=false -Dmuxer-fragmented=false -Dmuxer-chapters=false \
+        -Dencoder-drc=false -Ddecoder-drc=false -Ddecoder-dab=false -Ddecoder-ps=false \
         -Ddefault_library="$libtype"
     run faac-build ninja -C build-cross -j"$JOBS"
     run faac-install ninja -C build-cross install
@@ -632,31 +634,6 @@ H
 #define memcpy_P memcpy
 #endif
 H
-}
-
-build_helix_aac() {
-    local src="$DEPS_DIR/ESP8266Audio/src/libhelix-aac"
-    local ext=so other=a
-    if [ "$OPT_STATIC" = 1 ]; then ext=a; other=so; fi
-    # Same trap libschrift documents below: with both variants in the
-    # sysroot the linker prefers .so and quietly defeats --static.
-    rm -f "$SYSROOT_DIR/usr/lib/libhelix-aac.$other"
-    [ -f "$SYSROOT_DIR/usr/lib/libhelix-aac.$ext" ] && return
-
-    echo "Building libhelix-aac..."
-    setup_helix_stubs
-    local stubdir="$DEPS_DIR/helix-stubs"
-    local objs=""
-    for f in "$src"/*.c; do
-        ${CROSS_COMPILE}gcc -Os -fPIC -DUSE_DEFAULT_STDLIB -I"$stubdir" -I"$src" -c "$f" -o "${f%.c}.o"
-        objs="$objs ${f%.c}.o"
-    done
-    if [ "$OPT_STATIC" = 1 ]; then
-        ${CROSS_COMPILE}ar rcs "$SYSROOT_DIR/usr/lib/libhelix-aac.a" $objs
-    else
-        ${CROSS_COMPILE}gcc -shared -o "$SYSROOT_DIR/usr/lib/libhelix-aac.so" $objs
-    fi
-    cp -f "$src"/*.h "$SYSROOT_DIR/usr/include/"
 }
 
 build_helix_mp3() {
@@ -942,10 +919,8 @@ fi
 [ "$OPT_TLS" = 1 ] && clone_repo mbedtls https://github.com/Mbed-TLS/mbedtls "$MBEDTLS_VERSION" submodules
 [ "$OPT_TLS" = 1 ] && [ "$OPT_ALT" = 1 ] && clone_repo jz-crypto https://github.com/gtxaspec/jz-crypto "$JZ_CRYPTO_VERSION"
 [ "$OPT_OPUS" = 1 ] && clone_repo opus https://github.com/xiph/opus "v$OPUS_VERSION"
-[ "$OPT_AAC" = 1 ] && clone_repo faac https://github.com/knik0/faac "$FAAC_VERSION"
-if [ "$OPT_AAC" = 1 ] || [ "$OPT_MP3" = 1 ]; then
-    clone_repo ESP8266Audio https://github.com/earlephilhower/ESP8266Audio "$HELIX_VERSION"
-fi
+[ "$OPT_AAC" = 1 ] && clone_repo faac https://github.com/FreewareAdvancedAudio/faac "$FAAC_VERSION"
+[ "$OPT_MP3" = 1 ] && clone_repo ESP8266Audio https://github.com/earlephilhower/ESP8266Audio "$HELIX_VERSION"
 [ "$OPT_SRT" = 1 ] && clone_repo srt https://github.com/Haivision/srt "$LIBSRT_VERSION"
 
 # Build deps in order
@@ -954,7 +929,6 @@ build_libc_shim
 [ "$OPT_TLS" = 1 ]  && build_mbedtls
 [ "$OPT_OPUS" = 1 ] && build_opus
 [ "$OPT_AAC" = 1 ]  && build_faac
-[ "$OPT_AAC" = 1 ]  && build_helix_aac
 [ "$OPT_MP3" = 1 ]  && build_helix_mp3
 build_schrift
 [ "$OPT_RSD555" = 1 ] && build_live555

@@ -19,7 +19,7 @@
 #endif
 
 #ifdef RAPTOR_AAC
-#include <aacdec.h>
+#include <faad3.h>
 #endif
 
 #ifdef RAPTOR_OPUS
@@ -361,84 +361,104 @@ int cmd_play(const char *src, int sample_rate)
 	else if (fmt == FMT_AAC) {
 		/*
 		 * Streaming ADTS-AAC decoder (same pattern as MP3 above).
-		 * Max ADTS frame ~8 KB (2048 samples * 2 ch); 16 KB buffer
-		 * gives plenty of headroom.
+		 * An ADTS frame is at most 8191 bytes; 16 KB holds a whole
+		 * one plus the refill threshold. libfaad decodes one frame
+		 * per call, resyncs itself (reporting the skipped bytes) and
+		 * says NEED_MORE_DATA rather than guessing at a short frame.
 		 */
-		enum { AAC_BUF = 16 * 1024, AAC_REFILL_THRESH = 4 * 1024 };
-		HAACDecoder aac = AACInitDecoder();
-		if (!aac) {
-			fprintf(stderr, "rac: AACInitDecoder failed\n");
+		enum { AAC_BUF = 16 * 1024, AAC_REFILL_THRESH = 8 * 1024 };
+		faad_config cfg;
+		faad_decoder *aac = NULL;
+		faad_status st = faad_config_init(&cfg, (uint32_t)sizeof(cfg));
+		if (st == FAAD_OK) {
+			cfg.stream_format = FAAD_STREAM_ADTS;
+			cfg.output_format = FAAD_OUTPUT_16BIT;
+			cfg.downmix_mode = FAAD_DOWNMIX_MONO;
+			st = faad_decoder_open(&cfg, NULL, 0, &aac);
+		}
+		faad_stream_info info = {.struct_size = sizeof(info)};
+		if (st == FAAD_OK)
+			st = faad_decoder_get_info(aac, &info);
+		if (st != FAAD_OK) {
+			fprintf(stderr, "rac: AAC decoder init failed: %s\n", faad_strerror(st));
+			faad_decoder_close(&aac);
 			ret = 1;
 			goto done;
 		}
+		/* Lifetime PCM bound, implicit SBR/PS included. */
+		uint32_t pcm_cap = info.max_output_bytes;
 		uint8_t *buf = malloc(AAC_BUF);
-		if (!buf) {
-			AACFreeDecoder(aac);
+		int16_t *pcm_buf = malloc(pcm_cap);
+		if (!buf || !pcm_buf) {
+			free(buf);
+			free(pcm_buf);
+			faad_decoder_close(&aac);
 			ret = 1;
 			goto done;
 		}
 
-		int bytes_left = 0;
+		uint32_t bytes_left = 0;
 		if (peek_len > 0 && !can_rewind) {
 			memcpy(buf, peek, peek_len);
-			bytes_left = (int)peek_len;
+			bytes_left = (uint32_t)peek_len;
 		}
-		size_t n = fread(buf + bytes_left, 1, (size_t)(AAC_BUF - bytes_left), in);
-		bytes_left += (int)n;
-
-		int16_t pcm_buf[4096]; /* max AAC frame: 2048 samples * 2 ch */
 		bool eof = false;
+		int out_rate = 0;
 
-		while (g_running && bytes_left > 0) {
+		while (g_running) {
 			if (!eof && bytes_left < AAC_REFILL_THRESH) {
-				n = fread(buf + bytes_left, 1, (size_t)(AAC_BUF - bytes_left), in);
+				size_t n = fread(buf + bytes_left, 1, AAC_BUF - bytes_left, in);
 				if (n == 0)
 					eof = true;
-				bytes_left += (int)n;
+				bytes_left += (uint32_t)n;
 			}
+			if (bytes_left == 0)
+				break;
 
-			int offset = AACFindSyncWord(buf, bytes_left);
-			if (offset < 0) {
+			uint32_t used = 0, written = 0, flags = 0;
+			st = faad_decode_frame(aac, buf, bytes_left, &used, pcm_buf, pcm_cap,
+					       &written, &flags);
+			if (st == FAAD_ERR_NEED_MORE_DATA) {
 				if (eof)
 					break;
-				bytes_left = 0;
-				continue;
-			}
-			if (offset > 0) {
-				memmove(buf, buf + offset, (size_t)(bytes_left - offset));
-				bytes_left -= offset;
-			}
-
-			unsigned char *read_ptr = buf;
-			int err = AACDecode(aac, &read_ptr, &bytes_left, pcm_buf);
-			if (err) {
-				/* Helix AAC returns -1 on underflow — treat any
-				 * error as "skip sync byte and retry" to stay
-				 * conservative; refill will bring more data. */
-				if (bytes_left > 1) {
-					memmove(buf, buf + 1, (size_t)(bytes_left - 1));
+				if (bytes_left == AAC_BUF) {
+					/* No valid frame outgrows the buffer. */
+					memmove(buf, buf + 1, bytes_left - 1);
 					bytes_left--;
-				} else {
-					bytes_left = 0;
+					continue;
 				}
+				size_t n = fread(buf + bytes_left, 1, AAC_BUF - bytes_left, in);
+				if (n == 0)
+					eof = true;
+				bytes_left += (uint32_t)n;
 				continue;
 			}
-			if (bytes_left > 0 && read_ptr != buf)
-				memmove(buf, read_ptr, (size_t)bytes_left);
+			/* Sync loss and rejected frames report the bytes to
+			 * skip; anything that consumed nothing skips one so
+			 * the loop always advances. */
+			if (st != FAAD_OK && used == 0)
+				used = 1;
+			if (used > bytes_left)
+				used = bytes_left;
+			memmove(buf, buf + used, bytes_left - used);
+			bytes_left -= used;
+			if (st != FAAD_OK || written == 0)
+				continue;
 
-			AACFrameInfo info;
-			AACGetLastFrameInfo(aac, &info);
-
-			int samples = info.outputSamps / info.nChans;
-			if (info.nChans == 2) {
-				for (int i = 0; i < samples; i++)
-					pcm_buf[i] = (pcm_buf[i * 2] + pcm_buf[i * 2 + 1]) / 2;
+			if ((flags & FAAD_FRAME_FORMAT_CHANGED) || out_rate == 0) {
+				faad_stream_info fi = {.struct_size = sizeof(fi)};
+				if (faad_decoder_get_info(aac, &fi) == FAAD_OK)
+					out_rate = (int)fi.sample_rate;
 			}
-			total_samples += publish_pcm(ring, &pacer, pcm_buf, samples,
-						     info.sampRateOut, sample_rate);
+			if (out_rate <= 0)
+				continue;
+			int samples = (int)(written / sizeof(int16_t)); /* mono downmix */
+			total_samples +=
+				publish_pcm(ring, &pacer, pcm_buf, samples, out_rate, sample_rate);
 		}
 		free(buf);
-		AACFreeDecoder(aac);
+		free(pcm_buf);
+		faad_decoder_close(&aac);
 	}
 #endif
 #ifdef RAPTOR_OPUS

@@ -13,11 +13,13 @@
 #include <opus/opus.h>
 #endif
 #ifdef RAPTOR_AAC
-#include <aacdec.h>
+#include <faad3.h>
+#include <rss_aac.h>
 #endif
 
 #include <ctype.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "rsd_backchannel.h"
@@ -195,9 +197,13 @@ void rsd_bc_dec_deinit(rsd_bc_dec_t *d)
 #endif
 #ifdef RAPTOR_AAC
 	if (d->aac) {
-		AACFreeDecoder((HAACDecoder)d->aac);
+		faad_decoder *dec = d->aac;
+		faad_decoder_close(&dec);
 		d->aac = NULL;
 	}
+	free(d->aac_pcm);
+	d->aac_pcm = NULL;
+	d->aac_pcm_cap = 0;
 #endif
 	(void)d;
 }
@@ -388,52 +394,66 @@ static void bc_aac_decode_au(rsd_bc_dec_t *d, rss_ring_t *ring, const uint8_t *a
 	if (d->aac_dead)
 		return;
 	if (!d->aac) {
-		d->aac = AACInitDecoder();
-		if (!d->aac) {
-			RSS_WARN("backchannel: AAC decoder init failed");
-			d->aac_dead = true;
-			return;
-		}
 		/* RFC 3640 AUs are raw data blocks; the stream properties
 		 * come from the fmtp config WE advertised (AAC-LC, ring
 		 * rate, mono), so nonconforming input decodes as the error
 		 * it is rather than being guessed at. */
-		AACFrameInfo fi = {0};
-		fi.nChans = 1;
-		fi.sampRateCore = RSD_BC_RING_RATE;
-		fi.profile = AAC_PROFILE_LC;
-		int err = AACSetRawBlockParams((HAACDecoder)d->aac, 0, &fi);
-		if (err != 0) {
-			RSS_WARN("backchannel: AAC raw params rejected (%d)", err);
-			AACFreeDecoder((HAACDecoder)d->aac);
-			d->aac = NULL;
+		uint8_t asc[RSS_AAC_ASC_MAX];
+		int asc_len = rss_aac_asc(RSS_AAC_AOT_LC, RSD_BC_RING_RATE, 1, asc);
+		faad_config cfg;
+		faad_decoder *dec = NULL;
+		faad_status st = faad_config_init(&cfg, (uint32_t)sizeof(cfg));
+		if (st == FAAD_OK) {
+			cfg.stream_format = FAAD_STREAM_RAW;
+			cfg.output_format = FAAD_OUTPUT_16BIT;
+			cfg.downmix_mode = FAAD_DOWNMIX_MONO;
+			st = asc_len > 0 ? faad_decoder_open(&cfg, asc, (uint32_t)asc_len, &dec)
+					 : FAAD_ERR_UNSUPPORTED;
+		}
+		/* faad_decode_frame() wants the lifetime bound, implicit
+		 * SBR/PS included, so the buffer comes from the decoder. */
+		faad_stream_info info = {.struct_size = sizeof(info)};
+		if (st == FAAD_OK)
+			st = faad_decoder_get_info(dec, &info);
+		int16_t *pcm = st == FAAD_OK ? malloc(info.max_output_bytes) : NULL;
+		if (!pcm) {
+			RSS_WARN("backchannel: AAC decoder init failed: %s",
+				 st != FAAD_OK ? faad_strerror(st) : "out of memory");
+			faad_decoder_close(&dec);
 			d->aac_dead = true;
 			return;
 		}
+		d->aac = dec;
+		d->aac_pcm = pcm;
+		d->aac_pcm_cap = info.max_output_bytes;
+		d->aac_off_format = false;
 	}
 
-	/* Helix is built with SBR, and raw-block params do not stop a
-	 * hostile AU from carrying a CPE or an SBR extension: it decodes
-	 * what the bitstream says, up to 2048 samples per channel. The
-	 * buffer covers that worst case; conforming input (LC mono per
-	 * our fmtp) uses a quarter of it. */
-	int16_t pcm[AAC_MAX_NSAMPS * AAC_MAX_NCHANS * 2];
-	unsigned char *inp = (unsigned char *)au;
-	int left = (int)au_len;
-	int err = AACDecode((HAACDecoder)d->aac, &inp, &left, pcm);
-	if (err != 0) {
+	/* The ASC does not stop a hostile AU from carrying a CPE or an
+	 * implicit SBR extension. Mono downmix folds any CPE; SBR would
+	 * double the rate, and such frames are dropped below rather than
+	 * published at the wrong speed. */
+	int16_t *pcm = d->aac_pcm;
+	uint32_t used = 0, written = 0, flags = 0;
+	faad_status st = faad_decode_frame(d->aac, au, (uint32_t)au_len, &used, pcm, d->aac_pcm_cap,
+					   &written, &flags);
+	if (st != FAAD_OK) {
 		if (bc_warn_due(d))
-			RSS_WARN("backchannel: AAC decode failed (%d)", err);
+			RSS_WARN("backchannel: AAC decode failed: %s", faad_strerror(st));
 		return;
 	}
-	AACFrameInfo info;
-	AACGetLastFrameInfo((HAACDecoder)d->aac, &info);
-	int samples = info.outputSamps;
-	if (info.nChans == 2) {
-		samples /= 2;
-		for (int i = 0; i < samples; i++)
-			pcm[i] = (int16_t)((pcm[i * 2] + pcm[i * 2 + 1]) / 2);
+	if (flags & FAAD_FRAME_FORMAT_CHANGED) {
+		faad_stream_info info = {.struct_size = sizeof(info)};
+		d->aac_off_format = faad_decoder_get_info(d->aac, &info) != FAAD_OK ||
+				    info.sample_rate != RSD_BC_RING_RATE || info.channels != 1;
+		if (d->aac_off_format && bc_warn_due(d))
+			RSS_WARN("backchannel: AAC output %u Hz x%u, not the advertised %d Hz "
+				 "mono; dropping",
+				 info.sample_rate, info.channels, RSD_BC_RING_RATE);
 	}
+	if (d->aac_off_format)
+		return;
+	int samples = (int)(written / sizeof(int16_t));
 	if (samples <= 0)
 		return;
 	bc_note_codec(d, RSD_BC_PT_AAC);

@@ -152,8 +152,8 @@ Runtime shared libraries from the Ingenic SDK / Buildroot sysroot:
 - `libimp` -- Ingenic multimedia platform
 - `libalog` -- Ingenic logging
 - `libschrift` -- TrueType font rasterizer (ROD)
-- `libfaac` -- AAC encoder (optional, `AAC=1`)
-- `libhelix-aac` / `libhelix-mp3` -- AAC/MP3 decoders (optional, for rac playback)
+- `libfaac` / `libfaad3` -- AAC encoder and decoder, both from FAAC 3.0 (optional, `AAC=1`; the decoder serves backchannel, transcode and rac playback)
+- `libhelix-mp3` -- MP3 decoder (optional, `MP3=1`, for rac playback)
 - `libopus` -- Opus codec (optional, `OPUS=1`)
 - `libaudioProcess` -- Ingenic audio effects (optional, `AUDIO_EFFECTS=1`)
 - `libmbedtls` / `libmbedcrypto` / `libmbedx509` -- TLS/DTLS (optional, `TLS=1`, required for RTSPS and WebRTC)
