@@ -141,6 +141,62 @@ static void usage(const char *prog)
 		prog, prog, prog, prog, prog, prog);
 }
 
+/*
+ * The producer was restarted under us: rvd unlinks its rings on the way
+ * down and its successor creates new ones (or reuses the file and bumps
+ * the incarnation). The old mapping never produces again -- reads answer
+ * EOVERFLOW for good on an incarnation change, EAGAIN for good on an
+ * unlinked file -- so a follower that only retries spins or hangs.
+ * Reopen by name and carry on from the newest frame.
+ */
+static bool ring_replaced(rss_ring_t *ring, uint32_t open_inc)
+{
+	const rss_ring_header_t *hdr = rss_ring_get_header(ring);
+	uint32_t inc = atomic_load_explicit(&((rss_ring_header_t *)hdr)->incarnation,
+					    memory_order_relaxed);
+	return inc != open_inc || rss_ring_stale(ring);
+}
+
+static rss_ring_t *ring_reopen(rss_ring_t *ring, const char *name, uint32_t *open_inc,
+			       uint64_t *read_seq)
+{
+	rss_ring_release(ring);
+	rss_ring_close(ring);
+	fprintf(stderr, "[REOPEN] ring '%s' was replaced by its producer\n", name);
+
+	rss_ring_t *fresh = NULL;
+	bool told = false;
+	while (g_running && !(fresh = rss_ring_open(name))) {
+		if (!told)
+			fprintf(stderr, "[REOPEN] waiting for '%s' to come back\n", name);
+		told = true;
+		sleep(1);
+	}
+	if (!fresh)
+		return NULL;
+	rss_ring_acquire(fresh);
+	rss_ring_header_t *hdr = (rss_ring_header_t *)rss_ring_get_header(fresh);
+	*open_inc = atomic_load_explicit(&hdr->incarnation, memory_order_relaxed);
+	*read_seq = atomic_load(&hdr->write_seq) + 1;
+	return fresh;
+}
+
+/* A reopened ring may carry bigger frames than the one we sized for. */
+static bool refit_buffer(rss_ring_t *ring, uint8_t **buf, uint32_t *size)
+{
+	uint32_t need = rss_ring_max_frame_size(ring);
+	if (need <= *size)
+		return true;
+	uint8_t *nb = realloc(*buf, need);
+	if (!nb) {
+		fprintf(stderr, "Failed to grow read buffer to %u bytes\n", need);
+		return false;
+	}
+	*buf = nb;
+	*size = need;
+	return true;
+}
+
 int main(int argc, char **argv)
 {
 	if (argc < 2 || strcmp(argv[1], "-h") == 0) {
@@ -220,6 +276,8 @@ int main(int argc, char **argv)
 	rss_ring_acquire(ring);
 
 	const rss_ring_header_t *hdr = rss_ring_get_header(ring);
+	uint32_t open_inc = atomic_load_explicit(&((rss_ring_header_t *)hdr)->incarnation,
+						 memory_order_relaxed);
 	print_header(hdr, ring_name);
 
 	if (!follow && !dump_raw && !latency_mode) {
@@ -245,6 +303,8 @@ int main(int argc, char **argv)
 	}
 	int64_t first_ts = 0;
 	int64_t last_ts = 0;
+	int64_t dur_done = 0; /* duration of earlier producers' segments */
+	bool new_seg = false; /* first frame after a reopen: new clock */
 	uint64_t total_bytes = 0;
 
 	/* Latency stats — calibrate against first frame to remove
@@ -273,10 +333,29 @@ int main(int argc, char **argv)
 		 * the pending tail is never read. */
 		int ret = rss_ring_read(ring, &read_seq, frame_buf, buf_size, &length, &meta);
 		if (ret == -EAGAIN) {
-			rss_ring_wait(ring, 1000);
+			if (rss_ring_wait(ring, 1000) == -ETIMEDOUT &&
+			    ring_replaced(ring, open_inc)) {
+				ring = ring_reopen(ring, ring_name, &open_inc, &read_seq);
+				if (!ring || !refit_buffer(ring, &frame_buf, &buf_size))
+					break;
+				ring_codec = rss_ring_get_header(ring)->codec;
+				if (frame_count > 0 && !new_seg)
+					dur_done += last_ts - first_ts;
+				new_seg = true;
+			}
 			continue;
 		}
 		if (ret == RSS_EOVERFLOW) {
+			if (ring_replaced(ring, open_inc)) {
+				ring = ring_reopen(ring, ring_name, &open_inc, &read_seq);
+				if (!ring || !refit_buffer(ring, &frame_buf, &buf_size))
+					break;
+				ring_codec = rss_ring_get_header(ring)->codec;
+				if (frame_count > 0 && !new_seg)
+					dur_done += last_ts - first_ts;
+				new_seg = true;
+				continue;
+			}
 			fprintf(stderr, "[OVERFLOW] consumer fell behind\n");
 			continue;
 		}
@@ -291,8 +370,13 @@ int main(int argc, char **argv)
 		if (ret != 0)
 			continue;
 
-		if (frame_count == 0)
+		if (frame_count == 0) {
 			first_ts = meta.timestamp;
+		} else if (new_seg) {
+			first_ts = meta.timestamp;
+			last_ts = meta.timestamp;
+		}
+		new_seg = false;
 
 		int64_t dt = meta.timestamp - last_ts;
 		last_ts = meta.timestamp;
@@ -343,7 +427,7 @@ int main(int argc, char **argv)
 	}
 
 	/* Summary */
-	int64_t duration = last_ts - first_ts;
+	int64_t duration = dur_done + (last_ts - first_ts);
 	double dur_sec = duration > 0 ? (double)duration / 1000000.0 : 0;
 	double avg_fps = dur_sec > 0 ? (double)frame_count / dur_sec : 0;
 	double avg_bps = dur_sec > 0 ? (double)total_bytes * 8.0 / dur_sec : 0;
@@ -369,7 +453,9 @@ int main(int argc, char **argv)
 			(double)lat_max / 1000.0, lat_count);
 
 	free(frame_buf);
-	rss_ring_release(ring);
-	rss_ring_close(ring);
+	if (ring) {
+		rss_ring_release(ring);
+		rss_ring_close(ring);
+	}
 	return 0;
 }
