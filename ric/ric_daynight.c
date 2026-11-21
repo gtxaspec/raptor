@@ -595,6 +595,22 @@ void ric_poll_exposure(ric_state_t *st)
 		has_valid_mask ? (valid_mask & RSS_EXPOSURE_VALID_AE_LUMA) != 0 : ae_luma > 0;
 	bool have_ev = has_valid_mask ? (valid_mask & RSS_EXPOSURE_VALID_EV) != 0 : ev > 0;
 
+	/* A hard zero from the gain field while night mode is active is the
+	 * vendor dead-readback signature, not a real floor: day mode on the
+	 * same scene never floors at exactly 0. Latch gain as dead; any
+	 * nonzero reading clears the latch, so a manual day pin (which
+	 * revives the field) un-wedges the machine. */
+	if (st->current_mode == RIC_MODE_NIGHT && have_gain && total_gain == 0) {
+		if (!st->gain_dead)
+			RSS_WARN("night-mode gain readback reports 0 -- treating gain as "
+				 "unavailable until it returns");
+		st->gain_dead = true;
+	} else if (total_gain > 0) {
+		st->gain_dead = false;
+	}
+	if (st->gain_dead)
+		have_gain = false;
+
 	if (st->settings.trigger != RIC_TRIGGER_ADC && !have_gain && !have_luma && !have_ev) {
 		if (!st->no_exposure_warned) {
 			RSS_WARN("no valid gain, luma or ev data from rvd -- "
@@ -779,7 +795,8 @@ void ric_poll_exposure(ric_state_t *st)
 						  st->settings.poll_interval_ms;
 		}
 		if (st->current_mode == RIC_MODE_NIGHT && ir_banks &&
-		    st->settings.probe_gain_pct > 0 && st->night_gain_baseline > 0 &&
+		    st->settings.probe_gain_pct > 0 &&
+		    (st->night_gain_baseline > 0 || st->gain_dead) &&
 		    st->day_lockout_polls == 0) {
 			int hyst_polls = st->settings.hysteresis_sec;
 			if (!st->probe_active) {
@@ -872,9 +889,10 @@ void ric_poll_exposure(ric_state_t *st)
 			want_day = false;
 		}
 
-		snprintf(why, sizeof(why), "luma=%u/%d gain=%u/%d night baseline=%u x %d%%%s",
+		snprintf(why, sizeof(why), "luma=%u/%d gain=%u/%d night baseline=%u x %d%%%s%s",
 			 ae_luma, st->settings.night_luma, total_gain, st->settings.night_gain,
 			 st->night_gain_baseline, st->settings.day_gain_pct,
+			 st->gain_dead ? " gain-dead" : "",
 			 st->probe_active ? " (probing)" : "");
 	} else if (st->settings.trigger == RIC_TRIGGER_ADC) {
 		/*
