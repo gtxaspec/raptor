@@ -181,7 +181,14 @@ LDFLAGS_HAL := $(LDFLAGS_SYSROOT) $(SHIM_LIB) -limp -lalog -lpthread -lrt -lm -l
 # IVS detection libs
 ifeq ($(IVS_DETECT),1)
 CFLAGS += -DIVS_DETECT
+ifneq ($(URANUS_LIB),)
+# The HAL built with its NNA backend (URANUS_INCLUDE): link the vendor's
+# Uranus nna2 runtime from URANUS_LIB in place of JZDL.
+LDFLAGS_HAL += -L$(URANUS_LIB) -Wl,-rpath-link,$(URANUS_LIB) \
+	-luranus_tensor -luranus_core -luranus_extend -laip -ldrivers $(LINK_STDCXX)
+else
 LDFLAGS_HAL += -ljzdl.m $(LINK_STDCXX)
+endif
 ifeq ($(PERSONDET),1)
 CFLAGS += -DPERSONDET
 LDFLAGS_HAL += -lpersonDet_inf -ljzdl -Wl,--no-as-needed -lmxu_core -lmxu_imgproc -lmxu_merge -lmxu_video -Wl,--as-needed
