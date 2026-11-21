@@ -154,6 +154,10 @@ typedef struct {
 	uint32_t frame_buf_size; /* largest ring frame */
 	uint32_t frame_buf_cap;	 /* + EXIF and signing headroom */
 	uint64_t jpeg_read_seqs[RHD_MAX_JPEG];
+	/* When each ring last yielded a frame, monotonic ms. A ring that owes
+	 * a frame and has gone quiet for longer than a frame interval is asked
+	 * whether it is still the ring we opened. */
+	int64_t jpeg_last_frame_ms[RHD_MAX_JPEG];
 
 	/* JPEG capture-time EXIF + snapshot signing */
 	bool exif_timestamp;
