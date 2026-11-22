@@ -244,6 +244,7 @@ static const struct cmd_def cmd_table[] = {
 	{"set-stroke-size", NULL, 1, args_val},
 	{"set-time-format", NULL, 1, args_val_str},
 	{"set-speed-unit", NULL, 1, args_val_str},
+	{"set-impact-g", NULL, 1, args_val_str},
 	{"set-url", NULL, 1, args_val_str},
 	{"set-backchannel-codecs", NULL, 1, args_val_str},
 	{"set-position", NULL, 2, args_position},

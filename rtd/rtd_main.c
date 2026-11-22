@@ -78,6 +78,7 @@ typedef struct {
 	float peak_dev;
 	bool impact;
 	bool spike_pending;
+	bool manual_event;
 	float spike[3];
 	float spike_dev;
 
@@ -450,7 +451,11 @@ static void publish(rtd_state_t *st, int64_t now)
 	}
 	if (st->impact) {
 		r.flags |= RTD_F_IMPACT;
-		RSS_INFO("impact: %.2f g", st->peak_dev);
+		if (st->manual_event)
+			RSS_INFO("event (manual)");
+		else
+			RSS_INFO("impact: %.2f g", st->peak_dev);
+		st->manual_event = false;
 		if (st->impact_clip) {
 			if (!st->clip_stop_us)
 				rmr_clip(true);
@@ -488,6 +493,24 @@ static int ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size,
 		if (strcmp(val, "kmh") != 0 && strcmp(val, "mph") != 0)
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "kmh or mph");
 		rss_config_set_str(st->cfg, "telematics", "speed_unit", val);
+		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+	}
+
+	if (strcmp(cmd, "set-impact-g") == 0) {
+		rss_json_get_str(cmd_json, "value", val, sizeof(val));
+		char *end;
+		float g = strtof(val, &end);
+		if (end == val || g < 0 || g > 16)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "0..16 g");
+		st->impact_g = g;
+		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+	}
+
+	/* A manual event (the dashcam's protect button): handled like an
+	 * impact at the next epoch, clip and all. */
+	if (strcmp(cmd, "event") == 0) {
+		st->impact = true;
+		st->manual_event = true;
 		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
 	}
 

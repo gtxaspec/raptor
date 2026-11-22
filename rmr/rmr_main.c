@@ -617,6 +617,18 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
 	}
 
+	/* Continuous recording only: clips still start on events (a parked
+	 * dashcam records impacts, not the empty car park). */
+	if (strcmp(cmd, "pause") == 0) {
+		atomic_store(&st->recording, false);
+		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+	}
+
+	if (strcmp(cmd, "resume") == 0) {
+		atomic_store(&st->recording, true);
+		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
+	}
+
 	if (strcmp(cmd, "start") == 0) {
 		if (st->mode == RMR_MODE_MOTION)
 			atomic_store(&st->recording, true);

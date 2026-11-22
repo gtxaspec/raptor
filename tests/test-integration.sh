@@ -1052,6 +1052,14 @@ check_contains "rmr attached the telematics ring" '"gps":true' "$OUT/raptorctl" 
 check_contains "rtd set-speed-unit mph" "ok" "$OUT/raptorctl" rtd set-speed-unit mph
 check_contains "rtd rejects an unknown speed unit" "error" "$OUT/raptorctl" rtd set-speed-unit knots
 "$OUT/raptorctl" rtd set-speed-unit kmh > /dev/null 2>&1
+check_contains "rtd set-impact-g 0.5" "ok" "$OUT/raptorctl" rtd set-impact-g 0.5
+check_contains "rtd rejects an impact threshold past 16 g" "error" "$OUT/raptorctl" rtd set-impact-g 40
+check_contains "rtd event" "ok" "$OUT/raptorctl" rtd event
+"$OUT/raptorctl" rtd set-impact-g 1.5 > /dev/null 2>&1
+check_contains "rmr pause" "ok" "$OUT/raptorctl" rmr pause
+check_contains "rmr paused" '"recording":false' "$OUT/raptorctl" rmr status
+check_contains "rmr resume" "ok" "$OUT/raptorctl" rmr resume
+check_contains "rmr resumed" '"recording":true' "$OUT/raptorctl" rmr status
 
 # ── Wall-clock-aligned rotation ──
 # Segments run at 10s granularity for the suite. Other legs bounce the
