@@ -501,8 +501,9 @@ static int load_camera(rcd_cam_t *c, int index)
 			return -1;
 		}
 	}
-	const char *codec = rss_config_get_str(rs.cfg, sec, "codec", "h264");
-	c->codec = strcmp(codec, "h265") == 0 ? RSS_CODEC_H265 : RSS_CODEC_H264;
+	/* H.265: the same picture as H.264 for less of the camera link */
+	const char *codec = rss_config_get_str(rs.cfg, sec, "codec", "h265");
+	c->codec = strcmp(codec, "h264") == 0 ? RSS_CODEC_H264 : RSS_CODEC_H265;
 	c->want_sub = rss_config_get_bool(rs.cfg, sec, "sub", true);
 	c->data_mb[RCD_MAIN] = rss_config_get_int(rs.cfg, sec, "main_data_mb", 3);
 	c->data_mb[RCD_SUB] = rss_config_get_int(rs.cfg, sec, "sub_data_mb", 1);

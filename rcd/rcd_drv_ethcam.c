@@ -32,6 +32,7 @@ typedef struct {
 	char cmd_buf[8192];
 	size_t cmd_len;
 	int64_t cmd_last_rx_us;
+	int enc_buf_sec;
 	int fd[2];
 	uint8_t *buf[2];
 	size_t len[2];
@@ -96,10 +97,11 @@ static int cmd_do(rcd_cam_t *c, int port, int cmd, int par, ethcam_reply_t *r)
 	return cmd_wait(c->priv, cmd, r);
 }
 
-static int cmd_do_data(rcd_cam_t *c, int cmd, const void *data, size_t len, ethcam_reply_t *r)
+static int cmd_do_data(rcd_cam_t *c, int cmd, int par, const void *data, size_t len,
+		       ethcam_reply_t *r)
 {
 	ethcam_t *e = c->priv;
-	if (cmd_do(c, ETHCAM_PORT_CMD, cmd, 0, r) < 0 || r->status != ETHCAM_ST_CONTINUE)
+	if (cmd_do(c, ETHCAM_PORT_CMD, cmd, par, r) < 0 || r->status != ETHCAM_ST_CONTINUE)
 		return -1;
 	if (rcd_send_all(e->cmd_fd, data, len, CMD_TIMEOUT_MS) < 0)
 		return -1;
@@ -112,7 +114,9 @@ static int handshake(rcd_cam_t *c, int info[2][3])
 	bool h265 = c->codec == RSS_CODEC_H265;
 	uint32_t sys[3] = {0, c->want_sub ? 1u : 0u, 0}; /* PullModeEn, CloneDisplayPathEn */
 
-	if (cmd_do_data(c, ETHCAM_CMD_SET_SYS_INFO, sys, sizeof(sys), &r) < 0 ||
+	/* par = the module's encoder buffer in seconds (0: its default, 3) */
+	if (cmd_do_data(c, ETHCAM_CMD_SET_SYS_INFO, ((ethcam_t *)c->priv)->enc_buf_sec, sys,
+			sizeof(sys), &r) < 0 ||
 	    (r.status & 0xf) != 12) {
 		rcd_error(c, "system info (9027) rejected");
 		return -1;
@@ -121,7 +125,7 @@ static int handshake(rcd_cam_t *c, int info[2][3])
 		rcd_set_fw(c, r.string);
 	/* VCodec 0 = H.264, 1 = H.265; module type 4 = NT96562 */
 	uint32_t codec[3] = {h265 ? 1u : 0u, 4, 0};
-	if (cmd_do_data(c, ETHCAM_CMD_SET_CODEC, codec, sizeof(codec), &r) < 0)
+	if (cmd_do_data(c, ETHCAM_CMD_SET_CODEC, 0, codec, sizeof(codec), &r) < 0)
 		RSS_WARN("camera%d: codec set (9032) failed", c->index);
 	cmd_do(c, ETHCAM_PORT_CMD, ETHCAM_CMD_STARTUP, 0, &r);
 
@@ -131,7 +135,7 @@ static int handshake(rcd_cam_t *c, int info[2][3])
 	/* the module wants a full year and months 1-12 */
 	int32_t t[11] = {tm.tm_sec,	tm.tm_min,	   tm.tm_hour, tm.tm_mday,
 			 tm.tm_mon + 1, tm.tm_year + 1900, tm.tm_wday, tm.tm_yday};
-	if (cmd_do_data(c, ETHCAM_CMD_SYNC_TIME, t, sizeof(t), &r) < 0)
+	if (cmd_do_data(c, ETHCAM_CMD_SYNC_TIME, 0, t, sizeof(t), &r) < 0)
 		RSS_WARN("camera%d: time sync (9014) failed", c->index);
 
 	if (cmd_do(c, ETHCAM_PORT_REC, ETHCAM_CMD_GET_REC_INFO, 0, &r) < 0 || r.item_count < 7) {
@@ -301,11 +305,15 @@ out:
 
 static int init(rcd_cam_t *c, rss_config_t *cfg, const char *section)
 {
-	(void)cfg;
-	(void)section;
 	ethcam_t *e = calloc(1, sizeof(*e));
 	if (!e)
 		return -1;
+	/* a full-sensor (2592x1944) module only fits its encoder with 2 */
+	e->enc_buf_sec = rss_config_get_int(cfg, section, "enc_buf_sec", 0);
+	if (e->enc_buf_sec < 0 || e->enc_buf_sec > 20) {
+		RSS_WARN("%s: enc_buf_sec must be 0..20, using the module default", section);
+		e->enc_buf_sec = 0;
+	}
 	e->cmd_fd = e->fd[0] = e->fd[1] = -1;
 	for (int i = 0; i < 2; i++) {
 		e->buf[i] = malloc(RX_BUF);
