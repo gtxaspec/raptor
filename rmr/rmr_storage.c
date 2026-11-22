@@ -2,7 +2,7 @@
  * rmr_storage.c -- Recording file rotation and storage management
  *
  * Directory layout: {base_path}/YYYY-MM-DD/HH-MM-SS.mp4
- * One directory per day. Cleanup deletes oldest day directories first.
+ * One directory per day. Cleanup deletes the oldest segments first.
  */
 
 #include "rmr_storage.h"
@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
@@ -24,6 +25,7 @@ struct rmr_storage {
 	int segment_minutes;
 	int segment_seconds;
 	int max_storage_mb;
+	int min_free_mb;
 	bool refuse_logged;	   /* rootfs auto-create refusal logged once */
 	int64_t last_wait_warn_us; /* rate-limit for the waiting log       */
 };
@@ -41,6 +43,7 @@ rmr_storage_t *rmr_storage_create(const rmr_storage_config_t *cfg)
 	st->segment_minutes = cfg->segment_minutes > 0 ? cfg->segment_minutes : 5;
 	st->segment_seconds = cfg->segment_seconds;
 	st->max_storage_mb = cfg->max_storage_mb;
+	st->min_free_mb = cfg->min_free_mb;
 
 	return st;
 }
@@ -72,8 +75,10 @@ int rmr_storage_open_file(rmr_storage_t *st, int64_t rt_us, const char *suffix, 
 		 tm.tm_sec, tagged ? "_" : "", tagged ? suffix : "");
 
 	int fd = open(path_out, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	if (fd < 0 && errno == ENOSPC && rmr_storage_enforce_limit(st) > 0)
+		fd = open(path_out, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 	if (fd < 0)
-		RSS_ERROR("failed to open segment: %s", path_out);
+		RSS_ERROR("failed to open segment: %s: %m", path_out);
 
 	return fd;
 }
@@ -282,62 +287,115 @@ static int64_t dir_mp4_size(const char *dir_path)
 	return total;
 }
 
+static bool is_day_dir(const char *n)
+{
+	return strlen(n) == 10 && n[4] == '-' && n[7] == '-';
+}
+
+static bool is_mp4(const char *n)
+{
+	size_t len = strlen(n);
+	return len >= 4 && strcmp(n + len - 4, ".mp4") == 0;
+}
+
+/* Bytes to free: over max_storage_mb, or short of min_free_mb */
+static int64_t storage_need(rmr_storage_t *st, char **days, int day_count)
+{
+	int64_t need = 0;
+	if (st->max_storage_mb > 0) {
+		int64_t total = 0;
+		for (int i = 0; i < day_count; i++) {
+			if (!is_day_dir(days[i]))
+				continue;
+			char dir_path[512];
+			snprintf(dir_path, sizeof(dir_path), "%s/%s", st->base_path, days[i]);
+			total += dir_mp4_size(dir_path);
+		}
+		need = total - (int64_t)st->max_storage_mb * 1024 * 1024;
+	}
+	struct statvfs v;
+	if (st->min_free_mb > 0 && statvfs(st->base_path, &v) == 0) {
+		int64_t short_by =
+			(int64_t)st->min_free_mb * 1024 * 1024 - (int64_t)v.f_bavail * v.f_frsize;
+		if (short_by > need)
+			need = short_by;
+	}
+	return need;
+}
+
+/* Loop recording: whole segments go oldest first, a file with its tagged
+ * siblings (X.mp4, X_R.mp4), until the budget holds. Files touched within
+ * two segment lengths are kept, as one of them is open; so are clips. */
 int rmr_storage_enforce_limit(rmr_storage_t *st)
 {
-	if (!st || st->max_storage_mb <= 0)
+	if (!st || (st->max_storage_mb <= 0 && st->min_free_mb <= 0))
 		return 0;
 
-	int64_t max_bytes = (int64_t)st->max_storage_mb * 1024 * 1024;
-	int deleted = 0;
-
-	/* Scan day directories (sorted oldest first) */
 	int day_count;
 	char **days = scan_dir_sorted(st->base_path, &day_count);
 	if (!days)
 		return 0;
 
-	/* Calculate total usage */
-	int64_t total = 0;
-	for (int i = 0; i < day_count; i++) {
+	int64_t need = storage_need(st, days, day_count);
+	time_t keep_after = time(NULL) - 2 * rmr_storage_segment_len_sec(st);
+	int64_t freed = 0;
+	int deleted = 0;
+	bool reached_recent = false;
+
+	for (int i = 0; i < day_count && freed < need && !reached_recent; i++) {
+		if (!is_day_dir(days[i]))
+			continue;
 		char dir_path[512];
 		snprintf(dir_path, sizeof(dir_path), "%s/%s", st->base_path, days[i]);
-		total += dir_mp4_size(dir_path);
-	}
-
-	/* Delete oldest day directories until under limit */
-	for (int i = 0; i < day_count && total > max_bytes; i++) {
-		char dir_path[512];
-		snprintf(dir_path, sizeof(dir_path), "%s/%s", st->base_path, days[i]);
-
-		/* Delete .mp4 files in this day directory (skip non-mp4) */
 		int file_count;
 		char **files = scan_dir_sorted(dir_path, &file_count);
-		if (files) {
-			for (int j = 0; j < file_count; j++) {
-				size_t flen = strlen(files[j]);
-				if (flen < 4 || strcmp(files[j] + flen - 4, ".mp4") != 0)
+		if (!files)
+			continue;
+		int j = 0;
+		while (j < file_count && freed < need) {
+			size_t key = strcspn(files[j], "_.");
+			int g = j;
+			bool recent = false;
+			while (g < file_count && strncmp(files[g], files[j], key) == 0 &&
+			       (files[g][key] == '_' || files[g][key] == '.')) {
+				char fpath[768];
+				struct stat fst;
+				snprintf(fpath, sizeof(fpath), "%s/%s", dir_path, files[g]);
+				if (is_mp4(files[g]) && stat(fpath, &fst) == 0 &&
+				    fst.st_mtime >= keep_after)
+					recent = true;
+				g++;
+			}
+			if (g == j)
+				g = j + 1; /* a name that groups with nothing */
+			if (recent) {
+				reached_recent = true;
+				break;
+			}
+			for (int k = j; k < g; k++) {
+				if (!is_mp4(files[k]))
 					continue;
 				char fpath[768];
-				snprintf(fpath, sizeof(fpath), "%s/%s", dir_path, files[j]);
 				struct stat fst;
-				if (stat(fpath, &fst) == 0) {
-					total -= fst.st_size;
+				snprintf(fpath, sizeof(fpath), "%s/%s", dir_path, files[k]);
+				if (stat(fpath, &fst) == 0 && unlink(fpath) == 0) {
+					freed += fst.st_size;
 					deleted++;
 				}
-				unlink(fpath);
 			}
-			free_names(files, file_count);
+			j = g;
 		}
-
-		/* Remove empty directory */
-		rmdir(dir_path);
+		free_names(files, file_count);
+		rmdir(dir_path); /* only once empty */
 	}
-
 	free_names(days, day_count);
 
 	if (deleted > 0)
-		RSS_INFO("storage cleanup: deleted %d files (%.1f MB remaining)", deleted,
-			 (double)total / (1024.0 * 1024.0));
+		RSS_INFO("storage cleanup: deleted %d files, %.1f MB", deleted,
+			 (double)freed / (1024.0 * 1024.0));
+	else if (need > 0 && reached_recent)
+		RSS_WARN("storage cleanup: %.1f MB over budget, only recent files left",
+			 (double)need / (1024.0 * 1024.0));
 
 	return deleted;
 }

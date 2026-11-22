@@ -15,6 +15,7 @@ typedef struct {
 	int segment_minutes;   /* segment duration (default 5) */
 	int segment_seconds;   /* nonzero overrides minutes (debug/test) */
 	int max_storage_mb;    /* 0 = unlimited */
+	int min_free_mb;       /* keep this much free on the medium, 0 = off */
 } rmr_storage_config_t;
 
 /* Create/destroy storage manager */

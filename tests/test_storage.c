@@ -6,6 +6,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <utime.h>
 #include <unistd.h>
 
 static bool same_dev_as_root(const char *path)
@@ -236,7 +237,9 @@ TEST storage_name_stamp_never_reuses_own(void)
 	PASS();
 }
 
-static void make_file(const char *dir, const char *day, const char *name, off_t size)
+/* age_s: how long ago it was last written */
+static void make_file_aged(const char *dir, const char *day, const char *name, off_t size,
+			   int age_s)
 {
 	char path[512];
 	snprintf(path, sizeof(path), "%s/%s", dir, day);
@@ -248,6 +251,13 @@ static void make_file(const char *dir, const char *day, const char *name, off_t 
 			fputc(0, f);
 		fclose(f);
 	}
+	struct utimbuf ut = {.actime = time(NULL) - age_s, .modtime = time(NULL) - age_s};
+	utime(path, &ut);
+}
+
+static void make_file(const char *dir, const char *day, const char *name, off_t size)
+{
+	make_file_aged(dir, day, name, size, 3600);
 }
 
 static bool file_exists(const char *dir, const char *day, const char *name)
@@ -291,6 +301,74 @@ TEST storage_enforce_deletes_pairs_together(void)
 	PASS();
 }
 
+static void rm_day(const char *dir, const char *day)
+{
+	char path[512];
+	snprintf(path, sizeof(path), "rm -rf '%s/%s'", dir, day);
+	if (system(path) != 0)
+		return;
+}
+
+TEST storage_enforce_keeps_recent_segments(void)
+{
+	char dir[] = "/tmp/rmr_storage_test_XXXXXX";
+	ASSERT(mkdtemp(dir));
+	rmr_storage_config_t cfg = {.base_path = dir, .segment_minutes = 1, .max_storage_mb = 1};
+	rmr_storage_t *st = rmr_storage_create(&cfg);
+	ASSERT(st);
+
+	const off_t mb = 1024 * 1024;
+	make_file(dir, "2026-11-22", "10-00-00.mp4", mb);
+	make_file(dir, "2026-11-22", "10-00-00_R.mp4", mb);
+	/* the open pair: written within two segment lengths */
+	make_file_aged(dir, "2026-11-22", "10-01-00.mp4", mb, 30);
+	make_file_aged(dir, "2026-11-22", "10-01-00_R.mp4", mb, 30);
+	make_file(dir, "clips", "keep.mp4", mb);
+
+	/* still 2 MB over: the old pair goes, the open one and clips stay */
+	ASSERT_EQ(2, rmr_storage_enforce_limit(st));
+	ASSERT_FALSE(file_exists(dir, "2026-11-22", "10-00-00.mp4"));
+	ASSERT(file_exists(dir, "2026-11-22", "10-01-00.mp4"));
+	ASSERT(file_exists(dir, "2026-11-22", "10-01-00_R.mp4"));
+	ASSERT(file_exists(dir, "clips", "keep.mp4"));
+	ASSERT_EQ(0, rmr_storage_enforce_limit(st));
+
+	rm_day(dir, "2026-11-22");
+	rm_day(dir, "clips");
+	rmr_storage_destroy(st);
+	rmdir(dir);
+	PASS();
+}
+
+TEST storage_enforce_min_free_oldest_first(void)
+{
+	char dir[] = "/tmp/rmr_storage_test_XXXXXX";
+	ASSERT(mkdtemp(dir));
+	/* more free space than any medium has: everything old must go,
+	 * oldest day first, and the recent file still stays */
+	rmr_storage_config_t cfg = {.base_path = dir, .segment_minutes = 1, .min_free_mb = 1 << 30};
+	rmr_storage_t *st = rmr_storage_create(&cfg);
+	ASSERT(st);
+
+	make_file(dir, "2026-11-21", "23-59-00.mp4", 4096);
+	make_file(dir, "2026-11-22", "00-00-00.mp4", 4096);
+	make_file(dir, "2026-11-22", "00-00-00_R.mp4", 4096);
+	make_file_aged(dir, "2026-11-22", "00-01-00.mp4", 4096, 10);
+
+	ASSERT_EQ(3, rmr_storage_enforce_limit(st));
+	ASSERT_FALSE(file_exists(dir, "2026-11-21", "23-59-00.mp4"));
+	ASSERT_FALSE(file_exists(dir, "2026-11-22", "00-00-00_R.mp4"));
+	ASSERT(file_exists(dir, "2026-11-22", "00-01-00.mp4"));
+	char path[512];
+	snprintf(path, sizeof(path), "%s/2026-11-21", dir);
+	ASSERT_EQ(-1, access(path, F_OK)); /* emptied day removed */
+
+	rm_day(dir, "2026-11-22");
+	rmr_storage_destroy(st);
+	rmdir(dir);
+	PASS();
+}
+
 SUITE(storage_suite)
 {
 	RUN_TEST(storage_boundary_from_mid_period);
@@ -306,4 +384,6 @@ SUITE(storage_suite)
 	RUN_TEST(storage_name_stamp_pairs_tracks);
 	RUN_TEST(storage_name_stamp_never_reuses_own);
 	RUN_TEST(storage_enforce_deletes_pairs_together);
+	RUN_TEST(storage_enforce_keeps_recent_segments);
+	RUN_TEST(storage_enforce_min_free_oldest_first);
 }
