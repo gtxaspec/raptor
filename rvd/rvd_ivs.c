@@ -99,6 +99,8 @@ int rvd_ivs_start(rvd_state_t *st)
 
 	int w = st->streams[1].enc_cfg.width;
 	int h = st->streams[1].enc_cfg.height;
+	st->ivs_w = w;
+	st->ivs_h = h;
 
 	void *algo_handle = NULL;
 	st->ivs_persondet = false;

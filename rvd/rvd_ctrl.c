@@ -1356,6 +1356,9 @@ static int handle_ivs_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 		cJSON *r = cJSON_CreateObject();
 		cJSON_AddStringToObject(r, "status", "ok");
 		cJSON_AddNumberToObject(r, "count", (double)snap.count);
+		cJSON_AddNumberToObject(r, "width", (double)st->ivs_w);
+		cJSON_AddNumberToObject(r, "height", (double)st->ivs_h);
+		cJSON_AddNumberToObject(r, "timestamp", (double)snap.timestamp);
 		cJSON *arr = cJSON_AddArrayToObject(r, "detections");
 		for (int i = 0; i < snap.count; i++) {
 			rss_ivs_detection_t *d = &snap.detections[i];

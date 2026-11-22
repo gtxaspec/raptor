@@ -177,6 +177,7 @@ struct rvd_state {
 	int ivs_roi_count;  /* total ROI count for move detection */
 	_Atomic int ivs_person_count;
 	rss_ivs_detect_result_t ivs_detections; /* latest persondet results */
+	int ivs_w, ivs_h;			/* the frame detections are in */
 	pthread_mutex_t ivs_det_lock;		/* protects ivs_detections */
 };
 
