@@ -67,6 +67,9 @@ typedef struct {
 	float peak[3];
 	float peak_dev;
 	bool impact;
+	bool spike_pending;
+	float spike[3];
+	float spike_dev;
 
 	/* Impact handling */
 	float impact_g;
@@ -242,17 +245,41 @@ static void accel_sample(rtd_state_t *st, int64_t now)
 		dev += d[i] * d[i];
 	}
 	dev = sqrtf(dev);
+
+	/* A real impact lasts tens of milliseconds, several samples. One
+	 * sample alone over the threshold is a corrupted read (seen as a
+	 * 1.8 g sign-flip glitch at rest under load): hold it until the
+	 * next sample confirms it, and never let it move the rest vector. */
+	bool over = st->impact_g > 0 && dev > st->impact_g;
+	if (over && !st->spike_pending) {
+		st->spike_pending = true;
+		st->spike_dev = dev;
+		memcpy(st->spike, g, sizeof(g));
+		return;
+	}
+	if (st->spike_pending) {
+		st->spike_pending = false;
+		if (over) {
+			if (st->spike_dev >= st->peak_dev) {
+				st->peak_dev = st->spike_dev;
+				memcpy(st->peak, st->spike, sizeof(st->spike));
+			}
+			if (now - st->accel_start_us > WARMUP_US)
+				st->impact = true;
+		} else {
+			RSS_DEBUG("g-sensor: dropped a lone %.2f g sample", st->spike_dev);
+		}
+	}
 	if (dev >= st->peak_dev) {
 		st->peak_dev = dev;
 		memcpy(st->peak, g, sizeof(g));
 	}
+	if (over)
+		return;
 	/* ~2 s time constant: follows mounting angle and slopes, not bumps */
 	float alpha = (float)st->accel_period_us / 2e6f;
 	for (int i = 0; i < 3; i++)
 		st->rest[i] += alpha * d[i];
-
-	if (st->impact_g > 0 && dev > st->impact_g && now - st->accel_start_us > WARMUP_US)
-		st->impact = true;
 }
 
 /* ── Outputs ── */

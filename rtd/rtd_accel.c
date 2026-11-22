@@ -64,6 +64,14 @@ int rtd_accel_open(rtd_accel_t *a, int bus, int addr)
 		rtd_accel_close(a);
 		return -1;
 	}
+	/* Full scale +-16 g: the chip powers up at +-2 g, where a crash
+	 * clips. The other bits of the register are left as found. */
+	if ((range & 3) != 3) {
+		uint8_t want = (uint8_t)(range | 3);
+		if (reg_write(a, DA221_REG_RANGE, want) < 0 ||
+		    reg_read(a, DA221_REG_RANGE, &range, 1) < 0)
+			RSS_WARN("g-sensor: cannot set +-16 g");
+	}
 	int fs_g = 2 << (range & 3);
 	a->scale = (float)fs_g / 32768.0f;
 	RSS_INFO("g-sensor: DA221 at %s 0x%02x, +-%d g", dev, addr, fs_g);
