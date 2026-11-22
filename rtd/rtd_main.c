@@ -22,19 +22,24 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <linux/rtc.h>
+#include <sys/ioctl.h>
 #include <termios.h>
+#include <time.h>
 #include <unistd.h>
 
-#define THINGINO_JSON	"/etc/thingino.json"
-#define ROD_SOCK	RSS_RUN_DIR "/rod.sock"
-#define RMR_SOCK	RSS_RUN_DIR "/rmr.sock"
-#define RTD_SOCK	RSS_RUN_DIR "/rtd.sock"
+#define THINGINO_JSON	   "/etc/thingino.json"
+#define ROD_SOCK	   RSS_RUN_DIR "/rod.sock"
+#define RMR_SOCK	   RSS_RUN_DIR "/rmr.sock"
+#define RTD_SOCK	   RSS_RUN_DIR "/rtd.sock"
 
-#define GPS_SILENT_US	3000000 /* receiver considered gone */
-#define EPOCH_SETTLE_US 150000	/* let the rest of the burst after RMC arrive */
-#define EPOCH_MAX_US	1200000 /* publish on our own clock past this */
-#define WARMUP_US	2000000 /* resting vector settles before impacts count */
-#define ROD_RETRY_US	10000000
+#define GPS_SILENT_US	   3000000 /* receiver considered gone */
+#define EPOCH_SETTLE_US	   150000  /* let the rest of the burst after RMC arrive */
+#define EPOCH_MAX_US	   1200000 /* publish on our own clock past this */
+#define WARMUP_US	   2000000 /* resting vector settles before impacts count */
+#define ROD_RETRY_US	   10000000
+#define CLOCK_TOLERANCE_US 2000000 /* NTP and GPS agree within this: no tug of war */
+#define CLOCK_CHECK_US	   600000000
 
 typedef enum { UNIT_KMH, UNIT_MPH } speed_unit_t;
 
@@ -56,6 +61,11 @@ typedef struct {
 	int64_t last_sentence_us;
 	int64_t epoch_due_us; /* 0 = none pending */
 	int64_t last_publish_us;
+	int64_t rmc_us; /* when the last RMC arrived */
+
+	/* Clock */
+	bool set_clock;
+	int64_t next_clock_check_us;
 
 	/* Accelerometer */
 	rtd_accel_t accel;
@@ -182,8 +192,11 @@ static void gps_line(rtd_state_t *st, const char *line, int64_t now)
 	if (r == RTD_NMEA_BAD)
 		return;
 	st->last_sentence_us = now;
-	if (r == RTD_NMEA_RMC && !st->epoch_due_us)
-		st->epoch_due_us = now + EPOCH_SETTLE_US;
+	if (r == RTD_NMEA_RMC) {
+		st->rmc_us = now;
+		if (!st->epoch_due_us)
+			st->epoch_due_us = now + EPOCH_SETTLE_US;
+	}
 }
 
 static void gps_read(rtd_state_t *st, int64_t now)
@@ -366,6 +379,48 @@ static void rmr_clip(bool start)
 		RSS_WARN("impact clip %s: rmr not answering", start ? "start" : "stop");
 }
 
+/* RMC carries the time of the second it starts; it arrives a fraction
+ * of a second later, well inside the tolerance. The RTC is written
+ * too, so the next boot starts with this time (battery-backed RTC). */
+static void gps_set_clock(rtd_state_t *st, const rtd_record_t *r, int64_t now)
+{
+	if (!st->set_clock || st->replay || now < st->next_clock_check_us)
+		return;
+	if (!(r->flags & RTD_F_TIME) || !(r->flags & RTD_F_FIX) || r->sats < 4)
+		return;
+	st->next_clock_check_us = now + CLOCK_CHECK_US;
+
+	int64_t gps_now = r->utc_us + (now - st->rmc_us);
+	int64_t off = gps_now - rss_wallclock_us();
+	if (off > -CLOCK_TOLERANCE_US && off < CLOCK_TOLERANCE_US)
+		return;
+
+	struct timespec ts = {.tv_sec = gps_now / 1000000, .tv_nsec = (gps_now % 1000000) * 1000};
+	if (clock_settime(CLOCK_REALTIME, &ts) < 0) {
+		RSS_WARN("gps: cannot set the clock: %m");
+		return;
+	}
+	RSS_INFO("gps: clock was %+.1f s off, set from GPS", (double)off / 1e6);
+
+	int fd = open("/dev/rtc0", O_WRONLY | O_CLOEXEC);
+	if (fd < 0)
+		return;
+	struct tm tm;
+	time_t t = ts.tv_sec;
+	gmtime_r(&t, &tm);
+	struct rtc_time rt = {
+		.tm_sec = tm.tm_sec,
+		.tm_min = tm.tm_min,
+		.tm_hour = tm.tm_hour,
+		.tm_mday = tm.tm_mday,
+		.tm_mon = tm.tm_mon,
+		.tm_year = tm.tm_year,
+	};
+	if (ioctl(fd, RTC_SET_TIME, &rt) < 0)
+		RSS_WARN("gps: cannot set the RTC: %m");
+	close(fd);
+}
+
 static void publish(rtd_state_t *st, int64_t now)
 {
 	rtd_record_t r = {.version = RTD_REC_VERSION, .ts_us = now};
@@ -406,6 +461,7 @@ static void publish(rtd_state_t *st, int64_t now)
 	st->peak_dev = 0.0f;
 	memcpy(st->peak, st->rest, sizeof(st->peak));
 
+	gps_set_clock(st, &r, now);
 	rss_ring_publish(st->ring, (const uint8_t *)&r, sizeof(r), now, 0, 0, RSS_SRC_SEQ_NONE);
 	st->last = r;
 	st->last_publish_us = now;
@@ -483,6 +539,7 @@ int main(int argc, char **argv)
 	st.impact_clip = rss_config_get_bool(st.cfg, "telematics", "impact_clip", true);
 	st.impact_clip_sec = rss_config_get_int(st.cfg, "telematics", "impact_clip_sec", 30);
 	st.osd = rss_config_get_bool(st.cfg, "telematics", "osd", true);
+	st.set_clock = rss_config_get_bool(st.cfg, "telematics", "set_clock", true);
 	int hz = rss_config_get_int(st.cfg, "telematics", "accel_hz", 50);
 	st.accel_period_us = 1000000 / (hz < 1 ? 1 : hz > 400 ? 400 : hz);
 
