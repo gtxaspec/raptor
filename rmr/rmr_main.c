@@ -949,6 +949,13 @@ static int track_attach(rmr_state_t *st, rmr_track_t *t)
 		return -1;
 	rss_ring_check_version(t->ring, t->ring_name);
 	const rss_ring_header_t *hdr = rss_ring_get_header(t->ring);
+	/* rcd creates its rings before the first keyframe tells it the
+	 * stream info; attaching then would fix the track at 0x0. */
+	if (hdr->width == 0 || hdr->height == 0) {
+		rss_ring_close(t->ring);
+		t->ring = NULL;
+		return -1;
+	}
 	uint32_t mfs = rss_ring_max_frame_size(t->ring);
 	if (mfs > t->frame_buf_size) {
 		/* AVCC gets headroom for the leading SEI NAL */

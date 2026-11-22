@@ -249,6 +249,7 @@ start rings "$OUT/create_rings" --skip-video
 sleep 0.5
 start rvd "$OUT/rvd" -c "$WORK/multi.conf" -f -d
 start rcd "$OUT/rcd" -c "$WORK/multi.conf" -f -d
+RCD_PID=$LAST_PID
 start rtd "$OUT/rtd" -c "$WORK/multi.conf" -f -d
 sleep 1
 start rmr "$OUT/rmr" -c "$WORK/multi.conf" -f -d
@@ -404,6 +405,46 @@ if [ -n "$NAMES" ] && ! echo "$NAMES" | grep -qvE '^[0-9]{2}-[0-9]{2}-[0-9]{2}\.
 else
 	fail "legacy file names: $(echo "$NAMES" | tr '\n' ' ')"
 fi
+
+echo "--- rear stream info published after rmr attached ---"
+kill "$FAKE_PID" "$RCD_PID" 2> /dev/null
+wait "$FAKE_PID" "$RCD_PID" 2> /dev/null
+rm -f /dev/shm/rss_ring_s1_* "$WORK"/fake.log
+ffmpeg -v error -f lavfi -i testsrc=size=320x240:rate=30 -frames:v 240 -c:v libx265 \
+	-x265-params keyint=30:scenecut=0:bframes=0:log-level=error -f hevc "$WORK/clip.hevc" || exit 1
+python3 "$SCRIPT_DIR/fake_ethcam.py" --ip 127.0.0.12 --h264 "$WORK/clip.h264" --h265 "$WORK/clip.hevc" --delay 2 \
+	>> "$WORK/fake.log" 2>&1 &
+PIDS+=($!)
+for _ in $(seq 50); do
+	grep -q "fake ethcam" "$WORK/fake.log" && break
+	sleep 0.1
+done
+mkdir -p "$WORK/late"
+# H.265: an unset header reads as codec 0 (H.264), which never matches
+base_conf "$WORK/late" | sed '/^\[camera1\]/,/^\[/ s/^codec = h264$/codec = h265/' > "$WORK/late.conf"
+printf 'mode = continuous\nstreams = main, s1_main:R\n\n[log]\nlevel = debug\n' >> "$WORK/late.conf"
+start rcd-late "$OUT/rcd" -c "$WORK/late.conf" -f -d
+for _ in $(seq 50); do
+	[ -e /dev/shm/rss_ring_s1_main ] && break
+	sleep 0.1
+done
+start rmr-late "$OUT/rmr" -c "$WORK/late.conf" -f -d
+RMR_PID=$LAST_PID
+if wait_for 15 "len(d['tracks']) == 2 and all(t['frames'] > 0 for t in d['tracks'])"; then
+	pass "rear track records once its stream info arrives"
+else
+	fail "rear track after late stream info: $(status)"
+fi
+kill "$RMR_PID"
+wait "$RMR_PID" 2> /dev/null
+R=$(find "$WORK/late" -name '*_R.mp4' | head -1)
+V=$([ -n "$R" ] && verify "$R")
+case "$V" in
+ok | "no gps records") pass "late rear file verifies" ;;
+*) fail "late rear file: ${R:-none} $V" ;;
+esac
+[ -n "$R" ] && [ "$(ffprobe -v quiet -select_streams v -show_entries stream=codec_name,width -of csv=p=0 "$R")" = "hevc,320" ] &&
+	pass "late rear file is H.265 320 wide" || fail "late rear codec: $( [ -n "$R" ] && ffprobe -v quiet -select_streams v -show_entries stream=codec_name,width -of csv=p=0 "$R")"
 
 for l in "$WORK"/rmr*.log; do
 	if grep -q "ERROR: AddressSanitizer\|runtime error:\|LeakSanitizer" "$l"; then

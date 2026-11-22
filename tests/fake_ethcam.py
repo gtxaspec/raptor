@@ -86,6 +86,7 @@ class Module:
         self.fps = args.fps
         self.skip = args.skip
         self.corrupt = args.corrupt
+        self.delay = args.delay
         self.clips = {False: access_units(args.h264, False)}
         if args.h265:
             self.clips[True] = access_units(args.h265, True)
@@ -206,6 +207,11 @@ class Module:
             gop = 1 if key else gop + 1
             ts = int((time.monotonic() - self.t0) * 1e6)
             if start_ts is None:
+                if self.delay:
+                    time.sleep(self.delay)
+                    self.delay = 0
+                    nxt = time.monotonic()
+                    ts = int((nxt - self.t0) * 1e6)
                 start_ts, sent = ts, 0
             if sent < 3:
                 ts = start_ts
@@ -244,6 +250,8 @@ def main():
     ap.add_argument("--fps", type=int, default=30)
     ap.add_argument("--skip", type=int, default=0)
     ap.add_argument("--corrupt", type=int, default=0)
+    ap.add_argument("--delay", type=float, default=0,
+                    help="seconds before the first frame of the first session")
     args = ap.parse_args()
     m = Module(args)
     m.listen(CMD, m.serve_cmd)
