@@ -13,6 +13,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+/* Growth ceiling for the video pre-roll: 5 s of 4K at ~25 Mbps */
+#define RMR_PREBUF_MAX_BYTES (16u * 1024 * 1024)
+
 typedef struct {
 	uint32_t data_offset; /* byte offset into data region */
 	uint32_t data_length; /* frame payload size */
@@ -30,10 +33,18 @@ typedef struct {
 	uint8_t *data;	    /* contiguous data region */
 	uint32_t data_size; /* total data region size */
 	uint32_t data_head; /* next write offset in data region */
+
+	uint32_t data_max; /* growth ceiling (0 = fixed size) */
+	int64_t keep_us;   /* frames this young are kept by growing */
 } rmr_prebuf_t;
 
 /* Create pre-buffer. capacity must be power of 2. */
 rmr_prebuf_t *rmr_prebuf_create(uint32_t capacity, uint32_t data_size);
+
+/* Let the data region double, up to max_size, rather than drop a frame
+ * younger than keep_us: the region is sized from a bitrate estimate,
+ * and a stream running above it would otherwise cut the pre-roll. */
+void rmr_prebuf_set_growth(rmr_prebuf_t *pb, uint32_t max_size, int64_t keep_us);
 
 /* Destroy and free all resources. */
 void rmr_prebuf_destroy(rmr_prebuf_t *pb);

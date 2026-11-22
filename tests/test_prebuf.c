@@ -241,6 +241,80 @@ TEST prebuf_data_overrun(void)
 	PASS();
 }
 
+TEST prebuf_grows_to_keep_window(void)
+{
+	/* 128-byte region, 40-byte frames 1 ms apart, keep 10 ms: without
+	 * growth only 3 frames fit; growing keeps all 8 young ones intact. */
+	rmr_prebuf_t *pb = rmr_prebuf_create(16, 128);
+	ASSERT(pb);
+	rmr_prebuf_set_growth(pb, 4096, 10000);
+	for (int i = 0; i < 8; i++) {
+		uint8_t frame[40];
+		memset(frame, 0x50 + i, sizeof(frame));
+		rmr_prebuf_push(pb, frame, sizeof(frame), i * 1000, 0);
+	}
+	ASSERT_EQ(8u, rmr_prebuf_count(pb));
+	ASSERT(pb->data_size >= 8 * 40);
+	uint32_t oldest = rmr_prebuf_write_idx(pb) - rmr_prebuf_count(pb);
+	struct iter_ctx ic = {0};
+	ASSERT_EQ(8, rmr_prebuf_iterate(pb, oldest, data_iter_cb, &ic));
+	for (int i = 0; i < 8; i++)
+		ASSERT_EQ((uint8_t)(0x50 + i), ic.data[i]);
+	rmr_prebuf_destroy(pb);
+	PASS();
+}
+
+TEST prebuf_growth_capped(void)
+{
+	/* Ceiling of 256 bytes: 6 frames of 40 fit, older ones go */
+	rmr_prebuf_t *pb = rmr_prebuf_create(16, 128);
+	ASSERT(pb);
+	rmr_prebuf_set_growth(pb, 256, 1000000);
+	for (int i = 0; i < 12; i++) {
+		uint8_t frame[40];
+		memset(frame, 0x60 + i, sizeof(frame));
+		rmr_prebuf_push(pb, frame, sizeof(frame), i * 1000, 0);
+	}
+	ASSERT_EQ(256u, pb->data_size);
+	ASSERT(rmr_prebuf_count(pb) <= 6);
+	uint32_t oldest = rmr_prebuf_write_idx(pb) - rmr_prebuf_count(pb);
+	struct iter_ctx ic = {0};
+	int n = rmr_prebuf_iterate(pb, oldest, data_iter_cb, &ic);
+	for (int i = 0; i < n; i++)
+		ASSERT_EQ((uint8_t)(0x60 + 12 - n + i), ic.data[i]);
+	rmr_prebuf_destroy(pb);
+	PASS();
+}
+
+TEST prebuf_old_frames_still_retire(void)
+{
+	/* Frames older than the keep window are evicted, not grown for */
+	rmr_prebuf_t *pb = rmr_prebuf_create(16, 128);
+	ASSERT(pb);
+	rmr_prebuf_set_growth(pb, 4096, 1500);
+	for (int i = 0; i < 8; i++) {
+		uint8_t frame[40] = {0};
+		rmr_prebuf_push(pb, frame, sizeof(frame), i * 1000, 0);
+	}
+	ASSERT_EQ(128u, pb->data_size);
+	rmr_prebuf_destroy(pb);
+	PASS();
+}
+
+TEST prebuf_grows_for_large_frame(void)
+{
+	rmr_prebuf_t *pb = rmr_prebuf_create(16, 64);
+	ASSERT(pb);
+	rmr_prebuf_set_growth(pb, 1024, 1000000);
+	uint8_t big[200];
+	memset(big, 0x7a, sizeof(big));
+	rmr_prebuf_push(pb, big, sizeof(big), 0, 1);
+	ASSERT_EQ(1u, rmr_prebuf_count(pb));
+	ASSERT(pb->data_size >= 200);
+	rmr_prebuf_destroy(pb);
+	PASS();
+}
+
 SUITE(prebuf_suite)
 {
 	RUN_TEST(prebuf_push_count);
@@ -253,4 +327,8 @@ SUITE(prebuf_suite)
 	RUN_TEST(prebuf_no_keyframe);
 	RUN_TEST(prebuf_data_wrap);
 	RUN_TEST(prebuf_data_overrun);
+	RUN_TEST(prebuf_grows_to_keep_window);
+	RUN_TEST(prebuf_growth_capped);
+	RUN_TEST(prebuf_old_frames_still_retire);
+	RUN_TEST(prebuf_grows_for_large_frame);
 }

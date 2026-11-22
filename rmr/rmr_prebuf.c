@@ -48,29 +48,79 @@ void rmr_prebuf_destroy(rmr_prebuf_t *pb)
 	free(pb);
 }
 
-void rmr_prebuf_push(rmr_prebuf_t *pb, const uint8_t *data, uint32_t len, int64_t timestamp,
-		     uint8_t is_key)
+void rmr_prebuf_set_growth(rmr_prebuf_t *pb, uint32_t max_size, int64_t keep_us)
 {
-	if (!pb || !data || len == 0 || len > pb->data_size)
+	if (!pb)
 		return;
+	pb->data_max = max_size;
+	pb->keep_us = keep_us;
+}
 
-	/* Allocate space in data region. If the frame doesn't fit at
-	 * the current head, wrap to offset 0. */
-	uint32_t offset = pb->data_head;
-	if (offset + len > pb->data_size)
-		offset = 0;
-
-	/* Retire every frame up to the newest one this write overlaps. The
-	 * slot cap alone is not enough: at a bitrate above the sizing
-	 * estimate the data region wraps first, and the oldest slots would
-	 * replay overwritten bytes. After a wrap the overlapped frames are
-	 * newer than the ones left at the tail, hence "up to the newest". */
+/* Frames a write of len at offset would retire, oldest first */
+static uint32_t overlapped(const rmr_prebuf_t *pb, uint32_t offset, uint32_t len)
+{
 	uint32_t oldest = pb->write_idx - pb->count;
 	uint32_t evict = 0;
 	for (uint32_t i = 0; i < pb->count; i++) {
 		const rmr_prebuf_slot_t *s = &pb->slots[(oldest + i) & pb->mask];
 		if (s->data_offset < offset + len && offset < s->data_offset + s->data_length)
 			evict = i + 1;
+	}
+	return evict;
+}
+
+/* Double the region (capped), packing the live frames from offset 0 */
+static int grow(rmr_prebuf_t *pb)
+{
+	uint64_t want = (uint64_t)pb->data_size * 2;
+	uint32_t size = want > pb->data_max ? pb->data_max : (uint32_t)want;
+	if (size <= pb->data_size)
+		return -1;
+	uint8_t *nd = malloc(size);
+	if (!nd)
+		return -1;
+	uint32_t oldest = pb->write_idx - pb->count, head = 0;
+	for (uint32_t i = 0; i < pb->count; i++) {
+		rmr_prebuf_slot_t *s = &pb->slots[(oldest + i) & pb->mask];
+		memcpy(nd + head, pb->data + s->data_offset, s->data_length);
+		s->data_offset = head;
+		head += s->data_length;
+	}
+	free(pb->data);
+	pb->data = nd;
+	pb->data_size = size;
+	pb->data_head = head;
+	return 0;
+}
+
+static uint32_t place(const rmr_prebuf_t *pb, uint32_t len)
+{
+	return pb->data_head + len > pb->data_size ? 0 : pb->data_head;
+}
+
+void rmr_prebuf_push(rmr_prebuf_t *pb, const uint8_t *data, uint32_t len, int64_t timestamp,
+		     uint8_t is_key)
+{
+	if (!pb || !data || len == 0)
+		return;
+	while (len > pb->data_size && pb->data_max > pb->data_size && grow(pb) == 0)
+		;
+	if (len > pb->data_size)
+		return;
+
+	/* Retire every frame up to the newest one this write overlaps. The
+	 * slot cap alone is not enough: at a bitrate above the sizing
+	 * estimate the data region wraps first, and the oldest slots would
+	 * replay overwritten bytes. After a wrap the overlapped frames are
+	 * newer than the ones left at the tail, hence "up to the newest". */
+	uint32_t offset = place(pb, len);
+	uint32_t evict = overlapped(pb, offset, len);
+	while (evict > 0 && pb->data_max > pb->data_size) {
+		uint32_t last = (pb->write_idx - pb->count + evict - 1) & pb->mask;
+		if (timestamp - pb->slots[last].timestamp >= pb->keep_us || grow(pb) < 0)
+			break;
+		offset = place(pb, len);
+		evict = overlapped(pb, offset, len);
 	}
 	pb->count -= evict;
 

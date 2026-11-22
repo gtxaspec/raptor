@@ -1433,8 +1433,11 @@ int main(int argc, char **argv)
 		uint32_t fps = st.fps_num > 0 ? st.fps_num : 25;
 		uint32_t v_frames = fps * (uint32_t)st.prebuffer_sec + fps; /* +1s margin */
 		uint32_t v_slots = next_pow2(v_frames);
-		/* Data size: bitrate * prebuffer_sec * 2.5 (headroom for I-frames) / 8 */
-		uint32_t bps = rss_config_get_int(dctx.cfg, "stream0", "bitrate", 2000000);
+		/* Data size: bitrate * prebuffer_sec * 2.5 (headroom for I-frames) / 8.
+		 * Only a starting point: the region grows when the stream runs
+		 * above it (rmr_prebuf_set_growth below). */
+		uint32_t bps = rss_config_get_int(
+			dctx.cfg, st.stream_idx == 1 ? "stream1" : "stream0", "bitrate", 3000000);
 		uint64_t v_data = (uint64_t)bps * (uint32_t)st.prebuffer_sec * 5 / 2 / 8;
 		if (v_data < 1024 * 1024)
 			v_data = 1024 * 1024; /* min 1MB */
@@ -1442,10 +1445,12 @@ int main(int argc, char **argv)
 			v_data = 10 * 1024 * 1024; /* max 10MB */
 
 		st.video_pb = rmr_prebuf_create(v_slots, (uint32_t)v_data);
-		if (st.video_pb)
+		if (st.video_pb) {
+			rmr_prebuf_set_growth(st.video_pb, RMR_PREBUF_MAX_BYTES,
+					      ((int64_t)st.prebuffer_sec + 1) * 1000000);
 			RSS_DEBUG("video pre-buffer: %u slots, %u KB data", v_slots,
 				  (uint32_t)(v_data / 1024));
-		else
+		} else
 			RSS_WARN("video pre-buffer alloc failed");
 
 		if (st.audio_ring) {
