@@ -24,99 +24,40 @@
 
 /* ── Write callbacks ── */
 
+/* Bytes are counted as they queue: the counters are file offsets (GPS
+ * records index by them), and the writer thread keeps file order. */
+static int queue_write(rmr_state_t *st, int fd, const void *buf, uint32_t len, uint64_t *off,
+		       rmr_sign_stream_t *sign)
+{
+	if (len == 0)
+		return 0;
+	if (rmr_io_write(st->io, fd, buf, len) < 0)
+		return -1;
+	*off += len;
+	if (st->sign_enabled)
+		rmr_sign_stream_update(sign, buf, len);
+	return 0;
+}
+
 static int direct_write(const void *buf, uint32_t len, void *ctx)
 {
 	rmr_state_t *st = ctx;
-	if (len == 0)
-		return 0;
-
-	int fd = st->segment_fd;
-	if (fd < 0)
-		return -1;
-
-	const uint8_t *p = buf;
-	uint32_t remaining = len;
-	while (remaining > 0) {
-		ssize_t n = write(fd, p, remaining);
-		if (n > 0) {
-			p += n;
-			remaining -= (uint32_t)n;
-			st->bytes_written += (uint64_t)n;
-			st->segment_bytes += (uint64_t)n;
-		} else if (n < 0) {
-			if (errno == EINTR)
-				continue;
-			RSS_ERROR("write error: %s", strerror(errno));
-			if (errno == ENOSPC) {
-				RSS_ERROR("SD card full, stopping recording");
-				atomic_store(&st->recording, false);
-			}
-			return -1;
-		}
-	}
-	if (st->sign_enabled)
-		rmr_sign_stream_update(&st->sign_seg, buf, len);
-	return 0;
+	uint64_t before = st->segment_bytes;
+	int ret = queue_write(st, st->segment_fd, buf, len, &st->segment_bytes, &st->sign_seg);
+	st->bytes_written += st->segment_bytes - before;
+	return ret;
 }
 
 static int clip_write(const void *buf, uint32_t len, void *ctx)
 {
 	rmr_state_t *st = ctx;
-	if (len == 0)
-		return 0;
-
-	int fd = st->clip_fd;
-	if (fd < 0)
-		return -1;
-
-	const uint8_t *p = buf;
-	uint32_t remaining = len;
-	while (remaining > 0) {
-		ssize_t n = write(fd, p, remaining);
-		if (n > 0) {
-			p += n;
-			remaining -= (uint32_t)n;
-			st->clip_bytes += (uint64_t)n;
-		} else if (n < 0) {
-			if (errno == EINTR)
-				continue;
-			RSS_ERROR("clip write error: %s", strerror(errno));
-			return -1;
-		}
-	}
-	if (st->sign_enabled)
-		rmr_sign_stream_update(&st->sign_clip, buf, len);
-	return 0;
+	return queue_write(st, st->clip_fd, buf, len, &st->clip_bytes, &st->sign_clip);
 }
 
 static int tl_write(const void *buf, uint32_t len, void *ctx)
 {
 	rmr_state_t *st = ctx;
-	if (len == 0)
-		return 0;
-
-	int fd = st->tl_fd;
-	if (fd < 0)
-		return -1;
-
-	const uint8_t *p = buf;
-	uint32_t remaining = len;
-	while (remaining > 0) {
-		ssize_t n = write(fd, p, remaining);
-		if (n > 0) {
-			p += n;
-			remaining -= (uint32_t)n;
-			st->tl_bytes += (uint64_t)n;
-		} else if (n < 0) {
-			if (errno == EINTR)
-				continue;
-			RSS_ERROR("timelapse write error: %s", strerror(errno));
-			return -1;
-		}
-	}
-	if (st->sign_enabled)
-		rmr_sign_stream_update(&st->sign_tl, buf, len);
-	return 0;
+	return queue_write(st, st->tl_fd, buf, len, &st->tl_bytes, &st->sign_tl);
 }
 
 /* ── GPS records ── */
@@ -133,17 +74,17 @@ static void gps_write(rmr_mux_t *mux, rmr_write_fn fn, uint64_t *file_off, rmr_s
 		rmr_mux_gps_add(mux, off);
 }
 
-/* Fill the moov index; must run before the fd closes. Not hashed: the
- * signature chain covers the index as written (zeroed). */
-static void gps_patch_index(rmr_mux_t *mux, int fd)
+/* Fill the moov index, queued behind the records it names. Not hashed:
+ * the signature chain covers the index as written (zeroed). Repeated at
+ * every sync so a file cut by power loss keeps an index up to then. */
+static void gps_patch_index(rmr_state_t *st, rmr_mux_t *mux, int fd)
 {
 	uint8_t *buf;
 	uint32_t len;
 	uint64_t off;
 	if (rmr_mux_gps_index(mux, RMR_GPS_BOX_SIZE, &buf, &len, &off) < 0)
 		return;
-	if (pwrite(fd, buf, len, (off_t)off) != (ssize_t)len)
-		RSS_WARN("GPS index write failed: %s", strerror(errno));
+	rmr_io_pwrite(st->io, fd, buf, len, off);
 	free(buf);
 }
 
@@ -290,7 +231,7 @@ static void close_segment(rmr_state_t *st)
 		if (st->sign_enabled)
 			rmr_sign_stream_emit(&st->sign_seg, true, direct_write, st);
 		if (st->segment_fd >= 0)
-			gps_patch_index(st->mux, st->segment_fd);
+			gps_patch_index(st, st->mux, st->segment_fd);
 		rmr_mux_destroy(st->mux);
 		st->mux = NULL;
 	}
@@ -299,7 +240,7 @@ static void close_segment(rmr_state_t *st)
 	st->segment_fd = -1;
 
 	if (fd >= 0) {
-		rmr_storage_close_segment(fd);
+		rmr_io_close(st->io, fd);
 		RSS_DEBUG("segment closed: %s (%" PRIu64 " frames, %" PRIu64 " bytes)",
 			  st->segment_path, st->frames_written, st->bytes_written);
 	}
@@ -357,12 +298,12 @@ static void close_clip(rmr_state_t *st)
 		if (st->sign_enabled)
 			rmr_sign_stream_emit(&st->sign_clip, true, clip_write, st);
 		if (st->clip_fd >= 0)
-			gps_patch_index(st->clip_mux, st->clip_fd);
+			gps_patch_index(st, st->clip_mux, st->clip_fd);
 		rmr_mux_destroy(st->clip_mux);
 		st->clip_mux = NULL;
 	}
 	if (st->clip_fd >= 0) {
-		rmr_storage_close_segment(st->clip_fd);
+		rmr_io_close(st->io, st->clip_fd);
 		RSS_DEBUG("motion clip closed: %s (%" PRIu64 " bytes)", st->clip_path,
 			  st->clip_bytes);
 		st->clip_fd = -1;
@@ -391,7 +332,7 @@ static void close_timelapse(rmr_state_t *st)
 		st->tl_mux = NULL;
 	}
 	if (st->tl_fd >= 0) {
-		rmr_storage_close_segment(st->tl_fd);
+		rmr_io_close(st->io, st->tl_fd);
 		RSS_INFO("timelapse file closed: %s (%u frames, %" PRIu64 " bytes)", st->tl_path,
 			 st->tl.frames_in_file, st->tl_bytes);
 		st->tl_fd = -1;
@@ -705,6 +646,9 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		cJSON_AddBoolToObject(r, "sign", st->sign_enabled);
 		cJSON_AddBoolToObject(r, "sei_timecode", st->sei_timecode);
 		cJSON_AddBoolToObject(r, "gps", st->tele_ring != NULL);
+		cJSON_AddNumberToObject(r, "frames_lost", (double)st->frames_lost);
+		cJSON_AddNumberToObject(r, "io_pending_kb", rmr_io_pending(st->io) / 1024);
+		cJSON_AddNumberToObject(r, "io_peak_kb", rmr_io_peak(st->io) / 1024);
 		cJSON_AddBoolToObject(r, "timelapse", st->tl_enabled);
 		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 	}
@@ -798,6 +742,46 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 
 /* ── Main loop ── */
 
+/* Writer-thread errors surface here; a failed file is closed (what
+ * reached the medium stays playable) and the next keyframe opens a new
+ * one unless the storage is full. Then the periodic sync: the GPS index
+ * first, so the sync makes both durable together. */
+static void io_service(rmr_state_t *st)
+{
+	int err;
+	if (st->segment_fd >= 0 && (err = rmr_io_error(st->io, st->segment_fd)) != 0) {
+		RSS_ERROR("recording write failed: %s", strerror(err));
+		if (err == ENOSPC) {
+			RSS_ERROR("storage full, stopping recording");
+			atomic_store(&st->recording, false);
+		}
+		close_segment(st);
+	}
+	if (st->clip_fd >= 0 && (err = rmr_io_error(st->io, st->clip_fd)) != 0) {
+		RSS_ERROR("clip write failed: %s", strerror(err));
+		close_clip(st);
+	}
+	if (st->tl_fd >= 0 && (err = rmr_io_error(st->io, st->tl_fd)) != 0) {
+		RSS_ERROR("timelapse write failed: %s", strerror(err));
+		close_timelapse(st);
+	}
+
+	if (st->sync_interval_ms <= 0)
+		return;
+	int64_t now = rss_timestamp_us();
+	if (now < st->next_sync_us)
+		return;
+	st->next_sync_us = now + (int64_t)st->sync_interval_ms * 1000;
+	if (st->mux && st->segment_fd >= 0) {
+		gps_patch_index(st, st->mux, st->segment_fd);
+		rmr_io_sync(st->io, st->segment_fd);
+	}
+	if (st->clip_mux && st->clip_fd >= 0) {
+		gps_patch_index(st, st->clip_mux, st->clip_fd);
+		rmr_io_sync(st->io, st->clip_fd);
+	}
+}
+
 static void record_loop(rmr_state_t *st)
 {
 	int64_t v_ts_base = -1;	 /* continuous segment video timestamp base */
@@ -881,6 +865,7 @@ static void record_loop(rmr_state_t *st)
 		}
 
 		telematics_poll(st);
+		io_service(st);
 
 		/* Lazy audio ring attach — retry every ~2s until found */
 		if (st->audio_enabled && !st->audio_ring && ++audio_retry >= 50) {
@@ -967,7 +952,8 @@ static void record_loop(rmr_state_t *st)
 			 * references pictures we never read, and writing it
 			 * puts undecodable GOP fragments in the recording. */
 			rss_ring_request_idr(st->video_ring);
-			st->frames_dropped++;
+			if (st->mux || st->clip_mux)
+				st->frames_dropped++;
 			v_wait_key = true;
 			continue;
 		}
@@ -994,9 +980,25 @@ static void record_loop(rmr_state_t *st)
 			continue;
 		video_idle = 0;
 
+		/* The encoder's frame counter exposes every frame that never
+		 * reached rmr (ring overflow, producer drops) */
+		if (meta.src_seq != RSS_SRC_SEQ_NONE) {
+			uint32_t gap = meta.src_seq - st->last_src_seq - 1;
+			if (st->last_src_seq != RSS_SRC_SEQ_NONE && gap > 0 &&
+			    gap < RSS_SRC_SEQ_MAX_GAP &&
+			    (st->mux || st->clip_mux || atomic_load(&st->recording))) {
+				st->frames_lost += gap;
+				RSS_WARN("%u source frame%s lost before recording (%" PRIu64
+					 " total)",
+					 gap, gap == 1 ? "" : "s", st->frames_lost);
+			}
+			st->last_src_seq = meta.src_seq;
+		}
+
 		if (v_wait_key) {
 			if (!meta.is_key) {
-				st->frames_dropped++;
+				if (st->mux || st->clip_mux)
+					st->frames_dropped++;
 				continue;
 			}
 			v_wait_key = false;
@@ -1235,6 +1237,8 @@ static void record_loop(rmr_state_t *st)
 				if (open_clip_with_prebuffer(st, audio_samples_per_frame,
 							     audio_bps) == 0) {
 					RSS_INFO("motion clip active");
+					/* the seconds before the event are on the medium first */
+					rmr_io_sync(st->io, st->clip_fd);
 				}
 			}
 
@@ -1339,6 +1343,14 @@ int main(int argc, char **argv)
 	st.stream_idx = rss_config_get_int(dctx.cfg, "recording", "stream", 0);
 	st.audio_enabled = rss_config_get_bool(dctx.cfg, "recording", "audio", true);
 	st.sei_timecode = rss_config_get_bool(dctx.cfg, "recording", "sei_timecode", true);
+	st.sync_interval_ms = rss_config_get_int(dctx.cfg, "recording", "sync_interval_ms", 1000);
+	st.last_src_seq = RSS_SRC_SEQ_NONE;
+	int buffer_kb = rss_config_get_int(dctx.cfg, "recording", "write_buffer_kb", 4096);
+	st.io = rmr_io_create((uint32_t)(buffer_kb > 0 ? buffer_kb : 4096) * 1024);
+	if (!st.io) {
+		RSS_FATAL("cannot start the writer thread");
+		goto cleanup;
+	}
 	st.gps = rss_config_get_bool(dctx.cfg, "recording", "gps", true);
 	st.sign_enabled = rss_config_get_bool(dctx.cfg, "recording", "sign", true);
 	if (st.sign_enabled) {
@@ -1566,6 +1578,7 @@ cleanup:
 		rmr_prebuf_destroy(st.video_pb);
 	if (st.audio_pb)
 		rmr_prebuf_destroy(st.audio_pb);
+	rmr_io_destroy(st.io); /* drains: every queued byte and close runs */
 	free(st.frame_buf);
 	free(st.avcc_buf);
 	rss_config_free(dctx.cfg);

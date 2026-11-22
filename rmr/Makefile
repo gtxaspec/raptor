@@ -1,4 +1,4 @@
-SRCS := rmr_main.c rmr_gps.c rmr_mux.c rmr_nal.c rmr_prebuf.c rmr_sign.c rmr_storage.c rmr_timelapse.c
+SRCS := rmr_main.c rmr_gps.c rmr_io.c rmr_mux.c rmr_nal.c rmr_prebuf.c rmr_sign.c rmr_storage.c rmr_timelapse.c
 OBJS := $(SRCS:.c=.o)
 BIN  := rmr
 
@@ -6,7 +6,7 @@ all: $(BIN)
 
 $(BIN): $(OBJS)
 	@echo "  LD      $@"
-	$(Q)$(CC) -o $@ $^ $(LIBS) -lm $(LDFLAGS)
+	$(Q)$(CC) -o $@ $^ $(LIBS) -lm -lpthread $(LDFLAGS)
 
 %.o: %.c
 	@echo "  CC      $<"

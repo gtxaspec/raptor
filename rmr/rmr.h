@@ -15,6 +15,7 @@
 #include <stdatomic.h>
 
 #include "rmr_gps.h"
+#include "rmr_io.h"
 #include "rmr_mux.h"
 #include "rmr_nal.h"
 #include "rmr_prebuf.h"
@@ -118,6 +119,15 @@ typedef struct {
 	int64_t tele_retry_us;
 	rtd_record_t tele_hist[8]; /* recent records, for clip pre-roll */
 	unsigned tele_hist_n;
+
+	/* File I/O (writer thread) and crash safety */
+	rmr_io_t *io;
+	int sync_interval_ms; /* fdatasync open files this often; 0 = only at close */
+	int64_t next_sync_us;
+
+	/* Source frames that never reached a file */
+	uint64_t frames_lost;
+	uint32_t last_src_seq;
 
 	/* Control */
 	rss_ctrl_t *ctrl;
