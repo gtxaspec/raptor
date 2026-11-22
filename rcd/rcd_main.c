@@ -246,7 +246,8 @@ void rcd_drop(rcd_cam_t *c, int idx, uint64_t cam_ts_us)
 bool rcd_keyframe_wanted(rcd_cam_t *c, int idx)
 {
 	rcd_stream_t *s = &c->st[idx];
-	return s->open && rss_ring_check_idr(s->ring);
+	/* the request is consumed either way, so a refused one does not linger */
+	return s->open && rss_ring_check_idr(s->ring) && c->keyframe_requests;
 }
 
 void rcd_streaming(rcd_cam_t *c)
@@ -505,6 +506,7 @@ static int load_camera(rcd_cam_t *c, int index)
 	const char *codec = rss_config_get_str(rs.cfg, sec, "codec", "h265");
 	c->codec = strcmp(codec, "h264") == 0 ? RSS_CODEC_H264 : RSS_CODEC_H265;
 	c->want_sub = rss_config_get_bool(rs.cfg, sec, "sub", true);
+	c->keyframe_requests = rss_config_get_bool(rs.cfg, sec, "keyframe_requests", true);
 	c->data_mb[RCD_MAIN] = rss_config_get_int(rs.cfg, sec, "main_data_mb", 3);
 	c->data_mb[RCD_SUB] = rss_config_get_int(rs.cfg, sec, "sub_data_mb", 1);
 	pthread_mutex_init(&c->info_lock, NULL);

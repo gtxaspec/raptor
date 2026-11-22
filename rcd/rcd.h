@@ -67,6 +67,7 @@ struct rcd_cam {
 	int slot;  /* publishes sN_main / sN_sub */
 	int codec; /* configured codec */
 	bool want_sub;
+	bool keyframe_requests;
 	int data_mb[2];
 
 	pthread_t thread;
