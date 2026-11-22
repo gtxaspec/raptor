@@ -17,11 +17,13 @@ static const char *find_daemon_for_section(const char *section)
 		const char *section;
 		const char *daemon;
 	} map[] = {
-		{"sensor", "rvd"},     {"stream0", "rvd"}, {"stream1", "rvd"},	  {"jpeg", "rvd"},
-		{"ring", "rvd"},       {"audio", "rad"},   {"rtsp", "rsd"},	  {"http", "rhd"},
-		{"osd", "rod"},	       {"ircut", "ric"},   {"recording", "rmr"},  {"motion", "rmd"},
-		{"telematics", "rtd"}, {"webrtc", "rwd"},  {"webtorrent", "rwd"}, {"webcam", "rwc"},
-		{"filesource", "rfs"}, {"log", "rvd"},	   {NULL, NULL},
+		{"sensor", "rvd"},     {"stream0", "rvd"},   {"stream1", "rvd"},
+		{"jpeg", "rvd"},       {"ring", "rvd"},	     {"audio", "rad"},
+		{"rtsp", "rsd"},       {"http", "rhd"},	     {"osd", "rod"},
+		{"ircut", "ric"},      {"recording", "rmr"}, {"motion", "rmd"},
+		{"telematics", "rtd"}, {"cameras", "rcd"},   {"webrtc", "rwd"},
+		{"webtorrent", "rwd"}, {"webcam", "rwc"},    {"filesource", "rfs"},
+		{"log", "rvd"},	       {NULL, NULL},
 	};
 	for (int i = 0; map[i].section; i++) {
 		if (strcmp(section, map[i].section) == 0)

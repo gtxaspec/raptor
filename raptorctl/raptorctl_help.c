@@ -174,6 +174,8 @@ const struct help_entry help_entries[] = {
 	{"rmd", "sensitivity <0-4>                   Set motion sensitivity"},
 	{"rmd", "skip-frames <N>                      Set IVS skip frame count"},
 	{"rtd", "status                              Show GPS fix and acceleration"},
+	{"rcd", "status                              External cameras: state, firmware, streams"},
+	{"rcd", "reconnect [n]                       Reconnect camera n (all without n)"},
 	{"rtd", "set-speed-unit <kmh|mph>            OSD speed unit (live)"},
 	{"rtd", "set-impact-g <g>                    Impact threshold (live; park mode)"},
 	{"rtd", "event                               Manual event: protect the moment"},

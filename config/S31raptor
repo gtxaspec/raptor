@@ -59,6 +59,7 @@ daemon_section() {
 		rmr) echo "recording" ;;
 		rmd) echo "motion" ;;
 		rtd) echo "telematics" ;;
+		rcd) echo "cameras" ;;
 		rwd) echo "webrtc" ;;
 		rwc) echo "webcam" ;;
 		rsp) echo "push" ;;
@@ -69,7 +70,7 @@ daemon_section() {
 
 daemon_default_enabled() {
 	case $1 in
-		rmr | rmd | rwc | rsp | rsr | rsd-555) echo "false" ;;
+		rmr | rmd | rwc | rsp | rsr | rsd-555 | rcd) echo "false" ;;
 		*) echo "true" ;;
 	esac
 }
@@ -112,6 +113,8 @@ start() {
 	[ -f /usr/lib/libimp-nodbg.so ] && RAD_ENV="LD_PRELOAD=/usr/lib/libimp-nodbg.so"
 	start_daemon rad $RAD_ENV
 	start_daemon rtd
+	# external cameras fill sN_* rings before the consumers open them
+	start_daemon rcd
 
 	# Core daemons
 	start_daemon rod
@@ -149,7 +152,7 @@ stop() {
 	echo "Stopping Raptor Streaming System..."
 
 	# Stop consumers first, then producer (RVD) last
-	for d in rsr rsp rwd rmd rmr rtd ric rhd rsd rsd-555 rod rad rvd; do
+	for d in rsr rsp rwd rmd rmr rcd rtd ric rhd rsd rsd-555 rod rad rvd; do
 		stop_daemon $d
 	done
 

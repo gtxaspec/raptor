@@ -6,6 +6,7 @@ extern SUITE(prebuf_suite);
 extern SUITE(mux_suite);
 extern SUITE(gps_suite);
 extern SUITE(io_suite);
+extern SUITE(ethcam_suite);
 extern SUITE(sdp_suite);
 extern SUITE(codec_suite);
 extern SUITE(ring_suite);
@@ -70,5 +71,6 @@ int main(int argc, char **argv)
 	RUN_SUITE(backchannel_suite);
 	RUN_SUITE(config_suite);
 	RUN_SUITE(rhd_slots_suite);
+	RUN_SUITE(ethcam_suite);
 	GREATEST_MAIN_END();
 }

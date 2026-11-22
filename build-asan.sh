@@ -53,7 +53,7 @@ rm -f "$OUT/.build-ok"
 if [ "$1" = "clean" ]; then
     rm -f "$OUT"/*.o "$OUT"/*.a "$OUT"/rss_build_info.c
     rm -f "$OUT"/rvd "$OUT"/rsd "$OUT"/rad "$OUT"/rhd "$OUT"/rod "$OUT"/ric
-    rm -f "$OUT"/rmd "$OUT"/rtd "$OUT"/rmr "$OUT"/rwc "$OUT"/rwd "$OUT"/rsp "$OUT"/rsr
+    rm -f "$OUT"/rmd "$OUT"/rtd "$OUT"/rcd "$OUT"/rmr "$OUT"/rwc "$OUT"/rwd "$OUT"/rsp "$OUT"/rsr
     rm -f "$OUT"/raptorctl "$OUT"/ringdump "$OUT"/rac "$OUT"/create_rings
     rm -rf "$OUT"/mbedtls-build "$OUT"/mbedtls-install "$OUT"/compy-build "$OUT"/srt-build "$OUT"/srt-install
     echo "Cleaned asan-out/ (deps kept — use distclean to remove)"
@@ -361,6 +361,12 @@ $CC $CFLAGS -c "$RAPTOR_DIR/rtd/rtd_nmea.c" -o "$OUT/rtd_nmea.o"
 $CC $CFLAGS -c "$RAPTOR_DIR/rtd/rtd_accel.c" -o "$OUT/rtd_accel.o"
 $CC -o "$OUT/rtd" "$OUT/rtd_main.o" "$OUT/rtd_nmea.o" "$OUT/rtd_accel.o" $LIBS -lm $LDFLAGS
 echo "  -> rtd"
+$CC $CFLAGS $HAL_CFLAGS -c "$RAPTOR_DIR/rcd/rcd_main.c" -o "$OUT/rcd_main.o"
+$CC $CFLAGS $HAL_CFLAGS -c "$RAPTOR_DIR/rcd/rcd_drv_ethcam.c" -o "$OUT/rcd_drv_ethcam.o"
+$CC $CFLAGS -c "$RAPTOR_DIR/rcd/rcd_ethcam.c" -o "$OUT/rcd_ethcam.o"
+$CC $CFLAGS -c "$RAPTOR_DIR/rcd/rcd_tsmap.c" -o "$OUT/rcd_tsmap.o"
+$CC -o "$OUT/rcd" "$OUT/rcd_main.o" "$OUT/rcd_drv_ethcam.o" "$OUT/rcd_ethcam.o" "$OUT/rcd_tsmap.o" $LIBS $LDFLAGS
+echo "  -> rcd"
 
 echo "=== ROD ==="
 # Compile libschrift's single .c directly into rod — avoids depending on
@@ -537,4 +543,4 @@ touch "$OUT/.build-ok"
 
 echo ""
 echo "Done. All binaries in asan-out/"
-ls -1 "$OUT"/rvd "$OUT"/rsd "$OUT"/rad "$OUT"/rhd "$OUT"/rod "$OUT"/ric "$OUT"/rmd "$OUT"/rtd "$OUT"/rmr "$OUT"/rwd "$OUT"/rwc "$OUT"/rsp "$OUT"/rsr "$OUT"/raptorctl "$OUT"/ringdump "$OUT"/rac "$OUT"/create_rings 2>/dev/null | while read f; do echo "  $(basename $f)"; done
+ls -1 "$OUT"/rvd "$OUT"/rsd "$OUT"/rad "$OUT"/rhd "$OUT"/rod "$OUT"/ric "$OUT"/rmd "$OUT"/rtd "$OUT"/rcd "$OUT"/rmr "$OUT"/rwd "$OUT"/rwc "$OUT"/rsp "$OUT"/rsr "$OUT"/raptorctl "$OUT"/ringdump "$OUT"/rac "$OUT"/create_rings 2>/dev/null | while read f; do echo "  $(basename $f)"; done

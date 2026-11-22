@@ -211,6 +211,12 @@ else
     stage_fail "rac beep suite"
 fi
 
+if "$SCRIPT_DIR/test-rcd.sh"; then
+    stage_pass "rcd external cameras"
+else
+    stage_fail "rcd external cameras"
+fi
+
 if "$SCRIPT_DIR/test-fuzz.sh"; then
     stage_pass "fuzz (pre-auth parsers)"
 else
