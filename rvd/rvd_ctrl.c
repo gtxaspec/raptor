@@ -2102,10 +2102,13 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		 * encoder on reader_count, exactly as for rhd. Skip history --
 		 * small jpeg rings recycle their data region ahead of the slot
 		 * ring, so only a frame written after attach is trustworthy
-		 * (and it still gets the SOI/EOI check below). */
+		 * (and it still gets the SOI/EOI check below). write_seq is
+		 * the newest frame already published, which on an on-demand
+		 * channel is the last one before it stopped, however long
+		 * ago: start one past it. */
 		rss_ring_acquire(ring);
 		uint64_t read_seq =
-			atomic_load(&((rss_ring_header_t *)rss_ring_get_header(ring))->write_seq);
+			atomic_load(&((rss_ring_header_t *)rss_ring_get_header(ring))->write_seq) + 1;
 
 		uint32_t buf_size = rss_ring_max_frame_size(ring);
 		uint8_t *buf = malloc(buf_size);
