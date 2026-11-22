@@ -26,20 +26,32 @@ struct rmr_storage {
 	int segment_seconds;
 	int max_storage_mb;
 	int min_free_mb;
+	/* base_path follows the largest card */
+	bool auto_root;
+	char subdir[32];
+	int64_t next_pick_us;
 	bool refuse_logged;	   /* rootfs auto-create refusal logged once */
 	int64_t last_wait_warn_us; /* rate-limit for the waiting log       */
 };
 
 rmr_storage_t *rmr_storage_create(const rmr_storage_config_t *cfg)
 {
-	if (!cfg || !cfg->base_path)
+	if (!cfg)
 		return NULL;
 
 	rmr_storage_t *st = calloc(1, sizeof(*st));
 	if (!st)
 		return NULL;
 
-	snprintf(st->base_path, sizeof(st->base_path), "%s", cfg->base_path);
+	if (cfg->base_path && cfg->base_path[0]) {
+		snprintf(st->base_path, sizeof(st->base_path), "%s", cfg->base_path);
+	} else {
+		char root[sizeof(st->base_path) - sizeof(st->subdir)];
+		st->auto_root = true;
+		snprintf(st->subdir, sizeof(st->subdir), "%s", cfg->subdir ? cfg->subdir : "");
+		rmr_storage_pick_root(root, sizeof(root));
+		snprintf(st->base_path, sizeof(st->base_path), "%s%s", root, st->subdir);
+	}
 	st->segment_minutes = cfg->segment_minutes > 0 ? cfg->segment_minutes : 5;
 	st->segment_seconds = cfg->segment_seconds;
 	st->max_storage_mb = cfg->max_storage_mb;
@@ -186,10 +198,63 @@ static bool storage_try_create(rmr_storage_t *st)
 	return true;
 }
 
+int rmr_storage_pick_root(char *out, int out_size)
+{
+	uint64_t best = 0;
+	char line[512], dev[128], mnt[256];
+	FILE *f = fopen("/proc/mounts", "r");
+
+	out[0] = '\0';
+	while (f && fgets(line, sizeof(line), f)) {
+		struct statvfs v;
+		if (sscanf(line, "%127s %255s", dev, mnt) != 2 ||
+		    strncmp(dev, "/dev/mmcblk", 11) != 0 || strncmp(mnt, "/mnt/", 5) != 0 ||
+		    statvfs(mnt, &v) != 0)
+			continue;
+		uint64_t size = (uint64_t)v.f_blocks * v.f_frsize;
+		if (size > best) {
+			best = size;
+			snprintf(out, out_size, "%s/raptor", mnt);
+		}
+	}
+	if (f)
+		fclose(f);
+	if (out[0])
+		return 0;
+	snprintf(out, out_size, "%s", RMR_STORAGE_DEFAULT_ROOT);
+	return -1;
+}
+
+const char *rmr_storage_path(const rmr_storage_t *st)
+{
+	return st ? st->base_path : "";
+}
+
+/* A card can mount after rmr starts, its partitions one by one: while the
+ * picked directory is unusable, look again now and then. */
+static void storage_repick(rmr_storage_t *st)
+{
+	int64_t now = rss_timestamp_us();
+	if (!st->auto_root || now < st->next_pick_us)
+		return;
+	st->next_pick_us = now + 10000000LL;
+	char root[sizeof(st->base_path) - sizeof(st->subdir)], path[sizeof(st->base_path)];
+	rmr_storage_pick_root(root, sizeof(root));
+	snprintf(path, sizeof(path), "%s%s", root, st->subdir);
+	if (strcmp(path, st->base_path) != 0) {
+		RSS_INFO("storage: %s", path);
+		snprintf(st->base_path, sizeof(st->base_path), "%s", path);
+		st->refuse_logged = false;
+	}
+}
+
 bool rmr_storage_available(rmr_storage_t *st)
 {
 	if (!st)
 		return false;
+	if (access(st->base_path, W_OK) == 0)
+		return true;
+	storage_repick(st);
 	if (access(st->base_path, W_OK) == 0)
 		return true;
 	if (storage_try_create(st))

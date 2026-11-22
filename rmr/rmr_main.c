@@ -712,6 +712,7 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		cJSON_AddBoolToObject(r, "recording", atomic_load(&st->recording));
 		cJSON_AddBoolToObject(r, "clip", atomic_load(&st->clip_recording));
 		cJSON_AddStringToObject(r, "mode", mode_names[st->mode]);
+		cJSON_AddStringToObject(r, "storage_path", rmr_storage_path(st->storage));
 		cJSON_AddStringToObject(r, "file", t0->segment_path);
 		cJSON_AddNumberToObject(r, "frames", (double)t0->frames_written);
 		cJSON_AddNumberToObject(r, "dropped", (double)t0->frames_dropped);
@@ -1664,8 +1665,7 @@ int main(int argc, char **argv)
 
 	/* Storage */
 	rmr_storage_config_t scfg = {
-		.base_path = rss_config_get_str(dctx.cfg, "recording", "storage_path",
-						"/mnt/mmcblk0p1/raptor"),
+		.base_path = rss_config_get_str(dctx.cfg, "recording", "storage_path", ""),
 		.segment_minutes = rss_config_get_int(dctx.cfg, "recording", "segment_minutes", 5),
 		.segment_seconds = rss_config_get_int(dctx.cfg, "recording", "segment_seconds", 0),
 		.max_storage_mb = rss_config_get_int(dctx.cfg, "recording", "max_storage_mb", 0),
@@ -1676,6 +1676,8 @@ int main(int argc, char **argv)
 		RSS_FATAL("storage init failed");
 		goto cleanup;
 	}
+	RSS_INFO("storage: %s%s", rmr_storage_path(st.storage), scfg.base_path[0] ? "" : " (auto)");
+	const char *root_cfg = scfg.base_path;
 
 	/* Control socket */
 	rss_mkdir_p(RSS_RUN_DIR);
@@ -1685,12 +1687,12 @@ int main(int argc, char **argv)
 
 	/* Set up clip storage for motion modes */
 	if (st.mode == RMR_MODE_BOTH || st.mode == RMR_MODE_MOTION) {
-		char clip_path[280];
-		snprintf(clip_path, sizeof(clip_path), "%s/clips",
-			 rss_config_get_str(dctx.cfg, "recording", "storage_path",
-					    "/mnt/mmcblk0p1/raptor"));
+		char clip_path[280] = "";
+		if (root_cfg[0])
+			snprintf(clip_path, sizeof(clip_path), "%s/clips", root_cfg);
 		rmr_storage_config_t ccfg = {
 			.base_path = clip_path,
+			.subdir = "/clips",
 			.segment_minutes = (st.clip_length_sec + 59) / 60,
 			.max_storage_mb =
 				rss_config_get_int(dctx.cfg, "recording", "clip_max_mb", 100),
@@ -1705,12 +1707,12 @@ int main(int argc, char **argv)
 	/* Timelapse storage: same proven shape as clips — its own
 	 * subdirectory and its own quota, invisible to the main scan. */
 	{
-		char tl_path[280];
-		snprintf(tl_path, sizeof(tl_path), "%s/timelapse",
-			 rss_config_get_str(dctx.cfg, "recording", "storage_path",
-					    "/mnt/mmcblk0p1/raptor"));
+		char tl_path[280] = "";
+		if (root_cfg[0])
+			snprintf(tl_path, sizeof(tl_path), "%s/timelapse", root_cfg);
 		rmr_storage_config_t tcfg = {
 			.base_path = tl_path,
+			.subdir = "/timelapse",
 			.segment_minutes = 24 * 60,
 			.max_storage_mb = rss_config_get_int(dctx.cfg, "timelapse", "max_mb", 2048),
 		};

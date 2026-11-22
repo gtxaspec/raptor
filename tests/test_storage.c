@@ -369,6 +369,21 @@ TEST storage_enforce_min_free_oldest_first(void)
 	PASS();
 }
 
+TEST storage_auto_root_without_card(void)
+{
+	/* no card partition under /mnt here: the old default, plus subdir */
+	rmr_storage_config_t cfg = {.base_path = "", .subdir = "/clips", .segment_minutes = 1};
+	rmr_storage_t *st = rmr_storage_create(&cfg);
+	ASSERT(st);
+	char root[256];
+	if (rmr_storage_pick_root(root, sizeof(root)) == 0)
+		SKIPm("a card is mounted on this host");
+	ASSERT_STR_EQ(RMR_STORAGE_DEFAULT_ROOT, root);
+	ASSERT_STR_EQ(RMR_STORAGE_DEFAULT_ROOT "/clips", rmr_storage_path(st));
+	rmr_storage_destroy(st);
+	PASS();
+}
+
 SUITE(storage_suite)
 {
 	RUN_TEST(storage_boundary_from_mid_period);
@@ -386,4 +401,5 @@ SUITE(storage_suite)
 	RUN_TEST(storage_enforce_deletes_pairs_together);
 	RUN_TEST(storage_enforce_keeps_recent_segments);
 	RUN_TEST(storage_enforce_min_free_oldest_first);
+	RUN_TEST(storage_auto_root_without_card);
 }

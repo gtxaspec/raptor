@@ -11,12 +11,24 @@
 typedef struct rmr_storage rmr_storage_t;
 
 typedef struct {
-	const char *base_path; /* e.g. /mnt/mmcblk0p1/raptor */
+	const char *base_path; /* e.g. /mnt/mmcblk0p1/raptor; NULL or "" = the
+				* largest card partition (rmr_storage_pick_root) */
+	const char *subdir;    /* under a picked root, e.g. "/clips" */
 	int segment_minutes;   /* segment duration (default 5) */
 	int segment_seconds;   /* nonzero overrides minutes (debug/test) */
 	int max_storage_mb;    /* 0 = unlimited */
 	int min_free_mb;       /* keep this much free on the medium, 0 = off */
 } rmr_storage_config_t;
+
+#define RMR_STORAGE_DEFAULT_ROOT "/mnt/mmcblk0p1/raptor"
+
+/* "<mount>/raptor" on the largest mounted card partition (/dev/mmcblk*
+ * under /mnt). Returns 0, or -1 with RMR_STORAGE_DEFAULT_ROOT when no
+ * card is mounted. */
+int rmr_storage_pick_root(char *out, int out_size);
+
+/* The directory files go to now */
+const char *rmr_storage_path(const rmr_storage_t *st);
 
 /* Create/destroy storage manager */
 rmr_storage_t *rmr_storage_create(const rmr_storage_config_t *cfg);
