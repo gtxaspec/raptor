@@ -1,4 +1,4 @@
-SRCS := rmr_main.c rmr_gps.c rmr_io.c rmr_mux.c rmr_nal.c rmr_prebuf.c rmr_sign.c rmr_storage.c rmr_timelapse.c
+SRCS := rmr_main.c rmr_gps.c rmr_io.c rmr_mux.c rmr_nal.c rmr_prebuf.c rmr_sign.c rmr_storage.c rmr_streams.c rmr_timelapse.c
 OBJS := $(SRCS:.c=.o)
 BIN  := rmr
 

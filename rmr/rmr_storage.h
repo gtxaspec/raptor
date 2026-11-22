@@ -25,6 +25,27 @@ void rmr_storage_destroy(rmr_storage_t *st);
  * Returns fd on success, -1 on error. Writes path to path_out. */
 int rmr_storage_open_segment(rmr_storage_t *st, char *path_out, int path_out_size);
 
+/* Open a file named for the wall-clock time rt_us, "_<suffix>" before
+ * ".mp4" when suffix is non-empty. Returns fd or -1. */
+int rmr_storage_open_file(rmr_storage_t *st, int64_t rt_us, const char *suffix, char *path_out,
+			  int path_out_size);
+
+/* One file name shared by every track that opens a file for the same
+ * period, so a front HH-MM-SS.mp4 pairs with its HH-MM-SS_R.mp4. */
+typedef struct {
+	int64_t rt_us; /* wall clock the shared name is formed from */
+	int64_t until; /* shared while now < until, in the caller's clock */
+	uint32_t gen;  /* 0 = none yet */
+} rmr_name_stamp_t;
+
+/* Name time for a track opening a file now. The current stamp is reused
+ * while it is live and this track (*used) has not opened a file under it
+ * yet; otherwise rt_us starts a new stamp valid until `until`. A track
+ * reopening within one period never reuses its own name, so it cannot
+ * truncate the file it just closed. */
+int64_t rmr_name_stamp_take(rmr_name_stamp_t *s, uint32_t *used, int64_t now, int64_t rt_us,
+			    int64_t until);
+
 /* Close a segment file. */
 void rmr_storage_close_segment(int fd);
 

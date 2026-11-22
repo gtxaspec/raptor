@@ -315,6 +315,38 @@ TEST prebuf_grows_for_large_frame(void)
 	PASS();
 }
 
+TEST prebuf_reserve_keeps_frames(void)
+{
+	rmr_prebuf_t *pb = rmr_prebuf_create(16, 128);
+	ASSERT(pb);
+	rmr_prebuf_set_growth(pb, 1000, 1000000);
+	for (int i = 0; i < 3; i++) {
+		uint8_t frame[40];
+		memset(frame, 0x30 + i, sizeof(frame));
+		rmr_prebuf_push(pb, frame, sizeof(frame), i * 1000, i == 0);
+	}
+	ASSERT_EQ(0, rmr_prebuf_reserve(pb, 700));
+	ASSERT_EQ(700u, pb->data_size);
+	/* capped by the growth ceiling, never shrinks */
+	ASSERT_EQ(0, rmr_prebuf_reserve(pb, 5000));
+	ASSERT_EQ(1000u, pb->data_size);
+	ASSERT_EQ(0, rmr_prebuf_reserve(pb, 200));
+	ASSERT_EQ(1000u, pb->data_size);
+	ASSERT_EQ(3u, rmr_prebuf_count(pb));
+	uint32_t oldest = rmr_prebuf_write_idx(pb) - rmr_prebuf_count(pb);
+	struct iter_ctx ic = {0};
+	ASSERT_EQ(3, rmr_prebuf_iterate(pb, oldest, data_iter_cb, &ic));
+	for (int i = 0; i < 3; i++)
+		ASSERT_EQ((uint8_t)(0x30 + i), ic.data[i]);
+	/* new frames land after the kept ones */
+	uint8_t frame[40];
+	memset(frame, 0x40, sizeof(frame));
+	rmr_prebuf_push(pb, frame, sizeof(frame), 3000, 0);
+	ASSERT_EQ(4u, rmr_prebuf_count(pb));
+	rmr_prebuf_destroy(pb);
+	PASS();
+}
+
 SUITE(prebuf_suite)
 {
 	RUN_TEST(prebuf_push_count);
@@ -331,4 +363,5 @@ SUITE(prebuf_suite)
 	RUN_TEST(prebuf_growth_capped);
 	RUN_TEST(prebuf_old_frames_still_retire);
 	RUN_TEST(prebuf_grows_for_large_frame);
+	RUN_TEST(prebuf_reserve_keeps_frames);
 }

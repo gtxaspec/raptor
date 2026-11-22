@@ -217,6 +217,12 @@ else
     stage_fail "rcd external cameras"
 fi
 
+if "$SCRIPT_DIR/test-rmr-multi.sh"; then
+    stage_pass "rmr front + rear recording"
+else
+    stage_fail "rmr front + rear recording"
+fi
+
 if "$SCRIPT_DIR/test-fuzz.sh"; then
     stage_pass "fuzz (pre-auth parsers)"
 else

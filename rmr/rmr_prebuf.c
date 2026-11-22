@@ -69,10 +69,9 @@ static uint32_t overlapped(const rmr_prebuf_t *pb, uint32_t offset, uint32_t len
 	return evict;
 }
 
-/* Double the region (capped), packing the live frames from offset 0 */
-static int grow(rmr_prebuf_t *pb)
+/* Enlarge the region to size (capped), packing the live frames from offset 0 */
+static int resize(rmr_prebuf_t *pb, uint64_t want)
 {
-	uint64_t want = (uint64_t)pb->data_size * 2;
 	uint32_t size = want > pb->data_max ? pb->data_max : (uint32_t)want;
 	if (size <= pb->data_size)
 		return -1;
@@ -91,6 +90,20 @@ static int grow(rmr_prebuf_t *pb)
 	pb->data_size = size;
 	pb->data_head = head;
 	return 0;
+}
+
+static int grow(rmr_prebuf_t *pb)
+{
+	return resize(pb, (uint64_t)pb->data_size * 2);
+}
+
+int rmr_prebuf_reserve(rmr_prebuf_t *pb, uint32_t size)
+{
+	if (!pb)
+		return -1;
+	if (size <= pb->data_size || pb->data_max <= pb->data_size)
+		return 0;
+	return resize(pb, size);
 }
 
 static uint32_t place(const rmr_prebuf_t *pb, uint32_t len)

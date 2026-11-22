@@ -46,6 +46,10 @@ rmr_prebuf_t *rmr_prebuf_create(uint32_t capacity, uint32_t data_size);
  * and a stream running above it would otherwise cut the pre-roll. */
 void rmr_prebuf_set_growth(rmr_prebuf_t *pb, uint32_t max_size, int64_t keep_us);
 
+/* Grow the data region to size (capped by the growth ceiling) in one
+ * step, keeping the buffered frames. No-op when already that large. */
+int rmr_prebuf_reserve(rmr_prebuf_t *pb, uint32_t size);
+
 /* Destroy and free all resources. */
 void rmr_prebuf_destroy(rmr_prebuf_t *pb);
 

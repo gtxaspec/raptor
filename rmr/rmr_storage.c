@@ -50,14 +50,15 @@ void rmr_storage_destroy(rmr_storage_t *st)
 	free(st);
 }
 
-int rmr_storage_open_segment(rmr_storage_t *st, char *path_out, int path_out_size)
+int rmr_storage_open_file(rmr_storage_t *st, int64_t rt_us, const char *suffix, char *path_out,
+			  int path_out_size)
 {
 	if (!st)
 		return -1;
 
-	time_t now = time(NULL);
+	time_t t = (time_t)(rt_us / 1000000);
 	struct tm tm;
-	localtime_r(&now, &tm);
+	localtime_r(&t, &tm);
 
 	/* Create date directory: {base}/YYYY-MM-DD/ */
 	char dir[320];
@@ -65,15 +66,36 @@ int rmr_storage_open_segment(rmr_storage_t *st, char *path_out, int path_out_siz
 		 tm.tm_mon + 1, tm.tm_mday);
 	rss_mkdir_p(dir);
 
-	/* Filename: HH-MM-SS.mp4 */
-	snprintf(path_out, path_out_size, "%s/%02d-%02d-%02d.mp4", dir, tm.tm_hour, tm.tm_min,
-		 tm.tm_sec);
+	/* Filename: HH-MM-SS.mp4, HH-MM-SS_<suffix>.mp4 */
+	bool tagged = suffix && suffix[0];
+	snprintf(path_out, path_out_size, "%s/%02d-%02d-%02d%s%s.mp4", dir, tm.tm_hour, tm.tm_min,
+		 tm.tm_sec, tagged ? "_" : "", tagged ? suffix : "");
 
 	int fd = open(path_out, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 	if (fd < 0)
 		RSS_ERROR("failed to open segment: %s", path_out);
 
 	return fd;
+}
+
+int rmr_storage_open_segment(rmr_storage_t *st, char *path_out, int path_out_size)
+{
+	return rmr_storage_open_file(st, (int64_t)time(NULL) * 1000000, NULL, path_out,
+				     path_out_size);
+}
+
+int64_t rmr_name_stamp_take(rmr_name_stamp_t *s, uint32_t *used, int64_t now, int64_t rt_us,
+			    int64_t until)
+{
+	if (s->gen != 0 && *used != s->gen && now < s->until) {
+		*used = s->gen;
+		return s->rt_us;
+	}
+	s->gen = s->gen + 1 ? s->gen + 1 : 1;
+	s->rt_us = rt_us;
+	s->until = until;
+	*used = s->gen;
+	return rt_us;
 }
 
 void rmr_storage_close_segment(int fd)

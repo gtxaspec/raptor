@@ -3,10 +3,16 @@
  *
  * Reads H.264/H.265 video + audio from SHM rings and writes
  * fragmented MP4 files to SD card. Single-threaded: the main loop
- * reads rings, feeds the muxer, and writes directly to disk.
+ * reads rings, feeds the muxers, and queues file writes to the
+ * writer thread.
  *
- * Motion clips with pre-buffer: a process-local circular buffer
- * stores the last N seconds of frames. When motion triggers, the
+ * Several video rings can be recorded at once (a dashcam's front and
+ * rear cameras): each is a track with its own files, named after the
+ * first track's plus a tag. Audio, telematics, events and storage are
+ * shared by all tracks.
+ *
+ * Motion clips with pre-buffer: a process-local circular buffer per
+ * track stores the last N seconds of frames. When motion triggers, the
  * pre-buffer is replayed into a clip file before live frames continue.
  */
 
@@ -21,6 +27,20 @@
 #include <sys/select.h>
 
 #include "rmr.h"
+
+#define RING_RETRY_US	  200000
+#define RING_IDLE_US	  2000000
+#define AUDIO_RETRY_US	  2000000
+#define RATE_WINDOW_US	  3000000
+#define TRACK_READ_BURST  8
+#define AUDIO_READ_BURST  16
+#define LOOP_WAIT_MS	  10
+#define PREBUF_START_SIZE (1024 * 1024)
+
+static bool is_primary(const rmr_track_t *t)
+{
+	return t == &t->st->tracks[0];
+}
 
 /* ── Write callbacks ── */
 
@@ -41,17 +61,17 @@ static int queue_write(rmr_state_t *st, int fd, const void *buf, uint32_t len, u
 
 static int direct_write(const void *buf, uint32_t len, void *ctx)
 {
-	rmr_state_t *st = ctx;
-	uint64_t before = st->segment_bytes;
-	int ret = queue_write(st, st->segment_fd, buf, len, &st->segment_bytes, &st->sign_seg);
-	st->bytes_written += st->segment_bytes - before;
+	rmr_track_t *t = ctx;
+	uint64_t before = t->segment_bytes;
+	int ret = queue_write(t->st, t->segment_fd, buf, len, &t->segment_bytes, &t->sign_seg);
+	t->bytes_written += t->segment_bytes - before;
 	return ret;
 }
 
 static int clip_write(const void *buf, uint32_t len, void *ctx)
 {
-	rmr_state_t *st = ctx;
-	return queue_write(st, st->clip_fd, buf, len, &st->clip_bytes, &st->sign_clip);
+	rmr_track_t *t = ctx;
+	return queue_write(t->st, t->clip_fd, buf, len, &t->clip_bytes, &t->sign_clip);
 }
 
 static int tl_write(const void *buf, uint32_t len, void *ctx)
@@ -64,13 +84,13 @@ static int tl_write(const void *buf, uint32_t len, void *ctx)
 
 #define TELE_RETRY_US 5000000
 
-static void gps_write(rmr_mux_t *mux, rmr_write_fn fn, uint64_t *file_off, rmr_state_t *st,
+static void gps_write(rmr_mux_t *mux, rmr_write_fn fn, uint64_t *file_off, void *ctx,
 		      const rtd_record_t *r)
 {
 	uint8_t box[RMR_GPS_BOX_SIZE];
 	rmr_gps_build(box, r);
 	uint64_t off = *file_off;
-	if (fn(box, sizeof(box), st) == 0)
+	if (fn(box, sizeof(box), ctx) == 0)
 		rmr_mux_gps_add(mux, off);
 }
 
@@ -125,43 +145,42 @@ static void telematics_poll(rmr_state_t *st)
 		if (ret == RSS_EOVERFLOW || len != sizeof(r) || r.version != RTD_REC_VERSION)
 			continue;
 		st->tele_hist[st->tele_hist_n++ % 8] = r;
-		if (st->mux)
-			gps_write(st->mux, direct_write, &st->segment_bytes, st, &r);
-		if (st->clip_mux)
-			gps_write(st->clip_mux, clip_write, &st->clip_bytes, st, &r);
+		for (int i = 0; i < st->track_count; i++) {
+			rmr_track_t *t = &st->tracks[i];
+			if (t->mux)
+				gps_write(t->mux, direct_write, &t->segment_bytes, t, &r);
+			if (t->clip_mux)
+				gps_write(t->clip_mux, clip_write, &t->clip_bytes, t, &r);
+		}
 	}
 }
 
 /* ── Segment management ── */
 
-static void setup_mux_video_track_dur(rmr_mux_t *mux, rmr_state_t *st, uint32_t default_duration)
+static void setup_mux_video_track_dur(rmr_mux_t *mux, const rmr_track_t *t,
+				      uint32_t default_duration)
 {
 	rmr_video_params_t vp = {
-		.codec = (st->video_codec == 2)	  ? RMR_CODEC_MJPEG
-			 : (st->video_codec == 1) ? RMR_CODEC_H265
-						  : RMR_CODEC_H264,
-		.width = st->width,
-		.height = st->height,
+		.codec = (t->codec == 2)   ? RMR_CODEC_MJPEG
+			 : (t->codec == 1) ? RMR_CODEC_H265
+					   : RMR_CODEC_H264,
+		.width = t->width,
+		.height = t->height,
 		.timescale = 90000,
 		.default_duration = default_duration,
 	};
-	if (st->video_codec == 2)
+	if (t->codec == 2)
 		rmr_mux_set_video(mux, &vp, NULL, 0, NULL, 0, NULL, 0);
 	else
-		rmr_mux_set_video(mux, &vp, st->params.sps, st->params.sps_len, st->params.pps,
-				  st->params.pps_len,
-				  st->params.vps_len > 0 ? st->params.vps : NULL,
-				  st->params.vps_len);
+		rmr_mux_set_video(mux, &vp, t->params.sps, t->params.sps_len, t->params.pps,
+				  t->params.pps_len, t->params.vps_len > 0 ? t->params.vps : NULL,
+				  t->params.vps_len);
 }
 
-static void setup_mux_video_track(rmr_mux_t *mux, rmr_state_t *st)
+static void setup_mux_tracks(rmr_mux_t *mux, const rmr_track_t *t)
 {
-	setup_mux_video_track_dur(mux, st, 0);
-}
-
-static void setup_mux_tracks(rmr_mux_t *mux, rmr_state_t *st)
-{
-	setup_mux_video_track(mux, st);
+	const rmr_state_t *st = t->st;
+	setup_mux_video_track_dur(mux, t, 0);
 
 	if (st->audio_ring) {
 		rmr_audio_params_t ap = {
@@ -192,121 +211,134 @@ static void setup_mux_tracks(rmr_mux_t *mux, rmr_state_t *st)
 	}
 }
 
-static int start_segment(rmr_state_t *st)
+static int start_segment(rmr_track_t *t)
 {
-	int fd = rmr_storage_open_segment(st->storage, st->segment_path, sizeof(st->segment_path));
+	rmr_state_t *st = t->st;
+	int seg_len = rmr_storage_segment_len_sec(st->storage);
+	int64_t now_rt = rss_wallclock_us();
+	int64_t name_rt = rmr_name_stamp_take(&st->segment_name, &t->segment_stamp, now_rt, now_rt,
+					      rmr_storage_next_boundary(now_rt, seg_len));
+	int fd = rmr_storage_open_file(st->storage, name_rt, t->tag, t->segment_path,
+				       sizeof(t->segment_path));
 	if (fd < 0)
 		return -1;
 
-	st->mux = rmr_mux_create(direct_write, st);
-	if (!st->mux) {
+	t->mux = rmr_mux_create(direct_write, t);
+	if (!t->mux) {
 		rmr_storage_close_segment(fd);
 		return -1;
 	}
 
-	setup_mux_tracks(st->mux, st);
+	setup_mux_tracks(t->mux, t);
 	if (st->gps)
-		rmr_mux_enable_gps(st->mux, gps_capacity(rmr_storage_segment_len_sec(st->storage)));
-	st->segment_fd = fd;
-	st->segment_bytes = 0;
+		rmr_mux_enable_gps(t->mux, gps_capacity(seg_len));
+	t->segment_fd = fd;
+	t->segment_bytes = 0;
 	if (st->sign_enabled)
-		rmr_sign_stream_begin(&st->sign_seg, &st->sign_key);
-	rmr_mux_start(st->mux);
+		rmr_sign_stream_begin(&t->sign_seg, &st->sign_key);
+	rmr_mux_start(t->mux);
 	if (st->sign_enabled)
-		rmr_sign_stream_emit(&st->sign_seg, false, direct_write, st);
-	st->segment_start_us = rss_timestamp_us();
-	st->segment_start_rt_us = rss_wallclock_us();
-	st->segment_boundary_rt_us = rmr_storage_next_boundary(
-		st->segment_start_rt_us, rmr_storage_segment_len_sec(st->storage));
-	st->segment_idr_requested = false;
+		rmr_sign_stream_emit(&t->sign_seg, false, direct_write, t);
+	t->segment_start_rt_us = now_rt;
+	t->segment_boundary_rt_us = rmr_storage_next_boundary(now_rt, seg_len);
+	t->segment_idr_requested = false;
 
-	RSS_INFO("recording segment: %s", st->segment_path);
+	RSS_INFO("recording segment: %s", t->segment_path);
 	return 0;
 }
 
-static void close_segment(rmr_state_t *st)
+static void close_segment(rmr_track_t *t)
 {
-	if (st->mux) {
-		rmr_mux_finalize(st->mux);
+	rmr_state_t *st = t->st;
+	if (t->mux) {
+		rmr_mux_finalize(t->mux);
 		if (st->sign_enabled)
-			rmr_sign_stream_emit(&st->sign_seg, true, direct_write, st);
-		if (st->segment_fd >= 0)
-			gps_patch_index(st, st->mux, st->segment_fd);
-		rmr_mux_destroy(st->mux);
-		st->mux = NULL;
+			rmr_sign_stream_emit(&t->sign_seg, true, direct_write, t);
+		if (t->segment_fd >= 0)
+			gps_patch_index(st, t->mux, t->segment_fd);
+		rmr_mux_destroy(t->mux);
+		t->mux = NULL;
 	}
 
-	int fd = st->segment_fd;
-	st->segment_fd = -1;
+	int fd = t->segment_fd;
+	t->segment_fd = -1;
 
 	if (fd >= 0) {
 		rmr_io_close(st->io, fd);
 		RSS_DEBUG("segment closed: %s (%" PRIu64 " frames, %" PRIu64 " bytes)",
-			  st->segment_path, st->frames_written, st->bytes_written);
+			  t->segment_path, t->frames_written, t->bytes_written);
 	}
 }
 
 /* ── Motion clip management ── */
 
-static int open_clip(rmr_state_t *st)
+static int open_clip(rmr_track_t *t)
 {
+	rmr_state_t *st = t->st;
 	if (!st->clip_storage)
 		return -1;
 
-	int fd = rmr_storage_open_segment(st->clip_storage, st->clip_path, sizeof(st->clip_path));
+	int64_t now = rss_timestamp_us();
+	int64_t until =
+		st->clip_length_sec > 0 ? now + (int64_t)st->clip_length_sec * 1000000 : INT64_MAX;
+	int64_t name_rt =
+		rmr_name_stamp_take(&st->clip_name, &t->clip_stamp, now, rss_wallclock_us(), until);
+	int fd = rmr_storage_open_file(st->clip_storage, name_rt, t->tag, t->clip_path,
+				       sizeof(t->clip_path));
 	if (fd < 0)
 		return -1;
 
-	st->clip_mux = rmr_mux_create(clip_write, st);
-	if (!st->clip_mux) {
+	t->clip_mux = rmr_mux_create(clip_write, t);
+	if (!t->clip_mux) {
 		rmr_storage_close_segment(fd);
 		return -1;
 	}
 
-	st->clip_fd = fd;
-	st->clip_v_ts_base = -1;
-	st->clip_a_dts = 0;
-	st->clip_a_ts_base = -1;
-	st->clip_start_us = rss_timestamp_us();
-	st->clip_bytes = 0;
+	t->clip_fd = fd;
+	t->clip_v_ts_base = -1;
+	t->clip_a_dts = 0;
+	t->clip_a_ts_base = -1;
+	t->clip_start_us = now;
+	t->clip_bytes = 0;
 
-	setup_mux_tracks(st->clip_mux, st);
+	setup_mux_tracks(t->clip_mux, t);
 	if (st->gps)
-		rmr_mux_enable_gps(st->clip_mux,
+		rmr_mux_enable_gps(t->clip_mux,
 				   gps_capacity(st->clip_length_sec + st->prebuffer_sec));
 	if (st->sign_enabled)
-		rmr_sign_stream_begin(&st->sign_clip, &st->sign_key);
-	rmr_mux_start(st->clip_mux);
+		rmr_sign_stream_begin(&t->sign_clip, &st->sign_key);
+	rmr_mux_start(t->clip_mux);
 	if (st->sign_enabled)
-		rmr_sign_stream_emit(&st->sign_clip, false, clip_write, st);
+		rmr_sign_stream_emit(&t->sign_clip, false, clip_write, t);
 
-	int64_t since = st->clip_start_us - ((int64_t)st->prebuffer_sec + 1) * 1000000;
+	int64_t since = t->clip_start_us - ((int64_t)st->prebuffer_sec + 1) * 1000000;
 	unsigned n = st->tele_hist_n < 8 ? st->tele_hist_n : 8;
 	for (unsigned i = st->tele_hist_n - n; i < st->tele_hist_n; i++)
 		if (st->tele_hist[i % 8].ts_us >= since)
-			gps_write(st->clip_mux, clip_write, &st->clip_bytes, st,
+			gps_write(t->clip_mux, clip_write, &t->clip_bytes, t,
 				  &st->tele_hist[i % 8]);
 
-	RSS_INFO("motion clip started: %s", st->clip_path);
+	RSS_INFO("motion clip started: %s", t->clip_path);
 	return 0;
 }
 
-static void close_clip(rmr_state_t *st)
+static void close_clip(rmr_track_t *t)
 {
-	if (st->clip_mux) {
-		rmr_mux_finalize(st->clip_mux);
+	rmr_state_t *st = t->st;
+	if (t->clip_mux) {
+		rmr_mux_finalize(t->clip_mux);
 		if (st->sign_enabled)
-			rmr_sign_stream_emit(&st->sign_clip, true, clip_write, st);
-		if (st->clip_fd >= 0)
-			gps_patch_index(st, st->clip_mux, st->clip_fd);
-		rmr_mux_destroy(st->clip_mux);
-		st->clip_mux = NULL;
+			rmr_sign_stream_emit(&t->sign_clip, true, clip_write, t);
+		if (t->clip_fd >= 0)
+			gps_patch_index(st, t->clip_mux, t->clip_fd);
+		rmr_mux_destroy(t->clip_mux);
+		t->clip_mux = NULL;
 	}
-	if (st->clip_fd >= 0) {
-		rmr_io_close(st->io, st->clip_fd);
-		RSS_DEBUG("motion clip closed: %s (%" PRIu64 " bytes)", st->clip_path,
-			  st->clip_bytes);
-		st->clip_fd = -1;
+	if (t->clip_fd >= 0) {
+		rmr_io_close(st->io, t->clip_fd);
+		RSS_DEBUG("motion clip closed: %s (%" PRIu64 " bytes)", t->clip_path,
+			  t->clip_bytes);
+		t->clip_fd = -1;
 	}
 }
 
@@ -369,7 +401,7 @@ static int open_timelapse(rmr_state_t *st, int32_t day)
 	/* Fragment-per-sample: without a next sample to derive from, each
 	 * sample's declared duration must be the playback grid step or the
 	 * file contradicts its own DTS grid and players drop frames. */
-	setup_mux_video_track_dur(st->tl_mux, st, 90000 / st->tl.playback_fps);
+	setup_mux_video_track_dur(st->tl_mux, &st->tracks[0], 90000 / st->tl.playback_fps);
 	if (st->sign_enabled)
 		rmr_sign_stream_begin(&st->sign_tl, &st->sign_key);
 	rmr_mux_start(st->tl_mux);
@@ -415,16 +447,16 @@ static void timelapse_write_sample(rmr_state_t *st, const uint8_t *data, uint32_
 }
 
 /* Write a video frame to the clip mux with independent DTS. */
-static void clip_write_video(rmr_state_t *st, const uint8_t *avcc, uint32_t avcc_len,
+static void clip_write_video(rmr_track_t *t, const uint8_t *avcc, uint32_t avcc_len,
 			     int64_t timestamp, bool is_key)
 {
-	if (!st->clip_mux)
+	if (!t->clip_mux)
 		return;
 
-	if (st->clip_v_ts_base < 0)
-		st->clip_v_ts_base = timestamp;
+	if (t->clip_v_ts_base < 0)
+		t->clip_v_ts_base = timestamp;
 
-	int64_t v_dts = (timestamp - st->clip_v_ts_base) * 90 / 1000;
+	int64_t v_dts = (timestamp - t->clip_v_ts_base) * 90 / 1000;
 	rmr_video_sample_t vs = {
 		.data = avcc,
 		.size = avcc_len,
@@ -434,11 +466,11 @@ static void clip_write_video(rmr_state_t *st, const uint8_t *avcc, uint32_t avcc
 	};
 
 	if (is_key) {
-		rmr_mux_flush_fragment(st->clip_mux);
-		if (st->sign_enabled)
-			rmr_sign_stream_emit(&st->sign_clip, false, clip_write, st);
+		rmr_mux_flush_fragment(t->clip_mux);
+		if (t->st->sign_enabled)
+			rmr_sign_stream_emit(&t->sign_clip, false, clip_write, t);
 	}
-	rmr_mux_write_video(st->clip_mux, &vs);
+	rmr_mux_write_video(t->clip_mux, &vs);
 }
 
 /*
@@ -476,37 +508,40 @@ static int64_t steer_audio_dts(int64_t dts, int64_t ring_ts, int64_t *ts_base, u
 }
 
 /* Write an audio frame to the clip mux with independent DTS. */
-static void clip_write_audio(rmr_state_t *st, const uint8_t *data, uint32_t len, uint32_t samples,
+static void clip_write_audio(rmr_track_t *t, const uint8_t *data, uint32_t len, uint32_t samples,
 			     int64_t ring_ts)
 {
-	if (!st->clip_mux)
+	if (!t->clip_mux)
 		return;
 
-	st->clip_a_dts = steer_audio_dts(st->clip_a_dts, ring_ts, &st->clip_a_ts_base, samples,
-					 st->audio_sample_rate);
+	t->clip_a_dts = steer_audio_dts(t->clip_a_dts, ring_ts, &t->clip_a_ts_base, samples,
+					t->st->audio_sample_rate);
 	rmr_audio_sample_t as = {
 		.data = data,
 		.size = len,
-		.dts = st->clip_a_dts,
+		.dts = t->clip_a_dts,
 	};
-	rmr_mux_write_audio(st->clip_mux, &as);
-	st->clip_a_dts += samples;
+	rmr_mux_write_audio(t->clip_mux, &as);
+	t->clip_a_dts += samples;
 }
 
 /* ── Pre-buffer replay ── */
 
 typedef struct {
-	rmr_state_t *st;
-	uint32_t audio_samples_per_frame;
-	uint32_t audio_bps;
+	rmr_track_t *t;
 	int max_frames; /* limit replay count, -1 = unlimited */
 	int count;	/* frames replayed so far */
 } replay_ctx_t;
 
+static uint32_t audio_frame_samples(const rmr_state_t *st, uint32_t len)
+{
+	return st->audio_samples_per_frame ? st->audio_samples_per_frame : len / st->audio_bps;
+}
+
 static int replay_video_frame(const rmr_prebuf_slot_t *slot, const uint8_t *data, void *ctx)
 {
 	replay_ctx_t *rc = ctx;
-	clip_write_video(rc->st, data, slot->data_length, slot->timestamp, slot->is_key);
+	clip_write_video(rc->t, data, slot->data_length, slot->timestamp, slot->is_key);
 	rc->count++;
 	return 0;
 }
@@ -516,17 +551,16 @@ static int replay_audio_frame(const rmr_prebuf_slot_t *slot, const uint8_t *data
 	replay_ctx_t *rc = ctx;
 	if (rc->max_frames >= 0 && rc->count >= rc->max_frames)
 		return 1; /* stop iteration */
-	uint32_t samples = rc->audio_samples_per_frame ? rc->audio_samples_per_frame
-						       : slot->data_length / rc->audio_bps;
-	clip_write_audio(rc->st, data, slot->data_length, samples, slot->timestamp);
+	clip_write_audio(rc->t, data, slot->data_length,
+			 audio_frame_samples(rc->t->st, slot->data_length), slot->timestamp);
 	rc->count++;
 	return 0;
 }
 
-static int open_clip_with_prebuffer(rmr_state_t *st, uint32_t audio_samples_per_frame,
-				    uint32_t audio_bps)
+static int open_clip_with_prebuffer(rmr_track_t *t)
 {
-	if (open_clip(st) < 0)
+	rmr_state_t *st = t->st;
+	if (open_clip(t) < 0)
 		return -1;
 
 	/* Search one extra second back so the keyframe-aligned pre-buffer
@@ -534,27 +568,25 @@ static int open_clip_with_prebuffer(rmr_state_t *st, uint32_t audio_samples_per_
 	int64_t max_age_us = ((int64_t)st->prebuffer_sec + 1) * 1000000;
 
 	/* Find the oldest keyframe within the pre-buffer window */
-	uint32_t vstart = rmr_prebuf_find_keyframe(st->video_pb, max_age_us);
+	uint32_t vstart = rmr_prebuf_find_keyframe(t->video_pb, max_age_us);
 	if (vstart == UINT32_MAX) {
 		RSS_WARN("no keyframe in pre-buffer, clip starts without pre-buffer");
 		return 0;
 	}
 
 	/* Get the video pre-buffer time range */
-	int64_t kf_ts = rmr_prebuf_timestamp(st->video_pb, vstart);
-	int64_t newest_v_ts = rmr_prebuf_timestamp(st->video_pb, rmr_prebuf_newest(st->video_pb));
+	int64_t kf_ts = rmr_prebuf_timestamp(t->video_pb, vstart);
+	int64_t newest_v_ts = rmr_prebuf_timestamp(t->video_pb, rmr_prebuf_newest(t->video_pb));
 	int64_t v_duration_us = newest_v_ts - kf_ts;
 
 	replay_ctx_t rc = {
-		.st = st,
-		.audio_samples_per_frame = audio_samples_per_frame,
-		.audio_bps = audio_bps,
+		.t = t,
 		.max_frames = -1,
 		.count = 0,
 	};
 
 	/* Replay video pre-buffer */
-	int vcount = rmr_prebuf_iterate(st->video_pb, vstart, replay_video_frame, &rc);
+	int vcount = rmr_prebuf_iterate(t->video_pb, vstart, replay_video_frame, &rc);
 	RSS_DEBUG("pre-buffer: replayed %d video frames (%.1fs)", vcount,
 		  v_duration_us / 1000000.0);
 
@@ -564,9 +596,9 @@ static int open_clip_with_prebuffer(rmr_state_t *st, uint32_t audio_samples_per_
 	if (st->audio_pb && rmr_prebuf_count(st->audio_pb) > 0 && v_duration_us > 0) {
 		/* Audio frame duration in microseconds */
 		int64_t audio_frame_us;
-		if (audio_samples_per_frame > 0 && st->audio_sample_rate > 0)
-			audio_frame_us =
-				(int64_t)audio_samples_per_frame * 1000000 / st->audio_sample_rate;
+		if (st->audio_samples_per_frame > 0 && st->audio_sample_rate > 0)
+			audio_frame_us = (int64_t)st->audio_samples_per_frame * 1000000 /
+					 st->audio_sample_rate;
 		else
 			audio_frame_us = 20000; /* fallback: 20ms */
 
@@ -591,9 +623,36 @@ static int open_clip_with_prebuffer(rmr_state_t *st, uint32_t audio_samples_per_
 
 /* ── Control socket handler ── */
 
+static cJSON *tracks_json(const rmr_state_t *st)
+{
+	cJSON *arr = cJSON_CreateArray();
+	if (!arr)
+		return NULL;
+	for (int i = 0; i < st->track_count; i++) {
+		const rmr_track_t *t = &st->tracks[i];
+		cJSON *o = cJSON_CreateObject();
+		if (!o) {
+			cJSON_Delete(arr);
+			return NULL;
+		}
+		cJSON_AddStringToObject(o, "ring", t->ring_name);
+		cJSON_AddStringToObject(o, "tag", t->tag);
+		cJSON_AddBoolToObject(o, "active", t->ring && !t->idle);
+		cJSON_AddStringToObject(o, "file", t->segment_path);
+		cJSON_AddNumberToObject(o, "frames", (double)t->frames_written);
+		cJSON_AddNumberToObject(o, "dropped", (double)t->frames_dropped);
+		cJSON_AddNumberToObject(o, "bytes", (double)t->bytes_written);
+		cJSON_AddNumberToObject(o, "frames_lost", (double)t->frames_lost);
+		cJSON_AddStringToObject(o, "clip", t->clip_mux ? t->clip_path : "");
+		cJSON_AddItemToArray(arr, o);
+	}
+	return arr;
+}
+
 static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, void *userdata)
 {
 	rmr_state_t *st = userdata;
+	rmr_track_t *t0 = &st->tracks[0];
 
 	int common =
 		rss_ctrl_handle_common(cmd_json, resp_buf, resp_buf_size, st->cfg, st->config_path);
@@ -648,20 +707,28 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	if (strcmp(cmd, "status") == 0) {
 		static const char *mode_names[] = {"continuous", "motion", "both"};
 		cJSON *r = cJSON_CreateObject();
+		if (!r)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "alloc");
 		cJSON_AddBoolToObject(r, "recording", atomic_load(&st->recording));
 		cJSON_AddBoolToObject(r, "clip", atomic_load(&st->clip_recording));
 		cJSON_AddStringToObject(r, "mode", mode_names[st->mode]);
-		cJSON_AddStringToObject(r, "file", st->segment_path);
-		cJSON_AddNumberToObject(r, "frames", (double)st->frames_written);
-		cJSON_AddNumberToObject(r, "dropped", (double)st->frames_dropped);
-		cJSON_AddNumberToObject(r, "bytes", (double)st->bytes_written);
+		cJSON_AddStringToObject(r, "file", t0->segment_path);
+		cJSON_AddNumberToObject(r, "frames", (double)t0->frames_written);
+		cJSON_AddNumberToObject(r, "dropped", (double)t0->frames_dropped);
+		cJSON_AddNumberToObject(r, "bytes", (double)t0->bytes_written);
 		cJSON_AddBoolToObject(r, "sign", st->sign_enabled);
 		cJSON_AddBoolToObject(r, "sei_timecode", st->sei_timecode);
 		cJSON_AddBoolToObject(r, "gps", st->tele_ring != NULL);
-		cJSON_AddNumberToObject(r, "frames_lost", (double)st->frames_lost);
+		cJSON_AddNumberToObject(r, "frames_lost", (double)t0->frames_lost);
 		cJSON_AddNumberToObject(r, "io_pending_kb", rmr_io_pending(st->io) / 1024);
 		cJSON_AddNumberToObject(r, "io_peak_kb", rmr_io_peak(st->io) / 1024);
 		cJSON_AddBoolToObject(r, "timelapse", st->tl_enabled);
+		cJSON *tracks = tracks_json(st);
+		if (!tracks) {
+			cJSON_Delete(r);
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "alloc");
+		}
+		cJSON_AddItemToObject(r, "tracks", tracks);
 		return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 	}
 
@@ -706,8 +773,8 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		if (!st->tl_enabled)
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "timelapse disabled");
 		rmr_tl_force(&st->tl);
-		if (st->video_ring && st->video_codec != 2)
-			rss_ring_request_idr(st->video_ring);
+		if (t0->ring && t0->codec != 2)
+			rss_ring_request_idr(t0->ring);
 		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
 	}
 
@@ -761,17 +828,20 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 static void io_service(rmr_state_t *st)
 {
 	int err;
-	if (st->segment_fd >= 0 && (err = rmr_io_error(st->io, st->segment_fd)) != 0) {
-		RSS_ERROR("recording write failed: %s", strerror(err));
-		if (err == ENOSPC) {
-			RSS_ERROR("storage full, stopping recording");
-			atomic_store(&st->recording, false);
+	for (int i = 0; i < st->track_count; i++) {
+		rmr_track_t *t = &st->tracks[i];
+		if (t->segment_fd >= 0 && (err = rmr_io_error(st->io, t->segment_fd)) != 0) {
+			RSS_ERROR("recording write failed: %s", strerror(err));
+			if (err == ENOSPC) {
+				RSS_ERROR("storage full, stopping recording");
+				atomic_store(&st->recording, false);
+			}
+			close_segment(t);
 		}
-		close_segment(st);
-	}
-	if (st->clip_fd >= 0 && (err = rmr_io_error(st->io, st->clip_fd)) != 0) {
-		RSS_ERROR("clip write failed: %s", strerror(err));
-		close_clip(st);
+		if (t->clip_fd >= 0 && (err = rmr_io_error(st->io, t->clip_fd)) != 0) {
+			RSS_ERROR("clip write failed: %s", strerror(err));
+			close_clip(t);
+		}
 	}
 	if (st->tl_fd >= 0 && (err = rmr_io_error(st->io, st->tl_fd)) != 0) {
 		RSS_ERROR("timelapse write failed: %s", strerror(err));
@@ -784,47 +854,586 @@ static void io_service(rmr_state_t *st)
 	if (now < st->next_sync_us)
 		return;
 	st->next_sync_us = now + (int64_t)st->sync_interval_ms * 1000;
-	if (st->mux && st->segment_fd >= 0) {
-		gps_patch_index(st, st->mux, st->segment_fd);
-		rmr_io_sync(st->io, st->segment_fd);
+	for (int i = 0; i < st->track_count; i++) {
+		rmr_track_t *t = &st->tracks[i];
+		if (t->mux && t->segment_fd >= 0) {
+			gps_patch_index(st, t->mux, t->segment_fd);
+			rmr_io_sync(st->io, t->segment_fd);
+		}
+		if (t->clip_mux && t->clip_fd >= 0) {
+			gps_patch_index(st, t->clip_mux, t->clip_fd);
+			rmr_io_sync(st->io, t->clip_fd);
+		}
 	}
-	if (st->clip_mux && st->clip_fd >= 0) {
-		gps_patch_index(st, st->clip_mux, st->clip_fd);
-		rmr_io_sync(st->io, st->clip_fd);
+}
+
+/* Compute next power of 2 >= n */
+static uint32_t next_pow2(uint32_t n)
+{
+	if (n == 0)
+		return 1;
+	n--;
+	n |= n >> 1;
+	n |= n >> 2;
+	n |= n >> 4;
+	n |= n >> 8;
+	n |= n >> 16;
+	return n + 1;
+}
+
+/* Slots from the ring's frame rate; the data region starts small and is
+ * sized once from the observed byte rate after RATE_WINDOW_US, rather
+ * than doubling its way there (each doubling briefly holds both). */
+static void track_prebuf_init(rmr_state_t *st, rmr_track_t *t, uint32_t fps)
+{
+	if (t->video_pb || st->prebuffer_sec <= 0 || st->mode == RMR_MODE_CONTINUOUS)
+		return;
+	/* Slots are cheap; a producer that has not published its stream
+	 * info yet (RCD before the first keyframe) must not cut the window */
+	if (fps == 0 || fps > 120)
+		fps = 60;
+	uint32_t v_slots = next_pow2(fps * ((uint32_t)st->prebuffer_sec + 1));
+	uint32_t v_data = PREBUF_START_SIZE < st->prebuffer_max_bytes ? PREBUF_START_SIZE
+								      : st->prebuffer_max_bytes;
+	t->video_pb = rmr_prebuf_create(v_slots, v_data);
+	if (!t->video_pb) {
+		RSS_WARN("%s: video pre-buffer alloc failed", t->ring_name);
+		return;
+	}
+	/* Room for a large I frame until the rate is known */
+	rmr_prebuf_set_growth(t->video_pb,
+			      v_data * 2 < st->prebuffer_max_bytes ? v_data * 2 : v_data,
+			      ((int64_t)st->prebuffer_sec + 1) * 1000000);
+	t->rate_start_us = -1;
+	t->rate_bytes = 0;
+	t->rate_sized = false;
+	RSS_DEBUG("%s: video pre-buffer: %u slots, %u KB data", t->ring_name, v_slots,
+		  v_data / 1024);
+}
+
+static void track_prebuf_measure(rmr_state_t *st, rmr_track_t *t, uint32_t len, int64_t ts)
+{
+	if (!t->video_pb || t->rate_sized)
+		return;
+	if (t->rate_start_us < 0)
+		t->rate_start_us = ts;
+	t->rate_bytes += len;
+	int64_t span = ts - t->rate_start_us;
+	if (span < RATE_WINDOW_US)
+		return;
+	uint64_t bps = t->rate_bytes * 1000000 / (uint64_t)span;
+	uint32_t size = rmr_prebuf_size_for_rate(bps, st->prebuffer_sec, st->prebuffer_max_bytes);
+	rmr_prebuf_set_growth(t->video_pb, st->prebuffer_max_bytes,
+			      ((int64_t)st->prebuffer_sec + 1) * 1000000);
+	if (rmr_prebuf_reserve(t->video_pb, size) < 0)
+		RSS_WARN("%s: video pre-buffer stays at %u KB", t->ring_name,
+			 t->video_pb->data_size / 1024);
+	t->rate_sized = true;
+	RSS_INFO("%s: video pre-buffer %u KB for %" PRIu64 " kbit/s", t->ring_name,
+		 t->video_pb->data_size / 1024, bps * 8 / 1000);
+}
+
+static void track_detach(rmr_track_t *t)
+{
+	if (!t->ring)
+		return;
+	rss_ring_release(t->ring);
+	rss_ring_close(t->ring);
+	t->ring = NULL;
+}
+
+static int track_attach(rmr_state_t *st, rmr_track_t *t)
+{
+	t->ring = rss_ring_open(t->ring_name);
+	if (!t->ring)
+		return -1;
+	rss_ring_check_version(t->ring, t->ring_name);
+	const rss_ring_header_t *hdr = rss_ring_get_header(t->ring);
+	uint32_t mfs = rss_ring_max_frame_size(t->ring);
+	if (mfs > t->frame_buf_size) {
+		/* AVCC gets headroom for the leading SEI NAL */
+		uint8_t *new_frame = malloc(mfs);
+		uint8_t *new_avcc = malloc(mfs + RSS_SEI_TS_MAX);
+		if (!new_frame || !new_avcc) {
+			RSS_ERROR("%s: buffer allocation failed (%u bytes)", t->ring_name, mfs);
+			free(new_frame);
+			free(new_avcc);
+			rss_ring_close(t->ring);
+			t->ring = NULL;
+			return -1;
+		}
+		free(t->frame_buf);
+		free(t->avcc_buf);
+		t->frame_buf = new_frame;
+		t->avcc_buf = new_avcc;
+		t->frame_buf_size = mfs;
+		t->avcc_buf_size = mfs + RSS_SEI_TS_MAX;
+	}
+
+	/* A file's sample description is fixed at open: a source that came
+	 * back with another codec or size starts new files. */
+	if (t->attached_once &&
+	    (hdr->codec != t->codec || hdr->width != t->width || hdr->height != t->height)) {
+		if (t->mux)
+			close_segment(t);
+		if (t->clip_mux)
+			close_clip(t);
+	}
+	t->codec = hdr->codec;
+	t->width = hdr->width;
+	t->height = hdr->height;
+	t->fps_num = hdr->fps_num;
+	t->read_seq = 0;
+	t->params.ready = false;
+	t->incarnation = atomic_load(&hdr->incarnation);
+	t->idle = false;
+	t->idle_since_us = rss_timestamp_us();
+	t->idle_check_us = 0;
+	rss_ring_acquire(t->ring);
+
+	if (is_primary(t)) {
+		/* Codec or geometry may have changed: a timelapse track
+		 * cannot bend mid-file. The new ring also restarts its
+		 * sequence space, so the sampler's claimed-seq guard must
+		 * forget the old one or it rejects every new frame. */
+		if (st->tl_mux)
+			close_timelapse(st);
+		rmr_tl_ring_reset(&st->tl);
+	}
+
+	if (t->attached_once) {
+		RSS_DEBUG("video ring reconnected (%s)", t->ring_name);
+	} else {
+		const char *name = t->codec == 2 ? "MJPEG" : t->codec == 1 ? "H.265" : "H.264";
+		if (is_primary(t))
+			RSS_INFO("video: %s %ux%u @ %u fps", name, t->width, t->height, t->fps_num);
+		else
+			RSS_INFO("video %s (tag %s): %s %ux%u @ %u fps", t->ring_name, t->tag, name,
+				 t->width, t->height, t->fps_num);
+	}
+	t->attached_once = true;
+
+	uint32_t fps =
+		hdr->fps_den > 1 ? (hdr->fps_num + hdr->fps_den - 1) / hdr->fps_den : hdr->fps_num;
+	track_prebuf_init(st, t, fps);
+	return 0;
+}
+
+static bool clip_wanted(rmr_state_t *st)
+{
+	if (st->mode == RMR_MODE_BOTH)
+		return atomic_load(&st->clip_recording);
+	if (st->mode == RMR_MODE_MOTION)
+		return atomic_load(&st->recording);
+	return false;
+}
+
+/* Stops apply whether or not frames flow. A silent or detached source
+ * never reaches its next keyframe, so its files end at their period. */
+static void track_housekeep(rmr_state_t *st, rmr_track_t *t, bool rec, bool clip_want)
+{
+	if (t->mux && !rec) {
+		close_segment(t);
+		if (is_primary(t))
+			RSS_INFO("recording stopped");
+	}
+	if (t->clip_mux && !clip_want)
+		close_clip(t);
+	if (t->ring && !t->idle)
+		return;
+	if (t->mux && rss_wallclock_us() >= t->segment_boundary_rt_us) {
+		close_segment(t);
+		rmr_storage_enforce_limit(st->storage);
+	}
+	if (t->clip_mux && st->clip_length_sec > 0 &&
+	    rss_timestamp_us() - t->clip_start_us >= (int64_t)st->clip_length_sec * 1000000)
+		close_clip(t);
+}
+
+static void track_write_segment(rmr_track_t *t, const rss_ring_slot_t *meta,
+				const uint8_t *mux_data, uint32_t mux_len)
+{
+	rmr_state_t *st = t->st;
+
+	/* Flush fragment periodically for steady write pattern.
+	 * On keyframe: also check segment rotation. */
+	if (t->mux) {
+		t->frames_since_flush++;
+		/* Ask the encoder for an IDR on the first frame past the
+		 * wall-clock boundary so the split lands within a frame or
+		 * two of :00 instead of a GOP late. Requesting BEFORE the
+		 * boundary is a trap: the forced key arrives before the
+		 * boundary too, cannot rotate, and restarts the GOP, pushing
+		 * the first eligible key a full GOP past :00 (constant +2s
+		 * segments on 20fps HEVC). */
+		int64_t now_rt = rss_wallclock_us();
+		if (!t->segment_idr_requested && !meta->is_key &&
+		    now_rt >= t->segment_boundary_rt_us) {
+			rss_ring_request_idr(t->ring);
+			t->segment_idr_requested = true;
+		}
+		if (meta->is_key) {
+			rmr_mux_flush_fragment(t->mux);
+			if (st->sign_enabled)
+				rmr_sign_stream_emit(&t->sign_seg, false, direct_write, t);
+			t->frames_since_flush = 0;
+			if (rmr_storage_should_rotate_at(st->storage, t->segment_start_rt_us,
+							 now_rt)) {
+				close_segment(t);
+				rmr_storage_enforce_limit(st->storage);
+			}
+		} else if (t->frames_since_flush >= 10) {
+			rmr_mux_flush_fragment(t->mux);
+			if (st->sign_enabled)
+				rmr_sign_stream_emit(&t->sign_seg, false, direct_write, t);
+			t->frames_since_flush = 0;
+		}
+	}
+
+	/* Start new segment if needed */
+	if (!t->mux) {
+		if (!meta->is_key || start_segment(t) < 0)
+			return;
+		t->v_ts_base = -1;
+		t->a_dts = 0;
+		t->a_ts_base = -1;
+		t->frames_written = 0;
+		t->bytes_written = 0;
+	}
+
+	/* DTS from ring timestamp */
+	if (t->v_ts_base < 0)
+		t->v_ts_base = meta->timestamp;
+	int64_t v_dts = (meta->timestamp - t->v_ts_base) * 90 / 1000;
+
+	rmr_video_sample_t vs = {
+		.data = mux_data,
+		.size = mux_len,
+		.dts = v_dts,
+		.pts = v_dts,
+		.is_key = meta->is_key,
+	};
+
+	if (rmr_mux_write_video(t->mux, &vs) == 0)
+		t->frames_written++;
+	else
+		t->frames_dropped++;
+}
+
+static void track_write_clip(rmr_track_t *t, bool clip_want, const rss_ring_slot_t *meta,
+			     const uint8_t *mux_data, uint32_t mux_len)
+{
+	rmr_state_t *st = t->st;
+
+	/* Start clip with pre-buffer */
+	if (clip_want && !t->clip_mux && rmr_storage_available(st->clip_storage)) {
+		if (open_clip_with_prebuffer(t) == 0) {
+			RSS_INFO("motion clip active");
+			/* the seconds before the event are on the medium first */
+			rmr_io_sync(st->io, t->clip_fd);
+		}
+	}
+	if (!t->clip_mux)
+		return;
+
+	clip_write_video(t, mux_data, mux_len, meta->timestamp, meta->is_key);
+
+	/* Check clip length cap */
+	if (st->clip_length_sec > 0) {
+		int64_t elapsed = rss_timestamp_us() - t->clip_start_us;
+		if (elapsed >= (int64_t)st->clip_length_sec * 1000000) {
+			close_clip(t);
+			/* If still triggered, open a continuation clip (no
+			 * pre-buffer on continuation) */
+			if (clip_want && open_clip(t) == 0)
+				RSS_INFO("clip rotated (length cap)");
+		}
+	}
+}
+
+/* Prepare one frame read from the track's ring and feed every file. */
+static void track_frame(rmr_state_t *st, rmr_track_t *t, uint32_t length,
+			const rss_ring_slot_t *meta)
+{
+	bool rec = atomic_load(&st->recording);
+
+	/* The encoder's frame counter exposes every frame that never
+	 * reached rmr (ring overflow, producer drops) */
+	if (meta->src_seq != RSS_SRC_SEQ_NONE) {
+		uint32_t gap = meta->src_seq - t->last_src_seq - 1;
+		if (t->last_src_seq != RSS_SRC_SEQ_NONE && gap > 0 && gap < RSS_SRC_SEQ_MAX_GAP &&
+		    (t->mux || t->clip_mux || rec)) {
+			t->frames_lost += gap;
+			RSS_WARN("%u source frame%s lost before recording (%s, %" PRIu64 " total)",
+				 gap, gap == 1 ? "" : "s", t->ring_name, t->frames_lost);
+		}
+		t->last_src_seq = meta->src_seq;
+	}
+
+	if (t->wait_key) {
+		if (!meta->is_key) {
+			if (t->mux || t->clip_mux)
+				t->frames_dropped++;
+			return;
+		}
+		t->wait_key = false;
+	}
+
+	/* Prepare frame data for muxer */
+	const uint8_t *mux_data;
+	uint32_t mux_len;
+	bool is_mjpeg = (t->codec == 2);
+
+	if (is_mjpeg) {
+		if (!t->params.ready)
+			t->params.ready = true;
+		mux_data = t->frame_buf;
+		mux_len = length;
+	} else {
+		if (meta->is_key && !t->params.ready)
+			rmr_extract_params(t->frame_buf, length, t->codec, &t->params);
+		if (!t->params.ready)
+			return;
+
+		/* ST 0604 timecode SEI leads the sample; capture UTC comes
+		 * from the producer's ring clock mapping. */
+		uint32_t sei_len = 0;
+		int64_t utc_off;
+		uint8_t utc_st;
+		if (st->sei_timecode && rss_ring_get_utc(t->ring, &utc_off, &utc_st) == 0) {
+			int n = rss_sei_build_timestamp(
+				t->avcc_buf, t->avcc_buf_size, (int)t->codec, RSS_SEI_PREFIX_AVCC,
+				(uint64_t)(meta->timestamp + utc_off), utc_st);
+			if (n > 0)
+				sei_len = (uint32_t)n;
+		}
+
+		int avcc_len = rmr_annexb_to_avcc(t->frame_buf, length, t->avcc_buf + sei_len,
+						  t->avcc_buf_size - sei_len, t->codec);
+		if (avcc_len <= 0)
+			return;
+
+		if (avcc_len >= 5) {
+			const uint8_t *fb = t->avcc_buf + sei_len;
+			uint32_t nal_len = ((uint32_t)fb[0] << 24) | ((uint32_t)fb[1] << 16) |
+					   ((uint32_t)fb[2] << 8) | (uint32_t)fb[3];
+			if (nal_len > (uint32_t)avcc_len - 4) {
+				RSS_WARN("AVCC corrupt: nal_len=%u avcc_len=%d", nal_len, avcc_len);
+				return;
+			}
+		}
+		mux_data = t->avcc_buf;
+		mux_len = sei_len + (uint32_t)avcc_len;
+	}
+
+	/* Push to video pre-buffer (always, for motion clips) */
+	if (t->video_pb) {
+		track_prebuf_measure(st, t, mux_len, meta->timestamp);
+		rmr_prebuf_push(t->video_pb, mux_data, mux_len, meta->timestamp, meta->is_key);
+	}
+
+	/* Continuous destination absent (standby covers the
+	 * nothing-writable case, so clips may still be live): skip without
+	 * stalling — sleeping here starves the ring reader into overflow,
+	 * and every overflow requests an IDR. */
+	if (rec && rmr_storage_available(st->storage))
+		track_write_segment(t, meta, mux_data, mux_len);
+
+	if (st->mode == RMR_MODE_MOTION || st->mode == RMR_MODE_BOTH)
+		track_write_clip(t, clip_wanted(st), meta, mux_data, mux_len);
+
+	/* ── Timelapse sampling (first track) ── */
+	if (is_primary(t) && st->tl_enabled && (t->params.ready || is_mjpeg)) {
+		bool was_armed = st->tl.want_sample;
+		rmr_tl_tick(&st->tl, rss_timestamp_us());
+		/* The sample must be a keyframe; ask for one the moment a
+		 * tick arms so the wait is one frame, not the rest of a GOP.
+		 * Requests coalesce with the segment splitter's own. */
+		if (!was_armed && st->tl.want_sample && !is_mjpeg)
+			rss_ring_request_idr(t->ring);
+
+		bool tl_key = meta->is_key || is_mjpeg;
+		if (tl_key && rmr_tl_take(&st->tl, t->read_seq))
+			timelapse_write_sample(st, mux_data, mux_len);
+	}
+}
+
+/* No frame for RING_IDLE_US: a ring the producer replaced (new inode,
+ * or recreated in place under a new incarnation) is reopened; a ring
+ * that is merely silent (rear camera unplugged) stays open and its
+ * files close at their period's end (track_housekeep). */
+static void track_check_idle(rmr_track_t *t, int64_t now)
+{
+	if (now - t->idle_since_us < RING_IDLE_US || now < t->idle_check_us)
+		return;
+	t->idle_check_us = now + RING_IDLE_US;
+	if (rss_ring_stale(t->ring) ||
+	    atomic_load(&rss_ring_get_header(t->ring)->incarnation) != t->incarnation) {
+		RSS_DEBUG("video ring replaced, reopening (%s)", t->ring_name);
+		track_detach(t);
+		t->retry_us = 0;
+		return;
+	}
+	if (!t->idle) {
+		t->idle = true;
+		RSS_DEBUG("video ring idle (%s)", t->ring_name);
+	}
+}
+
+/* Read and record what the track's ring holds, at most a burst, so no
+ * track waits on another. Returns the frames consumed. A missing or
+ * idle ring is retried lazily without blocking the loop. */
+static int track_service(rmr_state_t *st, rmr_track_t *t)
+{
+	int64_t now = rss_timestamp_us();
+	if (!t->ring) {
+		if (now < t->retry_us)
+			return 0;
+		if (track_attach(st, t) < 0) {
+			t->retry_us = now + RING_RETRY_US;
+			return 0;
+		}
+	}
+
+	int n = 0;
+	while (n < TRACK_READ_BURST) {
+		uint32_t length;
+		rss_ring_slot_t meta;
+		int ret = rss_ring_read(t->ring, &t->read_seq, t->frame_buf, t->frame_buf_size,
+					&length, &meta);
+		if (ret == RSS_EOVERFLOW) {
+			/* Frames were lost: anything until the next keyframe
+			 * references pictures we never read, and writing it
+			 * puts undecodable GOP fragments in the recording. */
+			rss_ring_request_idr(t->ring);
+			if (t->mux || t->clip_mux)
+				t->frames_dropped++;
+			t->wait_key = true;
+		}
+		if (ret == RSS_EOVERFLOW || ret == -EAGAIN) {
+			track_check_idle(t, now);
+			break;
+		}
+		n++;
+		if (ret != 0)
+			continue;
+		t->idle_since_us = now;
+		if (t->idle) {
+			/* the decoder state across the silence is unknown */
+			t->idle = false;
+			if (!meta.is_key) {
+				t->wait_key = true;
+				rss_ring_request_idr(t->ring);
+			}
+			RSS_DEBUG("video ring active (%s)", t->ring_name);
+		}
+		track_frame(st, t, length, &meta);
+	}
+	return n;
+}
+
+static void audio_ring_params(rmr_state_t *st)
+{
+	const rss_ring_header_t *ahdr = rss_ring_get_header(st->audio_ring);
+	st->audio_codec = ahdr->codec;
+	st->audio_sample_rate = ahdr->fps_num;
+	st->audio_aot = ahdr->profile;
+	st->audio_bps =
+		(st->audio_codec == RMR_AUDIO_PCMU || st->audio_codec == RMR_AUDIO_PCMA) ? 1 : 2;
+	st->audio_samples_per_frame = 0;
+	/* HE-AAC frames carry 2048 samples; the producer declares the size
+	 * in the ring header. */
+	if (st->audio_codec == RMR_AUDIO_AAC)
+		st->audio_samples_per_frame = ahdr->width ? ahdr->width : 1024;
+	else if (st->audio_codec == RMR_AUDIO_OPUS)
+		st->audio_samples_per_frame = st->audio_sample_rate / 50;
+}
+
+static void audio_write_tracks(rmr_state_t *st, const uint8_t *data, uint32_t len, uint32_t samples,
+			       int64_t ts)
+{
+	for (int i = 0; i < st->track_count; i++) {
+		rmr_track_t *t = &st->tracks[i];
+		if (t->mux) {
+			t->a_dts = steer_audio_dts(t->a_dts, ts, &t->a_ts_base, samples,
+						   st->audio_sample_rate);
+			rmr_audio_sample_t as = {
+				.data = data,
+				.size = len,
+				.dts = t->a_dts,
+			};
+			rmr_mux_write_audio(t->mux, &as);
+			t->a_dts += samples;
+		}
+		clip_write_audio(t, data, len, samples, ts);
+	}
+}
+
+/* One audio ring feeds every track's files. Returns frames consumed. */
+static int audio_service(rmr_state_t *st)
+{
+	int64_t now = rss_timestamp_us();
+	if (!st->audio_ring) {
+		/* Lazy attach, retried every ~2s until found */
+		if (!st->audio_enabled || now < st->audio_retry_us)
+			return 0;
+		st->audio_retry_us = now + AUDIO_RETRY_US;
+		st->audio_ring = rss_ring_open("audio");
+		if (!st->audio_ring)
+			return 0;
+		rss_ring_check_version(st->audio_ring, "audio");
+		audio_ring_params(st);
+		/* Start reading from current position (skip stale frames) */
+		st->audio_read_seq = atomic_load(&rss_ring_get_header(st->audio_ring)->write_seq);
+		st->audio_last_ws = 0;
+		st->audio_idle_since_us = now;
+		RSS_DEBUG("audio ring attached (late): codec=%u rate=%u frame_samples=%u aot=%u",
+			  st->audio_codec, st->audio_sample_rate, st->audio_samples_per_frame,
+			  st->audio_aot);
+	}
+
+	int n = 0;
+	while (n < AUDIO_READ_BURST) {
+		uint32_t alen;
+		rss_ring_slot_t ameta;
+		int ret = rss_ring_read(st->audio_ring, &st->audio_read_seq, st->audio_buf,
+					sizeof(st->audio_buf), &alen, &ameta);
+		if (ret != 0)
+			break;
+		n++;
+		if (st->audio_pb)
+			rmr_prebuf_push(st->audio_pb, st->audio_buf, alen, ameta.timestamp, 0);
+		audio_write_tracks(st, st->audio_buf, alen, audio_frame_samples(st, alen),
+				   ameta.timestamp);
+	}
+
+	/* Idle detection — close audio ring if RAD stopped */
+	uint64_t aws = rss_ring_get_header(st->audio_ring)->write_seq;
+	if (aws != st->audio_last_ws) {
+		st->audio_last_ws = aws;
+		st->audio_idle_since_us = now;
+	} else if (n == 0 && now - st->audio_idle_since_us >= RING_IDLE_US) {
+		RSS_DEBUG("audio ring idle, closing");
+		rss_ring_close(st->audio_ring);
+		st->audio_ring = NULL;
+		st->audio_retry_us = now + AUDIO_RETRY_US;
+	}
+	return n;
+}
+
+static void close_all_files(rmr_state_t *st)
+{
+	for (int i = 0; i < st->track_count; i++) {
+		if (st->tracks[i].mux)
+			close_segment(&st->tracks[i]);
+		if (st->tracks[i].clip_mux)
+			close_clip(&st->tracks[i]);
 	}
 }
 
 static void record_loop(rmr_state_t *st)
 {
-	int64_t v_ts_base = -1;	 /* continuous segment video timestamp base */
-	bool v_wait_key = false; /* drop video until a keyframe after ring overflow */
-
-	/* Audio DTS increment per ring frame. */
-	uint32_t audio_bps =
-		(st->audio_codec == RMR_AUDIO_PCMU || st->audio_codec == RMR_AUDIO_PCMA) ? 1 : 2;
-	uint32_t audio_samples_per_frame = 0;
-	if (st->audio_codec == RMR_AUDIO_AAC) {
-		/* HE-AAC frames carry 2048 samples; the producer declares
-		 * the size in the ring header. */
-		audio_samples_per_frame = 1024;
-		if (st->audio_ring) {
-			const rss_ring_header_t *ahdr = rss_ring_get_header(st->audio_ring);
-			if (ahdr->width)
-				audio_samples_per_frame = ahdr->width;
-		}
-	} else if (st->audio_codec == RMR_AUDIO_OPUS) {
-		audio_samples_per_frame = st->audio_sample_rate / 50;
-	}
-	int64_t a_dts_counter = 0;
-	int64_t a_ts_base = -1; /* ring ts mapping base for a_dts_counter steering */
-	bool was_recording = false;
-
 	int ctrl_fd = st->ctrl ? rss_ctrl_get_fd(st->ctrl) : -1;
-	int audio_retry = 0;
-	uint64_t last_video_ws = 0;
-	int video_idle = 0;
-	uint64_t last_audio_ws = 0;
-	int audio_idle = 0;
 	bool standby = false; /* no writable destination: detached from rings */
 
 	while (rss_running(st->running)) {
@@ -851,17 +1460,9 @@ static void record_loop(rmr_state_t *st)
 		if (!have_dest) {
 			if (!standby) {
 				standby = true;
-				if (st->mux) {
-					close_segment(st);
-					was_recording = false;
-				}
-				if (st->clip_mux)
-					close_clip(st);
-				if (st->video_ring) {
-					rss_ring_release(st->video_ring);
-					rss_ring_close(st->video_ring);
-					st->video_ring = NULL;
-				}
+				close_all_files(st);
+				for (int i = 0; i < st->track_count; i++)
+					track_detach(&st->tracks[i]);
 				if (st->audio_ring) {
 					rss_ring_close(st->audio_ring);
 					st->audio_ring = NULL;
@@ -879,451 +1480,60 @@ static void record_loop(rmr_state_t *st)
 		telematics_poll(st);
 		io_service(st);
 
-		/* Lazy audio ring attach — retry every ~2s until found */
-		if (st->audio_enabled && !st->audio_ring && ++audio_retry >= 50) {
-			audio_retry = 0;
-			st->audio_ring = rss_ring_open("audio");
-			if (st->audio_ring) {
-				rss_ring_check_version(st->audio_ring, "audio");
-				const rss_ring_header_t *ahdr = rss_ring_get_header(st->audio_ring);
-				st->audio_codec = ahdr->codec;
-				st->audio_sample_rate = ahdr->fps_num;
-				/* Start reading from current position (skip stale frames) */
-				st->audio_read_seq = atomic_load(&ahdr->write_seq);
-				/* Update audio codec params */
-				audio_bps = (st->audio_codec == RMR_AUDIO_PCMU ||
-					     st->audio_codec == RMR_AUDIO_PCMA)
-						    ? 1
-						    : 2;
-				st->audio_aot = ahdr->profile;
-				audio_samples_per_frame = 0;
-				if (st->audio_codec == RMR_AUDIO_AAC)
-					audio_samples_per_frame = ahdr->width ? ahdr->width : 1024;
-				else if (st->audio_codec == RMR_AUDIO_OPUS)
-					audio_samples_per_frame = st->audio_sample_rate / 50;
-				RSS_DEBUG("audio ring attached (late): codec=%u rate=%u "
-					  "frame_samples=%u aot=%u",
-					  st->audio_codec, st->audio_sample_rate,
-					  audio_samples_per_frame, st->audio_aot);
-			}
-		}
-
-		/* ── Reconnect video ring if RVD restarted ── */
-		if (!st->video_ring) {
-			st->video_ring = rss_ring_open(st->video_ring_name);
-			if (st->video_ring) {
-				rss_ring_check_version(st->video_ring, "video");
-				const rss_ring_header_t *vhdr = rss_ring_get_header(st->video_ring);
-				uint32_t mfs = rss_ring_max_frame_size(st->video_ring);
-				if (mfs > st->frame_buf_size) {
-					uint8_t *new_frame = malloc(mfs);
-					uint8_t *new_avcc = malloc(mfs + RSS_SEI_TS_MAX);
-					if (!new_frame || !new_avcc) {
-						free(new_frame);
-						free(new_avcc);
-						rss_ring_close(st->video_ring);
-						st->video_ring = NULL;
-						continue;
-					}
-					free(st->frame_buf);
-					free(st->avcc_buf);
-					st->frame_buf = new_frame;
-					st->avcc_buf = new_avcc;
-					st->frame_buf_size = mfs;
-					st->avcc_buf_size = mfs + RSS_SEI_TS_MAX;
-				}
-				st->video_codec = vhdr->codec;
-				st->video_read_seq = 0;
-				st->params.ready = false;
-				video_idle = 0;
-				last_video_ws = 0;
-				rss_ring_acquire(st->video_ring);
-				/* Codec or geometry may have changed: a
-				 * timelapse track cannot bend mid-file. The new
-				 * ring also restarts its sequence space, so the
-				 * sampler's claimed-seq guard must forget the
-				 * old one or it rejects every new frame. */
-				if (st->tl_mux)
-					close_timelapse(st);
-				rmr_tl_ring_reset(&st->tl);
-				RSS_DEBUG("video ring reconnected (%s)", st->video_ring_name);
-			} else {
-				usleep(200000);
-			}
-			continue;
-		}
-
-		/* ── Read video frame from ring ── */
-		uint32_t length;
-		rss_ring_slot_t meta;
-		int ret = rss_ring_read(st->video_ring, &st->video_read_seq, st->frame_buf,
-					st->frame_buf_size, &length, &meta);
-
-		if (ret == RSS_EOVERFLOW) {
-			/* Frames were lost: anything until the next keyframe
-			 * references pictures we never read, and writing it
-			 * puts undecodable GOP fragments in the recording. */
-			rss_ring_request_idr(st->video_ring);
-			if (st->mux || st->clip_mux)
-				st->frames_dropped++;
-			v_wait_key = true;
-			continue;
-		}
-		if (ret == -EAGAIN) {
-			const rss_ring_header_t *vhdr = rss_ring_get_header(st->video_ring);
-			uint64_t ws = vhdr->write_seq;
-			if (ws == last_video_ws)
-				video_idle++;
-			else
-				video_idle = 0;
-			last_video_ws = ws;
-			if (video_idle >= 50) { /* ~2s at 40ms wait */
-				RSS_DEBUG("video ring idle, closing (%s)", st->video_ring_name);
-				rss_ring_release(st->video_ring);
-				rss_ring_close(st->video_ring);
-				st->video_ring = NULL;
-				video_idle = 0;
-			} else {
-				rss_ring_wait(st->video_ring, 40);
-			}
-			continue;
-		}
-		if (ret != 0)
-			continue;
-		video_idle = 0;
-
-		/* The encoder's frame counter exposes every frame that never
-		 * reached rmr (ring overflow, producer drops) */
-		if (meta.src_seq != RSS_SRC_SEQ_NONE) {
-			uint32_t gap = meta.src_seq - st->last_src_seq - 1;
-			if (st->last_src_seq != RSS_SRC_SEQ_NONE && gap > 0 &&
-			    gap < RSS_SRC_SEQ_MAX_GAP &&
-			    (st->mux || st->clip_mux || atomic_load(&st->recording))) {
-				st->frames_lost += gap;
-				RSS_WARN("%u source frame%s lost before recording (%" PRIu64
-					 " total)",
-					 gap, gap == 1 ? "" : "s", st->frames_lost);
-			}
-			st->last_src_seq = meta.src_seq;
-		}
-
-		if (v_wait_key) {
-			if (!meta.is_key) {
-				if (st->mux || st->clip_mux)
-					st->frames_dropped++;
-				continue;
-			}
-			v_wait_key = false;
-		}
-
-		/* Prepare frame data for muxer */
-		const uint8_t *mux_data;
-		uint32_t mux_len;
-		bool is_mjpeg = (st->video_codec == 2);
-
-		if (is_mjpeg) {
-			if (!st->params.ready)
-				st->params.ready = true;
-			mux_data = st->frame_buf;
-			mux_len = length;
-		} else {
-			if (meta.is_key && !st->params.ready)
-				rmr_extract_params(st->frame_buf, length, st->video_codec,
-						   &st->params);
-			if (!st->params.ready)
-				continue;
-
-			/* ST 0604 timecode SEI leads the sample; capture UTC
-			 * comes from the producer's ring clock mapping. */
-			uint32_t sei_len = 0;
-			int64_t utc_off;
-			uint8_t utc_st;
-			if (st->sei_timecode &&
-			    rss_ring_get_utc(st->video_ring, &utc_off, &utc_st) == 0) {
-				int n = rss_sei_build_timestamp(
-					st->avcc_buf, st->avcc_buf_size, (int)st->video_codec,
-					RSS_SEI_PREFIX_AVCC, (uint64_t)(meta.timestamp + utc_off),
-					utc_st);
-				if (n > 0)
-					sei_len = (uint32_t)n;
-			}
-
-			int avcc_len =
-				rmr_annexb_to_avcc(st->frame_buf, length, st->avcc_buf + sei_len,
-						   st->avcc_buf_size - sei_len, st->video_codec);
-			if (avcc_len <= 0)
-				continue;
-
-			if (avcc_len >= 5) {
-				const uint8_t *fb = st->avcc_buf + sei_len;
-				uint32_t nal_len = ((uint32_t)fb[0] << 24) |
-						   ((uint32_t)fb[1] << 16) |
-						   ((uint32_t)fb[2] << 8) | (uint32_t)fb[3];
-				if (nal_len > (uint32_t)avcc_len - 4) {
-					RSS_WARN("AVCC corrupt: nal_len=%u avcc_len=%d", nal_len,
-						 avcc_len);
-					continue;
-				}
-			}
-			mux_data = st->avcc_buf;
-			mux_len = sei_len + (uint32_t)avcc_len;
-		}
-
-		/* Push to video pre-buffer (always, for motion clips) */
-		if (st->video_pb)
-			rmr_prebuf_push(st->video_pb, mux_data, mux_len, meta.timestamp,
-					meta.is_key);
-
-		/* ── Read audio frames and push to pre-buffer ── */
-		/* Audio frame data saved for writing below */
-		struct {
-			uint8_t data[8192];
-			uint32_t len;
-			uint32_t samples;
-			int64_t ts; /* ring capture time (us) */
-		} audio_frames[4];
-		int audio_count = 0;
-
-		if (st->audio_ring) {
-			for (int burst = 0; burst < 4; burst++) {
-				uint32_t alen;
-				rss_ring_slot_t ameta;
-				ret = rss_ring_read(st->audio_ring, &st->audio_read_seq,
-						    st->audio_buf, sizeof(st->audio_buf), &alen,
-						    &ameta);
-				if (ret == RSS_EOVERFLOW || ret != 0)
-					break;
-				audio_idle = 0;
-
-				/* Push to audio pre-buffer */
-				if (st->audio_pb)
-					rmr_prebuf_push(st->audio_pb, st->audio_buf, alen,
-							ameta.timestamp, 0);
-
-				/* Save for writing to muxers */
-				if (audio_count < 4) {
-					memcpy(audio_frames[audio_count].data, st->audio_buf, alen);
-					audio_frames[audio_count].len = alen;
-					audio_frames[audio_count].samples =
-						audio_samples_per_frame ? audio_samples_per_frame
-									: alen / audio_bps;
-					audio_frames[audio_count].ts = ameta.timestamp;
-					audio_count++;
-				}
-			}
-
-			/* Idle detection — close audio ring if RAD stopped */
-			const rss_ring_header_t *ah = rss_ring_get_header(st->audio_ring);
-			uint64_t aws = ah->write_seq;
-			if (aws == last_audio_ws)
-				audio_idle++;
-			else
-				audio_idle = 0;
-			last_audio_ws = aws;
-			if (audio_idle >= 100) { /* ~2s at 50Hz poll */
-				RSS_DEBUG("audio ring idle, closing");
-				rss_ring_close(st->audio_ring);
-				st->audio_ring = NULL;
-				audio_idle = 0;
-			}
-		}
-
-		/* ── Continuous recording ── */
 		bool rec = atomic_load(&st->recording);
-
-		/* Handle stop transition */
-		if (was_recording && !rec) {
-			close_segment(st);
-			was_recording = false;
-			v_ts_base = -1;
-			a_dts_counter = 0;
-			a_ts_base = -1;
-			RSS_INFO("recording stopped");
+		bool clip_want = clip_wanted(st);
+		int busy = 0;
+		for (int i = 0; i < st->track_count; i++) {
+			track_housekeep(st, &st->tracks[i], rec, clip_want);
+			busy += track_service(st, &st->tracks[i]);
 		}
+		busy += audio_service(st);
+		if (busy)
+			continue;
 
-		if (rec) {
-			/* Continuous destination absent (standby above covers
-			 * the nothing-writable case, so clips may still be
-			 * live): skip without stalling — sleeping here starves
-			 * the ring reader into overflow, and every overflow
-			 * requests an IDR. */
-			if (!rmr_storage_available(st->storage))
-				goto clip_handling;
-
-			/* Flush fragment periodically for steady write pattern.
-			 * On keyframe: also check segment rotation. */
-			if (st->mux) {
-				st->frames_since_flush++;
-				/* Ask the encoder for an IDR on the first frame
-				 * past the wall-clock boundary so the split lands
-				 * within a frame or two of :00 instead of a GOP
-				 * late. Requesting BEFORE the boundary is a trap:
-				 * the forced key arrives before the boundary too,
-				 * cannot rotate, and restarts the GOP, pushing
-				 * the first eligible key a full GOP past :00
-				 * (constant +2s segments on 20fps HEVC). */
-				int64_t now_rt = rss_wallclock_us();
-				if (!st->segment_idr_requested && !meta.is_key &&
-				    now_rt >= st->segment_boundary_rt_us) {
-					rss_ring_request_idr(st->video_ring);
-					st->segment_idr_requested = true;
-				}
-				if (meta.is_key) {
-					rmr_mux_flush_fragment(st->mux);
-					if (st->sign_enabled)
-						rmr_sign_stream_emit(&st->sign_seg, false,
-								     direct_write, st);
-					st->frames_since_flush = 0;
-					if (rmr_storage_should_rotate_at(
-						    st->storage, st->segment_start_rt_us, now_rt)) {
-						close_segment(st);
-						rmr_storage_enforce_limit(st->storage);
-					}
-				} else if (st->frames_since_flush >= 10) {
-					rmr_mux_flush_fragment(st->mux);
-					if (st->sign_enabled)
-						rmr_sign_stream_emit(&st->sign_seg, false,
-								     direct_write, st);
-					st->frames_since_flush = 0;
-				}
-			}
-
-			/* Start new segment if needed */
-			if (!st->mux) {
-				if (meta.is_key) {
-					if (start_segment(st) < 0)
-						goto clip_handling;
-					v_ts_base = -1;
-					a_dts_counter = 0;
-					a_ts_base = -1;
-					st->frames_written = 0;
-					st->bytes_written = 0;
-					was_recording = true;
-				} else {
-					goto clip_handling;
-				}
-			}
-
-			/* DTS from ring timestamp */
-			if (v_ts_base < 0)
-				v_ts_base = meta.timestamp;
-			int64_t v_dts = (meta.timestamp - v_ts_base) * 90 / 1000;
-
-			rmr_video_sample_t vs = {
-				.data = mux_data,
-				.size = mux_len,
-				.dts = v_dts,
-				.pts = v_dts,
-				.is_key = meta.is_key,
-			};
-
-			if (rmr_mux_write_video(st->mux, &vs) == 0)
-				st->frames_written++;
-			else
-				st->frames_dropped++;
-
-			/* Write audio to continuous mux */
-			for (int i = 0; i < audio_count; i++) {
-				a_dts_counter = steer_audio_dts(a_dts_counter, audio_frames[i].ts,
-								&a_ts_base, audio_frames[i].samples,
-								st->audio_sample_rate);
-				rmr_audio_sample_t as = {
-					.data = audio_frames[i].data,
-					.size = audio_frames[i].len,
-					.dts = a_dts_counter,
-				};
-				rmr_mux_write_audio(st->mux, &as);
-				a_dts_counter += audio_frames[i].samples;
-			}
-		}
-
-	clip_handling:
-		/* ── Motion clip handling ── */
-		if (st->mode == RMR_MODE_MOTION || st->mode == RMR_MODE_BOTH) {
-			bool clip_want = (st->mode == RMR_MODE_BOTH)
-						 ? atomic_load(&st->clip_recording)
-						 : atomic_load(&st->recording);
-
-			/* Start clip with pre-buffer */
-			if (clip_want && !st->clip_mux && rmr_storage_available(st->clip_storage)) {
-				if (open_clip_with_prebuffer(st, audio_samples_per_frame,
-							     audio_bps) == 0) {
-					RSS_INFO("motion clip active");
-					/* the seconds before the event are on the medium first */
-					rmr_io_sync(st->io, st->clip_fd);
-				}
-			}
-
-			/* Write live frames to clip */
-			if (st->clip_mux) {
-				clip_write_video(st, mux_data, mux_len, meta.timestamp,
-						 meta.is_key);
-
-				for (int i = 0; i < audio_count; i++)
-					clip_write_audio(
-						st, audio_frames[i].data, audio_frames[i].len,
-						audio_frames[i].samples, audio_frames[i].ts);
-
-				/* Check clip length cap */
-				if (st->clip_length_sec > 0) {
-					int64_t elapsed = rss_timestamp_us() - st->clip_start_us;
-					if (elapsed >= (int64_t)st->clip_length_sec * 1000000) {
-						close_clip(st);
-						/* If still triggered, open a continuation
-						 * clip (no pre-buffer on continuation) */
-						if (clip_want) {
-							if (open_clip(st) == 0) {
-								RSS_INFO("clip rotated (length "
-									 "cap)");
-							}
-						}
-					}
-				}
-			}
-
-			/* Stop clip */
-			if (!clip_want && st->clip_mux)
-				close_clip(st);
-		}
-
-		/* ── Timelapse sampling ── */
-		if (st->tl_enabled && (st->params.ready || st->video_codec == 2)) {
-			bool was_armed = st->tl.want_sample;
-			rmr_tl_tick(&st->tl, rss_timestamp_us());
-			/* The sample must be a keyframe; ask for one the
-			 * moment a tick arms so the wait is one frame, not
-			 * the rest of a GOP. Requests coalesce with the
-			 * segment splitter's own. */
-			if (!was_armed && st->tl.want_sample && st->video_codec != 2)
-				rss_ring_request_idr(st->video_ring);
-
-			bool tl_key = meta.is_key || st->video_codec == 2;
-			if (tl_key && rmr_tl_take(&st->tl, st->video_read_seq))
-				timelapse_write_sample(st, mux_data, mux_len);
-		}
+		rss_ring_t *wait_ring = NULL;
+		for (int i = 0; i < st->track_count && !wait_ring; i++)
+			wait_ring = st->tracks[i].ring;
+		if (wait_ring)
+			rss_ring_wait(wait_ring, LOOP_WAIT_MS);
+		else
+			usleep(LOOP_WAIT_MS * 1000);
 	}
 
-	/* Shutdown */
-	if (st->mux)
-		close_segment(st);
-	if (st->clip_mux)
-		close_clip(st);
+	close_all_files(st);
 }
 
 /* ── Entry point ── */
 
-/* Compute next power of 2 >= n */
-static uint32_t next_pow2(uint32_t n)
+static void tracks_init(rmr_state_t *st)
 {
-	if (n == 0)
-		return 1;
-	n--;
-	n |= n >> 1;
-	n |= n >> 2;
-	n |= n >> 4;
-	n |= n >> 8;
-	n |= n >> 16;
-	return n + 1;
+	rmr_stream_spec_t specs[RMR_MAX_TRACKS];
+	st->track_count = rmr_streams_parse(
+		rss_config_get_str(st->cfg, "recording", "streams", NULL),
+		rss_config_get_int(st->cfg, "recording", "stream", 0), specs, RMR_MAX_TRACKS);
+	for (int i = 0; i < st->track_count; i++) {
+		rmr_track_t *t = &st->tracks[i];
+		t->st = st;
+		rss_strlcpy(t->ring_name, specs[i].ring, sizeof(t->ring_name));
+		rss_strlcpy(t->tag, specs[i].tag, sizeof(t->tag));
+		t->segment_fd = -1;
+		t->clip_fd = -1;
+		t->v_ts_base = -1;
+		t->a_ts_base = -1;
+		t->last_src_seq = RSS_SRC_SEQ_NONE;
+	}
+}
+
+static void tracks_destroy(rmr_state_t *st)
+{
+	for (int i = 0; i < st->track_count; i++) {
+		rmr_track_t *t = &st->tracks[i];
+		track_detach(t);
+		if (t->video_pb)
+			rmr_prebuf_destroy(t->video_pb);
+		free(t->frame_buf);
+		free(t->avcc_buf);
+	}
 }
 
 int main(int argc, char **argv)
@@ -1345,18 +1555,15 @@ int main(int argc, char **argv)
 	st.cfg = dctx.cfg;
 	st.config_path = dctx.config_path;
 	st.running = dctx.running;
-	st.segment_fd = -1;
-	st.clip_fd = -1;
 	st.tl_fd = -1;
 	st.tl_enabled = tl_enabled;
 	rmr_tl_init(&st.tl, rss_config_get_int(dctx.cfg, "timelapse", "interval", 10),
 		    rss_config_get_int(dctx.cfg, "timelapse", "playback_fps", 30),
 		    rss_config_get_int(dctx.cfg, "timelapse", "file_frames", 0));
-	st.stream_idx = rss_config_get_int(dctx.cfg, "recording", "stream", 0);
 	st.audio_enabled = rss_config_get_bool(dctx.cfg, "recording", "audio", true);
 	st.sei_timecode = rss_config_get_bool(dctx.cfg, "recording", "sei_timecode", true);
 	st.sync_interval_ms = rss_config_get_int(dctx.cfg, "recording", "sync_interval_ms", 1000);
-	st.last_src_seq = RSS_SRC_SEQ_NONE;
+	tracks_init(&st);
 	int buffer_kb = rss_config_get_int(dctx.cfg, "recording", "write_buffer_kb", 4096);
 	st.io = rmr_io_create((uint32_t)(buffer_kb > 0 ? buffer_kb : 4096) * 1024);
 	if (!st.io) {
@@ -1388,111 +1595,64 @@ int main(int argc, char **argv)
 		st.prebuffer_sec = 0;
 	if (st.prebuffer_sec > 5)
 		st.prebuffer_sec = 5;
+	int prebuf_mb = rss_config_get_int(dctx.cfg, "recording", "prebuffer_max_mb", 16);
+	if (prebuf_mb < 1)
+		prebuf_mb = 1;
+	if (prebuf_mb > 64)
+		prebuf_mb = 64;
+	st.prebuffer_max_bytes = (uint32_t)prebuf_mb * 1024 * 1024;
 
 	st.clip_length_sec = rss_config_get_int(dctx.cfg, "recording", "clip_length_sec", 60);
 
-	/* Open video ring (stream 0-5 for multi-sensor) */
-	static const char *ring_names[] = {"main",   "sub",   "s1_main",  "s1_sub",  "s2_main",
-					   "s2_sub", "jpeg0", "s1_jpeg0", "s2_jpeg0"};
-	int ri = st.stream_idx;
-	if (ri < 0 || ri >= (int)(sizeof(ring_names) / sizeof(ring_names[0])))
-		ri = 0;
-	const char *ring_name = ring_names[ri];
-	st.video_ring_name = ring_name;
-
+	/* The first stream is required at startup; the others attach when
+	 * their producers appear. */
+	rmr_track_t *t0 = &st.tracks[0];
 	for (int attempt = 0; attempt < 30 && *st.running; attempt++) {
-		st.video_ring = rss_ring_open(st.video_ring_name);
-		if (st.video_ring)
+		if (track_attach(&st, t0) == 0)
 			break;
-		RSS_DEBUG("waiting for %s ring...", ring_name);
+		RSS_DEBUG("waiting for %s ring...", t0->ring_name);
 		sleep(1);
 	}
-
-	if (!st.video_ring) {
+	if (!t0->ring) {
 		RSS_FATAL("video ring not available");
 		goto cleanup;
 	}
-	rss_ring_check_version(st.video_ring, "video");
-	rss_ring_acquire(st.video_ring);
-
-	/* Read ring metadata */
-	const rss_ring_header_t *vhdr = rss_ring_get_header(st.video_ring);
-	st.video_codec = vhdr->codec;
-	st.width = vhdr->width;
-	st.height = vhdr->height;
-	st.fps_num = vhdr->fps_num;
-	const char *vcodec_name = st.video_codec == 2	? "MJPEG"
-				  : st.video_codec == 1 ? "H.265"
-							: "H.264";
-	RSS_INFO("video: %s %ux%u @ %u fps", vcodec_name, st.width, st.height, st.fps_num);
-
-	/* Allocate buffers (AVCC gets headroom for the leading SEI NAL) */
-	st.frame_buf_size = rss_ring_max_frame_size(st.video_ring);
-	st.frame_buf = malloc(st.frame_buf_size);
-	st.avcc_buf_size = st.frame_buf_size + RSS_SEI_TS_MAX;
-	st.avcc_buf = malloc(st.avcc_buf_size);
-	if (!st.frame_buf || !st.avcc_buf) {
-		RSS_FATAL("buffer allocation failed (%u bytes)", st.frame_buf_size);
-		goto cleanup;
-	}
+	for (int i = 1; i < st.track_count; i++)
+		if (track_attach(&st, &st.tracks[i]) < 0)
+			RSS_INFO("video %s not available yet (tag %s)", st.tracks[i].ring_name,
+				 st.tracks[i].tag);
 
 	/* Open audio ring */
 	if (st.audio_enabled) {
 		st.audio_ring = rss_ring_open("audio");
 		if (st.audio_ring) {
 			rss_ring_check_version(st.audio_ring, "audio");
-			const rss_ring_header_t *ahdr = rss_ring_get_header(st.audio_ring);
-			st.audio_codec = ahdr->codec;
-			st.audio_sample_rate = ahdr->fps_num;
-			st.audio_aot = ahdr->profile;
+			audio_ring_params(&st);
+			st.audio_idle_since_us = rss_timestamp_us();
 			RSS_DEBUG("audio: codec=%u rate=%u aot=%u", st.audio_codec,
 				  st.audio_sample_rate, st.audio_aot);
 		} else {
 			RSS_WARN("audio ring not available (recording video only)");
+			st.audio_retry_us = rss_timestamp_us() + AUDIO_RETRY_US;
 		}
 	}
 
-	/* Create pre-buffers for motion clip modes */
-	if (st.prebuffer_sec > 0 && (st.mode == RMR_MODE_MOTION || st.mode == RMR_MODE_BOTH)) {
-		uint32_t fps = st.fps_num > 0 ? st.fps_num : 25;
-		uint32_t v_frames = fps * (uint32_t)st.prebuffer_sec + fps; /* +1s margin */
-		uint32_t v_slots = next_pow2(v_frames);
-		/* Data size: bitrate * prebuffer_sec * 2.5 (headroom for I-frames) / 8.
-		 * Only a starting point: the region grows when the stream runs
-		 * above it (rmr_prebuf_set_growth below). */
-		uint32_t bps = rss_config_get_int(
-			dctx.cfg, st.stream_idx == 1 ? "stream1" : "stream0", "bitrate", 3000000);
-		uint64_t v_data = (uint64_t)bps * (uint32_t)st.prebuffer_sec * 5 / 2 / 8;
-		if (v_data < 1024 * 1024)
-			v_data = 1024 * 1024; /* min 1MB */
-		if (v_data > 10 * 1024 * 1024)
-			v_data = 10 * 1024 * 1024; /* max 10MB */
+	/* Audio pre-buffer for motion clips, shared by every track */
+	if (st.audio_ring && st.prebuffer_sec > 0 &&
+	    (st.mode == RMR_MODE_MOTION || st.mode == RMR_MODE_BOTH)) {
+		/* Audio: 50fps (20ms frames) typical */
+		uint32_t a_frames = 50 * (uint32_t)st.prebuffer_sec + 50;
+		uint32_t a_slots = next_pow2(a_frames);
+		/* Audio data: small frames, 1KB each is generous */
+		uint32_t a_data = a_slots * 1024;
+		if (a_data < 128 * 1024)
+			a_data = 128 * 1024;
 
-		st.video_pb = rmr_prebuf_create(v_slots, (uint32_t)v_data);
-		if (st.video_pb) {
-			rmr_prebuf_set_growth(st.video_pb, RMR_PREBUF_MAX_BYTES,
-					      ((int64_t)st.prebuffer_sec + 1) * 1000000);
-			RSS_DEBUG("video pre-buffer: %u slots, %u KB data", v_slots,
-				  (uint32_t)(v_data / 1024));
-		} else
-			RSS_WARN("video pre-buffer alloc failed");
-
-		if (st.audio_ring) {
-			/* Audio: 50fps (20ms frames) typical */
-			uint32_t a_frames = 50 * (uint32_t)st.prebuffer_sec + 50;
-			uint32_t a_slots = next_pow2(a_frames);
-			/* Audio data: small frames, 1KB each is generous */
-			uint32_t a_data = a_slots * 1024;
-			if (a_data < 128 * 1024)
-				a_data = 128 * 1024;
-
-			st.audio_pb = rmr_prebuf_create(a_slots, a_data);
-			if (st.audio_pb)
-				RSS_DEBUG("audio pre-buffer: %u slots, %u KB data", a_slots,
-					  a_data / 1024);
-			else
-				RSS_WARN("audio pre-buffer alloc failed");
-		}
+		st.audio_pb = rmr_prebuf_create(a_slots, a_data);
+		if (st.audio_pb)
+			RSS_DEBUG("audio pre-buffer: %u slots, %u KB data", a_slots, a_data / 1024);
+		else
+			RSS_WARN("audio pre-buffer alloc failed");
 	}
 
 	/* Storage */
@@ -1568,8 +1728,7 @@ int main(int argc, char **argv)
 cleanup:
 	if (st.ctrl)
 		rss_ctrl_destroy(st.ctrl);
-	if (st.clip_mux)
-		close_clip(&st);
+	close_all_files(&st);
 	if (st.tl_mux)
 		close_timelapse(&st);
 	if (st.tl_storage)
@@ -1578,21 +1737,14 @@ cleanup:
 		rmr_storage_destroy(st.clip_storage);
 	if (st.storage)
 		rmr_storage_destroy(st.storage);
-	if (st.video_ring) {
-		rss_ring_release(st.video_ring);
-		rss_ring_close(st.video_ring);
-	}
+	tracks_destroy(&st);
 	if (st.audio_ring)
 		rss_ring_close(st.audio_ring);
 	if (st.tele_ring)
 		rss_ring_close(st.tele_ring);
-	if (st.video_pb)
-		rmr_prebuf_destroy(st.video_pb);
 	if (st.audio_pb)
 		rmr_prebuf_destroy(st.audio_pb);
 	rmr_io_destroy(st.io); /* drains: every queued byte and close runs */
-	free(st.frame_buf);
-	free(st.avcc_buf);
 	rss_config_free(dctx.cfg);
 
 	rss_daemon_cleanup("rmr");
