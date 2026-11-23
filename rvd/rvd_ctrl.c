@@ -1476,9 +1476,10 @@ static bool extras_step_aside(rvd_state_t *st)
  * Rebuild extra stream `chn` as `want` (its config with a change applied):
  * every extra comes down, the change goes into its saved copy, and all
  * attach again. If it no longer fits, the old config goes back and they
- * attach once more. On success *slot_out names its saved copy (its
- * streams[] index may differ if an extra before it dropped out).
- * Returns 0, or the response length of the error written.
+ * attach once more. Callers find the stream again through its saved
+ * copy (extra_saved[slot]): its streams[] index may differ afterwards if
+ * an extra before it dropped out. Returns 0, or the response length of
+ * the error written (-1 with no response buffer).
  */
 static int extra_rebuild(rvd_state_t *st, int chn, const rvd_stream_t *want, char *resp,
 			 int resp_size)
