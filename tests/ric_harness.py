@@ -654,6 +654,55 @@ def scenario_baseline_refresh(stub, watch):
     ric.stop()
 
 
+def scenario_baseline_zero_repair(stub, watch):
+    """A night baseline adopted while the vendor gain readback was dead
+    (valid field, value 0 -- T41 gc4023) is sticky without repair: the
+    ratio threshold lands at 0 and the lit-IR guard blocks the luma day
+    test, so the machine never exits night. The re-anchor must adopt the
+    first honest nonzero night reading and restore the ratio trigger."""
+    stub.set_scene(luma=120, gain=500, ev=4000)
+    ric = Ric("zerobase", LUMA_CONF)
+    if not ric.wait_running():
+        result(False, "baseline-zero-repair: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    time.sleep(0.5)
+
+    # Dusk with a healthy settle, then the dead readback window: gain
+    # reads a VALID zero while the scene stays dark, so the settle
+    # adopts gain=0 as the night baseline.
+    mm = stub.mark()
+    stub.set_scene(luma=17, gain=20000, ev=60000)
+    if not wait_for(lambda: "night" in stub.modes_since(mm), 5):
+        result(False, "baseline-zero-repair: night entry", str(stub.modes_since(mm)))
+        ric.stop()
+        return
+    stub.set_scene(
+        luma=17,
+        gain=0,
+        ev=60000,
+        valid_mask=(1 << 0) | (1 << 1) | (1 << 2) | (1 << 3),
+    )
+    time.sleep((3 + 17 + 4) * POLL_MS / 1000.0)
+
+    # The sensor recovers and reports its real dark reading (luma 8:
+    # dark even without IR, so no probe can day-exit) while the machine
+    # is still in night with a zero baseline. The re-anchor adopts it.
+    stub.set_scene(luma=8, gain=20000, ev=80000)
+    time.sleep(3 * POLL_MS / 1000.0)
+
+    # Dawn: gain dips below 25% of the re-anchored baseline.
+    mm2 = stub.mark()
+    stub.set_scene(luma=45, gain=3000, ev=3000)
+    ok = wait_for(lambda: "day" in stub.modes_since(mm2), 8)
+    log = ric.read_log()
+    result(ok, "baseline-zero-repair: honest reading repairs the zero baseline",
+           str(stub.modes_since(mm2)) + " " + log[-300:])
+    result("re-anchored" in log, "baseline-zero-repair: re-anchor logged",
+           log[-300:])
+    ric.stop()
+
+
 def scenario_probe_dawn(stub, watch):
     """T20-class compressed gain: a lit scene under IR floors total_gain
     far above the day ratio (Wyze V2 bench: night baseline 1300 with IR,
@@ -2488,6 +2537,7 @@ def main():
         scenario_cooldown,
         scenario_covered_lens_baseline,
         scenario_baseline_refresh,
+        scenario_baseline_zero_repair,
         scenario_probe_dawn,
         scenario_probe_dark_restore,
         scenario_noir_luma_dawn,

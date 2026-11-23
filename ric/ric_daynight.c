@@ -773,6 +773,19 @@ void ric_poll_exposure(ric_state_t *st)
 			uint32_t day_thr =
 				st->night_gain_baseline * (uint32_t)st->settings.day_gain_pct / 100;
 			want_day = (total_gain < day_thr);
+		} else if (have_gain && total_gain > 0) {
+			/* A baseline stuck at 0 is repairable the same
+			 * way: re-anchor from the first honest nonzero
+			 * night reading. It reaches 0 via rearm while
+			 * night stays active, or via a settle/gain-dead
+			 * window that read the vendor zero gain
+			 * (T41 gc4023: ratio dead at day_thr 0, luma
+			 * day-test blocked by lit IR forever). */
+			RSS_DEBUG("night baseline re-anchored at %u (was 0, "
+				  "scene showed its real dark reading)",
+				  total_gain);
+			st->night_gain_baseline = total_gain;
+			st->night_ev_baseline = ev;
 		}
 		if (!ir_lit && have_luma && ae_luma >= (uint32_t)st->settings.night_luma)
 			want_day = true;
