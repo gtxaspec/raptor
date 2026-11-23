@@ -27,7 +27,7 @@ start_daemon() {
 	name=$1
 	shift
 	if [ ! -x "/usr/bin/$name" ]; then
-		printf "  %-4s skipped (not installed)\n" "$name"
+		printf "  %-4s skipped (not executable)\n" "$name"
 		return
 	fi
 	if ! daemon_enabled "$name"; then
