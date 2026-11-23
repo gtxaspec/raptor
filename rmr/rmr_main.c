@@ -1729,6 +1729,7 @@ int main(int argc, char **argv)
 		.segment_seconds = rss_config_get_int(dctx.cfg, "recording", "segment_seconds", 0),
 		.max_storage_mb = rss_config_get_int(dctx.cfg, "recording", "max_storage_mb", 0),
 		.min_free_mb = rss_config_get_int(dctx.cfg, "recording", "min_free_mb", 0),
+		.cleanup_delay_ms = 15000,
 	};
 	st.storage = rmr_storage_create(&scfg);
 	if (!st.storage) {

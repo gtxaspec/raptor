@@ -38,6 +38,8 @@ struct rmr_storage {
 	pthread_cond_t req_cv;
 	pthread_t clean_thr;
 	bool clean_started, clean_pending, clean_stop;
+	int cleanup_delay_ms;
+	bool pacing;		   /* set while the thread runs a delayed cleanup */
 	bool refuse_logged;	   /* rootfs auto-create refusal logged once */
 	int64_t last_wait_warn_us; /* rate-limit for the waiting log       */
 };
@@ -64,6 +66,7 @@ rmr_storage_t *rmr_storage_create(const rmr_storage_config_t *cfg)
 	st->segment_seconds = cfg->segment_seconds;
 	st->max_storage_mb = cfg->max_storage_mb;
 	st->min_free_mb = cfg->min_free_mb;
+	st->cleanup_delay_ms = cfg->cleanup_delay_ms;
 	pthread_mutex_init(&st->clean_lock, NULL);
 	pthread_mutex_init(&st->req_lock, NULL);
 	pthread_cond_init(&st->req_cv, NULL);
@@ -496,6 +499,10 @@ static int enforce_limit_locked(rmr_storage_t *st)
 				if (stat(fpath, &fst) == 0 && unlink(fpath) == 0) {
 					freed += fst.st_size;
 					deleted++;
+					/* a fragmented segment's truncate holds f2fs locks
+					 * the writer needs: give it the card between files */
+					if (st->pacing)
+						usleep(500000);
 				}
 			}
 			j = g;
@@ -535,8 +542,28 @@ static void *clean_thread(void *arg)
 			continue;
 		}
 		st->clean_pending = false;
+		if (st->cleanup_delay_ms > 0) {
+			/* away from the rotation's burst of closes and opens */
+			struct timespec until;
+			clock_gettime(CLOCK_REALTIME, &until);
+			until.tv_sec += st->cleanup_delay_ms / 1000;
+			until.tv_nsec += (long)(st->cleanup_delay_ms % 1000) * 1000000L;
+			if (until.tv_nsec >= 1000000000L) {
+				until.tv_sec++;
+				until.tv_nsec -= 1000000000L;
+			}
+			while (!st->clean_stop &&
+			       pthread_cond_timedwait(&st->req_cv, &st->req_lock, &until) == 0)
+				;
+			if (st->clean_stop)
+				break;
+		}
 		pthread_mutex_unlock(&st->req_lock);
-		rmr_storage_enforce_limit(st);
+		pthread_mutex_lock(&st->clean_lock);
+		st->pacing = st->cleanup_delay_ms > 0;
+		enforce_limit_locked(st);
+		st->pacing = false;
+		pthread_mutex_unlock(&st->clean_lock);
 		pthread_mutex_lock(&st->req_lock);
 	}
 	pthread_mutex_unlock(&st->req_lock);

@@ -18,6 +18,8 @@ typedef struct {
 	int segment_seconds;   /* nonzero overrides minutes (debug/test) */
 	int max_storage_mb;    /* 0 = unlimited */
 	int min_free_mb;       /* keep this much free on the medium, 0 = off */
+	int cleanup_delay_ms;  /* background cleanup waits this long after a
+				* request and paces its deletes; 0 = at once */
 } rmr_storage_config_t;
 
 #define RMR_STORAGE_DEFAULT_ROOT "/mnt/mmcblk0p1/raptor"
