@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <dirent.h>
+#include <pthread.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -30,6 +31,13 @@ struct rmr_storage {
 	bool auto_root;
 	char subdir[32];
 	int64_t next_pick_us;
+	/* cleanup off the main loop: deleting 100+ MB files on a busy card
+	 * took up to 0.8 s there, enough to overflow a 32-slot ring */
+	pthread_mutex_t clean_lock;
+	pthread_mutex_t req_lock;
+	pthread_cond_t req_cv;
+	pthread_t clean_thr;
+	bool clean_started, clean_pending, clean_stop;
 	bool refuse_logged;	   /* rootfs auto-create refusal logged once */
 	int64_t last_wait_warn_us; /* rate-limit for the waiting log       */
 };
@@ -56,12 +64,27 @@ rmr_storage_t *rmr_storage_create(const rmr_storage_config_t *cfg)
 	st->segment_seconds = cfg->segment_seconds;
 	st->max_storage_mb = cfg->max_storage_mb;
 	st->min_free_mb = cfg->min_free_mb;
+	pthread_mutex_init(&st->clean_lock, NULL);
+	pthread_mutex_init(&st->req_lock, NULL);
+	pthread_cond_init(&st->req_cv, NULL);
 
 	return st;
 }
 
 void rmr_storage_destroy(rmr_storage_t *st)
 {
+	if (!st)
+		return;
+	if (st->clean_started) {
+		pthread_mutex_lock(&st->req_lock);
+		st->clean_stop = true;
+		pthread_cond_signal(&st->req_cv);
+		pthread_mutex_unlock(&st->req_lock);
+		pthread_join(st->clean_thr, NULL);
+	}
+	pthread_cond_destroy(&st->req_cv);
+	pthread_mutex_destroy(&st->req_lock);
+	pthread_mutex_destroy(&st->clean_lock);
 	free(st);
 }
 
@@ -418,7 +441,7 @@ static int open_paths(char paths[][320], int max)
  * this process has open are kept, so a clock that steps (RTC before NTP,
  * a GPS fix) can reorder what goes first but never stops the cleanup or
  * takes a file being written. Clips live elsewhere and are not touched. */
-int rmr_storage_enforce_limit(rmr_storage_t *st)
+static int enforce_limit_locked(rmr_storage_t *st)
 {
 	if (!st || (st->max_storage_mb <= 0 && st->min_free_mb <= 0))
 		return 0;
@@ -490,4 +513,46 @@ int rmr_storage_enforce_limit(rmr_storage_t *st)
 			 (double)need / (1024.0 * 1024.0));
 
 	return deleted;
+}
+
+int rmr_storage_enforce_limit(rmr_storage_t *st)
+{
+	if (!st)
+		return 0;
+	pthread_mutex_lock(&st->clean_lock);
+	int n = enforce_limit_locked(st);
+	pthread_mutex_unlock(&st->clean_lock);
+	return n;
+}
+
+static void *clean_thread(void *arg)
+{
+	rmr_storage_t *st = arg;
+	pthread_mutex_lock(&st->req_lock);
+	while (!st->clean_stop) {
+		if (!st->clean_pending) {
+			pthread_cond_wait(&st->req_cv, &st->req_lock);
+			continue;
+		}
+		st->clean_pending = false;
+		pthread_mutex_unlock(&st->req_lock);
+		rmr_storage_enforce_limit(st);
+		pthread_mutex_lock(&st->req_lock);
+	}
+	pthread_mutex_unlock(&st->req_lock);
+	return NULL;
+}
+
+void rmr_storage_request_cleanup(rmr_storage_t *st)
+{
+	if (!rmr_storage_loops(st))
+		return;
+	pthread_mutex_lock(&st->req_lock);
+	if (!st->clean_started && pthread_create(&st->clean_thr, NULL, clean_thread, st) == 0)
+		st->clean_started = true;
+	st->clean_pending = true;
+	pthread_cond_signal(&st->req_cv);
+	pthread_mutex_unlock(&st->req_lock);
+	if (!st->clean_started)
+		rmr_storage_enforce_limit(st); /* no thread: do it here */
 }

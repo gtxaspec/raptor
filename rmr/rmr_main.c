@@ -59,6 +59,16 @@ static int queue_write(rmr_state_t *st, int fd, const void *buf, uint32_t len, u
 	return 0;
 }
 
+/* A storage call on the main loop longer than this starves the rings */
+#define SLOW_STORAGE_US 200000
+
+static void slow_storage(const char *what, const char *path, int64_t t0)
+{
+	int64_t us = rss_timestamp_us() - t0;
+	if (us >= SLOW_STORAGE_US)
+		RSS_WARN("slow storage: %s took %lld ms (%s)", what, (long long)(us / 1000), path);
+}
+
 static int direct_write(const void *buf, uint32_t len, void *ctx)
 {
 	rmr_track_t *t = ctx;
@@ -218,8 +228,10 @@ static int start_segment(rmr_track_t *t)
 	int64_t now_rt = rss_wallclock_us();
 	int64_t name_rt = rmr_name_stamp_take(&st->segment_name, &t->segment_stamp, now_rt, now_rt,
 					      rmr_storage_next_boundary(now_rt, seg_len));
+	int64_t t0 = rss_timestamp_us();
 	int fd = rmr_storage_open_file(st->storage, name_rt, t->tag, t->segment_path,
 				       sizeof(t->segment_path));
+	slow_storage("open", t->segment_path, t0);
 	if (fd < 0)
 		return -1;
 
@@ -247,7 +259,16 @@ static int start_segment(rmr_track_t *t)
 	return 0;
 }
 
+static void close_segment_inner(rmr_track_t *t);
+
 static void close_segment(rmr_track_t *t)
+{
+	int64_t t0 = rss_timestamp_us();
+	close_segment_inner(t);
+	slow_storage("close", t->ring_name, t0);
+}
+
+static void close_segment_inner(rmr_track_t *t)
 {
 	rmr_state_t *st = t->st;
 	if (t->mux) {
@@ -1055,7 +1076,7 @@ static void track_housekeep(rmr_state_t *st, rmr_track_t *t, bool rec, bool clip
 		return;
 	if (t->mux && rss_wallclock_us() >= t->segment_boundary_rt_us) {
 		close_segment(t);
-		rmr_storage_enforce_limit(st->storage);
+		rmr_storage_request_cleanup(st->storage);
 	}
 	if (t->clip_mux && st->clip_length_sec > 0 &&
 	    rss_timestamp_us() - t->clip_start_us >= (int64_t)st->clip_length_sec * 1000000)
@@ -1115,7 +1136,7 @@ static void track_write_segment(rmr_track_t *t, const rss_ring_slot_t *meta,
 			if (rmr_storage_should_rotate_at(st->storage, t->segment_start_rt_us,
 							 now_rt)) {
 				close_segment(t);
-				rmr_storage_enforce_limit(st->storage);
+				rmr_storage_request_cleanup(st->storage);
 			}
 		} else if (t->frames_since_flush >= 10) {
 			t->frames_since_flush = 0;
@@ -1475,7 +1496,14 @@ static void record_loop(rmr_state_t *st)
 	int ctrl_fd = st->ctrl ? rss_ctrl_get_fd(st->ctrl) : -1;
 	bool standby = false; /* no writable destination: detached from rings */
 
+	int64_t iter_us = rss_timestamp_us();
 	while (rss_running(st->running)) {
+		int64_t now_us = rss_timestamp_us();
+		if (now_us - iter_us >= 3 * SLOW_STORAGE_US)
+			RSS_WARN("main loop stalled %lld ms",
+				 (long long)((now_us - iter_us) / 1000));
+		iter_us = now_us;
+
 		/* Handle control socket */
 		if (ctrl_fd >= 0) {
 			fd_set fds;

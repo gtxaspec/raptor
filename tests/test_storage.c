@@ -400,6 +400,29 @@ TEST storage_auto_root_without_card(void)
 	PASS();
 }
 
+TEST storage_cleanup_runs_in_background(void)
+{
+	char dir[] = "/tmp/rmr_storage_test_XXXXXX";
+	ASSERT(mkdtemp(dir));
+	rmr_storage_config_t cfg = {.base_path = dir, .segment_minutes = 1, .max_storage_mb = 1};
+	rmr_storage_t *st = rmr_storage_create(&cfg);
+	ASSERT(st);
+	const off_t mb = 1024 * 1024;
+	make_file(dir, "2026-11-22", "10-00-00.mp4", mb);
+	make_file(dir, "2026-11-22", "10-01-00.mp4", mb);
+
+	rmr_storage_request_cleanup(st);
+	for (int i = 0; i < 200 && file_exists(dir, "2026-11-22", "10-00-00.mp4"); i++)
+		usleep(10000);
+	ASSERT_FALSE(file_exists(dir, "2026-11-22", "10-00-00.mp4"));
+	ASSERT(file_exists(dir, "2026-11-22", "10-01-00.mp4"));
+
+	rmr_storage_destroy(st); /* joins the thread */
+	rm_day(dir, "2026-11-22");
+	rmdir(dir);
+	PASS();
+}
+
 SUITE(storage_suite)
 {
 	RUN_TEST(storage_boundary_from_mid_period);
@@ -416,6 +439,7 @@ SUITE(storage_suite)
 	RUN_TEST(storage_name_stamp_never_reuses_own);
 	RUN_TEST(storage_enforce_deletes_pairs_together);
 	RUN_TEST(storage_enforce_keeps_open_segments);
+	RUN_TEST(storage_cleanup_runs_in_background);
 	RUN_TEST(storage_enforce_min_free_oldest_first);
 	RUN_TEST(storage_auto_root_without_card);
 }

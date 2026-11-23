@@ -82,6 +82,9 @@ bool rmr_storage_should_rotate_at(rmr_storage_t *st, int64_t start_rt_us, int64_
  * Returns number of files deleted, or -1 on error. */
 int rmr_storage_enforce_limit(rmr_storage_t *st);
 
+/* Run the cleanup on a background thread (started on first use) */
+void rmr_storage_request_cleanup(rmr_storage_t *st);
+
 /* Check if storage path is mounted and writable. */
 bool rmr_storage_available(rmr_storage_t *st);
 
