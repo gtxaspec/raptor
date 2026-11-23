@@ -7,7 +7,7 @@ SHMDIR=/dev/shm
 
 # Re-exec under an exclusive lock so two runs cannot interleave. busybox
 # flock takes no -w; a run is bounded by stop_daemon's own waits anyway.
-if [ -z "$S31RAPTOR_LOCKED" ] && command -v flock >/dev/null 2>&1; then
+if [ "$1" != watch ] && [ -z "$S31RAPTOR_LOCKED" ] && command -v flock >/dev/null 2>&1; then
 	mkdir -p "$RUNDIR"
 	S31RAPTOR_LOCKED=1 exec flock "$RUNDIR/.lock" "$0" "$@"
 fi
@@ -128,7 +128,29 @@ start() {
 	start_daemon rsp
 	start_daemon rsr
 
+	# Bring back whatever dies (an OOM kill must not end recording)
+	watched=""
+	for d in rad rtd rcd rod rsd rsd-555 rhd ric rmr rmd rwd rsp rsr; do
+		pidof "$d" >/dev/null && watched="$watched $d"
+	done
+	start-stop-daemon -S -b -m -p "$RUNDIR/watch.pid" -x /bin/sh -- "$0" watch $watched
+
 	echo "Done."
+}
+
+watch() {
+	while sleep 5; do
+		if ! pidof rvd >/dev/null; then
+			logger -t raptor "rvd died, restarting all"
+			S31RAPTOR_LOCKED='' "$0" restart >/dev/null 2>&1
+			exit 0
+		fi
+		for d in "$@"; do
+			pidof "$d" >/dev/null && continue
+			logger -t raptor "$d died, restarting"
+			start-stop-daemon -S -b -x /usr/bin/$d -- -c "$CONF"
+		done
+	done
 }
 
 stop_daemon() {
@@ -150,6 +172,8 @@ stop_daemon() {
 
 stop() {
 	echo "Stopping Raptor Streaming System..."
+	start-stop-daemon -K -q -p "$RUNDIR/watch.pid" 2>/dev/null
+	rm -f "$RUNDIR/watch.pid"
 
 	# Stop consumers first, then producer (RVD) last
 	for d in rsr rsp rwd rmd rmr rcd rtd ric rhd rsd rsd-555 rod rad rvd; do
@@ -171,6 +195,10 @@ case "$1" in
 	restart)
 		stop
 		start
+		;;
+	watch)
+		shift
+		watch "$@"
 		;;
 	*)
 		echo "Usage: $0 {start|stop|restart}"
