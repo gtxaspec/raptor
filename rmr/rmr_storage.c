@@ -400,7 +400,7 @@ static int open_paths(char paths[][320], int max)
 	int n = 0;
 	struct dirent *e;
 	while (d && n < max && (e = readdir(d)) != NULL) {
-		char link[64];
+		char link[300];
 		snprintf(link, sizeof(link), "/proc/self/fd/%s", e->d_name);
 		ssize_t len = readlink(link, paths[n], 319);
 		if (len > 0) {
