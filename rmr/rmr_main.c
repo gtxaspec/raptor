@@ -833,7 +833,10 @@ static void io_service(rmr_state_t *st)
 		rmr_track_t *t = &st->tracks[i];
 		if (t->segment_fd >= 0 && (err = rmr_io_error(st->io, t->segment_fd)) != 0) {
 			RSS_ERROR("recording write failed: %s", strerror(err));
-			if (err == ENOSPC && rmr_storage_enforce_limit(st->storage) == 0) {
+			/* Looping, the next keyframe's open makes room or fails
+			 * on its own; stopping here would end recording for good. */
+			if (err == ENOSPC && rmr_storage_enforce_limit(st->storage) == 0 &&
+			    !rmr_storage_loops(st->storage)) {
 				RSS_ERROR("storage full, stopping recording");
 				atomic_store(&st->recording, false);
 			}

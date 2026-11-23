@@ -27,6 +27,9 @@ typedef struct {
  * card is mounted. */
 int rmr_storage_pick_root(char *out, int out_size);
 
+/* True when a quota or a free-space floor makes room for new files */
+bool rmr_storage_loops(const rmr_storage_t *st);
+
 /* The directory files go to now */
 const char *rmr_storage_path(const rmr_storage_t *st);
 

@@ -225,6 +225,11 @@ int rmr_storage_pick_root(char *out, int out_size)
 	return -1;
 }
 
+bool rmr_storage_loops(const rmr_storage_t *st)
+{
+	return st && (st->max_storage_mb > 0 || st->min_free_mb > 0);
+}
+
 const char *rmr_storage_path(const rmr_storage_t *st)
 {
 	return st ? st->base_path : "";
@@ -388,9 +393,31 @@ static int64_t storage_need(rmr_storage_t *st, char **days, int day_count)
 	return need;
 }
 
-/* Loop recording: whole segments go oldest first, a file with its tagged
- * siblings (X.mp4, X_R.mp4), until the budget holds. Files touched within
- * two segment lengths are kept, as one of them is open; so are clips. */
+/* Paths this process holds open: the segments and clips being written */
+static int open_paths(char paths[][320], int max)
+{
+	DIR *d = opendir("/proc/self/fd");
+	int n = 0;
+	struct dirent *e;
+	while (d && n < max && (e = readdir(d)) != NULL) {
+		char link[64];
+		snprintf(link, sizeof(link), "/proc/self/fd/%s", e->d_name);
+		ssize_t len = readlink(link, paths[n], 319);
+		if (len > 0) {
+			paths[n][len] = '\0';
+			n++;
+		}
+	}
+	if (d)
+		closedir(d);
+	return n;
+}
+
+/* Loop recording: whole segments go oldest name first, a file with its
+ * tagged siblings (X.mp4, X_R.mp4), until the budget holds. Only files
+ * this process has open are kept, so a clock that steps (RTC before NTP,
+ * a GPS fix) can reorder what goes first but never stops the cleanup or
+ * takes a file being written. Clips live elsewhere and are not touched. */
 int rmr_storage_enforce_limit(rmr_storage_t *st)
 {
 	if (!st || (st->max_storage_mb <= 0 && st->min_free_mb <= 0))
@@ -402,12 +429,13 @@ int rmr_storage_enforce_limit(rmr_storage_t *st)
 		return 0;
 
 	int64_t need = storage_need(st, days, day_count);
-	time_t keep_after = time(NULL) - 2 * rmr_storage_segment_len_sec(st);
+	static char held[64][320];
+	int held_n = open_paths(held, 64);
 	int64_t freed = 0;
 	int deleted = 0;
-	bool reached_recent = false;
+	bool kept_open = false;
 
-	for (int i = 0; i < day_count && freed < need && !reached_recent; i++) {
+	for (int i = 0; i < day_count && freed < need; i++) {
 		if (!is_day_dir(days[i]))
 			continue;
 		char dir_path[512];
@@ -420,22 +448,21 @@ int rmr_storage_enforce_limit(rmr_storage_t *st)
 		while (j < file_count && freed < need) {
 			size_t key = strcspn(files[j], "_.");
 			int g = j;
-			bool recent = false;
+			bool in_use = false;
 			while (g < file_count && strncmp(files[g], files[j], key) == 0 &&
 			       (files[g][key] == '_' || files[g][key] == '.')) {
 				char fpath[768];
-				struct stat fst;
 				snprintf(fpath, sizeof(fpath), "%s/%s", dir_path, files[g]);
-				if (is_mp4(files[g]) && stat(fpath, &fst) == 0 &&
-				    fst.st_mtime >= keep_after)
-					recent = true;
+				for (int o = 0; o < held_n && !in_use; o++)
+					in_use = strcmp(held[o], fpath) == 0;
 				g++;
 			}
 			if (g == j)
 				g = j + 1; /* a name that groups with nothing */
-			if (recent) {
-				reached_recent = true;
-				break;
+			if (in_use) {
+				kept_open = true;
+				j = g;
+				continue;
 			}
 			for (int k = j; k < g; k++) {
 				if (!is_mp4(files[k]))
@@ -458,8 +485,8 @@ int rmr_storage_enforce_limit(rmr_storage_t *st)
 	if (deleted > 0)
 		RSS_INFO("storage cleanup: deleted %d files, %.1f MB", deleted,
 			 (double)freed / (1024.0 * 1024.0));
-	else if (need > 0 && reached_recent)
-		RSS_WARN("storage cleanup: %.1f MB over budget, only recent files left",
+	else if (need > 0 && kept_open)
+		RSS_WARN("storage cleanup: %.1f MB over budget, only open files left",
 			 (double)need / (1024.0 * 1024.0));
 
 	return deleted;
