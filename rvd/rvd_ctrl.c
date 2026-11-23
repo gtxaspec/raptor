@@ -1458,8 +1458,75 @@ static int find_jpeg_for_video_ctrl(rvd_state_t *st, int video_idx)
  * Returns 0 on success, or positive response length on failure
  * (error already written to resp).
  */
+static int do_stream_restart_core(rvd_state_t *st, int chn, char *resp, int resp_size,
+				  bool recreate_fs);
+
+/* A base stream rebuilt while extra streams hold rmem might not get its
+ * buffers back: step every extra aside first and attach them again after
+ * (one may then not fit, which only costs that one). */
+static bool extras_step_aside(rvd_state_t *st)
+{
+	if (st->stream_count == st->extra_base)
+		return false;
+	rvd_extra_detach(st);
+	return true;
+}
+
+/*
+ * Rebuild extra stream `chn` as `want` (its config with a change applied):
+ * every extra comes down, the change goes into its saved copy, and all
+ * attach again. If it no longer fits, the old config goes back and they
+ * attach once more. On success *slot_out names its saved copy (its
+ * streams[] index may differ if an extra before it dropped out).
+ * Returns 0, or the response length of the error written.
+ */
+static int extra_rebuild(rvd_state_t *st, int chn, const rvd_stream_t *want, char *resp,
+			 int resp_size)
+{
+	int slot = st->streams[chn].extra_slot;
+	rvd_stream_t *x = &st->extra_saved[slot];
+	rss_video_config_t old_enc;
+	rss_fs_config_t old_fs;
+
+	rvd_extra_detach(st);
+	old_enc = x->enc_cfg;
+	old_fs = x->fs_cfg;
+	x->enc_cfg = want->enc_cfg;
+	x->fs_cfg = want->fs_cfg;
+	rvd_extra_attach(st);
+	if (rvd_extra_index(st, slot) >= 0)
+		return 0;
+
+	rvd_extra_detach(st);
+	x->enc_cfg = old_enc;
+	x->fs_cfg = old_fs;
+	rvd_extra_attach(st);
+	bool back = rvd_extra_index(st, slot) >= 0;
+	RSS_WARN("extra [%s]: new settings don't fit; %s", x->cfg_sect,
+		 back ? "kept the old ones" : "and the old ones no longer do: now off");
+	if (!resp)
+		return -1;
+	return rss_ctrl_resp_error(resp, resp_size,
+				   back ? "doesn't fit, kept old settings"
+					: "doesn't fit, stream now off");
+}
+
 static int do_stream_restart_ex(rvd_state_t *st, int chn, char *resp, int resp_size,
 				bool recreate_fs)
+{
+	if (st->streams[chn].is_extra) {
+		rvd_stream_t want = st->streams[chn];
+		return extra_rebuild(st, chn, &want, resp, resp_size);
+	}
+	bool extras_off = extras_step_aside(st);
+	int ret = do_stream_restart_core(st, chn, resp, resp_size, recreate_fs);
+	if (extras_off)
+		rvd_extra_attach(st);
+	return ret;
+}
+
+static int do_stream_restart_core(rvd_state_t *st, int chn, char *resp, int resp_size,
+				  bool recreate_fs)
 {
 	int jpeg = find_jpeg_for_video_ctrl(st, chn);
 	bool has_ivs = (st->streams[chn].fs_chn == st->ivs_fs_chn && atomic_load(&st->ivs_active));
@@ -1657,6 +1724,37 @@ static int bayer_move(const char *src, const char *dst)
 }
 #endif
 
+/* Resize an extra stream: rebuild it at the new size; if that doesn't fit,
+ * go back to the old size (and say so). Never larger than its sensor's
+ * main: the scaler only shrinks. */
+static int extra_set_resolution(rvd_state_t *st, int chn, int w, int h, char *resp, int resp_size)
+{
+	int m = rvd_sensor_main(st, st->streams[chn].sensor_idx);
+	if (m < 0)
+		return rss_ctrl_resp_error(resp, resp_size, "no main stream for this sensor");
+	const rss_fs_config_t *mfs = &st->streams[m].fs_cfg;
+	if (w > (int)mfs->width || h > (int)mfs->height)
+		return rss_ctrl_resp_error(resp, resp_size, "can't be larger than main");
+
+	rvd_stream_t want = st->streams[chn];
+	int slot = want.extra_slot;
+	want.enc_cfg.width = w;
+	want.enc_cfg.height = h;
+	want.fs_cfg.width = w;
+	want.fs_cfg.height = h;
+	want.fs_cfg.scaler.enable = (w != (int)mfs->width || h != (int)mfs->height);
+	want.fs_cfg.scaler.out_width = w;
+	want.fs_cfg.scaler.out_height = h;
+	RSS_INFO("set-resolution: [%s] (channel %d) → %dx%d", want.cfg_sect, chn, w, h);
+
+	int vret = extra_rebuild(st, chn, &want, resp, resp_size);
+	if (vret != 0)
+		return vret;
+	rss_config_set_int(st->cfg, st->extra_saved[slot].cfg_sect, "width", w);
+	rss_config_set_int(st->cfg, st->extra_saved[slot].cfg_sect, "height", h);
+	return rss_ctrl_resp_ok(resp, resp_size);
+}
+
 static int validate_video_channel(rvd_state_t *st, const char *cmd_json, int *out_chn, char *resp,
 				  int resp_size)
 {
@@ -1759,6 +1857,19 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 			return rss_ctrl_resp_ok(resp, resp_size); /* already set */
 		}
 
+		if (st->streams[chn].is_extra) {
+			/* extra_rebuild restores the old codec itself on failure */
+			rvd_stream_t want = st->streams[chn];
+			int slot = want.extra_slot;
+			want.enc_cfg.codec = codec;
+			RSS_INFO("set-codec: [%s] (channel %d) → %s", want.cfg_sect, chn, val);
+			vret = extra_rebuild(st, chn, &want, resp, resp_size);
+			if (vret > 0)
+				return vret;
+			rss_config_set_str(st->cfg, st->extra_saved[slot].cfg_sect, "codec", val);
+			return rss_ctrl_resp_ok(resp, resp_size);
+		}
+
 		/* Save old codec, update, restart, restore on failure */
 		rss_codec_t old_codec = st->streams[chn].enc_cfg.codec;
 		st->streams[chn].enc_cfg.codec = codec;
@@ -1793,6 +1904,10 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		    (int)st->streams[chn].enc_cfg.height == h) {
 			return rss_ctrl_resp_ok(resp, resp_size);
 		}
+
+		if (st->streams[chn].is_extra)
+			return extra_set_resolution(st, chn, w, h, resp, resp_size);
+		bool extras_off = extras_step_aside(st);
 
 		/* Save old config for rollback */
 		int old_enc_w = st->streams[chn].enc_cfg.width;
@@ -1856,6 +1971,8 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 			} else if (has_ivs) {
 				atomic_store(&st->ivs_active, false);
 			}
+			if (extras_off)
+				rvd_extra_attach(st);
 			return rss_ctrl_resp_error(resp, resp_size, "init failed");
 		}
 		if (jpeg >= 0) {
@@ -1872,6 +1989,8 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 			rvd_stream_start(st, jpeg);
 		if (has_ivs)
 			ivs_thread_start(st);
+		if (extras_off)
+			rvd_extra_attach(st);
 
 		/* Persist config only after successful restart */
 		rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, "width", w);
@@ -2190,7 +2309,9 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 			return rss_ctrl_resp_ok(resp, resp_size);
 		}
 
-		/* Fallback: channel recreate (new SDK) */
+		/* Fallback: channel recreate (new SDK). JPEG channels are base
+		 * channels: extras give way while it gets its buffers back. */
+		bool extras_off = extras_step_aside(st);
 		rvd_stream_stop(st, chn);
 		rvd_stream_deinit(st, chn);
 
@@ -2202,9 +2323,13 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 			st->streams[chn].enc_cfg.init_qp = old_qp;
 			if (rvd_stream_init(st, chn) == RSS_OK)
 				rvd_stream_start(st, chn);
+			if (extras_off)
+				rvd_extra_attach(st);
 			return rss_ctrl_resp_error(resp, resp_size, "init failed");
 		}
 		rvd_stream_start(st, chn);
+		if (extras_off)
+			rvd_extra_attach(st);
 
 		rss_config_set_int(st->cfg, st->streams[chn].cfg_sect, "jpeg_quality", quality);
 		RSS_INFO("set-jpeg-quality: chn %d quality %d → %d (recreate)", chn, old_qp,
@@ -2228,7 +2353,7 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 			pthread_mutex_unlock(&st->osd_lock);
 			return rss_ctrl_resp_error(resp, resp_size, "region not active");
 		}
-		if (st->use_isp_osd && st->streams[stream].fs_chn % 3 == 0) {
+		if (st->use_isp_osd && st->streams[stream].fs_chn % RVD_FS_PER_SENSOR == 0) {
 			int sensor = st->streams[stream].sensor_idx;
 			RSS_HAL_CALL(st->ops, isp_osd_show_region, st->hal_ctx, sensor,
 				     reg->hal_handle, show);
@@ -2288,9 +2413,9 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 			.bitmap_data = reg->local_buf,
 			.bitmap_fmt = RSS_PIXFMT_BGRA,
 		};
-		if (st->use_isp_osd && st->streams[stream].fs_chn % 3 == 0) {
+		if (st->use_isp_osd && st->streams[stream].fs_chn % RVD_FS_PER_SENSOR == 0) {
 			int sensor = st->streams[stream].sensor_idx;
-			int chx = st->streams[stream].fs_chn % 3;
+			int chx = st->streams[stream].fs_chn % RVD_FS_PER_SENSOR;
 			RSS_HAL_CALL(st->ops, isp_osd_set_region_attr, st->hal_ctx, sensor,
 				     reg->hal_handle, chx, &attr);
 		} else {
@@ -2317,6 +2442,10 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		}
 
 		RSS_INFO("osd-restart: stopping all streams (pool_kb=%d)", pool_kb);
+
+		/* Extra streams come down first and are attached again once the
+		 * base streams are back (rmem order, as at startup). */
+		bool extras_off = extras_step_aside(st);
 
 		/* Count video streams (non-JPEG) */
 		int video_count = 0;
@@ -2399,6 +2528,8 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 		/* IVS start + thread relaunch (after streams — SDK requires FS streaming) */
 		if (has_ivs)
 			ivs_thread_start(st);
+		if (extras_off)
+			rvd_extra_attach(st);
 
 		RSS_INFO("osd-restart: complete");
 		return rss_ctrl_resp_ok(resp, resp_size);
@@ -2513,6 +2644,21 @@ static int handle_config_cmd(const char *cmd, const char *cmd_json, rvd_state_t 
 						(double)st->streams[i].enc_cfg.gop_length);
 			cJSON_AddNumberToObject(item, "fps",
 						(double)st->streams[i].enc_cfg.fps_num);
+			if (!st->streams[i].is_jpeg && st->streams[i].ring_type[0]) {
+				/* Lets a consumer find a stream by its ring, which
+				 * stays put when an extra stream before it drops out
+				 * and its index moves. */
+				char ring[32];
+				if (st->streams[i].sensor_idx == 0)
+					rss_strlcpy(ring, st->streams[i].ring_type, sizeof(ring));
+				else
+					snprintf(ring, sizeof(ring), "s%d_%s",
+						 st->streams[i].sensor_idx,
+						 st->streams[i].ring_type);
+				cJSON_AddStringToObject(item, "ring", ring);
+				cJSON_AddStringToObject(item, "section", st->streams[i].cfg_sect);
+				cJSON_AddBoolToObject(item, "on_demand", st->streams[i].on_demand);
+			}
 			cJSON_AddItemToArray(arr, item);
 		}
 		return rss_ctrl_resp_json(resp, resp_size, r);

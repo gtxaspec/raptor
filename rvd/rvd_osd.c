@@ -34,7 +34,8 @@
 
 #include "rvd.h"
 
-#define STREAM_ISP_OSD(st, s) ((st)->use_isp_osd && (st)->streams[s].fs_chn % 3 == 0)
+#define STREAM_ISP_OSD(st, s)                                                                      \
+	((st)->use_isp_osd && (st)->streams[s].fs_chn % RVD_FS_PER_SENSOR == 0)
 
 #define OSD_MARGIN	      10
 
@@ -276,6 +277,10 @@ static bool probe_shm_dims(int s, const char *name, uint32_t *out_w, uint32_t *o
  */
 static bool stream_osd_enabled(rvd_state_t *st, int s)
 {
+	/* No OSD group (extra streams by default): nothing may create
+	 * regions on it, whatever the config says. */
+	if (st->streams[s].no_osd)
+		return false;
 	return rss_config_get_bool(st->cfg, st->streams[s].cfg_sect, "osd_enabled", true);
 }
 
@@ -461,7 +466,7 @@ static void push_region(rvd_state_t *st, int s, rvd_osd_region_t *reg)
 			.bitmap_data = reg->local_buf,
 			.bitmap_fmt = RSS_PIXFMT_BGRA,
 		};
-		int chx = st->streams[s].fs_chn % 3;
+		int chx = st->streams[s].fs_chn % RVD_FS_PER_SENSOR;
 		RSS_HAL_CALL(st->ops, isp_osd_set_region_attr, st->hal_ctx, sensor, reg->hal_handle,
 			     chx, &attr);
 	} else {
@@ -560,7 +565,7 @@ static void try_open_shm(rvd_state_t *st, int s, rvd_osd_region_t *reg)
 				};
 				if (STREAM_ISP_OSD(st, s)) {
 					int sensor = st->streams[s].sensor_idx;
-					int chx = st->streams[s].fs_chn % 3;
+					int chx = st->streams[s].fs_chn % RVD_FS_PER_SENSOR;
 					RSS_HAL_CALL(st->ops, isp_osd_set_region_attr, st->hal_ctx,
 						     sensor, reg->hal_handle, chx, &attr);
 				} else {
@@ -611,7 +616,7 @@ static void try_open_shm(rvd_state_t *st, int s, rvd_osd_region_t *reg)
 				.bitmap_data = reg->local_buf,
 				.bitmap_fmt = RSS_PIXFMT_BGRA,
 			};
-			int chx = st->streams[s].fs_chn % 3;
+			int chx = st->streams[s].fs_chn % RVD_FS_PER_SENSOR;
 			RSS_HAL_CALL(st->ops, isp_osd_set_region_attr, st->hal_ctx, sensor,
 				     reg->hal_handle, chx, &attr);
 			RSS_HAL_CALL(st->ops, isp_osd_show_region, st->hal_ctx, sensor,
@@ -844,7 +849,7 @@ push_updates:
 						.bitmap_data = reg->local_buf,
 						.bitmap_fmt = RSS_PIXFMT_BGRA,
 					};
-					int chx = st->streams[s].fs_chn % 3;
+					int chx = st->streams[s].fs_chn % RVD_FS_PER_SENSOR;
 					RSS_HAL_CALL(st->ops, isp_osd_set_region_attr, st->hal_ctx,
 						     sensor, reg->hal_handle, chx, &attr);
 					RSS_HAL_CALL(st->ops, isp_osd_show_region, st->hal_ctx,
@@ -874,7 +879,7 @@ static void set_privacy_stream(rvd_state_t *st, int s, bool enable)
 
 	if (STREAM_ISP_OSD(st, s)) {
 		int sensor = st->streams[s].sensor_idx;
-		int chx = st->streams[s].fs_chn % 3;
+		int chx = st->streams[s].fs_chn % RVD_FS_PER_SENSOR;
 		int stream_w = st->streams[s].enc_cfg.width;
 		int stream_h = st->streams[s].enc_cfg.height;
 		uint32_t pcol = (uint32_t)strtoul(
@@ -904,7 +909,7 @@ static void set_privacy_stream(rvd_state_t *st, int s, bool enable)
 		}
 	}
 
-	st->privacy[s] = enable;
+	__atomic_store_n(&st->privacy[s], enable, __ATOMIC_RELAXED);
 }
 
 void rvd_osd_set_privacy(rvd_state_t *st, bool enable, int stream)
@@ -959,7 +964,7 @@ void *rvd_osd_thread(void *arg)
 					.bitmap_data = reg->local_buf,
 					.bitmap_fmt = RSS_PIXFMT_BGRA,
 				};
-				int chx = st->streams[s].fs_chn % 3;
+				int chx = st->streams[s].fs_chn % RVD_FS_PER_SENSOR;
 				RSS_HAL_CALL(st->ops, isp_osd_set_region_attr, st->hal_ctx, sensor,
 					     reg->hal_handle, chx, &attr);
 				RSS_HAL_CALL(st->ops, isp_osd_show_region, st->hal_ctx, sensor,
@@ -1024,7 +1029,7 @@ void rvd_osd_deinit_stream(rvd_state_t *st, int s)
 
 	if (STREAM_ISP_OSD(st, s) && st->privacy[s]) {
 		int sensor = st->streams[s].sensor_idx;
-		int chx = st->streams[s].fs_chn % 3;
+		int chx = st->streams[s].fs_chn % RVD_FS_PER_SENSOR;
 		RSS_HAL_CALL(st->ops, isp_osd_set_mask, st->hal_ctx, sensor, chx, 0, 0, 0, 0, 0, 0,
 			     0);
 	}

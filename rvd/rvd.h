@@ -12,7 +12,13 @@
 #include <stdatomic.h>
 
 #define RVD_MAX_SENSORS		3
-#define RVD_MAX_STREAMS		(RVD_MAX_SENSORS * 4) /* main+sub+jpeg0+jpeg1 per sensor */
+/* Framesource slots per sensor (fs_chn = sensor * RVD_FS_PER_SENSOR + local).
+ * Local 0 is main and 1 is sub; every slot after that can carry an optional
+ * extra video stream ([streamN], N >= 2). */
+#define RVD_FS_PER_SENSOR 3
+#define RVD_MAX_EXTRA	  (RVD_MAX_SENSORS * (RVD_FS_PER_SENSOR - 2))
+/* main+sub+jpeg0+jpeg1 per sensor, + the extra streams */
+#define RVD_MAX_STREAMS		(RVD_MAX_SENSORS * 4 + RVD_MAX_EXTRA)
 #define RVD_MAX_JPEG		(RVD_MAX_SENSORS * 2)
 #define RVD_JPEG_STREAM_ID_BASE 0x20 /* JPEG ring stream_id namespace (video=idx, audio=0x10) */
 #define RVD_OSD_MAX_REGIONS	16
@@ -30,7 +36,7 @@ typedef struct {
 	rss_fs_config_t fs_cfg;
 	rss_ring_t *ring;
 	int chn;	   /* encoder group/channel index */
-	int fs_chn;	   /* framesource channel (sensor*3 + local) */
+	int fs_chn;	   /* framesource channel (sensor*RVD_FS_PER_SENSOR + local) */
 	int sensor_idx;	   /* which sensor (0, 1, 2) */
 	char cfg_sect[32]; /* config section name (e.g. "stream0", "sensor1_stream0") */
 	bool enabled;
@@ -39,6 +45,13 @@ typedef struct {
 	int64_t started_us;	    /* last rvd_stream_start, for the fallback grace */
 	bool is_jpeg;		    /* true for snapshot channel */
 	bool jpeg_idle;		    /* true = stop encoder when no consumers */
+	bool on_demand;		    /* video: encoder runs only while the ring has readers */
+	bool is_extra;		    /* [streamN], N >= 2: attached last (rvd_extra_attach) */
+	int extra_slot;		    /* is_extra: index into extra_saved[] */
+	bool no_osd;		    /* no OSD group: no overlays, privacy stops the encoder */
+	char ring_type[16];	    /* video ring name before the sensor prefix */
+	uint32_t linger_ms;	    /* on demand: keep encoding this long after the last reader */
+	_Atomic uint32_t demand_start_ms; /* on demand: encoder last started (ms, wraps) */
 	int64_t pulse_next_us;	    /* jpeg_pulse: earliest next RecvPic start */
 	uintptr_t enc_buf_addrs[8]; /* refmode: unique virAddr bases seen */
 	uint8_t enc_buf_count;	    /* refmode: number of unique buffers discovered */
@@ -94,6 +107,16 @@ struct rvd_state {
 	/* Streams */
 	rvd_stream_t streams[RVD_MAX_STREAMS];
 	int stream_count;
+
+	/* Extra streams ([streamN], N >= 2), in config order. Each costs rmem
+	 * (framesource buffers + encoder), so they are built after every base
+	 * channel holds its buffers (rvd_extra_attach): one that doesn't fit is
+	 * dropped, never main. Attached ones sit at the tail of streams[] from
+	 * extra_base on; extra_saved[] keeps the config (with runtime changes)
+	 * of each while detached. */
+	rvd_stream_t extra_saved[RVD_MAX_EXTRA];
+	int extra_count;
+	int extra_base;
 
 	/* Deferred full pipeline reinit (T20 save bayer: the old-SDK VBM
 	 * pool does not survive a RAW flip in place; respond first, then
@@ -190,6 +213,17 @@ void rvd_stream_deinit(rvd_state_t *st, int idx);
 int rvd_stream_restart_vbs_fallback(rvd_state_t *st, int chn);
 int rvd_stream_start(rvd_state_t *st, int idx);
 void rvd_stream_stop(rvd_state_t *st, int idx);
+
+/* Extra streams: rvd_extra_attach builds every configured extra stream not
+ * yet attached, in config order, skipping any that doesn't fit; it returns
+ * how many are attached. rvd_extra_detach takes them all down. Detach before
+ * rebuilding any base stream (rmem), attach again after. rvd_extra_index
+ * gives the streams[] index of extra_saved[slot], or -1 when detached. */
+int rvd_extra_attach(rvd_state_t *st);
+void rvd_extra_detach(rvd_state_t *st);
+int rvd_extra_index(const rvd_state_t *st, int slot);
+/* streams[] index of the main stream of a sensor (-1 if none) */
+int rvd_sensor_main(const rvd_state_t *st, int sensor_idx);
 
 /* Republish geometry and rate into the ring header; rsd's SDP reads it. */
 void rvd_stream_publish_info(rvd_state_t *st, int idx);

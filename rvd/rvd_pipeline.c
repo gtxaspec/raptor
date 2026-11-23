@@ -6,6 +6,7 @@
  * SHM ring buffers.
  */
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -370,6 +371,7 @@ static int rvd_pipeline_init_v4l2(rvd_state_t *st)
 	stream->chn = 0;
 	stream->sensor_idx = 0;
 	rss_strlcpy(stream->cfg_sect, "stream0", sizeof(stream->cfg_sect));
+	rss_strlcpy(stream->ring_type, "main", sizeof(stream->ring_type));
 	if (stream->enc_cfg.codec != RSS_CODEC_H264) {
 		RSS_FATAL("V4L2 backend currently requires stream0 codec=h264");
 		return RSS_ERR_NOTSUP;
@@ -566,7 +568,7 @@ static void load_sensor_from_section(rss_config_t *cfg, const char *section,
 /* FS channel base for a given sensor index (hardware mapping) */
 static int fs_base_channel(int sensor_idx)
 {
-	return sensor_idx * 3; /* sensor 0→0, sensor 1→3, sensor 2→6 */
+	return sensor_idx * RVD_FS_PER_SENSOR; /* sensor 0→0, sensor 1→3, sensor 2→6 */
 }
 
 /* Ring name for a sensor/stream combination */
@@ -576,6 +578,40 @@ static void get_ring_name(int sensor_idx, const char *type, char *buf, size_t le
 		rss_strlcpy(buf, type, len);
 	else
 		snprintf(buf, len, "s%d_%s", sensor_idx, type);
+}
+
+/*
+ * Ring name an extra stream may take: short, [a-z0-9_], and not one that
+ * a base stream, a JPEG channel, audio or another sensor's prefix uses.
+ */
+static bool extra_ring_name_ok(const rvd_state_t *st, const char *name, int upto)
+{
+	size_t n = strlen(name);
+	if (n == 0 || n >= sizeof(((rvd_stream_t *)0)->ring_type))
+		return false;
+	for (size_t i = 0; i < n; i++)
+		if (!islower((unsigned char)name[i]) && !isdigit((unsigned char)name[i]) &&
+		    name[i] != '_')
+			return false;
+	if (strcmp(name, "main") == 0 || strcmp(name, "sub") == 0 ||
+	    strncmp(name, "jpeg", 4) == 0 || strncmp(name, "audio", 5) == 0 ||
+	    (name[0] == 's' && isdigit((unsigned char)name[1])))
+		return false;
+	for (int i = 0; i < upto; i++)
+		if (st->streams[i].is_extra && strcmp(st->streams[i].ring_type, name) == 0)
+			return false;
+	return true;
+}
+
+int rvd_sensor_main(const rvd_state_t *st, int sensor_idx)
+{
+	for (int i = 0; i < st->stream_count; i++) {
+		const rvd_stream_t *s = &st->streams[i];
+		if (!s->is_jpeg && !s->is_extra && s->sensor_idx == sensor_idx &&
+		    s->fs_chn == fs_base_channel(sensor_idx))
+			return i;
+	}
+	return -1;
 }
 
 /*
@@ -1083,6 +1119,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 		st->streams[si].chn = enc_grp_counter++;
 		st->streams[si].sensor_idx = s;
 		rss_strlcpy(st->streams[si].cfg_sect, main_sect, sizeof(st->streams[si].cfg_sect));
+		rss_strlcpy(st->streams[si].ring_type, "main", sizeof(st->streams[si].ring_type));
 		st->stream_count++;
 
 		RSS_DEBUG("sensor%d main: fs_chn=%d enc_grp=%d %ux%u", s, st->streams[si].fs_chn,
@@ -1099,6 +1136,8 @@ int rvd_pipeline_init(rvd_state_t *st)
 			st->streams[si].fs_chn = fs_base + 1;
 			st->streams[si].chn = enc_grp_counter++;
 			st->streams[si].sensor_idx = s;
+			rss_strlcpy(st->streams[si].ring_type, "sub",
+				    sizeof(st->streams[si].ring_type));
 			rss_strlcpy(st->streams[si].cfg_sect, sub_sect,
 				    sizeof(st->streams[si].cfg_sect));
 			st->stream_count++;
@@ -1203,6 +1242,94 @@ int rvd_pipeline_init(rvd_state_t *st)
 		}
 	}
 
+	/* Extra video streams (optional): one per spare framesource slot of
+	 * each sensor, [streamN] (N >= 2; sensorS_streamN for sensor S > 0).
+	 * Each needs its own framesource channel and encoder channel and
+	 * costs rmem for both, so which of them fit is up to the SoC and the
+	 * rmem size: they are attached after every base channel holds its
+	 * buffers (rvd_extra_attach), and one that doesn't fit is dropped.
+	 * Appended after the JPEG channels so every base stream index stays
+	 * where it was. Each publishes its own ring ("ring" key, default
+	 * "streamN"). On demand by default: the encoder runs only while a
+	 * consumer holds the ring, as the JPEG channels do. Off unless
+	 * enabled. */
+	st->extra_count = 0;
+	{
+		int extra_chn = jpeg_chn_base + st->jpeg_count;
+		int osd_groups = (caps && caps->max_osd_groups > 0) ? caps->max_osd_groups : 0;
+
+		for (int s = 0; s < st->sensor_count; s++) {
+			int mi = rvd_sensor_main(st, s);
+			if (mi < 0)
+				continue;
+			for (int local = 2; local < RVD_FS_PER_SENSOR; local++) {
+				char sect[32], defring[16];
+				if (s == 0)
+					snprintf(sect, sizeof(sect), "stream%d", local);
+				else
+					snprintf(sect, sizeof(sect), "sensor%d_stream%d", s, local);
+				if (!rss_config_get_bool(cfg, sect, "enabled", false))
+					continue;
+				if (st->stream_count >= RVD_MAX_STREAMS ||
+				    st->extra_count >= RVD_MAX_EXTRA) {
+					RSS_WARN("[%s]: no stream slot left, skipped", sect);
+					continue;
+				}
+
+				int xi = st->stream_count;
+				rvd_stream_t *x = &st->streams[xi];
+				const rvd_stream_t *m = &st->streams[mi];
+
+				/* Default: main's aspect at up to 1280 wide, and main's
+				 * rate, not the sensor's (a 30 fps sensor with main at
+				 * 25 would otherwise give 30). */
+				int mw = (int)m->enc_cfg.width, mh = (int)m->enc_cfg.height;
+				int xw = mw > 1280 ? 1280 : mw;
+				int xh = (mw > 0) ? (int)((int64_t)mh * xw / mw) & ~1 : mh;
+				int xfps = m->enc_cfg.fps_num > 0 ? (int)m->enc_cfg.fps_num
+								  : sensor_fps;
+				load_stream_config(cfg, sect, x, xw, xh, xfps, 1500000);
+				x->fs_chn = fs_base_channel(s) + local;
+				x->chn = extra_chn++;
+				x->sensor_idx = s;
+				x->is_extra = true;
+				x->extra_slot = st->extra_count;
+				x->on_demand = rss_config_get_bool(cfg, sect, "on_demand", true);
+				/* A viewer that reconnects or reconfigures comes back
+				 * within seconds; keeping the encoder warm that long
+				 * spares it a stop/start and a fresh IDR wait. */
+				int linger = rss_config_get_int(cfg, sect, "linger", 5);
+				x->linger_ms = linger > 0 ? (uint32_t)linger * 1000u : 0;
+				/* An OSD needs a group of its own. Past the SoC's last
+				 * one, creating it fails (T41: 4 groups), so extras go
+				 * without unless asked and a group is there. */
+				x->no_osd = !rss_config_get_bool(cfg, sect, "osd_enabled", false) ||
+					    x->chn >= osd_groups;
+				rss_strlcpy(x->cfg_sect, sect, sizeof(x->cfg_sect));
+
+				snprintf(defring, sizeof(defring), "stream%d", local);
+				const char *ring = rss_config_get_str(cfg, sect, "ring", defring);
+				if (!extra_ring_name_ok(st, ring, xi)) {
+					RSS_WARN("[%s] ring = %s is not usable (a-z, 0-9, _; not "
+						 "main, sub, jpeg*, audio*, sN*, or taken); using "
+						 "%s",
+						 sect, ring, defring);
+					ring = defring;
+				}
+				rss_strlcpy(x->ring_type, ring, sizeof(x->ring_type));
+				st->stream_count++;
+				st->extra_count++;
+
+				RSS_INFO("extra: [%s] sensor%d fs_chn=%d enc_grp=%d %ux%u -> ring "
+					 "%s%s%s",
+					 sect, s, x->fs_chn, x->chn, x->enc_cfg.width,
+					 x->enc_cfg.height, ring,
+					 x->on_demand ? " (on demand)" : "",
+					 x->no_osd ? " (no OSD)" : "");
+			}
+		}
+	}
+
 	/* H.265 fallback on SoCs without support */
 	if (caps && !caps->has_h265) {
 		for (int i = 0; i < st->stream_count; i++) {
@@ -1242,6 +1369,17 @@ int rvd_pipeline_init(rvd_state_t *st)
 			}
 		}
 	}
+
+	/* Hold the extra streams back. rvd_extra_attach() builds them once
+	 * every base channel has its encoder and framesource buffers: on the
+	 * T31 (rmem 29M) a 1080p extra stream created first left main's
+	 * framesource unable to enable. Built last, the extra is what fails. */
+	st->extra_base = st->stream_count - st->extra_count;
+	for (int k = 0; k < st->extra_count; k++) {
+		st->extra_saved[k] = st->streams[st->extra_base + k];
+		memset(&st->streams[st->extra_base + k], 0, sizeof(rvd_stream_t));
+	}
+	st->stream_count = st->extra_base;
 
 	/* ── 5. Create framesource channels ── */
 	/* JPEG shares framesource with its video stream — skip FS creation for it */
@@ -1454,10 +1592,9 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 
 			/* SHM injection path: create named SHM and inject */
 			if (st->refmode_shm) {
-				int local_chn = s->fs_chn - fs_base_channel(s->sensor_idx);
 				char shm_name[64];
-				get_ring_name(s->sensor_idx, local_chn == 0 ? "main" : "sub",
-					      shm_name, sizeof(shm_name));
+				get_ring_name(s->sensor_idx, s->ring_type, shm_name,
+					      sizeof(shm_name));
 				char full_shm[128];
 				snprintf(full_shm, sizeof(full_shm), "/rss_enc_%s", shm_name);
 
@@ -1542,7 +1679,8 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 	}
 
 	/* ── OSD group + regions (IPU only, non-JPEG) ── */
-	if (st->osd_enabled && !s->is_jpeg && (!st->use_isp_osd || s->fs_chn % 3 != 0)) {
+	if (st->osd_enabled && !s->is_jpeg && !s->no_osd &&
+	    (!st->use_isp_osd || s->fs_chn % RVD_FS_PER_SENSOR != 0)) {
 		ret = RSS_HAL_CALL(st->ops, osd_create_group, st->hal_ctx, s->chn);
 		if (ret != RSS_OK)
 			RSS_WARN("osd_create_group(%d) failed: %d (non-fatal)", s->chn, ret);
@@ -1552,7 +1690,7 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 		pthread_mutex_unlock(&st->osd_lock);
 
 		RSS_HAL_CALL(st->ops, osd_start, st->hal_ctx, s->chn);
-	} else if (st->osd_enabled && !s->is_jpeg && st->use_isp_osd) {
+	} else if (st->osd_enabled && !s->is_jpeg && !s->no_osd && st->use_isp_osd) {
 		/* ISP OSD: regions only, no group/start */
 		pthread_mutex_lock(&st->osd_lock);
 		rvd_osd_init_stream(st, idx);
@@ -1567,7 +1705,8 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 		chain[chain_len++] = (rss_cell_t){RSS_DEV_FS, s->fs_chn, 0};
 		if (s->fs_chn == st->ivs_fs_chn && st->ivs_active)
 			chain[chain_len++] = (rss_cell_t){RSS_DEV_IVS, st->ivs_grp, 0};
-		if (st->osd_enabled && (!st->use_isp_osd || s->fs_chn % 3 != 0))
+		if (st->osd_enabled && !s->no_osd &&
+		    (!st->use_isp_osd || s->fs_chn % RVD_FS_PER_SENSOR != 0))
 			chain[chain_len++] = (rss_cell_t){RSS_DEV_OSD, s->chn, 0};
 		chain[chain_len++] = (rss_cell_t){RSS_DEV_ENC, s->chn, 0};
 
@@ -1602,7 +1741,7 @@ create_ring:
 		RSS_DEBUG("stream%d ring: reused", idx);
 	} else {
 		int local = s->fs_chn - fs_base_channel(s->sensor_idx);
-		bool is_main = (local == 0);
+		bool is_main = (local != 1); /* extra streams size like main */
 		char ring_name[24];
 
 		if (s->is_jpeg) {
@@ -1637,10 +1776,12 @@ create_ring:
 					s->ring, RVD_JPEG_STREAM_ID_BASE + jpeg_idx, RSS_CODEC_JPEG,
 					w, h, fps, s->enc_cfg.fps_den, 0, 0);
 		} else {
-			const char *type = is_main ? "main" : "sub";
+			const char *type = s->ring_type;
 			get_ring_name(s->sensor_idx, type, ring_name, sizeof(ring_name));
 
-			const char *slots_key = is_main ? "main_slots" : "sub_slots";
+			char slots_key[24], mb_key[24];
+			snprintf(slots_key, sizeof(slots_key), "%s_slots", type);
+			snprintf(mb_key, sizeof(mb_key), "%s_data_mb", type);
 			int slots_cfg = rss_config_get_int(cfg, "ring", slots_key, 32);
 			/*
 			 * rss_ring_create takes only a power-of-two slot count, and
@@ -1651,8 +1792,7 @@ create_ring:
 			 * down keeps the footprint at or under what was asked for.
 			 */
 			slots_cfg = clamp_ring_slots(slots_cfg, slots_key);
-			int mb_cfg = rss_config_get_int(
-				cfg, "ring", is_main ? "main_data_mb" : "sub_data_mb", 0);
+			int mb_cfg = rss_config_get_int(cfg, "ring", mb_key, 0);
 			uint32_t min_data = is_main ? (256 * 1024) : (128 * 1024);
 			uint32_t max_data = is_main ? (8 * 1024 * 1024) : (4 * 1024 * 1024);
 			uint32_t min_frame = is_main ? 8192 : 4096;
@@ -1744,11 +1884,11 @@ fail_ring:
 		return ret;
 	}
 fail_bind:
-	if (st->osd_enabled && !s->is_jpeg) {
+	if (st->osd_enabled && !s->is_jpeg && !s->no_osd) {
 		pthread_mutex_lock(&st->osd_lock);
 		rvd_osd_deinit_stream(st, idx);
 		pthread_mutex_unlock(&st->osd_lock);
-		if (!st->use_isp_osd || s->fs_chn % 3 != 0) {
+		if (!st->use_isp_osd || s->fs_chn % RVD_FS_PER_SENSOR != 0) {
 			RSS_HAL_CALL(st->ops, osd_stop, st->hal_ctx, s->chn);
 			RSS_HAL_CALL(st->ops, osd_destroy_group, st->hal_ctx, s->chn);
 		}
@@ -1810,14 +1950,15 @@ void rvd_stream_deinit(rvd_state_t *st, int idx)
 	}
 
 	/* OSD region teardown (under lock — OSD thread may be running) */
-	if (st->osd_enabled && !s->is_jpeg) {
+	if (st->osd_enabled && !s->is_jpeg && !s->no_osd) {
 		pthread_mutex_lock(&st->osd_lock);
 		rvd_osd_deinit_stream(st, idx);
 		pthread_mutex_unlock(&st->osd_lock);
 	}
 
 	/* OSD group teardown (IPU only, non-JPEG) */
-	if (st->osd_enabled && !s->is_jpeg && (!st->use_isp_osd || s->fs_chn % 3 != 0)) {
+	if (st->osd_enabled && !s->is_jpeg && !s->no_osd &&
+	    (!st->use_isp_osd || s->fs_chn % RVD_FS_PER_SENSOR != 0)) {
 		RSS_HAL_CALL(st->ops, osd_stop, st->hal_ctx, s->chn);
 		RSS_HAL_CALL(st->ops, osd_destroy_group, st->hal_ctx, s->chn);
 	}
@@ -1834,10 +1975,8 @@ void rvd_stream_deinit(rvd_state_t *st, int idx)
 		st->enc_shm_addr[idx] = NULL;
 		st->enc_shm_size[idx] = 0;
 
-		int local_chn = s->fs_chn - fs_base_channel(s->sensor_idx);
 		char shm_name[64], full_shm[128];
-		get_ring_name(s->sensor_idx, local_chn == 0 ? "main" : "sub", shm_name,
-			      sizeof(shm_name));
+		get_ring_name(s->sensor_idx, s->ring_type, shm_name, sizeof(shm_name));
 		snprintf(full_shm, sizeof(full_shm), "/rss_enc_%s", shm_name);
 		shm_unlink(full_shm);
 	}
@@ -1859,6 +1998,16 @@ int rvd_stream_start(rvd_state_t *st, int idx)
 	 * encoder here — the encoder thread handles start/stop based on
 	 * ring consumer count. */
 	if (s->is_jpeg && s->jpeg_idle) {
+		s->enabled = false;
+	} else if (s->on_demand) {
+		/* On-demand video owns its framesource: enable that now, leave
+		 * the encoder to the demand loop in the encoder thread. Enabling
+		 * allocates its buffers, so this is where a short rmem shows. */
+		int fret = RSS_HAL_CALL(st->ops, fs_enable_channel, st->hal_ctx, s->fs_chn);
+		if (fret != RSS_OK && fret != RSS_ERR_NOTSUP) {
+			RSS_ERROR("stream%d: framesource enable failed: %d", idx, fret);
+			return fret;
+		}
 		s->enabled = false;
 	} else {
 		if (!s->is_jpeg)
@@ -1896,8 +2045,96 @@ int rvd_stream_start(rvd_state_t *st, int idx)
 		 s->is_jpeg			      ? "JPEG"
 		 : s->enc_cfg.codec == RSS_CODEC_H265 ? "H.265"
 						      : "H.264",
-		 s->enc_cfg.fps_num, (s->is_jpeg && s->jpeg_idle) ? "(on-demand)" : "");
+		 s->enc_cfg.fps_num,
+		 ((s->is_jpeg && s->jpeg_idle) || s->on_demand) ? "(on-demand)" : "");
 	return RSS_OK;
+}
+
+int rvd_extra_index(const rvd_state_t *st, int slot)
+{
+	for (int i = st->extra_base; i < st->stream_count; i++)
+		if (st->streams[i].is_extra && st->streams[i].extra_slot == slot)
+			return i;
+	return -1;
+}
+
+/* Build extra_saved[slot] at the tail of streams[]. On any failure the
+ * stream is torn down again and the camera runs without it. */
+static int extra_attach_one(rvd_state_t *st, int slot)
+{
+	if (st->stream_count >= RVD_MAX_STREAMS)
+		return RSS_ERR;
+
+	int idx = st->stream_count;
+	rvd_stream_t *s = &st->streams[idx];
+	*s = st->extra_saved[slot];
+
+	int ret = RSS_HAL_CALL(st->ops, fs_create_channel, st->hal_ctx, s->fs_chn, &s->fs_cfg);
+	if (ret != RSS_OK) {
+		RSS_WARN("extra [%s]: fs_create_channel(%d) failed: %d -- running without it",
+			 s->cfg_sect, s->fs_chn, ret);
+		memset(s, 0, sizeof(*s));
+		return ret;
+	}
+	RSS_HAL_CALL(st->ops, fs_set_fifo, st->hal_ctx, s->fs_chn, 0);
+	RSS_HAL_CALL(st->ops, fs_set_frame_depth, st->hal_ctx, s->fs_chn, 0);
+
+	/* Without an OSD cover, privacy stops the encoder (encoder thread):
+	 * take the sensor main's state before that thread can run. */
+	int m = rvd_sensor_main(st, s->sensor_idx);
+	st->privacy_handles[idx] = -1;
+	__atomic_store_n(&st->privacy[idx],
+			 m >= 0 ? __atomic_load_n(&st->privacy[m], __ATOMIC_RELAXED) : false,
+			 __ATOMIC_RELAXED);
+
+	ret = rvd_stream_init(st, idx);
+	if (ret == RSS_OK) {
+		ret = rvd_stream_start(st, idx);
+		if (ret != RSS_OK)
+			rvd_stream_deinit(st, idx);
+	}
+	if (ret != RSS_OK) {
+		RSS_WARN("extra [%s]: %ux%u doesn't fit (%d) -- running without it", s->cfg_sect,
+			 s->enc_cfg.width, s->enc_cfg.height, ret);
+		RSS_HAL_CALL(st->ops, fs_destroy_channel, st->hal_ctx, s->fs_chn);
+		memset(s, 0, sizeof(*s));
+		return ret;
+	}
+
+	st->stream_count = idx + 1;
+	RSS_INFO("extra [%s]: attached as stream%d (%ux%u, enc chn %d, ring %s)", s->cfg_sect, idx,
+		 s->enc_cfg.width, s->enc_cfg.height, s->chn, s->ring_type);
+	return RSS_OK;
+}
+
+int rvd_extra_attach(rvd_state_t *st)
+{
+	int attached = 0;
+	for (int k = 0; k < st->extra_count; k++) {
+		if (rvd_extra_index(st, k) >= 0 || extra_attach_one(st, k) == RSS_OK)
+			attached++;
+	}
+	return attached;
+}
+
+void rvd_extra_detach(rvd_state_t *st)
+{
+	while (st->stream_count > st->extra_base) {
+		int idx = st->stream_count - 1;
+		rvd_stream_t *s = &st->streams[idx];
+		if (!s->is_extra)
+			break;
+
+		rvd_stream_stop(st, idx);
+		st->stream_count = idx;
+		rvd_stream_deinit(st, idx);
+		RSS_HAL_CALL(st->ops, fs_destroy_channel, st->hal_ctx, s->fs_chn);
+		/* keep runtime bitrate/fps/size changes for the next attach */
+		st->extra_saved[s->extra_slot].enc_cfg = s->enc_cfg;
+		st->extra_saved[s->extra_slot].fs_cfg = s->fs_cfg;
+		RSS_DEBUG("extra [%s]: detached", s->cfg_sect);
+		memset(s, 0, sizeof(*s));
+	}
 }
 
 void rvd_pipeline_deinit(rvd_state_t *st)
