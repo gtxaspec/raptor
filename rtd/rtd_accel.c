@@ -80,9 +80,13 @@ int rtd_accel_open(rtd_accel_t *a, int bus, int addr)
 
 int rtd_accel_read(rtd_accel_t *a, float g[3])
 {
+	/* One 2-byte read per axis: a 6-byte burst on the NT98529 I2C
+	 * controller ends in 0xff now and then (~1% of reads at 200 Hz),
+	 * with no error reported; 2-byte reads never did. */
 	uint8_t b[6];
-	if (reg_read(a, DA221_REG_ACC_X, b, sizeof(b)) < 0)
-		return -1;
+	for (int i = 0; i < 3; i++)
+		if (reg_read(a, (uint8_t)(DA221_REG_ACC_X + 2 * i), b + 2 * i, 2) < 0)
+			return -1;
 	for (int i = 0; i < 3; i++)
 		g[i] = (float)(int16_t)(b[2 * i] | b[2 * i + 1] << 8) * a->scale;
 	return 0;
