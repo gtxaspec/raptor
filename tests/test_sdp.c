@@ -298,6 +298,71 @@ TEST sdp_invalid_pt_range(void)
 	PASS();
 }
 
+TEST sdp_reject_reasons(void)
+{
+	/* The _r variant must classify each reject cause so rwd can put a
+	 * human-readable reason in the WHIP error body. */
+	rwd_sdp_offer_t offer;
+
+	const char *no_h264 = "v=0\r\n"
+			      "a=ice-ufrag:rsn1\r\n"
+			      "a=ice-pwd:reasonpassword1234567890\r\n"
+			      "a=fingerprint:sha-256 AA:BB\r\n"
+			      "m=video 9 UDP/TLS/RTP/SAVPF 97\r\n"
+			      "a=rtpmap:97 VP8/90000\r\n";
+	ASSERT_EQ(RWD_SDP_ERR_NO_H264, rwd_sdp_parse_offer_r(no_h264, &offer));
+	ASSERT_EQ(RWD_SDP_ERR_NO_H264, rwd_sdp_parse_offer(no_h264, &offer));
+
+	const char *no_fingerprint = "v=0\r\n"
+				     "a=ice-ufrag:rsn2\r\n"
+				     "a=ice-pwd:reasonpassword1234567890\r\n"
+				     "m=video 9 UDP/TLS/RTP/SAVPF 96\r\n"
+				     "a=rtpmap:96 H264/90000\r\n";
+	ASSERT_EQ(RWD_SDP_ERR_NO_FINGERPRINT, rwd_sdp_parse_offer_r(no_fingerprint, &offer));
+
+	const char *no_ice = "v=0\r\n"
+			     "a=ice-pwd:reasonpassword1234567890\r\n"
+			     "a=fingerprint:sha-256 AA:BB\r\n"
+			     "m=video 9 UDP/TLS/RTP/SAVPF 96\r\n"
+			     "a=rtpmap:96 H264/90000\r\n";
+	ASSERT_EQ(RWD_SDP_ERR_ICE_CREDENTIALS, rwd_sdp_parse_offer_r(no_ice, &offer));
+
+	/* No syntax gate in the parser: empty or garbage input falls through to
+	 * the first missing-field check (ICE credentials). */
+	ASSERT_EQ(RWD_SDP_ERR_ICE_CREDENTIALS, rwd_sdp_parse_offer_r("", &offer));
+	ASSERT_EQ(RWD_SDP_ERR_ICE_CREDENTIALS,
+		  rwd_sdp_parse_offer_r("not an sdp at all\r\n", &offer));
+
+	ASSERT_EQ(RWD_SDP_OK, rwd_sdp_parse_offer_r(VALID_SDP, &offer));
+	PASS();
+}
+
+TEST sdp_reject_no_stale_fields(void)
+{
+	/* parse_offer memsets the offer on entry: a rejected parse must never
+	 * leave fields from a previous successful parse behind. Fields the
+	 * rejected offer actually carried stay populated (by design). */
+	rwd_sdp_offer_t offer;
+
+	ASSERT_EQ(RWD_SDP_OK, rwd_sdp_parse_offer_r(VALID_SDP, &offer));
+	ASSERT_EQ(1, offer.has_video);
+
+	const char *no_h264 = "v=0\r\n"
+			      "a=ice-ufrag:zero\r\n"
+			      "a=ice-pwd:zeropassword12345678901\r\n"
+			      "a=fingerprint:sha-256 AA:BB\r\n"
+			      "m=video 9 UDP/TLS/RTP/SAVPF 97\r\n"
+			      "a=rtpmap:97 VP8/90000\r\n";
+	ASSERT_EQ(RWD_SDP_ERR_NO_H264, rwd_sdp_parse_offer_r(no_h264, &offer));
+
+	/* Nothing from the valid offer survives; only this round's fields. */
+	ASSERT_STR_EQ("sha-256 AA:BB", offer.fingerprint);
+	ASSERT_EQ(-1, offer.video_pt);
+	ASSERT_STR_EQ("zero", offer.ice_ufrag);
+	PASS();
+}
+
+
 SUITE(sdp_suite)
 {
 	RUN_TEST(sdp_valid_offer);
@@ -317,4 +382,6 @@ SUITE(sdp_suite)
 	RUN_TEST(sdp_multiple_video_codecs);
 	RUN_TEST(sdp_case_insensitive_codec);
 	RUN_TEST(sdp_invalid_pt_range);
+	RUN_TEST(sdp_reject_reasons);
+	RUN_TEST(sdp_reject_no_stale_fields);
 }
