@@ -167,11 +167,31 @@ static void *mock_null_ptr(void *ctx, ...)
 
 /* ── Encoder: per-channel operations ── */
 
+/*
+ * RSS_MOCK_ENC_CREATE_FAIL=<chn>[:<max_pixels>]  channel <chn> can't be
+ * created (-ENOMEM, as the IMP encoder answers when rmem runs out), or only
+ * above max_pixels when that is given. Lets a test run out of encoder
+ * memory on one channel without touching the others.
+ */
+static bool mock_enc_create_fails(int chn, const rss_video_config_t *cfg)
+{
+	const char *v = getenv("RSS_MOCK_ENC_CREATE_FAIL");
+	if (!v || !*v || atoi(v) != chn)
+		return false;
+	const char *colon = strchr(v, ':');
+	if (!colon)
+		return true;
+	unsigned long max_px = strtoul(colon + 1, NULL, 10);
+	return (unsigned long)cfg->width * cfg->height > max_px;
+}
+
 static int mock_enc_create_channel(void *ctx, int chn, const rss_video_config_t *cfg)
 {
 	rss_hal_ctx_t *hal = ctx;
 	if (chn < 0 || chn >= MOCK_MAX_CHANNELS)
 		return -EINVAL;
+	if (mock_enc_create_fails(chn, cfg))
+		return -ENOMEM;
 
 	mock_channel_t *ch = &hal->channels[chn];
 	ch->cfg = *cfg;
@@ -458,8 +478,14 @@ static int mock_fs_create_channel(void *ctx, int chn, const rss_fs_config_t *cfg
 
 static int mock_enc_get_fps(void *ctx, int chn, uint32_t *fps_num, uint32_t *fps_den)
 {
-	(void)ctx;
-	(void)chn;
+	/* The rate the channel was created with, as the SDK reports it. */
+	rss_hal_ctx_t *hal = ctx;
+	if (chn >= 0 && chn < MOCK_MAX_CHANNELS && hal->channels[chn].active &&
+	    hal->channels[chn].cfg.fps_num > 0) {
+		*fps_num = hal->channels[chn].cfg.fps_num;
+		*fps_den = hal->channels[chn].cfg.fps_den ? hal->channels[chn].cfg.fps_den : 1;
+		return RSS_OK;
+	}
 	*fps_num = 25;
 	*fps_den = 1;
 	return RSS_OK;
