@@ -128,6 +128,11 @@ start() {
 	start_daemon rsp
 	start_daemon rsr
 
+	# Under memory pressure the recording path goes last
+	for d in rvd rcd rmr; do
+		for p in $(pidof "$d"); do echo -500 >"/proc/$p/oom_score_adj"; done
+	done
+
 	# Bring back whatever dies (an OOM kill must not end recording)
 	watched=""
 	for d in rad rtd rcd rod rsd rsd-555 rhd ric rmr rmd rwd rsp rsr; do
@@ -149,6 +154,11 @@ watch() {
 			pidof "$d" >/dev/null && continue
 			logger -t raptor "$d died, restarting"
 			start-stop-daemon -S -b -x /usr/bin/$d -- -c "$CONF"
+			case $d in rcd | rmr)
+				sleep 1
+				for p in $(pidof "$d"); do echo -500 >"/proc/$p/oom_score_adj"; done
+				;;
+			esac
 		done
 	done
 }
