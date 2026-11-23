@@ -641,6 +641,7 @@ static cJSON *tracks_json(const rmr_state_t *st)
 		cJSON_AddStringToObject(o, "file", t->segment_path);
 		cJSON_AddNumberToObject(o, "frames", (double)t->frames_written);
 		cJSON_AddNumberToObject(o, "dropped", (double)t->frames_dropped);
+		cJSON_AddNumberToObject(o, "card_drops", (double)t->card_drops);
 		cJSON_AddNumberToObject(o, "bytes", (double)t->bytes_written);
 		cJSON_AddNumberToObject(o, "frames_lost", (double)t->frames_lost);
 		cJSON_AddStringToObject(o, "clip", t->clip_mux ? t->clip_path : "");
@@ -1061,6 +1062,31 @@ static void track_housekeep(rmr_state_t *st, rmr_track_t *t, bool rec, bool clip
 		close_clip(t);
 }
 
+/* Flush the pending segment fragment, or drop it when the writer cannot
+ * take it now: a stalled card then costs these frames instead of blocking
+ * the ring reads until every ring overflows. Returns false on a drop. */
+static bool segment_flush(rmr_track_t *t)
+{
+	rmr_state_t *st = t->st;
+	uint32_t need = rmr_mux_pending_bytes(t->mux);
+	if (need && rmr_io_room(st->io) < need + 1024) {
+		uint32_t n = rmr_mux_discard_fragment(t->mux);
+		t->frames_dropped += n;
+		t->card_drops += n;
+		int64_t now = rss_timestamp_us();
+		if (now - t->card_drop_log_us >= 10000000) {
+			RSS_WARN("%s: storage behind, dropped %" PRIu64 " frames so far",
+				 t->ring_name, t->card_drops);
+			t->card_drop_log_us = now;
+		}
+		return false;
+	}
+	rmr_mux_flush_fragment(t->mux);
+	if (st->sign_enabled)
+		rmr_sign_stream_emit(&t->sign_seg, false, direct_write, t);
+	return true;
+}
+
 static void track_write_segment(rmr_track_t *t, const rss_ring_slot_t *meta,
 				const uint8_t *mux_data, uint32_t mux_len)
 {
@@ -1084,9 +1110,7 @@ static void track_write_segment(rmr_track_t *t, const rss_ring_slot_t *meta,
 			t->segment_idr_requested = true;
 		}
 		if (meta->is_key) {
-			rmr_mux_flush_fragment(t->mux);
-			if (st->sign_enabled)
-				rmr_sign_stream_emit(&t->sign_seg, false, direct_write, t);
+			segment_flush(t);
 			t->frames_since_flush = 0;
 			if (rmr_storage_should_rotate_at(st->storage, t->segment_start_rt_us,
 							 now_rt)) {
@@ -1094,10 +1118,14 @@ static void track_write_segment(rmr_track_t *t, const rss_ring_slot_t *meta,
 				rmr_storage_enforce_limit(st->storage);
 			}
 		} else if (t->frames_since_flush >= 10) {
-			rmr_mux_flush_fragment(t->mux);
-			if (st->sign_enabled)
-				rmr_sign_stream_emit(&t->sign_seg, false, direct_write, t);
 			t->frames_since_flush = 0;
+			if (!segment_flush(t)) {
+				/* the rest of this GOP references what was dropped */
+				t->frames_dropped++;
+				t->wait_key = true;
+				rss_ring_request_idr(t->ring);
+				return;
+			}
 		}
 	}
 

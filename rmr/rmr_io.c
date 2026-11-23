@@ -294,6 +294,14 @@ uint32_t rmr_io_pending(rmr_io_t *io)
 	return n;
 }
 
+uint32_t rmr_io_room(rmr_io_t *io)
+{
+	pthread_mutex_lock(&io->lock);
+	uint32_t n = io->op_wr - io->op_rd >= IO_OPS ? 0 : io->size - (uint32_t)(io->wr - io->rd);
+	pthread_mutex_unlock(&io->lock);
+	return n;
+}
+
 uint32_t rmr_io_peak(rmr_io_t *io)
 {
 	pthread_mutex_lock(&io->lock);

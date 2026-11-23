@@ -124,8 +124,18 @@ TEST io_error_reported(void)
 	PASS();
 }
 
+TEST io_room_reports_free_space(void)
+{
+	rmr_io_t *io = rmr_io_create(64 * 1024);
+	ASSERT(io);
+	ASSERT_EQ(64 * 1024, (int)rmr_io_room(io));
+	rmr_io_destroy(io);
+	PASS();
+}
+
 SUITE(io_suite)
 {
+	RUN_TEST(io_room_reports_free_space);
 	RUN_TEST(io_order_across_wraps);
 	RUN_TEST(io_pwrite_after_appends);
 	RUN_TEST(io_write_larger_than_ring);

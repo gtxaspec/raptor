@@ -1091,6 +1091,26 @@ int rmr_mux_flush_fragment(rmr_mux_t *mux)
 	return write_fragment(mux);
 }
 
+uint32_t rmr_mux_pending_bytes(const rmr_mux_t *mux)
+{
+	if (!mux || (mux->v_count == 0 && mux->a_count == 0))
+		return 0;
+	/* mdat payload plus moof: headers and one trun entry per sample */
+	return mux->v_data_len + mux->a_data_len + 512 + 16 * (mux->v_count + mux->a_count);
+}
+
+uint32_t rmr_mux_discard_fragment(rmr_mux_t *mux)
+{
+	if (!mux)
+		return 0;
+	uint32_t n = mux->v_count;
+	mux->v_count = 0;
+	mux->a_count = 0;
+	mux->v_data_len = 0;
+	mux->a_data_len = 0;
+	return n;
+}
+
 int rmr_mux_finalize(rmr_mux_t *mux)
 {
 	if (!mux)

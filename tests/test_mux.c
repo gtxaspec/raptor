@@ -869,8 +869,57 @@ TEST mux_av_duration(void)
 	PASS();
 }
 
+TEST mux_discard_fragment_leaves_gap(void)
+{
+	mux_buf_reset();
+	rmr_mux_t *mux = rmr_mux_create(mem_write, NULL);
+	ASSERT(mux);
+	rmr_video_params_t vp = {
+		.codec = RMR_CODEC_H264, .width = 640, .height = 480, .timescale = 90000};
+	rmr_mux_set_video(mux, &vp, test_sps, sizeof(test_sps), test_pps, sizeof(test_pps), NULL,
+			  0);
+	rmr_mux_start(mux);
+	ASSERT_EQ(0, rmr_mux_pending_bytes(mux));
+
+	/* GOP 1 is discarded, GOP 2 (90000 ticks later) is written */
+	for (int g = 0; g < 2; g++) {
+		for (int i = 0; i < 5; i++) {
+			bool key = (i == 0);
+			uint32_t ns;
+			uint8_t *nal = make_fake_nal(key ? 2048 : 512, key ? 0x65 : 0x41, &ns);
+			int64_t dts = g * 90000 + i * 3600;
+			rmr_video_sample_t vs = {
+				.data = nal, .size = ns, .dts = dts, .pts = dts, .is_key = key};
+			rmr_mux_write_video(mux, &vs);
+			free(nal);
+		}
+		if (g == 0) {
+			uint32_t before = g_len;
+			ASSERT(rmr_mux_pending_bytes(mux) > 2048 + 4 * 512);
+			ASSERT_EQ(5, rmr_mux_discard_fragment(mux));
+			ASSERT_EQ(0, rmr_mux_pending_bytes(mux));
+			ASSERT_EQ(before, g_len); /* nothing written */
+		}
+	}
+	rmr_mux_flush_fragment(mux);
+	rmr_mux_destroy(mux);
+
+	/* one fragment only, its tfdt the second GOP's own start */
+	int moof = find_box(g_buf, g_len, "moof");
+	ASSERT(moof >= 0);
+	ASSERT_EQ(-1, find_box(g_buf + moof + 8, g_len - moof - 8, "moof"));
+	uint8_t *tfdt = memmem(g_buf + moof, g_len - moof, "tfdt", 4);
+	ASSERT(tfdt);
+	uint64_t base = 0;
+	for (int i = 0; i < 8; i++)
+		base = base << 8 | tfdt[8 + i];
+	ASSERT_EQ(90000, (int)base);
+	PASS();
+}
+
 SUITE(mux_suite)
 {
+	RUN_TEST(mux_discard_fragment_leaves_gap);
 	RUN_TEST(mux_video_h264);
 	RUN_TEST(mux_video_h265);
 	RUN_TEST(mux_single_sample_fragment_duration);

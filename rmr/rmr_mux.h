@@ -99,6 +99,13 @@ int rmr_mux_write_audio(rmr_mux_t *mux, const rmr_audio_sample_t *sample);
 /* Flush current fragment (moof + mdat) to output. */
 int rmr_mux_flush_fragment(rmr_mux_t *mux);
 
+/* Bytes the next flush will write (0 with nothing pending) */
+uint32_t rmr_mux_pending_bytes(const rmr_mux_t *mux);
+
+/* Drop the pending fragment unwritten; returns the video frames dropped.
+ * Fragments carry absolute decode times, so the file keeps a gap there. */
+uint32_t rmr_mux_discard_fragment(rmr_mux_t *mux);
+
 /* Write mfra box for random access (optional, call before destroy). */
 int rmr_mux_finalize(rmr_mux_t *mux);
 

@@ -97,6 +97,8 @@ typedef struct {
 	/* Stats */
 	uint64_t frames_written;
 	uint64_t frames_dropped;
+	uint64_t card_drops; /* of those, fragments the writer could not take */
+	int64_t card_drop_log_us;
 	uint64_t bytes_written;
 	uint64_t frames_lost; /* source frames that never reached a file */
 	uint32_t last_src_seq;

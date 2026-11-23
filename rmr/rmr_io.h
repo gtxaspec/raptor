@@ -44,5 +44,7 @@ int rmr_io_error(rmr_io_t *io, int fd);
 /* Bytes queued and not yet written; the high-water mark since create. */
 uint32_t rmr_io_pending(rmr_io_t *io);
 uint32_t rmr_io_peak(rmr_io_t *io);
+/* Bytes a write can queue now without waiting for the writer */
+uint32_t rmr_io_room(rmr_io_t *io);
 
 #endif /* RMR_IO_H */
