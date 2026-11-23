@@ -307,7 +307,19 @@ int rwd_ice_send_check(rwd_server_t *srv, rwd_client_t *c, const char *dest_ip, 
 
 /* ── rwd_sdp.c ── */
 
+/* Why rwd_sdp_parse_offer_r rejected an SDP offer. Nonzero = rejected. */
+typedef enum {
+	RWD_SDP_OK = 0,
+	RWD_SDP_ERR_SYNTAX,
+	RWD_SDP_ERR_ICE_CREDENTIALS,
+	RWD_SDP_ERR_NO_FINGERPRINT,
+	RWD_SDP_ERR_NO_H264,
+	RWD_SDP_ERR_NO_LOCAL_IP,
+	RWD_SDP_ERR_UNKNOWN
+} rwd_sdp_reject_t;
+
 int rwd_sdp_parse_offer(const char *sdp, rwd_sdp_offer_t *offer);
+rwd_sdp_reject_t rwd_sdp_parse_offer_r(const char *sdp, rwd_sdp_offer_t *offer);
 int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf, size_t buf_size);
 
 /* ── rwd_signaling.c ── */
@@ -316,7 +328,8 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 			  const struct sockaddr_storage *local_addr);
 void rwd_signaling_cleanup(void);
 rwd_client_t *rwd_client_from_offer(rwd_server_t *srv, const char *sdp, int stream_idx,
-				    char *sdp_answer, size_t sdp_answer_size);
+				    char *sdp_answer, size_t sdp_answer_size,
+				    rwd_sdp_reject_t *reject);
 
 /* ── rwd_media.c ── */
 

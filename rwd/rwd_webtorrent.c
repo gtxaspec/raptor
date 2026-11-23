@@ -711,7 +711,8 @@ static void handle_tracker_offer(rwd_webtorrent_t *wt, wt_tls_t *tls, const char
 	}
 	sdp_answer[0] = '\0';
 
-	rwd_client_t *c = rwd_client_from_offer(srv, sdp, stream_idx, sdp_answer, RWD_SDP_BUF_SIZE);
+	rwd_client_t *c =
+		rwd_client_from_offer(srv, sdp, stream_idx, sdp_answer, RWD_SDP_BUF_SIZE, NULL);
 	if (!c) {
 		RSS_WARN("webtorrent: failed to create client from offer");
 		free(sdp_answer);
@@ -805,7 +806,8 @@ static void *webtorrent_thread(void *arg)
 		wt_tls_t tls;
 		if (wt_tls_connect(&tls, host, port, wt->tls_verify) != 0) {
 			RSS_WARN("webtorrent: connection failed, retry in %ds", backoff);
-			for (int i = 0; i < backoff && wt->running && rss_running(srv->running); i++)
+			for (int i = 0; i < backoff && wt->running && rss_running(srv->running);
+			     i++)
 				sleep(1);
 			if (backoff < 30)
 				backoff *= 2;
@@ -815,7 +817,8 @@ static void *webtorrent_thread(void *arg)
 		if (ws_upgrade(&tls, host, path) != 0) {
 			RSS_WARN("webtorrent: WebSocket upgrade failed");
 			wt_tls_close(&tls);
-			for (int i = 0; i < backoff && wt->running && rss_running(srv->running); i++)
+			for (int i = 0; i < backoff && wt->running && rss_running(srv->running);
+			     i++)
 				sleep(1);
 			if (backoff < 30)
 				backoff *= 2;

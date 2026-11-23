@@ -72,7 +72,7 @@ static const char *sdp_attr_value(const char *line, const char *key)
 
 /* ── Parse SDP offer from browser ── */
 
-int rwd_sdp_parse_offer(const char *sdp, rwd_sdp_offer_t *offer)
+static rwd_sdp_reject_t parse_offer_internal(const char *sdp, rwd_sdp_offer_t *offer)
 {
 	memset(offer, 0, sizeof(*offer));
 	offer->video_pt = -1;
@@ -235,20 +235,37 @@ int rwd_sdp_parse_offer(const char *sdp, rwd_sdp_offer_t *offer)
 
 	if (!offer->ice_ufrag[0] || !offer->ice_pwd[0]) {
 		RSS_WARN("SDP: missing ICE credentials");
-		return -1;
+		return RWD_SDP_ERR_ICE_CREDENTIALS;
 	}
 	if (!offer->fingerprint[0]) {
 		RSS_WARN("SDP: missing DTLS fingerprint");
-		return -1;
+		return RWD_SDP_ERR_NO_FINGERPRINT;
 	}
 	if (!offer->has_video || offer->video_pt < 0) {
 		RSS_WARN("SDP: no H264 video offered");
-		return -1;
+		return RWD_SDP_ERR_NO_H264;
 	}
 
+	return RWD_SDP_OK;
+}
+
+/* Accept/reject wrapper for callers that only need a verdict; kept so the
+ * fuzz shim (and any future caller) can use the bare-int signature. */
+rwd_sdp_reject_t rwd_sdp_parse_offer_r(const char *sdp, rwd_sdp_offer_t *offer)
+{
+	rwd_sdp_reject_t r = parse_offer_internal(sdp, offer);
+	if (r != RWD_SDP_OK)
+		return r;
 	RSS_DEBUG("SDP offer: ufrag=%s video_pt=%d audio_pt=%d mid_v=%s mid_a=%s", offer->ice_ufrag,
 		  offer->video_pt, offer->audio_pt, offer->mid_video, offer->mid_audio);
-	return 0;
+	return RWD_SDP_OK;
+}
+
+/* Bare-int signature kept for the fuzz target and existing callers:
+ * 0 = accepted, nonzero = a rwd_sdp_reject_t code. */
+int rwd_sdp_parse_offer(const char *sdp, rwd_sdp_offer_t *offer)
+{
+	return (int)rwd_sdp_parse_offer_r(sdp, offer);
 }
 
 /* ── Generate SDP answer ── */

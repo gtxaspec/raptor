@@ -35,7 +35,19 @@ typedef struct {
 	int candidate_count;
 } rwd_sdp_offer_t;
 
+/* Keep in sync with rwd/rwd.h — the shim mirrors the subset the parser needs. */
+typedef enum {
+	RWD_SDP_OK = 0,
+	RWD_SDP_ERR_SYNTAX,
+	RWD_SDP_ERR_ICE_CREDENTIALS,
+	RWD_SDP_ERR_NO_FINGERPRINT,
+	RWD_SDP_ERR_NO_H264,
+	RWD_SDP_ERR_NO_LOCAL_IP,
+	RWD_SDP_ERR_UNKNOWN
+} rwd_sdp_reject_t;
+
 int rwd_sdp_parse_offer(const char *sdp, rwd_sdp_offer_t *offer);
+rwd_sdp_reject_t rwd_sdp_parse_offer_r(const char *sdp, rwd_sdp_offer_t *offer);
 
 /* Stub types so rwd_sdp_generate_answer compiles (not fuzzed) */
 typedef struct rwd_client rwd_client_t;

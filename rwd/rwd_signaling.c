@@ -85,9 +85,33 @@ static void http_send(int fd, const char *status, const char *content_type, cons
 		(void)!http_write(fd, body, body_len);
 }
 
-static void http_error(int fd, const char *status)
+static void http_error(int fd, const char *status, const char *reason)
 {
-	http_send(fd, status, "text/plain", status, strlen(status), NULL);
+	char body[160];
+
+	if (reason && *reason)
+		snprintf(body, sizeof(body), "%s: %s", status, reason);
+	else
+		snprintf(body, sizeof(body), "%s", status);
+	http_send(fd, body, "text/plain", body, strlen(body), NULL);
+}
+
+/* Human-readable cause for a rejected SDP offer, safe for an HTTP body. */
+static const char *sdp_reject_reason(rwd_sdp_reject_t r)
+{
+	switch (r) {
+	case RWD_SDP_ERR_ICE_CREDENTIALS:
+		return "SDP offer missing ICE credentials (ice-ufrag/ice-pwd)";
+	case RWD_SDP_ERR_NO_FINGERPRINT:
+		return "SDP offer missing DTLS fingerprint";
+	case RWD_SDP_ERR_NO_H264:
+		return "no H264 video codec in offer; browser may lack an H264 encoder "
+		       "(e.g. Firefox without the OpenH264 plugin)";
+	case RWD_SDP_ERR_SYNTAX:
+		return "request body is not a parseable SDP offer";
+	default:
+		return NULL;
+	}
 }
 
 static void http_close(int fd)
@@ -117,14 +141,24 @@ static void generate_session_id(char *out, size_t out_size)
 /* ── Create client from SDP offer (shared by WHIP and WebTorrent) ── */
 
 rwd_client_t *rwd_client_from_offer(rwd_server_t *srv, const char *sdp, int stream_idx,
-				    char *sdp_answer, size_t sdp_answer_size)
+				    char *sdp_answer, size_t sdp_answer_size,
+				    rwd_sdp_reject_t *reject)
 {
 	if (stream_idx < 0 || stream_idx >= RWD_STREAM_COUNT)
 		stream_idx = 0;
 
+	/* Default reason covers later failures; the most common is having no
+	 * local address for the answer. Parse failure overrides it below. */
+	if (reject)
+		*reject =
+			(srv->local_ip[0] == '\0') ? RWD_SDP_ERR_NO_LOCAL_IP : RWD_SDP_ERR_UNKNOWN;
 	rwd_sdp_offer_t offer;
-	if (rwd_sdp_parse_offer(sdp, &offer) != 0)
+	rwd_sdp_reject_t parsed = rwd_sdp_parse_offer_r(sdp, &offer);
+	if (parsed != RWD_SDP_OK) {
+		if (reject)
+			*reject = parsed;
 		return NULL;
+	}
 
 	pthread_mutex_lock(&srv->clients_lock);
 	if (srv->client_count >= srv->max_clients) {
@@ -225,8 +259,9 @@ static void handle_whip_post(rwd_server_t *srv, int fd, const char *body, size_t
 	(void)local_addr;
 
 	char sdp_answer[RWD_SDP_BUF_SIZE];
-	rwd_client_t *c =
-		rwd_client_from_offer(srv, body, stream_idx, sdp_answer, sizeof(sdp_answer));
+	rwd_sdp_reject_t reject = RWD_SDP_ERR_UNKNOWN;
+	rwd_client_t *c = rwd_client_from_offer(srv, body, stream_idx, sdp_answer,
+						sizeof(sdp_answer), &reject);
 	if (!c) {
 		/*
 		 * Distinguish our failure from the caller's. Having no local
@@ -234,10 +269,12 @@ static void handle_whip_post(rwd_server_t *srv, int fd, const char *body, size_t
 		 * offer is perfectly good, and reporting it as 400 sends whoever
 		 * is debugging off to inspect their own SDP.
 		 */
-		if (srv->local_ip[0] == '\0')
-			http_error(fd, "500 Internal Server Error");
+		if (reject == RWD_SDP_ERR_NO_LOCAL_IP)
+			http_error(fd, "500 Internal Server Error",
+				   "cannot determine camera IP for SDP answer; "
+				   "set local_ip in raptor.conf");
 		else
-			http_error(fd, "400 Bad Request");
+			http_error(fd, "400 Bad Request", sdp_reject_reason(reject));
 		return;
 	}
 
@@ -335,7 +372,7 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 	/* Parse request line */
 	char method[16], path[256];
 	if (sscanf(buf, "%15s %255s", method, path) != 2) {
-		http_error(client_fd, "400 Bad Request");
+		http_error(client_fd, "400 Bad Request", "malformed request line");
 		goto done;
 	}
 
@@ -343,7 +380,7 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 
 	/* Reject oversized requests */
 	if (n >= (ssize_t)(RWD_HTTP_BUF_SIZE - 1)) {
-		http_error(client_fd, "414 URI Too Long");
+		http_error(client_fd, "414 URI Too Long", "request exceeds buffer size");
 		goto done;
 	}
 
@@ -411,7 +448,7 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 		const char *body = strstr(buf, "\r\n\r\n");
 		if (!body) {
 			RSS_WARN("WHIP: no body separator in request");
-			http_error(client_fd, "400 Bad Request");
+			http_error(client_fd, "400 Bad Request", "missing request body");
 			goto done;
 		}
 		body += 4;
@@ -446,7 +483,7 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 		}
 	}
 
-	http_error(client_fd, "404 Not Found");
+	http_error(client_fd, "404 Not Found", "unknown path or method");
 
 done:
 	free(buf);
