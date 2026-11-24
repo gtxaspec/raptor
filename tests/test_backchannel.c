@@ -9,6 +9,7 @@
 
 #include <errno.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <rss_ipc.h>
 
@@ -218,6 +219,33 @@ TEST bc_dispatch_partial_frames_carry_over(void)
 	PASS();
 }
 
+/* The remainder of one talk burst must not be prepended to the next one:
+ * after a gap that ends the burst it is dropped, not played late. */
+TEST bc_dispatch_stale_remainder_dropped(void)
+{
+	rss_ring_t *w = rss_ring_create("test_bc_stale", 16, 64 * 1024);
+	ASSERT(w);
+	rss_ring_t *rd = rss_ring_open("test_bc_stale");
+	ASSERT(rd);
+	uint8_t in[100];
+	memset(in, 0x80, sizeof(in));
+	rsd_bc_dec_t dec;
+	rsd_bc_dec_init(&dec, 0);
+	rsd_bc_handle(&dec, w, 0, 0, in, 100); /* 200 samples: no slot yet */
+	usleep(300000);			       /* the burst ended */
+	rsd_bc_handle(&dec, w, 0, 0, in, 60);  /* 120 new samples */
+	rsd_bc_dec_deinit(&dec);
+
+	uint64_t seq = 1;
+	uint8_t buf[4096];
+	uint32_t len = 0;
+	rss_ring_slot_t meta;
+	ASSERT_EQ(-EAGAIN, rss_ring_read(rd, &seq, buf, sizeof(buf), &len, &meta));
+	rss_ring_close(rd);
+	rss_ring_destroy(w);
+	PASS();
+}
+
 TEST bc_dispatch_unknown_pt_drops(void)
 {
 	const uint8_t in[] = {1, 2, 3, 4};
@@ -423,6 +451,7 @@ SUITE(backchannel_suite)
 	RUN_TEST(bc_dispatch_l16_swaps_network_order);
 	RUN_TEST(bc_dispatch_long_pcmu_packet_is_reframed);
 	RUN_TEST(bc_dispatch_partial_frames_carry_over);
+	RUN_TEST(bc_dispatch_stale_remainder_dropped);
 	RUN_TEST(bc_dispatch_unknown_pt_drops);
 	RUN_TEST(bc_dispatch_empty_payload_is_noop);
 	RUN_TEST(bc_aac_parse_single_au);

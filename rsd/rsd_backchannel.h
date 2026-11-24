@@ -103,6 +103,7 @@ typedef struct {
 	 * that length; a remainder waits here for the next packet. */
 	int16_t frame[RSD_BC_RING_RATE / 50];
 	int frame_len;
+	int64_t frame_us; /* when frame_len last grew */
 } rsd_bc_dec_t;
 
 /* An access unit inside one RTP payload (parse result). */

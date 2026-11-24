@@ -295,8 +295,16 @@ static void bc_note_codec(rsd_bc_dec_t *d, uint8_t pt)
  * for files. */
 #define BC_FRAME_SAMPLES (RSD_BC_RING_RATE / 50)
 
+/* Packets come every 20-120 ms; a longer gap ended the talk burst, and
+ * its remainder would otherwise start the next one, played late. */
+#define BC_STALE_US 200000
+
 static void bc_publish(rsd_bc_dec_t *d, rss_ring_t *ring, const int16_t *pcm, int samples)
 {
+	int64_t now = rss_timestamp_us();
+	if (d->frame_len && now - d->frame_us > BC_STALE_US)
+		d->frame_len = 0;
+	d->frame_us = now;
 	while (samples > 0) {
 		int take = BC_FRAME_SAMPLES - d->frame_len;
 		if (take > samples)
