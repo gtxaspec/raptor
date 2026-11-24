@@ -794,9 +794,12 @@ void ric_poll_exposure(ric_state_t *st)
 			st->probe_holdoff_polls = st->settings.probe_holdoff_sec * 1000 /
 						  st->settings.poll_interval_ms;
 		}
+		/* A running probe must reach its end whatever happened to the
+		 * baseline: gain recovering mid-probe clears gain_dead while
+		 * the baseline can still be 0, and the IR would stay off. */
 		if (st->current_mode == RIC_MODE_NIGHT && ir_banks &&
 		    st->settings.probe_gain_pct > 0 &&
-		    (st->night_gain_baseline > 0 || st->gain_dead) &&
+		    (st->probe_active || st->night_gain_baseline > 0 || st->gain_dead) &&
 		    st->day_lockout_polls == 0) {
 			int hyst_polls = st->settings.hysteresis_sec;
 			if (!st->probe_active) {

@@ -654,6 +654,60 @@ def scenario_baseline_refresh(stub, watch):
     ric.stop()
 
 
+def night_baselines(log):
+    """Every value the night baseline took, in order, whatever the
+    wording of the line that set it."""
+    return [int(v) for v in re.findall(
+        r"night baseline(?:: gain=| raised \d+ -> | re-anchored at )(\d+)", log)]
+
+
+def scenario_baseline_zero_probe(stub, watch):
+    """With the baseline at 0, a recheck probe lifts the IR and the dark
+    room reads near-ceiling gain. Adopting that would put the IR-lit gain
+    under the ratio and fake a day; the baseline must come from the
+    IR-lit reading after the probe."""
+    stub.set_scene(luma=120, gain=500, ev=4000)
+    ric = Ric("zerobaseprobe", LUMA_CONF + "probe_recheck_sec = 2\n")
+    if not ric.wait_running():
+        result(False, "baseline-zero-probe: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    mm = stub.mark()
+    stub.set_scene(luma=17, gain=20000, ev=60000)
+    if not wait_for(lambda: "night" in stub.modes_since(mm), 5):
+        result(False, "baseline-zero-probe: night entry", str(stub.modes_since(mm)))
+        ric.stop()
+        return
+    stub.set_scene(luma=17, gain=0, ev=60000,
+                   valid_mask=(1 << 0) | (1 << 1) | (1 << 2) | (1 << 3))
+    if not wait_for(lambda: "night baseline: gain=0" in ric.read_log(), 8):
+        result(False, "baseline-zero-probe: zero baseline", ric.read_log()[-300:])
+        ric.stop()
+        return
+
+    gm = watch.mark()
+    if not wait_for(lambda: last_value(watch.since(gm), IRLED) == "0", 6):
+        result(False, "baseline-zero-probe: recheck probe lifts IR", str(watch.since(gm)))
+        ric.stop()
+        return
+    stub.set_scene(luma=8, gain=100000, ev=900000)  # dark room, IR off
+    # gm predates the lift, so a probe that ends fast is still seen
+    ok = wait_for(lambda: last_value(watch.since(gm), IRLED) == "1", 6)
+    result(ok, "baseline-zero-probe: darkness restores IR", str(watch.since(gm)))
+    mm = stub.mark()
+    stub.set_scene(luma=17, gain=20000, ev=60000)  # IR lit again
+    ok = wait_for(lambda: night_baselines(ric.read_log())[-1:] == [20000], 6)
+    result(ok, "baseline-zero-probe: the baseline comes from the IR-lit reading",
+           str(night_baselines(ric.read_log())))
+    result(100000 not in night_baselines(ric.read_log()),
+           "baseline-zero-probe: the probe reading is never adopted",
+           str(night_baselines(ric.read_log())))
+    time.sleep(6 * POLL_MS / 1000.0)
+    result("day" not in stub.modes_since(mm), "baseline-zero-probe: no false day",
+           str(stub.modes_since(mm)))
+    ric.stop()
+
+
 def scenario_probe_dawn(stub, watch):
     """T20-class compressed gain: a lit scene under IR floors total_gain
     far above the day ratio (Wyze V2 bench: night baseline 1300 with IR,
@@ -2488,6 +2542,7 @@ def main():
         scenario_cooldown,
         scenario_covered_lens_baseline,
         scenario_baseline_refresh,
+        scenario_baseline_zero_probe,
         scenario_probe_dawn,
         scenario_probe_dark_restore,
         scenario_noir_luma_dawn,
