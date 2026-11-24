@@ -178,10 +178,12 @@ endif
 # Shim must come BEFORE Ingenic SDK libs — symbols must be resolved first.
 LDFLAGS_HAL := $(LDFLAGS_SYSROOT) $(SHIM_LIB) -limp -lalog -lpthread -lrt -lm -ldl -latomic
 
-# IVS detection libs
+# IVS detection libs. JZDL_LIBS= (empty) when the hal runs JZDL models itself
+# (raptor-hal built with OJZDL=1): no libjzdl.m.so, no libstdc++.
+JZDL_LIBS ?= -ljzdl.m $(LINK_STDCXX)
 ifeq ($(IVS_DETECT),1)
 CFLAGS += -DIVS_DETECT
-LDFLAGS_HAL += -ljzdl.m $(LINK_STDCXX)
+LDFLAGS_HAL += $(JZDL_LIBS)
 ifeq ($(PERSONDET),1)
 CFLAGS += -DPERSONDET
 LDFLAGS_HAL += -lpersonDet_inf -ljzdl -Wl,--no-as-needed -lmxu_core -lmxu_imgproc -lmxu_merge -lmxu_video -Wl,--as-needed
