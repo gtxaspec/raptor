@@ -16,6 +16,7 @@
 #include <sys/epoll.h>
 
 #include "rvd.h"
+#include "rvd_frame_result.h"
 #include <rss_vui.h>
 #ifdef __mips__
 #include <sys/cachectl.h>
@@ -216,24 +217,25 @@ void *rvd_encoder_thread(void *arg)
 
 		rss_frame_t frame;
 		ret = RSS_HAL_CALL(st->ops, enc_get_frame, st->hal_ctx, s->chn, &frame);
-		if (ret == -EAGAIN) {
-			/*
-			 * No frame this time -- routine on its own (empty stream,
-			 * JPEG fps divider). Sustained is not: the poll said the
-			 * encoder was ready every time and it yielded nothing, so
-			 * the channel is bound to something that never produces.
-			 * Say so, because the silent version of this state is
-			 * indistinguishable from an idle on-demand JPEG channel,
-			 * which is what makes it expensive to find.
-			 */
-			if (++empty_polls == 10)
-				RSS_WARN("stream%d: chn %d ready but yielding no frames -- "
-					 "check its source is bound and producing",
-					 idx, s->chn);
+		switch (rvd_frame_result(ret, &empty_polls)) {
+		case RVD_FRAME_READY:
+			break;
+		case RVD_FRAME_NONE:
 			continue;
-		}
-		empty_polls = 0;
-		if (ret != RSS_OK) {
+		case RVD_FRAME_STALLED:
+			/*
+			 * The poll said the encoder was ready every time and it
+			 * yielded nothing, so the channel is bound to something
+			 * that never produces. Say so, because the silent version
+			 * of this state is indistinguishable from an idle
+			 * on-demand JPEG channel, which is what makes it
+			 * expensive to find.
+			 */
+			RSS_WARN("stream%d: chn %d ready but yielding no frames -- "
+				 "check its source is bound and producing",
+				 idx, s->chn);
+			continue;
+		case RVD_FRAME_FAILED:
 			RSS_WARN("stream%d: enc_get_frame failed (chn %d, ret=%d)", idx, s->chn,
 				 ret);
 			continue;
