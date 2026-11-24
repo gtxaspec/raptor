@@ -22,6 +22,7 @@
 
 #include <stdio.h>
 #include <stdatomic.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -545,6 +546,17 @@ static void *rvd_jzdl_thread(void *arg)
 	if (IMP_FrameSource_SetFrameDepth(fs, 1) != 0)
 		RSS_WARN("JZDL: SetFrameDepth failed, inference may not work");
 
+	/* The frame to infer on is copied and released at once: a frame held for
+	 * the length of an inference stalls the encoders when inference runs back
+	 * to back (T41 with an NNA backend: the main stream fell to 15 fps) */
+	size_t fsz = (size_t)st->streams[1].enc_cfg.width * st->streams[1].enc_cfg.height * 3 / 2;
+	uint8_t *copy = malloc(fsz);
+	if (!copy) {
+		RSS_ERROR("JZDL: no memory for a %zu-byte frame", fsz);
+		IMP_FrameSource_SetFrameDepth(fs, 0);
+		return NULL;
+	}
+
 	while (rss_running(st->running) && atomic_load(&st->ivs_active)) {
 		IMPFrameInfo *frame = NULL;
 		int ret = IMP_FrameSource_GetFrame(fs, &frame);
@@ -558,9 +570,11 @@ static void *rvd_jzdl_thread(void *arg)
 			continue;
 		}
 
-		rss_ivs_detect_result_t result = {0};
-		ret = hal_jzdl_detect(st->jzdl_handle, (const uint8_t *)frame->virAddr, &result);
+		memcpy(copy, (const void *)frame->virAddr, fsz);
 		IMP_FrameSource_ReleaseFrame(fs, frame);
+
+		rss_ivs_detect_result_t result = {0};
+		ret = hal_jzdl_detect(st->jzdl_handle, copy, &result);
 
 		if (ret != 0)
 			continue;
@@ -593,6 +607,7 @@ static void *rvd_jzdl_thread(void *arg)
 		}
 	}
 
+	free(copy);
 	IMP_FrameSource_SetFrameDepth(fs, 0);
 	RSS_INFO("JZDL inference thread exiting");
 	return NULL;
