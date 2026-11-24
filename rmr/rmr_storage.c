@@ -372,13 +372,15 @@ static bool is_hour_dir(const char *n)
 }
 
 typedef struct {
-	char *name; /* basename, the sort and group key */
+	size_t name_off; /* basename in path; an offset survives realloc and qsort */
 	char path[1024];
 } day_file_t;
 
+#define DF_NAME(f) ((f)->path + (f)->name_off)
+
 static int day_file_cmp(const void *a, const void *b)
 {
-	return strcmp(((const day_file_t *)a)->name, ((const day_file_t *)b)->name);
+	return strcmp(DF_NAME((const day_file_t *)a), DF_NAME((const day_file_t *)b));
 }
 
 /* Files of one day, flat or in hour subdirectories, oldest name first.
@@ -417,7 +419,7 @@ static day_file_t *collect_day(const char *day_path, int *count)
 				snprintf(out[n].path, sizeof(out[n].path), "%s/%s", sub, names[k]);
 			else
 				snprintf(out[n].path, sizeof(out[n].path), "%s", sub);
-			out[n].name = strrchr(out[n].path, '/') + 1;
+			out[n].name_off = (size_t)(strrchr(out[n].path, '/') + 1 - out[n].path);
 			n++;
 		}
 		if (names)
@@ -455,7 +457,7 @@ static int64_t dir_mp4_size(const char *dir_path)
 	int64_t total = 0;
 	for (int i = 0; f && i < n; i++) {
 		struct stat st;
-		if (is_mp4(f[i].name) && stat(f[i].path, &st) == 0)
+		if (is_mp4(DF_NAME(&f[i])) && stat(f[i].path, &st) == 0)
 			total += st.st_size;
 	}
 	free(f);
@@ -551,12 +553,12 @@ static int enforce_limit_locked(rmr_storage_t *st)
 			continue;
 		int j = 0;
 		while (j < file_count && freed < need) {
-			const char *first = files[j].name;
+			const char *first = DF_NAME(&files[j]);
 			size_t key = strcspn(first, "_.");
 			int g = j;
 			bool in_use = false;
-			while (g < file_count && strncmp(files[g].name, first, key) == 0 &&
-			       (files[g].name[key] == '_' || files[g].name[key] == '.')) {
+			while (g < file_count && strncmp(DF_NAME(&files[g]), first, key) == 0 &&
+			       (DF_NAME(&files[g])[key] == '_' || DF_NAME(&files[g])[key] == '.')) {
 				for (int o = 0; o < held_n && !in_use; o++)
 					in_use = strcmp(held[o], files[g].path) == 0;
 				g++;
@@ -569,7 +571,7 @@ static int enforce_limit_locked(rmr_storage_t *st)
 				continue;
 			}
 			for (int k = j; k < g; k++) {
-				if (!is_mp4(files[k].name))
+				if (!is_mp4(DF_NAME(&files[k])))
 					continue;
 				struct stat fst;
 				if (stat(files[k].path, &fst) == 0 && unlink(files[k].path) == 0) {

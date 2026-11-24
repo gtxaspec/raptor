@@ -473,6 +473,54 @@ TEST storage_hour_dirs_layout_and_cleanup(void)
 	PASS();
 }
 
+/* Over 64 files grow the list, and a flat file among hour dirs is out of
+ * order until sorted: cleanup must still go oldest name first */
+TEST storage_cleanup_order_many_mixed(void)
+{
+	char dir[] = "/tmp/rmr_storage_test_XXXXXX";
+	ASSERT(mkdtemp(dir));
+	rmr_storage_config_t cfg = {
+		.base_path = dir, .segment_minutes = 1, .max_storage_mb = 1, .hour_dirs = true};
+	rmr_storage_t *st = rmr_storage_create(&cfg);
+	ASSERT(st);
+
+	char names[101][16];
+	int n = 0;
+	for (int m = 0; m < 50; m++)
+		for (int s = 0; s < 60; s += 30)
+			snprintf(names[n++], sizeof(names[0]), "10-%02d-%02d.mp4", m, s);
+	const off_t kb = 1024;
+	make_file(dir, "2026-11-22", "10-30-15.mp4", 32 * kb); /* creates the day */
+	for (int i = 0; i < n; i++)
+		make_file(dir, "2026-11-22/10", names[i], 32 * kb);
+
+	ASSERT(rmr_storage_enforce_limit(st) > 0);
+	/* in name order, every deleted file is older than every kept one */
+	bool kept_seen = false;
+	for (int i = 0; i < n; i++) {
+		bool kept = file_exists(dir, "2026-11-22/10", names[i]);
+		if (strcmp(names[i], "10-30-30.mp4") == 0) {
+			bool flat = file_exists(dir, "2026-11-22", "10-30-15.mp4");
+			if (flat)
+				kept_seen = true;
+			else
+				ASSERT_FALSE(kept_seen);
+		}
+		if (kept)
+			kept_seen = true;
+		else
+			ASSERT_FALSE(kept_seen);
+	}
+	ASSERT(kept_seen);
+
+	char cmd[600];
+	snprintf(cmd, sizeof(cmd), "rm -rf '%s'", dir);
+	if (system(cmd) != 0)
+		FAIL();
+	rmr_storage_destroy(st);
+	PASS();
+}
+
 SUITE(storage_suite)
 {
 	RUN_TEST(storage_boundary_from_mid_period);
@@ -491,6 +539,7 @@ SUITE(storage_suite)
 	RUN_TEST(storage_enforce_keeps_open_segments);
 	RUN_TEST(storage_cleanup_runs_in_background);
 	RUN_TEST(storage_hour_dirs_layout_and_cleanup);
+	RUN_TEST(storage_cleanup_order_many_mixed);
 	RUN_TEST(storage_enforce_min_free_oldest_first);
 	RUN_TEST(storage_auto_root_without_card);
 }
