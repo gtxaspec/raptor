@@ -327,6 +327,12 @@ static int handle_set_element(rod_state_t *st, const char *cmd_json, char *resp,
 		mark_element_dirty(e, st->stream_count);
 	}
 
+	if (rss_json_get_str(cmd_json, "bg_color", val, sizeof(val)) == 0) {
+		e->bg_color = (uint32_t)strtoul(val, NULL, 0);
+		e->has_bg_color = true;
+		mark_element_dirty(e, st->stream_count);
+	}
+
 	if (rss_json_get_int(cmd_json, "stroke_size", &ival) == 0 && ival >= 0 && ival <= 5) {
 		e->stroke_size = ival;
 		mark_element_dirty(e, st->stream_count);
@@ -486,6 +492,10 @@ int rod_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size, vo
 	if (strcmp(cmd, "set-font-color") == 0)
 		return handle_color_change(st, cmd_json, resp_buf, resp_buf_size, "font_color",
 					   &st->settings.font_color);
+
+	if (strcmp(cmd, "set-bg-color") == 0)
+		return handle_color_change(st, cmd_json, resp_buf, resp_buf_size,
+					   "background_color", &st->settings.bg_color);
 
 	if (strcmp(cmd, "set-stroke-color") == 0)
 		return handle_color_change(st, cmd_json, resp_buf, resp_buf_size, "stroke_color",
