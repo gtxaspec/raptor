@@ -500,24 +500,43 @@ static int64_t storage_need(rmr_storage_t *st, char **days, int day_count)
 	return need;
 }
 
-/* Paths this process holds open: the segments and clips being written */
-static int open_paths(char paths[][320], int max)
+/* Files this process holds open: the segments and clips being written.
+ * Matched by inode, so a storage_path spelled differently from the
+ * kernel's canonical path (trailing slash, symlink) still matches. */
+typedef struct {
+	dev_t dev;
+	ino_t ino;
+} held_file_t;
+
+static int open_files(held_file_t *held, int max)
 {
 	DIR *d = opendir("/proc/self/fd");
 	int n = 0;
 	struct dirent *e;
 	while (d && n < max && (e = readdir(d)) != NULL) {
 		char link[300];
+		struct stat fst;
 		snprintf(link, sizeof(link), "/proc/self/fd/%s", e->d_name);
-		ssize_t len = readlink(link, paths[n], 319);
-		if (len > 0) {
-			paths[n][len] = '\0';
+		if (stat(link, &fst) == 0 && S_ISREG(fst.st_mode)) {
+			held[n].dev = fst.st_dev;
+			held[n].ino = fst.st_ino;
 			n++;
 		}
 	}
 	if (d)
 		closedir(d);
 	return n;
+}
+
+static bool is_held(const held_file_t *held, int n, const char *path)
+{
+	struct stat fst;
+	if (stat(path, &fst) != 0)
+		return false;
+	for (int i = 0; i < n; i++)
+		if (held[i].dev == fst.st_dev && held[i].ino == fst.st_ino)
+			return true;
+	return false;
 }
 
 /* Loop recording: whole segments go oldest name first, a file with its
@@ -536,8 +555,8 @@ static int enforce_limit_locked(rmr_storage_t *st)
 		return 0;
 
 	int64_t need = storage_need(st, days, day_count);
-	static char held[64][320];
-	int held_n = open_paths(held, 64);
+	held_file_t held[128];
+	int held_n = open_files(held, 128);
 	int64_t freed = 0;
 	int deleted = 0;
 	bool kept_open = false;
@@ -559,8 +578,8 @@ static int enforce_limit_locked(rmr_storage_t *st)
 			bool in_use = false;
 			while (g < file_count && strncmp(DF_NAME(&files[g]), first, key) == 0 &&
 			       (DF_NAME(&files[g])[key] == '_' || DF_NAME(&files[g])[key] == '.')) {
-				for (int o = 0; o < held_n && !in_use; o++)
-					in_use = strcmp(held[o], files[g].path) == 0;
+				if (!in_use)
+					in_use = is_held(held, held_n, files[g].path);
 				g++;
 			}
 			if (g == j)

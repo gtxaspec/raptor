@@ -521,6 +521,36 @@ TEST storage_cleanup_order_many_mixed(void)
 	PASS();
 }
 
+/* storage_path spelled with a trailing slash still recognises the open
+ * file (the kernel's fd path never has the double slash) */
+TEST storage_cleanup_keeps_open_with_trailing_slash(void)
+{
+	char dir[] = "/tmp/rmr_storage_test_XXXXXX";
+	ASSERT(mkdtemp(dir));
+	char base[64];
+	snprintf(base, sizeof(base), "%s/", dir);
+	rmr_storage_config_t cfg = {.base_path = base, .segment_minutes = 1, .max_storage_mb = 1};
+	rmr_storage_t *st = rmr_storage_create(&cfg);
+	ASSERT(st);
+
+	const off_t mb = 1024 * 1024;
+	make_file(dir, "2026-11-22", "10-00-00.mp4", 2 * mb);
+	char path[512];
+	snprintf(path, sizeof(path), "%s/2026-11-22/10-00-00.mp4", dir);
+	int held = open(path, O_RDONLY);
+	ASSERT(held >= 0);
+	ASSERT_EQ(0, rmr_storage_enforce_limit(st));
+	ASSERT(file_exists(dir, "2026-11-22", "10-00-00.mp4"));
+
+	close(held);
+	char cmd[600];
+	snprintf(cmd, sizeof(cmd), "rm -rf '%s'", dir);
+	if (system(cmd) != 0)
+		FAIL();
+	rmr_storage_destroy(st);
+	PASS();
+}
+
 SUITE(storage_suite)
 {
 	RUN_TEST(storage_boundary_from_mid_period);
@@ -540,6 +570,7 @@ SUITE(storage_suite)
 	RUN_TEST(storage_cleanup_runs_in_background);
 	RUN_TEST(storage_hour_dirs_layout_and_cleanup);
 	RUN_TEST(storage_cleanup_order_many_mixed);
+	RUN_TEST(storage_cleanup_keeps_open_with_trailing_slash);
 	RUN_TEST(storage_enforce_min_free_oldest_first);
 	RUN_TEST(storage_auto_root_without_card);
 }
