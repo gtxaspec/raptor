@@ -111,14 +111,26 @@ int rmr_storage_open_file(rmr_storage_t *st, int64_t rt_us, const char *suffix, 
 		snprintf(dir + dn, sizeof(dir) - (size_t)dn, "/%02d", tm.tm_hour);
 	rss_mkdir_p(dir);
 
-	/* Filename: HH-MM-SS.mp4, HH-MM-SS_<suffix>.mp4 */
+	/* Filename: HH-MM-SS.mp4, HH-MM-SS_<suffix>.mp4. A name already taken
+	 * (a resume within the same second, whose predecessor may still have
+	 * writes queued on the writer thread) gets .1 to .9 before .mp4:
+	 * truncating it would mix the two files in one inode. */
 	bool tagged = suffix && suffix[0];
-	snprintf(path_out, path_out_size, "%s/%02d-%02d-%02d%s%s.mp4", dir, tm.tm_hour, tm.tm_min,
-		 tm.tm_sec, tagged ? "_" : "", tagged ? suffix : "");
-
-	int fd = open(path_out, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-	if (fd < 0 && errno == ENOSPC && rmr_storage_enforce_limit(st) > 0)
-		fd = open(path_out, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	int fd = -1;
+	for (int n = 0; n < 10; n++) {
+		char dup[3] = "";
+		if (n) {
+			dup[0] = '.';
+			dup[1] = (char)('0' + n);
+		}
+		snprintf(path_out, path_out_size, "%s/%02d-%02d-%02d%s%s%s.mp4", dir, tm.tm_hour,
+			 tm.tm_min, tm.tm_sec, tagged ? "_" : "", tagged ? suffix : "", dup);
+		fd = open(path_out, O_WRONLY | O_CREAT | O_EXCL, 0644);
+		if (fd < 0 && errno == ENOSPC && rmr_storage_enforce_limit(st) > 0)
+			fd = open(path_out, O_WRONLY | O_CREAT | O_EXCL, 0644);
+		if (fd >= 0 || errno != EEXIST)
+			break;
+	}
 	if (fd < 0)
 		RSS_ERROR("failed to open segment: %s: %m", path_out);
 

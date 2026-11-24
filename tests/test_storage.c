@@ -209,6 +209,38 @@ TEST storage_open_file_suffix(void)
 	PASS();
 }
 
+/* A resume in the same second must not truncate the file it follows */
+TEST storage_open_file_never_truncates(void)
+{
+	char dir[] = "/tmp/rmr_storage_test_XXXXXX";
+	ASSERT(mkdtemp(dir));
+	rmr_storage_config_t cfg = {.base_path = dir, .segment_minutes = 1};
+	rmr_storage_t *st = rmr_storage_create(&cfg);
+	ASSERT(st);
+
+	int64_t rt = local_rt_us(16, 59, 0, 22);
+	char first[256], second[256], want[300];
+	int fd1 = rmr_storage_open_file(st, rt, NULL, first, sizeof(first));
+	ASSERT(fd1 >= 0);
+	ASSERT_EQ(4, write(fd1, "moov", 4));
+	int fd2 = rmr_storage_open_file(st, rt, NULL, second, sizeof(second));
+	ASSERT(fd2 >= 0);
+	snprintf(want, sizeof(want), "%s/2026-11-22/16-59-00.1.mp4", dir);
+	ASSERT_STR_EQ(want, second);
+	struct stat sb;
+	ASSERT_EQ(0, stat(first, &sb));
+	ASSERT_EQ(4, (int)sb.st_size);
+
+	close(fd1);
+	close(fd2);
+	char cmd[600];
+	snprintf(cmd, sizeof(cmd), "rm -rf '%s'", dir);
+	if (system(cmd) != 0)
+		FAIL();
+	rmr_storage_destroy(st);
+	PASS();
+}
+
 TEST storage_name_stamp_pairs_tracks(void)
 {
 	rmr_name_stamp_t s = {0};
@@ -563,6 +595,7 @@ SUITE(storage_suite)
 	RUN_TEST(storage_autocreate_on_mounted_fs);
 	RUN_TEST(storage_refuses_rootfs_autocreate);
 	RUN_TEST(storage_open_file_suffix);
+	RUN_TEST(storage_open_file_never_truncates);
 	RUN_TEST(storage_name_stamp_pairs_tracks);
 	RUN_TEST(storage_name_stamp_never_reuses_own);
 	RUN_TEST(storage_enforce_deletes_pairs_together);
