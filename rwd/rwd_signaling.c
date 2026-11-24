@@ -93,7 +93,7 @@ static void http_error(int fd, const char *status, const char *reason)
 		snprintf(body, sizeof(body), "%s: %s", status, reason);
 	else
 		snprintf(body, sizeof(body), "%s", status);
-	http_send(fd, body, "text/plain", body, strlen(body), NULL);
+	http_send(fd, status, "text/plain", body, strlen(body), NULL);
 }
 
 /* Human-readable cause for a rejected SDP offer, safe for an HTTP body. */
