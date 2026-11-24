@@ -82,7 +82,7 @@ void rmr_storage_destroy(rmr_storage_t *st)
 		return;
 	if (st->clean_started) {
 		pthread_mutex_lock(&st->req_lock);
-		st->clean_stop = true;
+		__atomic_store_n(&st->clean_stop, true, __ATOMIC_RELAXED);
 		pthread_cond_signal(&st->req_cv);
 		pthread_mutex_unlock(&st->req_lock);
 		pthread_join(st->clean_thr, NULL);
@@ -600,6 +600,8 @@ static int enforce_limit_locked(rmr_storage_t *st)
 					 * the writer needs: give it the card between files */
 					if (st->pacing)
 						usleep(500000);
+					if (__atomic_load_n(&st->clean_stop, __ATOMIC_RELAXED))
+						need = 0; /* shutting down: the next pass resumes */
 				}
 			}
 			j = g;
