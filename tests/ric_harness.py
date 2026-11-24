@@ -147,6 +147,7 @@ class StubRvd:
         self.modes = []  # (monotonic, "day"|"night")
         self.fps_calls = []  # (monotonic, int value) from set-sensor-fps
         self.fps_error = False  # answer set-sensor-fps with an error
+        self.mode_error = False  # answer set-running-mode with an error
         self.lock = threading.Lock()
         self.path = RUN_DIR + "/rvd.sock"
         self._bind()
@@ -230,7 +231,12 @@ class StubRvd:
                     val = json.loads(req).get("value", "?")
                     with self.lock:
                         self.modes.append((time.monotonic(), val))
-                    resp = {"status": "ok", "mode": val}
+                        err = self.mode_error
+                    if err:
+                        resp = {"status": "error",
+                                "reason": "running mode did not change"}
+                    else:
+                        resp = {"status": "ok", "mode": val}
                 elif cmd == "set-sensor-fps":
                     val = json.loads(req).get("value", -1)
                     with self.lock:
@@ -2124,6 +2130,40 @@ def scenario_night_fps(stub, watch):
     ric.stop()
 
 
+def scenario_mode_refused(stub, watch):
+    """rvd refusing a switch (T32 with no night bin stays in day) is
+    logged with its reason; an accepted switch logs nothing."""
+    stub.set_scene(luma=120, gain=500, ev=4000)
+    ric = Ric("moderefused", LUMA_CONF)
+    if not ric.wait_running():
+        result(False, "mode-refused: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    time.sleep(0.5)
+
+    mm = stub.mark()
+    stub.set_scene(luma=5, gain=20000, ev=100000)
+    wait_for(lambda: "night" in stub.modes_since(mm), 4)
+    time.sleep(0.3)
+    result("mode not applied" not in ric.read_log(),
+           "mode-refused: an accepted switch logs no warning",
+           ric.read_log()[-300:])
+
+    # the night gain baseline must be sampled from the night scene
+    wait_for(lambda: "night baseline: gain=20000" in ric.read_log(), 4)
+    stub.mode_error = True
+    mm = stub.mark()
+    stub.set_scene(luma=5, gain=4000, ev=100000)
+    asked = wait_for(lambda: "day" in stub.modes_since(mm), 4)
+    result(asked, "mode-refused: dawn asks rvd for day", ric.read_log()[-300:])
+    ok = wait_for(lambda: "ISP day mode not applied" in ric.read_log(), 4)
+    stub.mode_error = False
+    result(ok, "mode-refused: a refused switch is warned", ric.read_log()[-300:])
+    result("did not change" in ric.read_log(),
+           "mode-refused: the warning carries rvd's reason", ric.read_log()[-300:])
+    ric.stop()
+
+
 def scenario_photo_interference(stub, watch):
     """After a ratio-path day trigger the photo machine watches for a
     false day. A rise in ev (darker again) past the interference band
@@ -2637,6 +2677,7 @@ def main():
         scenario_adc_dead,
         scenario_rvd_lost,
         scenario_night_fps,
+        scenario_mode_refused,
         scenario_default_topologies,
         scenario_gpio_failure,
         scenario_disabled,

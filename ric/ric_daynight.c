@@ -271,6 +271,9 @@ void ric_set_isp_mode(ric_mode_t mode)
 		RSS_WARN("ISP %s mode not applied (rvd unreachable) -- image stays in the old "
 			 "mode until the next transition",
 			 mode == RIC_MODE_NIGHT ? "night" : "day");
+	else if (!rss_ctrl_resp_is_ok(resp))
+		RSS_WARN("ISP %s mode not applied: %s", mode == RIC_MODE_NIGHT ? "night" : "day",
+			 resp);
 }
 
 /*
