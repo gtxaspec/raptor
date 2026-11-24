@@ -1,6 +1,6 @@
 # Raptor Streaming System (RSS)
 
-A modular microservice camera streamer for Ingenic SoCs. Raptor replaces the
+A modular microservice camera streamer for Ingenic SoCs and the Novatek NA51055 (NT98529). Raptor replaces the
 traditional monolithic streamer with independent daemons that communicate
 through POSIX shared-memory ring buffers and Unix domain control sockets.
 
@@ -95,8 +95,10 @@ buffers at runtime, gracefully skipping any that don't exist.
 | ROD  | `rod`  | OSD Rendering Daemon. Renders timestamp, uptime, user text, and logo bitmaps into BGRA SHM double-buffers using libschrift. No HAL dependency -- RVD handles the hardware OSD regions. |
 | RHD  | `rhd`  | HTTP Streaming Daemon. JPEG snapshots (`/snap`), MJPEG (`/mjpeg`), and audio (`/audio`) straight from the rings, with proper container framing (WAV, ADTS, Ogg). Dual-stack IPv4/IPv6, Basic auth, optional HTTPS. Optional EXIF capture times and Ed25519-signed snapshots. |
 | RIC  | `ric`  | IR-Cut Controller. Hybrid luma+gain day/night detection: ae_luma for day-to-night, auto-calibrating gain-ratio for night-to-day (prevents IR flip-flop). Pins from raptor.conf or auto-discovered from `/etc/thingino.json`; single and dual-GPIO filters. |
-| RMR  | `rmr`  | Recording/Muxing Daemon. Writes crash-safe fragmented MP4 segments (H.264/H.265/MJPEG + audio) to SD with its own dependency-free fMP4 muxer. Optional MISB ST 0604 UTC timecodes and Ed25519 hash-chain provenance signing. |
+| RMR  | `rmr`  | Recording/Muxing Daemon. Writes crash-safe fragmented MP4 segments (H.264/H.265/MJPEG + audio) to SD with its own dependency-free fMP4 muxer, from one stream or several at once (front + rear), on a writer thread so a slow card never stalls the rings. Loop recording by quota or free space. Optional MISB ST 0604 UTC timecodes, Ed25519 hash-chain provenance signing, and GPS/g-sensor records from RTD. |
 | RMD  | `rmd`  | Motion Detection Daemon. Consumes RVD's IVS results (hardware motion grid, JZDL YOLOv5 inference on NNA), runs the idle/active/cooldown state machine, and triggers RMR plus GPIO outputs. Configurable ROI, per-class filtering, external detection push via control socket. |
+| RTD  | `rtd`  | Telematics Daemon. Dashcam GPS (NMEA) and g-sensor: publishes one record per GPS epoch to the `telematics` ring for RMR, sets ROD's speed/position/event OSD variables, starts an RMR clip on impact, and sets the clock and RTC from GPS. Exits when the camera has neither. |
+| RCD  | `rcd`  | Camera Daemon. Brings cameras that are not on the SoC's sensor interface in as extra sensors, publishing their encoded video to `sN_main`/`sN_sub` rings that RSD, RWD and RMR use like an on-board second sensor. First driver: the Novatek EthCam rear module. |
 | RWD  | `rwd`  | WebRTC Daemon. Live H.264 + Opus to browsers and go2rtc via WHIP with sub-second latency: ICE-lite, DTLS-SRTP, two-way audio (browser mic to camera speaker). Embedded player at `/webrtc`; optional WebTorrent sharing for external viewing without port forwarding. |
 | RWC  | `rwc`  | USB Webcam Daemon. Presents the camera as a standard UVC + UAC1 USB webcam (MJPEG or H.264 at 1080p/720p/360p, 16kHz mono mic) through the kernel gadget. Bulk video endpoint, so it works through USB hubs. |
 | RFS  | `rfs`  | File Source Daemon. Plays MP4/MOV or raw Annex B H.264/H.265 files into the rings at real-time rate, replacing RVD+RAD where there is no ISP (A1, x86 testing). Zero-copy MP4 demux, B-frame reorder, audio passthrough or transcode. Pause/resume/seek via control socket. |
@@ -151,6 +153,7 @@ Runtime shared libraries from the Ingenic SDK / Buildroot sysroot:
 
 - `libimp` -- Ingenic multimedia platform
 - `libalog` -- Ingenic logging
+- `libhdal` / `libvendor_isp` -- Novatek HDAL, in place of `libimp`/`libalog` on NA51055
 - `libschrift` -- TrueType font rasterizer (ROD)
 - `libfaac` -- AAC encoder (optional, `AAC=1`)
 - `libhelix-aac` / `libhelix-mp3` -- AAC/MP3 decoders (optional, for rac playback)
@@ -172,7 +175,9 @@ Runtime shared libraries from the Ingenic SDK / Buildroot sysroot:
 ./build-standalone.sh t31 --clean        # clean all build artifacts
 ```
 
-Supported platforms: `t10`, `t20`, `t21`, `t23`, `t30`, `t31`, `t32`, `t33`, `t40`, `t41`, `a1`.
+Supported platforms: `t10`, `t20`, `t21`, `t23`, `t30`, `t31`, `t32`, `t33`, `t40`, `t41`, `a1`, `na51055`.
+`na51055` has no toolchain download: set `CROSS_COMPILE` (e.g. a thingino NT98529
+build's `host/bin/arm-linux-`) and `HDAL_DIR` (the Novatek HDAL `include/` and `lib/`).
 
 First run downloads the toolchain and all dependencies automatically.
 Output binaries go to `build/`. Options: `--no-tls`, `--no-aac`,
@@ -187,7 +192,7 @@ make PLATFORM=T31 CROSS_COMPILE=mipsel-linux- SYSROOT=/path/to/sysroot
 
 Required variables:
 
-- `PLATFORM` -- target SoC: `T10`, `T20`, `T21`, `T23`, `T30`, `T31`, `T32`, `T33`, `T40`, `T41`, `A1`
+- `PLATFORM` -- target SoC: `T10`, `T20`, `T21`, `T23`, `T30`, `T31`, `T32`, `T33`, `T40`, `T41`, `A1`, `NA51055`
 - `CROSS_COMPILE` -- toolchain prefix (e.g., `mipsel-linux-`)
 
 Optional variables:
@@ -383,9 +388,10 @@ clocks must be NTP-synced.
 | T40 | IMPVI         | Supported |
 | T41 | IMPVI         | Supported |
 | A1  | VDEC/VENC     | RFS only (no ISP HAL) |
+| NA51055 | Novatek HDAL | Supported (NT98529 dashcam, ARM Cortex-A9) |
 
-Platform differences are handled by raptor-hal, which abstracts the three SDK
-generations behind a common API. The `PLATFORM` build variable selects the
+Platform differences are handled by raptor-hal, which abstracts the three Ingenic
+SDK generations and the Novatek HDAL behind a common API. The `PLATFORM` build variable selects the
 correct HAL backend at compile time. On A1, HAL is not built — RFS serves as
 the video/audio producer instead of RVD+RAD.
 
