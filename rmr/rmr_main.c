@@ -1637,10 +1637,14 @@ int main(int argc, char **argv)
 		    rss_config_get_int(dctx.cfg, "timelapse", "file_frames", 0));
 	st.audio_enabled = rss_config_get_bool(dctx.cfg, "recording", "audio", true);
 	st.sei_timecode = rss_config_get_bool(dctx.cfg, "recording", "sei_timecode", true);
-	st.sync_interval_ms = rss_config_get_int(dctx.cfg, "recording", "sync_interval_ms", 1000);
+	st.sync_interval_ms = rss_config_get_int(dctx.cfg, "recording", "sync_interval_ms", 0);
 	tracks_init(&st);
-	int buffer_kb = rss_config_get_int(dctx.cfg, "recording", "write_buffer_kb", 4096);
-	st.io = rmr_io_create((uint32_t)(buffer_kb > 0 ? buffer_kb : 4096) * 1024);
+	int buffer_kb = rss_config_get_int(dctx.cfg, "recording", "write_buffer_kb", 1024);
+	if (buffer_kb < 256)
+		buffer_kb = 256;
+	if (buffer_kb > 16384)
+		buffer_kb = 16384;
+	st.io = rmr_io_create((uint32_t)buffer_kb * 1024);
 	if (!st.io) {
 		RSS_FATAL("cannot start the writer thread");
 		goto cleanup;
@@ -1670,7 +1674,7 @@ int main(int argc, char **argv)
 		st.prebuffer_sec = 0;
 	if (st.prebuffer_sec > 5)
 		st.prebuffer_sec = 5;
-	int prebuf_mb = rss_config_get_int(dctx.cfg, "recording", "prebuffer_max_mb", 16);
+	int prebuf_mb = rss_config_get_int(dctx.cfg, "recording", "prebuffer_max_mb", 10);
 	if (prebuf_mb < 1)
 		prebuf_mb = 1;
 	if (prebuf_mb > 64)
