@@ -189,6 +189,7 @@ int rvd_stream_init(rvd_state_t *st, int idx);
 void rvd_stream_deinit(rvd_state_t *st, int idx);
 int rvd_stream_restart_vbs_fallback(rvd_state_t *st, int chn);
 int rvd_stream_start(rvd_state_t *st, int idx);
+void rvd_apply_flip(rvd_state_t *st);
 void rvd_stream_stop(rvd_state_t *st, int idx);
 
 /* Republish geometry and rate into the ring header; rsd's SDP reads it. */

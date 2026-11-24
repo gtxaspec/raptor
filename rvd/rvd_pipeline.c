@@ -286,6 +286,23 @@ static void rvd_apply_image_defaults(rvd_state_t *st)
 		  ret == RSS_OK);
 }
 
+/* T32 loses a flip set before the channels run (get-isp reads 0/0), so the
+ * configured one is applied again once they do. Single sensor: the
+ * per-sensor path sets its own. */
+void rvd_apply_flip(rvd_state_t *st)
+{
+	if (st->sensor_count > 1)
+		return;
+	int hflip = rss_config_get_int(st->cfg, "image", "hflip", 0);
+	int vflip = rss_config_get_int(st->cfg, "image", "vflip", 0);
+	if (!hflip && !vflip)
+		return;
+	int hr = RSS_HAL_CALL(st->ops, isp_set_hflip, st->hal_ctx, hflip);
+	int vr = RSS_HAL_CALL(st->ops, isp_set_vflip, st->hal_ctx, vflip);
+	RSS_DEBUG("flip re-applied after stream start: hflip=%d (%d) vflip=%d (%d)", hflip, hr,
+		  vflip, vr);
+}
+
 static int read_sensor_proc_int(int idx, const char *key, int base, int def);
 static int find_active_sensor_proc_index(void);
 static void load_sensor_from_section(rss_config_t *cfg, const char *section,
