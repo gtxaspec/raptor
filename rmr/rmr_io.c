@@ -134,14 +134,16 @@ static void *writer(void *arg)
 		} else if (op.kind == OP_CLOSE) {
 			if (!failed)
 				fsync(op.fd);
+			/* before close frees the number for the next open */
+			pthread_mutex_lock(&io->lock);
+			err_clear(io, op.fd);
+			pthread_mutex_unlock(&io->lock);
 			close(op.fd);
 		}
 
 		pthread_mutex_lock(&io->lock);
 		io->busy = false;
-		if (op.kind == OP_CLOSE)
-			err_clear(io, op.fd);
-		else if (err)
+		if (err)
 			err_set(io, op.fd, err);
 		io->rd += op.len;
 		io->op_rd++;
