@@ -54,6 +54,7 @@ static struct {
 	/* ISP */
 	int set_brightness;
 	int brightness_stored;
+	int mode_set_ret;
 
 	/* Ring header republishes, and the channel of the last one */
 	int publish_count;
@@ -182,6 +183,13 @@ static int rec_isp_get_brightness(void *ctx, uint8_t *val)
 	(void)ctx;
 	*val = (uint8_t)rec.brightness_stored;
 	return 0;
+}
+
+static int rec_isp_set_running_mode(void *ctx, rss_isp_mode_t mode)
+{
+	(void)ctx;
+	(void)mode;
+	return rec.mode_set_ret;
 }
 
 /* WB mock that preserves state for merge testing */
@@ -347,6 +355,7 @@ static void setup(void)
 	ops.enc_get_color2grey = (void *)rec_enc_get_color2grey;
 	ops.isp_set_brightness = (void *)rec_isp_set_brightness;
 	ops.isp_get_brightness = (void *)rec_isp_get_brightness;
+	ops.isp_set_running_mode = (void *)rec_isp_set_running_mode;
 	ops.isp_get_wb = rec_isp_get_wb;
 	ops.isp_set_wb = (void *)rec_isp_set_wb;
 
@@ -1163,6 +1172,20 @@ TEST isp_brightness_roundtrip(void)
 }
 
 /* ══════════════════════════════════════════════════════════════════
+ *  Running mode: a switch the HAL reports as failed is an error
+ * ══════════════════════════════════════════════════════════════════ */
+
+TEST mode_hal_failure_is_error(void)
+{
+	setup();
+	rec.mode_set_ret = -5;
+	call("{\"cmd\":\"set-running-mode\",\"value\":\"night\"}");
+	ASSERT_FALSE(rss_ctrl_resp_is_ok(resp));
+	teardown();
+	PASS();
+}
+
+/* ══════════════════════════════════════════════════════════════════
  *  Channel validation
  * ══════════════════════════════════════════════════════════════════ */
 
@@ -1417,6 +1440,7 @@ SUITE(ctrl_suite)
 
 	/* ISP roundtrip */
 	RUN_TEST(isp_brightness_roundtrip);
+	RUN_TEST(mode_hal_failure_is_error);
 
 	/* Channel validation */
 	RUN_TEST(reject_negative_channel);

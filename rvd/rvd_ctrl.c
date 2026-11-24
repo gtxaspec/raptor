@@ -1312,8 +1312,11 @@ static int handle_isp_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 	if (strcmp(cmd, "set-running-mode") == 0) {
 		char mode_str[8];
 		if (rss_json_get_str(cmd_json, "value", mode_str, sizeof(mode_str)) == 0) {
-			int mode = (strcmp(mode_str, "night") == 0) ? 1 : 0;
-			RSS_HAL_CALL(st->ops, isp_set_running_mode, st->hal_ctx, mode);
+			rss_isp_mode_t mode =
+				(strcmp(mode_str, "night") == 0) ? RSS_ISP_NIGHT : RSS_ISP_DAY;
+			int ret = RSS_HAL_CALL(st->ops, isp_set_running_mode, st->hal_ctx, mode);
+			if (ret != RSS_OK)
+				return fmt_hal_result(resp, resp_size, ret);
 			cJSON *r = cJSON_CreateObject();
 			cJSON_AddStringToObject(r, "status", "ok");
 			cJSON_AddStringToObject(r, "mode", mode ? "night" : "day");
