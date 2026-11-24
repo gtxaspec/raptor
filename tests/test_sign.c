@@ -73,7 +73,7 @@ TEST sign_chain_verifies(void)
 	static const uint8_t frag1[] = "fragment one moof+mdat";
 	static const uint8_t frag2[] = "fragment two moof+mdat";
 
-	rmr_sign_stream_t ss;
+	rmr_sign_stream_t ss = {0};
 	capture_t cap = {0};
 
 	rmr_sign_stream_begin(&ss, &key);
@@ -84,6 +84,7 @@ TEST sign_chain_verifies(void)
 	rmr_sign_stream_update(&ss, frag2, sizeof(frag2));
 	ASSERT_EQ(0, rmr_sign_stream_emit(&ss, true, capture_write, &cap));
 
+	rmr_sign_stream_release(&ss);
 	ASSERT_EQ(3u * RMR_SIGN_BOX_SIZE, cap.len);
 
 	/* Independently verify the chain the way rverify does */
@@ -142,7 +143,7 @@ TEST sign_empty_span_is_noop(void)
 	rmr_sign_key_t key;
 	ASSERT_EQ(0, make_key(&key));
 
-	rmr_sign_stream_t ss;
+	rmr_sign_stream_t ss = {0};
 	capture_t cap = {0};
 	rmr_sign_stream_begin(&ss, &key);
 	ASSERT_EQ(0, rmr_sign_stream_emit(&ss, false, capture_write, &cap));
@@ -161,9 +162,53 @@ TEST sign_empty_span_is_noop(void)
 	PASS();
 }
 
+/* Both hash paths sign the same chain; the kernel one only where AF_ALG
+ * exists (the build host normally has it). */
+TEST sign_chain_verifies_portable(void)
+{
+	rmr_sign_use_kernel_hash(false);
+	CHECK_CALL(sign_chain_verifies());
+	rmr_sign_use_kernel_hash(true);
+	PASS();
+}
+
+/* A file abandoned mid-span leaves data in the kernel hash; the next
+ * file on the same stream must not inherit it. */
+TEST sign_abandoned_span_does_not_leak(void)
+{
+	rmr_sign_key_t key;
+	ASSERT_EQ(0, make_key(&key));
+
+	static const uint8_t junk[] = "bytes of a file closed without a box";
+	static const uint8_t span[] = "the next file's init segment";
+
+	rmr_sign_stream_t ss = {0};
+	capture_t cap = {0};
+
+	rmr_sign_stream_begin(&ss, &key);
+	rmr_sign_stream_update(&ss, junk, sizeof(junk));
+	rmr_sign_stream_begin(&ss, &key);
+	rmr_sign_stream_update(&ss, span, sizeof(span));
+	ASSERT_EQ(0, rmr_sign_stream_emit(&ss, true, capture_write, &cap));
+	rmr_sign_stream_release(&ss);
+
+	uint8_t want[64];
+	crypto_sha512(want, span, sizeof(span));
+	ASSERT_EQ(RMR_SIGN_BOX_SIZE, cap.len);
+	ASSERT_MEM_EQ(want, cap.data + 36, 64);
+
+	char pub_path[300];
+	snprintf(pub_path, sizeof(pub_path), "%s.pub", key_path);
+	unlink(key_path);
+	unlink(pub_path);
+	PASS();
+}
+
 SUITE(sign_suite)
 {
 	RUN_TEST(sign_key_generate_and_reload);
 	RUN_TEST(sign_chain_verifies);
+	RUN_TEST(sign_chain_verifies_portable);
+	RUN_TEST(sign_abandoned_span_does_not_leak);
 	RUN_TEST(sign_empty_span_is_noop);
 }

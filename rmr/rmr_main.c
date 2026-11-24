@@ -1815,6 +1815,11 @@ cleanup:
 	close_all_files(&st);
 	if (st.tl_mux)
 		close_timelapse(&st);
+	for (int i = 0; i < st.track_count; i++) {
+		rmr_sign_stream_release(&st.tracks[i].sign_seg);
+		rmr_sign_stream_release(&st.tracks[i].sign_clip);
+	}
+	rmr_sign_stream_release(&st.sign_tl);
 	if (st.tl_storage)
 		rmr_storage_destroy(st.tl_storage);
 	if (st.clip_storage)

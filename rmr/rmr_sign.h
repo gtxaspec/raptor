@@ -51,9 +51,21 @@ typedef struct {
 	uint8_t prev_sig[64];
 	uint64_t span_bytes; /* bytes hashed in current span      */
 	bool emitting;	     /* suppress update() during box write */
+	int kfd;	     /* AF_ALG op socket + 1; 0 = portable hash */
+	bool kfd_pending;    /* data sent to kfd since its last digest */
+	bool kfd_failed;     /* kernel hash lost data in this span */
 } rmr_sign_stream_t;
 
-/* Begin signing a new file (call once per segment/clip open). */
+/* Hash with the kernel's SHA-512 (AF_ALG) when available: the NEON one
+ * is ~3x the portable C on 32-bit ARM. On by default; tests turn it off
+ * to cover both paths. */
+void rmr_sign_use_kernel_hash(bool on);
+
+/* Release a stream's kernel hash socket (a stream not used again). */
+void rmr_sign_stream_release(rmr_sign_stream_t *ss);
+
+/* Begin signing a new file (call once per segment/clip open). The stream
+ * must start zeroed; it keeps its kernel hash socket across files. */
 void rmr_sign_stream_begin(rmr_sign_stream_t *ss, const rmr_sign_key_t *key);
 
 /* Hash bytes written to the file. Call from the write callback. */
