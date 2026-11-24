@@ -128,10 +128,7 @@ start() {
 	start_daemon rsp
 	start_daemon rsr
 
-	# Under memory pressure the recording path goes last
-	for d in rvd rcd rmr; do
-		for p in $(pidof "$d"); do echo -500 >"/proc/$p/oom_score_adj"; done
-	done
+	for p in $(pidof rvd); do echo -500 >"/proc/$p/oom_score_adj" 2>/dev/null; done
 
 	# Bring back whatever dies (an OOM kill must not end recording)
 	watched=""
@@ -143,23 +140,44 @@ start() {
 	echo "Done."
 }
 
+crash_loop() {
+	f="$RUNDIR/restarts.$1"
+	read up _ </proc/uptime
+	now=${up%.*}
+	first=$now
+	n=0
+	[ -f "$f" ] && read first n <"$f"
+	[ $((now - first)) -gt 600 ] && first=$now && n=0
+	n=$((n + 1))
+	echo "$first $n" >"$f"
+	[ $n -gt 5 ]
+}
+
 watch() {
+	watched="$*"
 	while sleep 5; do
 		if ! pidof rvd >/dev/null; then
+			if crash_loop rvd; then
+				logger -t raptor "rvd keeps dying, giving up"
+				exit 0
+			fi
 			logger -t raptor "rvd died, restarting all"
-			S31RAPTOR_LOCKED='' "$0" restart >/dev/null 2>&1
+			S31RAPTOR_LOCKED='' S31RAPTOR_WATCH=1 "$0" restart >/dev/null 2>&1
 			exit 0
 		fi
-		for d in "$@"; do
-			pidof "$d" >/dev/null && continue
-			logger -t raptor "$d died, restarting"
-			start-stop-daemon -S -b -x /usr/bin/$d -- -c "$CONF"
-			case $d in rcd | rmr)
-				sleep 1
-				for p in $(pidof "$d"); do echo -500 >"/proc/$p/oom_score_adj"; done
-				;;
-			esac
+		keep=""
+		for d in $watched; do
+			if ! pidof "$d" >/dev/null; then
+				if crash_loop "$d"; then
+					logger -t raptor "$d keeps dying, giving up"
+					continue
+				fi
+				logger -t raptor "$d died, restarting"
+				start-stop-daemon -S -b -x /usr/bin/$d -- -c "$CONF"
+			fi
+			keep="$keep $d"
 		done
+		watched=$keep
 	done
 }
 
@@ -184,6 +202,7 @@ stop() {
 	echo "Stopping Raptor Streaming System..."
 	start-stop-daemon -K -q -p "$RUNDIR/watch.pid" 2>/dev/null
 	rm -f "$RUNDIR/watch.pid"
+	[ -n "$S31RAPTOR_WATCH" ] || rm -f "$RUNDIR"/restarts.*
 
 	# Stop consumers first, then producer (RVD) last
 	for d in rsr rsp rwd rmd rmr rcd rtd ric rhd rsd rsd-555 rod rad rvd; do
