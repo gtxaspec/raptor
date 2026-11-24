@@ -1293,6 +1293,83 @@ else
     skip "timelapse packet checks" "ffprobe not installed"
 fi
 
+# ── Motion mode: a trigger writes the clip only, and only when on ──
+# In motion mode the recording flag is the clip's trigger. The
+# continuous writer must not run on it as well (each event would be
+# written twice, as a clip and as a segment), and a trigger must be
+# refused while recording is switched off: rmr also runs for the
+# timelapse alone. A second rmr runs here with mode = motion on its
+# own storage path (rmr creates no folder on the root filesystem, so
+# the clip folder is made here); the continuous one comes back after.
+echo ""
+echo "=== Motion-mode recording ==="
+MOTION_CONFIG="$LOG_DIR/test-motion.conf"
+sed -e 's|^mode = continuous|mode = motion|' \
+    -e "s|^storage_path = .*|storage_path = $LOG_DIR/rec-motion|" \
+    "$CONFIG" > "$MOTION_CONFIG"
+rm -rf "$LOG_DIR/rec-motion"
+mkdir -p "$LOG_DIR/rec-motion/clips"
+pkill -f "$OUT/rmr -c" 2>/dev/null || true
+sleep 1
+start_daemon rmr-motion "$OUT/rmr" -c "$MOTION_CONFIG" -f -d
+sleep 2
+check_contains "rmr status reports motion mode" '"mode":"motion"' "$OUT/raptorctl" rmr status
+"$OUT/raptorctl" test-motion 4 > "$LOG_DIR/test-motion.out" 2>&1 || true
+sleep 1
+CLIPS=$(find "$LOG_DIR/rec-motion/clips" -name '*.mp4' 2>/dev/null | wc -l)
+SEGS=$(find "$LOG_DIR/rec-motion" -name '*.mp4' -not -path '*/clips/*' \
+    -not -path '*/timelapse/*' 2>/dev/null | wc -l)
+if [ "$CLIPS" -ge 1 ]; then
+    pass "motion trigger writes a clip ($CLIPS)"
+else
+    fail "motion trigger writes a clip" "no clip under rec-motion/clips"
+fi
+if [ "$SEGS" -eq 0 ]; then
+    pass "motion trigger writes no continuous segment"
+else
+    fail "motion trigger writes no continuous segment" "$SEGS segment(s) beside the clip"
+fi
+"$OUT/raptorctl" rmr disable > /dev/null 2>&1
+check_contains "motion trigger refused while recording is off" "recording is off" \
+    "$OUT/raptorctl" test-motion 2
+sleep 1
+CLIPS_AFTER=$(find "$LOG_DIR/rec-motion/clips" -name '*.mp4' 2>/dev/null | wc -l)
+if [ "$CLIPS_AFTER" -eq "$CLIPS" ]; then
+    pass "refused trigger writes no clip"
+else
+    fail "refused trigger writes no clip" "$CLIPS clip(s) before, $CLIPS_AFTER after"
+fi
+pkill -f "$OUT/rmr -c $MOTION_CONFIG" 2>/dev/null || true
+sleep 1
+
+# Mode both, paused: "pause" stops continuous recording only, and a
+# trigger must still write its clip (a parked dashcam records impacts
+# through "start" while its continuous recording is paused).
+echo ""
+echo "=== Mode both: a trigger while paused ==="
+BOTH_CONFIG="$LOG_DIR/test-both.conf"
+sed -e 's|^mode = continuous|mode = both|'     -e "s|^storage_path = .*|storage_path = $LOG_DIR/rec-both|"     "$CONFIG" > "$BOTH_CONFIG"
+rm -rf "$LOG_DIR/rec-both"
+mkdir -p "$LOG_DIR/rec-both/clips"
+start_daemon rmr-both "$OUT/rmr" -c "$BOTH_CONFIG" -f -d
+sleep 2
+check_contains "rmr pause (mode both)" "ok" "$OUT/raptorctl" rmr pause
+check_contains "paused: continuous off, recording still on" '"recording":false,"clip":false,"enabled":true'     "$OUT/raptorctl" rmr status
+BOTH_CLIPS=$(find "$LOG_DIR/rec-both/clips" -name '*.mp4' 2>/dev/null | wc -l)
+check_contains "trigger accepted while paused" "ok" "$OUT/raptorctl" test-motion 3
+sleep 1
+BOTH_AFTER=$(find "$LOG_DIR/rec-both/clips" -name '*.mp4' 2>/dev/null | wc -l)
+if [ "$BOTH_AFTER" -gt "$BOTH_CLIPS" ]; then
+    pass "trigger while paused writes a clip ($BOTH_CLIPS -> $BOTH_AFTER)"
+else
+    fail "trigger while paused writes a clip" "$BOTH_CLIPS clip(s) before, $BOTH_AFTER after"
+fi
+check_contains "still paused after the clip" '"recording":false' "$OUT/raptorctl" rmr status
+pkill -f "$OUT/rmr -c $BOTH_CONFIG" 2>/dev/null || true
+sleep 1
+start_daemon rmr "$OUT/rmr" -c "$CONFIG" -f -d
+sleep 1
+
 # ── ONVIF backchannel: client audio reaches the speaker ring ──
 # rsd's receive path (sendonly SETUP, RTP over an interleaved channel,
 # PCMU decode, publish) had no x86 coverage at all -- it was exercised
