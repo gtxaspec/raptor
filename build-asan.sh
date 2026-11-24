@@ -352,7 +352,10 @@ echo "  -> ric"
 echo "=== RMD ==="
 $CC $CFLAGS -c "$RAPTOR_DIR/rmd/rmd_main.c" -o "$OUT/rmd_main.o"
 $CC $CFLAGS -c "$RAPTOR_DIR/rmd/rmd_actions.c" -o "$OUT/rmd_actions.o"
-$CC -o "$OUT/rmd" "$OUT/rmd_main.o" "$OUT/rmd_actions.o" $LIBS $LDFLAGS
+$CC $CFLAGS -c "$RAPTOR_DIR/rmd/rmd_track.c" -o "$OUT/rmd_track.o"
+$CC $CFLAGS -c "$RAPTOR_DIR/rmd/rmd_tracker.c" -o "$OUT/rmd_tracker.o"
+$CC $CFLAGS -c "$RAPTOR_DIR/rmd/rmd_ptz.c" -o "$OUT/rmd_ptz.o"
+$CC -o "$OUT/rmd" "$OUT/rmd_main.o" "$OUT/rmd_actions.o" "$OUT/rmd_track.o" "$OUT/rmd_tracker.o" "$OUT/rmd_ptz.o" $LIBS $LDFLAGS
 echo "  -> rmd"
 
 echo "=== RTD ==="
