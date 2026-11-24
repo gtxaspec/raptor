@@ -88,6 +88,11 @@ daemon_enabled() {
 	esac
 }
 
+# rad: preload libimp-nodbg if available to avoid competing IMP debug thread
+daemon_env() {
+	[ "$1" = rad ] && [ -f /usr/lib/libimp-nodbg.so ] && echo LD_PRELOAD=/usr/lib/libimp-nodbg.so
+}
+
 start() {
 	echo "Starting Raptor Streaming System..."
 	mkdir -p "$RUNDIR"
@@ -108,10 +113,7 @@ start() {
 		exit 1
 	fi
 
-	# Audio: preload libimp-nodbg if available to avoid competing IMP debug thread
-	RAD_ENV=""
-	[ -f /usr/lib/libimp-nodbg.so ] && RAD_ENV="LD_PRELOAD=/usr/lib/libimp-nodbg.so"
-	start_daemon rad $RAD_ENV
+	start_daemon rad $(daemon_env rad)
 	start_daemon rtd
 	# external cameras fill sN_* rings before the consumers open them
 	start_daemon rcd
@@ -173,7 +175,7 @@ watch() {
 					continue
 				fi
 				logger -t raptor "$d died, restarting"
-				start-stop-daemon -S -b -x /usr/bin/$d -- -c "$CONF"
+				env $(daemon_env "$d") start-stop-daemon -S -b -x /usr/bin/$d -- -c "$CONF"
 			fi
 			keep="$keep $d"
 		done
