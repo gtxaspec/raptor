@@ -423,6 +423,56 @@ TEST storage_cleanup_runs_in_background(void)
 	PASS();
 }
 
+TEST storage_hour_dirs_layout_and_cleanup(void)
+{
+	char dir[] = "/tmp/rmr_storage_test_XXXXXX";
+	ASSERT(mkdtemp(dir));
+	rmr_storage_config_t cfg = {
+		.base_path = dir, .segment_minutes = 1, .max_storage_mb = 1, .hour_dirs = true};
+	rmr_storage_t *st = rmr_storage_create(&cfg);
+	ASSERT(st);
+
+	/* a new file lands in YYYY-MM-DD/HH/ */
+	time_t now = time(NULL);
+	struct tm tm;
+	localtime_r(&now, &tm);
+	char path[512], want[512];
+	int fd = rmr_storage_open_file(st, (int64_t)now * 1000000, "R", path, sizeof(path));
+	ASSERT(fd >= 0);
+	close(fd);
+	snprintf(want, sizeof(want), "%s/%04d-%02d-%02d/%02d/%02d-%02d-%02d_R.mp4", dir,
+		 tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_hour, tm.tm_min,
+		 tm.tm_sec);
+	ASSERT_STR_EQ(want, path);
+	unlink(path);
+
+	/* an old flat file and two hour dirs: oldest name goes first across
+	 * both layouts; an emptied hour dir is removed; the open file stays */
+	const off_t mb = 1024 * 1024;
+	make_file(dir, "2026-11-22", "09-59-00.mp4", mb);
+	make_file(dir, "2026-11-22/10", "10-00-00.mp4", mb);
+	make_file(dir, "2026-11-22/10", "10-00-00_R.mp4", mb);
+	make_file(dir, "2026-11-22/11", "11-00-00.mp4", mb);
+	snprintf(path, sizeof(path), "%s/2026-11-22/11/11-00-00.mp4", dir);
+	int held = open(path, O_RDONLY);
+	ASSERT(held >= 0);
+
+	ASSERT_EQ(3, rmr_storage_enforce_limit(st));
+	ASSERT_FALSE(file_exists(dir, "2026-11-22", "09-59-00.mp4"));
+	ASSERT_FALSE(file_exists(dir, "2026-11-22/10", "10-00-00_R.mp4"));
+	ASSERT(file_exists(dir, "2026-11-22/11", "11-00-00.mp4"));
+	snprintf(path, sizeof(path), "%s/2026-11-22/10", dir);
+	ASSERT_EQ(-1, access(path, F_OK));
+
+	close(held);
+	char cmd[600];
+	snprintf(cmd, sizeof(cmd), "rm -rf '%s'", dir);
+	if (system(cmd) != 0)
+		FAIL();
+	rmr_storage_destroy(st);
+	PASS();
+}
+
 SUITE(storage_suite)
 {
 	RUN_TEST(storage_boundary_from_mid_period);
@@ -440,6 +490,7 @@ SUITE(storage_suite)
 	RUN_TEST(storage_enforce_deletes_pairs_together);
 	RUN_TEST(storage_enforce_keeps_open_segments);
 	RUN_TEST(storage_cleanup_runs_in_background);
+	RUN_TEST(storage_hour_dirs_layout_and_cleanup);
 	RUN_TEST(storage_enforce_min_free_oldest_first);
 	RUN_TEST(storage_auto_root_without_card);
 }

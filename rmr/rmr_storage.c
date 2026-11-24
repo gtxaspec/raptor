@@ -1,7 +1,7 @@
 /*
  * rmr_storage.c -- Recording file rotation and storage management
  *
- * Directory layout: {base_path}/YYYY-MM-DD/HH-MM-SS.mp4
+ * Directory layout: {base_path}/YYYY-MM-DD/[HH/]HH-MM-SS.mp4 (hour level with hour_dirs)
  * One directory per day. Cleanup deletes the oldest segments first.
  */
 
@@ -39,6 +39,7 @@ struct rmr_storage {
 	pthread_t clean_thr;
 	bool clean_started, clean_pending, clean_stop;
 	int cleanup_delay_ms;
+	bool hour_dirs;
 	bool pacing;		   /* set while the thread runs a delayed cleanup */
 	bool refuse_logged;	   /* rootfs auto-create refusal logged once */
 	int64_t last_wait_warn_us; /* rate-limit for the waiting log       */
@@ -67,6 +68,7 @@ rmr_storage_t *rmr_storage_create(const rmr_storage_config_t *cfg)
 	st->max_storage_mb = cfg->max_storage_mb;
 	st->min_free_mb = cfg->min_free_mb;
 	st->cleanup_delay_ms = cfg->cleanup_delay_ms;
+	st->hour_dirs = cfg->hour_dirs;
 	pthread_mutex_init(&st->clean_lock, NULL);
 	pthread_mutex_init(&st->req_lock, NULL);
 	pthread_cond_init(&st->req_cv, NULL);
@@ -101,10 +103,12 @@ int rmr_storage_open_file(rmr_storage_t *st, int64_t rt_us, const char *suffix, 
 	struct tm tm;
 	localtime_r(&t, &tm);
 
-	/* Create date directory: {base}/YYYY-MM-DD/ */
+	/* {base}/YYYY-MM-DD/[HH/] */
 	char dir[320];
-	snprintf(dir, sizeof(dir), "%s/%04d-%02d-%02d", st->base_path, tm.tm_year + 1900,
-		 tm.tm_mon + 1, tm.tm_mday);
+	int dn = snprintf(dir, sizeof(dir), "%s/%04d-%02d-%02d", st->base_path, tm.tm_year + 1900,
+			  tm.tm_mon + 1, tm.tm_mday);
+	if (st->hour_dirs && dn > 0 && (size_t)dn < sizeof(dir))
+		snprintf(dir + dn, sizeof(dir) - (size_t)dn, "/%02d", tm.tm_hour);
 	rss_mkdir_p(dir);
 
 	/* Filename: HH-MM-SS.mp4, HH-MM-SS_<suffix>.mp4 */
@@ -360,26 +364,101 @@ static void free_names(char **names, int count)
 	free(names);
 }
 
+static bool is_mp4(const char *n);
+
+static bool is_hour_dir(const char *n)
+{
+	return strlen(n) == 2 && n[0] >= '0' && n[0] <= '2' && n[1] >= '0' && n[1] <= '9';
+}
+
+typedef struct {
+	char *name; /* basename, the sort and group key */
+	char path[1024];
+} day_file_t;
+
+static int day_file_cmp(const void *a, const void *b)
+{
+	return strcmp(((const day_file_t *)a)->name, ((const day_file_t *)b)->name);
+}
+
+/* Files of one day, flat or in hour subdirectories, oldest name first.
+ * Names are HH-MM-SS[_tag].mp4 in both layouts, so they sort together. */
+static day_file_t *collect_day(const char *day_path, int *count)
+{
+	int n = 0, cap = 64;
+	day_file_t *out = malloc(cap * sizeof(*out));
+	int top_n;
+	char **top = scan_dir_sorted(day_path, &top_n);
+	*count = 0;
+	if (!out || !top) {
+		free(out);
+		if (top)
+			free_names(top, top_n);
+		return NULL;
+	}
+	for (int i = 0; i < top_n; i++) {
+		char sub[768];
+		snprintf(sub, sizeof(sub), "%s/%s", day_path, top[i]);
+		int sub_n = 0;
+		char **names = NULL;
+		bool hour = is_hour_dir(top[i]);
+		if (hour)
+			names = scan_dir_sorted(sub, &sub_n);
+		int m = hour ? sub_n : 1;
+		for (int k = 0; k < m; k++) {
+			if (n == cap) {
+				day_file_t *t = realloc(out, (size_t)cap * 2 * sizeof(*out));
+				if (!t)
+					break;
+				out = t;
+				cap *= 2;
+			}
+			if (hour)
+				snprintf(out[n].path, sizeof(out[n].path), "%s/%s", sub, names[k]);
+			else
+				snprintf(out[n].path, sizeof(out[n].path), "%s", sub);
+			out[n].name = strrchr(out[n].path, '/') + 1;
+			n++;
+		}
+		if (names)
+			free_names(names, sub_n);
+	}
+	free_names(top, top_n);
+	if (n > 1)
+		qsort(out, (size_t)n, sizeof(*out), day_file_cmp);
+	*count = n;
+	return out;
+}
+
+/* Remove a day's emptied hour directories, then the day itself */
+static void prune_day(const char *day_path)
+{
+	int n;
+	char **names = scan_dir_sorted(day_path, &n);
+	for (int i = 0; names && i < n; i++) {
+		if (!is_hour_dir(names[i]))
+			continue;
+		char sub[768];
+		snprintf(sub, sizeof(sub), "%s/%s", day_path, names[i]);
+		rmdir(sub);
+	}
+	if (names)
+		free_names(names, n);
+	rmdir(day_path);
+}
+
 /* Get total size of .mp4 files in a day directory */
 static int64_t dir_mp4_size(const char *dir_path)
 {
-	DIR *d = opendir(dir_path);
-	if (!d)
-		return 0;
-
+	int n;
+	day_file_t *f = collect_day(dir_path, &n);
 	int64_t total = 0;
-	struct dirent *ent;
-	while ((ent = readdir(d)) != NULL) {
-		size_t len = strlen(ent->d_name);
-		if (len < 4 || strcmp(ent->d_name + len - 4, ".mp4") != 0)
-			continue;
-		char fpath[768];
-		snprintf(fpath, sizeof(fpath), "%s/%s", dir_path, ent->d_name);
+	for (int i = 0; f && i < n; i++) {
 		struct stat st;
-		if (stat(fpath, &st) == 0)
+		if (is_mp4(f[i].name) && stat(f[i].path, &st) == 0)
 			total += st.st_size;
 	}
-	closedir(d);
+	free(f);
 	return total;
 }
 
@@ -467,20 +546,19 @@ static int enforce_limit_locked(rmr_storage_t *st)
 		char dir_path[512];
 		snprintf(dir_path, sizeof(dir_path), "%s/%s", st->base_path, days[i]);
 		int file_count;
-		char **files = scan_dir_sorted(dir_path, &file_count);
+		day_file_t *files = collect_day(dir_path, &file_count);
 		if (!files)
 			continue;
 		int j = 0;
 		while (j < file_count && freed < need) {
-			size_t key = strcspn(files[j], "_.");
+			const char *first = files[j].name;
+			size_t key = strcspn(first, "_.");
 			int g = j;
 			bool in_use = false;
-			while (g < file_count && strncmp(files[g], files[j], key) == 0 &&
-			       (files[g][key] == '_' || files[g][key] == '.')) {
-				char fpath[768];
-				snprintf(fpath, sizeof(fpath), "%s/%s", dir_path, files[g]);
+			while (g < file_count && strncmp(files[g].name, first, key) == 0 &&
+			       (files[g].name[key] == '_' || files[g].name[key] == '.')) {
 				for (int o = 0; o < held_n && !in_use; o++)
-					in_use = strcmp(held[o], fpath) == 0;
+					in_use = strcmp(held[o], files[g].path) == 0;
 				g++;
 			}
 			if (g == j)
@@ -491,12 +569,10 @@ static int enforce_limit_locked(rmr_storage_t *st)
 				continue;
 			}
 			for (int k = j; k < g; k++) {
-				if (!is_mp4(files[k]))
+				if (!is_mp4(files[k].name))
 					continue;
-				char fpath[768];
 				struct stat fst;
-				snprintf(fpath, sizeof(fpath), "%s/%s", dir_path, files[k]);
-				if (stat(fpath, &fst) == 0 && unlink(fpath) == 0) {
+				if (stat(files[k].path, &fst) == 0 && unlink(files[k].path) == 0) {
 					freed += fst.st_size;
 					deleted++;
 					/* a fragmented segment's truncate holds f2fs locks
@@ -507,8 +583,8 @@ static int enforce_limit_locked(rmr_storage_t *st)
 			}
 			j = g;
 		}
-		free_names(files, file_count);
-		rmdir(dir_path); /* only once empty */
+		free(files);
+		prune_day(dir_path); /* only what is empty */
 	}
 	free_names(days, day_count);
 
