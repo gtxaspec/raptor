@@ -125,25 +125,33 @@ static uint32_t gps_capacity(int sec)
 	return (uint32_t)sec + 120; /* boundary waits for an IDR, pre-roll */
 }
 
-static void telematics_poll(rmr_state_t *st)
+/* now: retry the open regardless of the backoff */
+static bool telematics_attach(rmr_state_t *st, bool now)
 {
 	if (!st->gps)
-		return;
-	int64_t now = rss_timestamp_us();
+		return false;
+	int64_t t = rss_timestamp_us();
 	if (st->tele_ring && rss_ring_stale(st->tele_ring)) {
 		rss_ring_close(st->tele_ring);
 		st->tele_ring = NULL;
 	}
 	if (!st->tele_ring) {
-		if (now < st->tele_retry_us)
-			return;
-		st->tele_retry_us = now + TELE_RETRY_US;
+		if (!now && t < st->tele_retry_us)
+			return false;
+		st->tele_retry_us = t + TELE_RETRY_US;
 		st->tele_ring = rss_ring_open(RTD_RING);
 		if (!st->tele_ring)
-			return;
+			return false;
 		st->tele_read_seq = atomic_load(&rss_ring_get_header(st->tele_ring)->write_seq);
 		RSS_INFO("telematics ring attached");
 	}
+	return true;
+}
+
+static void telematics_poll(rmr_state_t *st)
+{
+	if (!telematics_attach(st, false))
+		return;
 
 	rtd_record_t r;
 	uint32_t len;
@@ -242,7 +250,7 @@ static int start_segment(rmr_track_t *t)
 	}
 
 	setup_mux_tracks(t->mux, t);
-	if (st->gps)
+	if (telematics_attach(st, true))
 		rmr_mux_enable_gps(t->mux, gps_capacity(seg_len));
 	t->segment_fd = fd;
 	t->segment_bytes = 0;
@@ -323,7 +331,7 @@ static int open_clip(rmr_track_t *t)
 	t->clip_bytes = 0;
 
 	setup_mux_tracks(t->clip_mux, t);
-	if (st->gps)
+	if (telematics_attach(st, true))
 		rmr_mux_enable_gps(t->clip_mux,
 				   gps_capacity(st->clip_length_sec + st->prebuffer_sec));
 	if (st->sign_enabled)
