@@ -757,19 +757,22 @@ void ric_poll_exposure(ric_state_t *st)
 				(st->settings.gpio_irled2 >= 0 && st->settings.ir940_enabled);
 		bool ir_lit = ir_banks && st->current_mode == RIC_MODE_NIGHT && !st->probe_active;
 
+		/* The running max must not learn from a probe: with the IR
+		 * lifted a dark room reads ceiling gain, and adopting it would
+		 * both wreck the ratio and re-arm the dip trigger into a blink
+		 * loop. It does raise a baseline of 0: one sampled through a
+		 * dead gain readback (T41 gc4023) leaves the day threshold at
+		 * 0 for good, and with the IR lit the luma test cannot end the
+		 * night either. Day mode zeroes the baseline; it stays 0 there. */
+		if (have_gain && st->current_mode == RIC_MODE_NIGHT && !st->probe_active &&
+		    total_gain > st->night_gain_baseline) {
+			RSS_DEBUG("night baseline raised %u -> %u (scene showed its "
+				  "real dark reading)",
+				  st->night_gain_baseline, total_gain);
+			st->night_gain_baseline = total_gain;
+			st->night_ev_baseline = ev;
+		}
 		if (have_gain && st->night_gain_baseline > 0) {
-			/* The running max must not learn from a probe: with
-			 * the IR lifted a dark room reads ceiling gain, and
-			 * adopting it would both wreck the ratio and re-arm
-			 * the dip trigger into a blink loop. */
-			if (st->current_mode == RIC_MODE_NIGHT && !st->probe_active &&
-			    total_gain > st->night_gain_baseline) {
-				RSS_DEBUG("night baseline raised %u -> %u (scene showed its "
-					  "real dark reading)",
-					  st->night_gain_baseline, total_gain);
-				st->night_gain_baseline = total_gain;
-				st->night_ev_baseline = ev;
-			}
 			uint32_t day_thr =
 				st->night_gain_baseline * (uint32_t)st->settings.day_gain_pct / 100;
 			want_day = (total_gain < day_thr);

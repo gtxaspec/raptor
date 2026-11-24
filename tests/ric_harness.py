@@ -661,6 +661,69 @@ def night_baselines(log):
         r"night baseline(?:: gain=| raised \d+ -> | re-anchored at )(\d+)", log)]
 
 
+def scenario_baseline_zero_repair(stub, watch):
+    """A night baseline sampled while the vendor gain readback was dead
+    (valid field, value 0 -- T41 gc4023) leaves the ratio threshold at 0
+    and the lit-IR guard blocks the luma day test, so night never ends.
+    The first real night reading must raise it like any low baseline."""
+    stub.set_scene(luma=120, gain=500, ev=4000)
+    ric = Ric("zerobase", LUMA_CONF)
+    if not ric.wait_running():
+        result(False, "baseline-zero-repair: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    time.sleep(0.5)
+
+    mm = stub.mark()
+    stub.set_scene(luma=17, gain=20000, ev=60000)
+    if not wait_for(lambda: "night" in stub.modes_since(mm), 5):
+        result(False, "baseline-zero-repair: night entry", str(stub.modes_since(mm)))
+        ric.stop()
+        return
+    stub.set_scene(luma=17, gain=0, ev=60000,
+                   valid_mask=(1 << 0) | (1 << 1) | (1 << 2) | (1 << 3))
+    ok = wait_for(lambda: "night baseline: gain=0" in ric.read_log(), 8)
+    result(ok, "baseline-zero-repair: the dead readback lands a zero baseline",
+           ric.read_log()[-300:])
+
+    stub.set_scene(luma=8, gain=20000, ev=80000)
+    ok = wait_for(lambda: night_baselines(ric.read_log())[-1:] == [20000], 4)
+    result(ok, "baseline-zero-repair: the first real reading raises it",
+           str(night_baselines(ric.read_log())))
+
+    mm2 = stub.mark()
+    stub.set_scene(luma=45, gain=3000, ev=3000)
+    ok = wait_for(lambda: "day" in stub.modes_since(mm2), 8)
+    result(ok, "baseline-zero-repair: the ratio exits to day at dawn",
+           str(stub.modes_since(mm2)) + " " + ric.read_log()[-300:])
+    ric.stop()
+
+
+def scenario_baseline_zero_day(stub, watch):
+    """A day switch zeroes the night baseline; a day reading must not
+    refill it."""
+    stub.set_scene(luma=120, gain=500, ev=4000)
+    ric = Ric("zerobaseday", LUMA_CONF)
+    if not ric.wait_running():
+        result(False, "baseline-zero-day: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    mm = stub.mark()
+    stub.set_scene(luma=5, gain=20000, ev=100000)
+    wait_for(lambda: "night" in stub.modes_since(mm), 5)
+    wait_for(lambda: "night baseline: gain=20000" in ric.read_log(), 5)
+    mm = stub.mark()
+    stub.set_scene(luma=120, gain=500, ev=4000)
+    ok = wait_for(lambda: "day" in stub.modes_since(mm), 8)
+    result(ok, "baseline-zero-day: dawn switches to day", str(stub.modes_since(mm)))
+    n = len(ric.read_log())
+    time.sleep(10 * POLL_MS / 1000.0)
+    result(night_baselines(ric.read_log()[n:]) == [],
+           "baseline-zero-day: day readings leave the night baseline alone",
+           str(night_baselines(ric.read_log()[n:])))
+    ric.stop()
+
+
 def scenario_baseline_zero_probe(stub, watch):
     """With the baseline at 0, a recheck probe lifts the IR and the dark
     room reads near-ceiling gain. Adopting that would put the IR-lit gain
@@ -2542,6 +2605,8 @@ def main():
         scenario_cooldown,
         scenario_covered_lens_baseline,
         scenario_baseline_refresh,
+        scenario_baseline_zero_repair,
+        scenario_baseline_zero_day,
         scenario_baseline_zero_probe,
         scenario_probe_dawn,
         scenario_probe_dark_restore,
