@@ -446,6 +446,20 @@ esac
 [ -n "$R" ] && [ "$(ffprobe -v quiet -select_streams v -show_entries stream=codec_name,width -of csv=p=0 "$R")" = "hevc,320" ] &&
 	pass "late rear file is H.265 320 wide" || fail "late rear codec: $( [ -n "$R" ] && ffprobe -v quiet -select_streams v -show_entries stream=codec_name,width -of csv=p=0 "$R")"
 
+echo "--- no writable storage: standby without stall warnings ---"
+base_conf /proc/rmr-no-such-dir > "$WORK/standby.conf"
+printf 'mode = continuous\nstream = 0\n\n[log]\nlevel = debug\n' >> "$WORK/standby.conf"
+start rmr-standby "$OUT/rmr" -c "$WORK/standby.conf" -f -d
+RMR_PID=$LAST_PID
+sleep 4
+kill "$RMR_PID"
+wait "$RMR_PID" 2> /dev/null
+if grep -q "standing by" "$WORK/rmr-standby.log" && ! grep -q "main loop stalled" "$WORK/rmr-standby.log"; then
+	pass "standby sleeps without stall warnings"
+else
+	fail "standby: $(grep -c 'main loop stalled' "$WORK/rmr-standby.log") stall warnings"
+fi
+
 for l in "$WORK"/rmr*.log; do
 	if grep -q "ERROR: AddressSanitizer\|runtime error:\|LeakSanitizer" "$l"; then
 		fail "sanitizer report in $(basename "$l")"

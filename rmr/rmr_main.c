@@ -1545,6 +1545,7 @@ static void record_loop(rmr_state_t *st)
 				RSS_WARN("no writable storage: standing by, rings released");
 			}
 			usleep(1000000);
+			iter_us = rss_timestamp_us(); /* a chosen wait, not a stall */
 			continue;
 		}
 		if (standby) {
