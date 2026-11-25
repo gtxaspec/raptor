@@ -117,7 +117,7 @@ int rcd_send_all(int fd, const void *data, size_t len, int timeout_ms)
 
 bool rcd_should_run(rcd_cam_t *c)
 {
-	return *rs.running && !atomic_load(&c->restart);
+	return rss_running(rs.running) && !atomic_load(&c->restart);
 }
 
 void rcd_set_fw(rcd_cam_t *c, const char *fw)
@@ -292,7 +292,7 @@ static void power_cycle(const char *why)
 	pthread_mutex_lock(&rs.power_lock);
 	RSS_WARN("power-cycling the cameras: %s", why);
 	gpio_write(rs.power_gpio, 0);
-	for (int i = 0; i < 30 && *rs.running; i++)
+	for (int i = 0; i < 30 && rss_running(rs.running); i++)
 		usleep(100000);
 	if (gpio_write(rs.power_gpio, 1) < 0)
 		RSS_WARN("cannot switch camera power (gpio %d)", rs.power_gpio);
@@ -304,13 +304,13 @@ static void *cam_thread(void *arg)
 	rcd_cam_t *c = arg;
 	int failed = 0;
 
-	while (*rs.running) {
+	while (rss_running(rs.running)) {
 		atomic_store(&c->restart, false);
 		atomic_store(&c->state, ST_CONNECTING);
 		uint32_t before = atomic_load(&c->sessions);
 		int ret = c->driver->session(c);
 		c->st[RCD_MAIN].open = c->st[RCD_SUB].open = false;
-		if (!*rs.running)
+		if (!rss_running(rs.running))
 			break;
 		bool streamed = atomic_load(&c->sessions) != before;
 		/* a camera that answers but never gets to streaming may be wedged */
@@ -324,8 +324,9 @@ static void *cam_thread(void *arg)
 			failed = 0;
 		}
 		atomic_store(&c->state, ret < 0 ? ST_ERROR : ST_CONNECTING);
-		for (int64_t until = rss_timestamp_us() + RCD_RETRY_US;
-		     *rs.running && !atomic_load(&c->restart) && rss_timestamp_us() < until;)
+		int64_t until = rss_timestamp_us() + RCD_RETRY_US;
+		while (rss_running(rs.running) && !atomic_load(&c->restart) &&
+		       rss_timestamp_us() < until)
 			usleep(100000);
 	}
 	atomic_store(&c->state, ST_IDLE);
