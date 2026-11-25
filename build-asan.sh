@@ -215,7 +215,9 @@ if [ ! -f "$SRT_PREFIX/lib/libsrt.a" ]; then
     fi
     echo "=== libsrt $SRT_VER (cmake + mbedTLS) ==="
     mkdir -p "$SRT_BUILD"
+    # SRT 1.5.4 asks for CMake 2.8.12, which CMake 4 refuses outright
     cmake -S "$SRT_DIR" -B "$SRT_BUILD" \
+        -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
         -DCMAKE_C_FLAGS="$SANITIZE -O1 -g" \
         -DCMAKE_CXX_FLAGS="$SANITIZE -O1 -g" \
         -DCMAKE_BUILD_TYPE=Debug \
