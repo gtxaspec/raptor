@@ -291,7 +291,7 @@ wait "$IMP_PID" 2>/dev/null || true
 # the driver wins over the config's ivdc, loudly when the config said
 # otherwise. Where it cannot (other SoCs), the config is trusted as before.
 echo "=== ISP direct mode (IVDC) ==="
-# direct_run <label> <stream0 line or -> <osd: on|off|on-no-isp> [env...]
+# direct_run <label> <"[section] line", stream0 line, or -> <osd: on|off|on-no-isp> [env...]
 direct_run() {
     dr_label="$1"
     dr_line="$2"
@@ -300,7 +300,15 @@ direct_run() {
     DR_LOG="$LOG_DIR/rvd-direct-$dr_label.log"
     dr_conf="$LOG_DIR/direct-$dr_label.conf"
     cp "$CONFIG" "$dr_conf"
-    [ "$dr_line" != "-" ] && sed -i "/^\[stream0\]/a $dr_line" "$dr_conf"
+    dr_sect=stream0
+    case "$dr_line" in
+    \[*\]\ *)
+        dr_sect="${dr_line%%]*}"
+        dr_sect="${dr_sect#[}"
+        dr_line="${dr_line#*] }"
+        ;;
+    esac
+    [ "$dr_line" != "-" ] && sed -i "/^\[$dr_sect\]/a $dr_line" "$dr_conf"
     case "$dr_osd" in
     on) sed -i '/^\[osd\]/,/^$/ s/^enabled = false/enabled = true/' "$dr_conf" ;;
     on-no-isp) sed -i '/^\[osd\]/,/^$/ s/^enabled = false/enabled = true\nisp_osd = false/' "$dr_conf" ;;
@@ -337,10 +345,19 @@ direct_expect "direct driver: the main snapshot joins the IVDC group" "jpeg 1920
 direct_expect "direct driver: the mains take the ISP OSD" "using hybrid OSD"
 direct_absent "direct driver with no ivdc key is not a disagreement" "WARN.*ivdc"
 
+# In direct mode the sub's encoder queues behind the IVDC main and hands
+# its buffers back late: with two the ISP dropped a third of the sub's
+# frames on a T32LQ (19 of 29 fps), with three it kept them all.
+direct_expect "direct driver: the sub framesource gets a third buffer" "fs chn 1: 640x360 .* nr_vbs=3"
+direct_expect "direct driver: the IVDC main keeps two buffers" "fs chn 0: 1920x1080 .* nr_vbs=2"
+direct_run driver-direct-sub-vbs "[stream1] nr_vbs = 2" off RSS_MOCK_DIRECT_SENSORS=1 RSS_MOCK_ISP_OSD=1
+direct_expect "direct driver: a configured sub nr_vbs is trusted" "fs chn 1: 640x360 .* nr_vbs=2"
+
 direct_run driver-memory "ivdc = true" off RSS_MOCK_DIRECT_SENSORS=0
 direct_expect "memory-mode driver: ivdc = true is overruled" "enc chn 0 video 1920x1080 ivdc=0"
 direct_expect "memory-mode driver: the overrule is a warning naming the driver" "WARN.*ivdc.*direct_mode=0"
 direct_expect "memory-mode driver: the main snapshot is a plain channel" "jpeg 1920x1080 ivdc=0"
+direct_expect "memory-mode driver: the sub keeps two buffers" "fs chn 1: 640x360 .* nr_vbs=2"
 
 direct_run driver-direct-cfg-off "ivdc = false" off RSS_MOCK_DIRECT_SENSORS=1 RSS_MOCK_ISP_OSD=1
 direct_expect "direct driver: ivdc = false is overruled" "enc chn 0 video 1920x1080 ivdc=1"

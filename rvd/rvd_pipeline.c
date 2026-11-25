@@ -737,6 +737,18 @@ static void apply_isp_direct_mode(rvd_state_t *st, rss_config_t *cfg)
 			RSS_INFO("%s: IVDC, the ISP driver feeds it straight to the encoder",
 				 s->cfg_sect);
 	}
+
+	/* A direct sensor's other channels encode behind its IVDC main and hand
+	 * their buffers back late: with two, the ISP dropped a third of a T32LQ
+	 * sub stream's frames (19 of 29 fps). A third buffer keeps them. */
+	for (int i = 0; i < st->stream_count; i++) {
+		rvd_stream_t *s = &st->streams[i];
+		if (s->fs_chn % 3 == 0 || s->sensor_idx >= n || !s->nr_vbs_auto ||
+		    s->fs_cfg.nr_vbs >= 3)
+			continue;
+		s->fs_cfg.nr_vbs = 3;
+		RSS_INFO("%s: 3 frame buffers beside an IVDC main", s->cfg_sect);
+	}
 }
 
 static int fs_base_channel(int sensor_idx)
