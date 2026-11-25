@@ -200,7 +200,7 @@ kill "$RCD_PID"
 wait "$RCD_PID" 2> /dev/null
 RC=$?
 [ $RC -eq 0 ] && pass "rcd exits cleanly" || fail "rcd exit status $RC"
-if grep -q "ERROR: AddressSanitizer\|runtime error:\|LeakSanitizer" "$WORK/rcd.log"; then
+if grep -q "ERROR: AddressSanitizer\|runtime error:\|LeakSanitizer\|WARNING: ThreadSanitizer" "$WORK/rcd.log"; then
 	fail "sanitizer report"
 	grep -A20 "Sanitizer\|runtime error" "$WORK/rcd.log" | head -40
 else

@@ -461,7 +461,7 @@ else
 fi
 
 for l in "$WORK"/rmr*.log; do
-	if grep -q "ERROR: AddressSanitizer\|runtime error:\|LeakSanitizer" "$l"; then
+	if grep -q "ERROR: AddressSanitizer\|runtime error:\|LeakSanitizer\|WARNING: ThreadSanitizer" "$l"; then
 		fail "sanitizer report in $(basename "$l")"
 		grep -A20 "Sanitizer\|runtime error" "$l" | head -40
 	fi
