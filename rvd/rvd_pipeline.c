@@ -16,6 +16,7 @@
 
 #include "rvd.h"
 #include "rvd_ring_size.h"
+#include "rvd_osd_pool.h"
 
 #define RVD_PAGE_SIZE 4096u
 
@@ -747,69 +748,6 @@ static int clamp_ring_slots(int slots, const char *key)
 	return pow2;
 }
 
-/* OSD pool sizing callback — estimates per-element region bytes */
-struct osd_pool_ctx {
-	rss_config_t *cfg;
-	int font_size;
-	int main_w;
-	int main_h;
-	int sub_w;
-	int sub_h;
-	bool has_sub;
-	uint32_t total;
-};
-
-static void osd_pool_cb(const char *section, void *ud)
-{
-	struct osd_pool_ctx *c = ud;
-	const char *dot = strchr(section, '.');
-	if (!dot)
-		return;
-	const char *type = rss_config_get_str(c->cfg, section, "type", "text");
-	int efs = rss_config_get_int(c->cfg, section, "font_size", 0);
-	if (efs <= 0)
-		efs = c->font_size;
-	uint32_t adv = (uint32_t)(efs * 10 / 24);
-	if (adv < 10)
-		adv = 10;
-	uint32_t eh = (uint32_t)(efs * 36 / 24);
-	if (eh < 36)
-		eh = 36;
-
-	if (strcmp(type, "text") == 0) {
-		int mc = rss_config_get_int(c->cfg, section, "max_chars", 20);
-		uint32_t ew = mc * adv;
-		c->total += ew * eh * 4;
-		if (c->has_sub && c->main_w > 0 && c->main_h > 0) {
-			uint32_t sew = ew * c->sub_w / c->main_w;
-			uint32_t seh = eh * c->sub_h / c->main_h;
-			if (seh < 16)
-				seh = 16;
-			c->total += sew * seh * 4;
-		}
-	} else if (strcmp(type, "image") == 0) {
-		int iw = rss_config_get_int(c->cfg, section, "width", 100);
-		int ih = rss_config_get_int(c->cfg, section, "height", 30);
-		c->total += (uint32_t)(iw * ih * 4);
-		if (c->has_sub)
-			c->total += (uint32_t)(iw * ih * 4);
-	} else if (strcmp(type, "receipt") == 0) {
-		int ml = rss_config_get_int(c->cfg, section, "max_lines", 20);
-		int mll = rss_config_get_int(c->cfg, section, "max_line_length", 80);
-		uint32_t rw = mll * adv;
-		uint32_t rh = ml * eh;
-		c->total += rw * rh * 4;
-		if (c->has_sub && c->main_w > 0 && c->main_h > 0) {
-			uint32_t srw = rw * c->sub_w / c->main_w;
-			uint32_t srh = rh * c->sub_h / c->main_h;
-			c->total += srw * srh * 4;
-		}
-	} else if (strcmp(type, "overlay") == 0) {
-		if (c->has_sub)
-			c->total += (uint32_t)(c->sub_w * c->sub_h * 4);
-	}
-}
-
 int rvd_pipeline_init(rvd_state_t *st)
 {
 	rss_config_t *cfg = st->cfg;
@@ -956,28 +894,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 	 * init from the sensor; the values stored by these reads are
 	 * display-only and never become configuration. */
 	{
-		int font_size = rss_config_get_int(cfg, "osd", "font_size", 24);
-		if (font_size < 10)
-			font_size = 10;
-		int main_w = rss_config_get_int(cfg, "stream0", "width", 2560);
-		int main_h = rss_config_get_int(cfg, "stream0", "height", 1440);
-		int sub_w = rss_config_get_int(cfg, "stream1", "width", 640);
-		int sub_h = rss_config_get_int(cfg, "stream1", "height", 360);
-		bool has_sub = rss_config_get_bool(cfg, "stream1", "enabled", true);
-
-		uint32_t osd_pool = 0;
-		struct osd_pool_ctx pctx = {
-			.cfg = cfg,
-			.font_size = font_size,
-			.main_w = main_w,
-			.main_h = main_h,
-			.sub_w = sub_w,
-			.sub_h = sub_h,
-			.has_sub = has_sub,
-			.total = 0,
-		};
-		rss_config_foreach_section(cfg, "osd.", osd_pool_cb, &pctx);
-		osd_pool = pctx.total;
+		uint32_t osd_pool = rvd_osd_pool_bytes(cfg);
 
 		/* Privacy cover regions (no bitmap, just color — negligible) */
 		/* 25% headroom for SDK alignment + metadata */
@@ -988,7 +905,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 			osd_pool = 448 * 1024;
 		osd_pool = (osd_pool + 0xFFFFu) & ~0xFFFFu;
 		RSS_HAL_CALL(st->ops, osd_set_pool_size, st->hal_ctx, osd_pool);
-		RSS_DEBUG("osd pool: %u KB (font_size=%d)", osd_pool / 1024, font_size);
+		RSS_DEBUG("osd pool: %u KB", osd_pool / 1024);
 	}
 
 	/* ── 4. Init HAL (brings up ISP + sensor(s)) ── */
