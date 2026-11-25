@@ -166,7 +166,7 @@ if [ "$SAN_MODE" = "tsan" ]; then
     UNIT_SAN="thread"
 fi
 
-for repo in raptor-ipc raptor-common; do
+for repo in raptor-ipc raptor-common raptor-hal; do
     REPO_DIR="$RAPTOR_DIR/../$repo"
     if [ -d "$REPO_DIR/tests" ]; then
         if (cd "$REPO_DIR/tests" && make clean > /dev/null 2>&1 && make tests SAN="$UNIT_SAN" > /dev/null 2>&1 && ./tests 2>/dev/null); then
