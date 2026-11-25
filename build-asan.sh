@@ -449,10 +449,11 @@ $CC $CFLAGS $HAL_CFLAGS -c "$RAPTOR_DIR/rvd/rvd_pipeline.c" -o "$OUT/rvd_pipelin
 $CC $CFLAGS $HAL_CFLAGS -c "$RAPTOR_DIR/rvd/rvd_frame_loop.c" -o "$OUT/rvd_frame_loop.o"
 $CC $CFLAGS $HAL_CFLAGS -c "$RAPTOR_DIR/rvd/rvd_ctrl.c" -o "$OUT/rvd_ctrl.o"
 $CC $CFLAGS $HAL_CFLAGS -c "$RAPTOR_DIR/rvd/rvd_osd.c" -o "$OUT/rvd_osd.o"
+$CC $CFLAGS $HAL_CFLAGS -c "$RAPTOR_DIR/rvd/rvd_osd_pos.c" -o "$OUT/rvd_osd_pos.o"
 $CC $CFLAGS $HAL_CFLAGS -c "$RAPTOR_DIR/rvd/rvd_ivs.c" -o "$OUT/rvd_ivs.o"
 $CC $CFLAGS $HAL_CFLAGS -c "$RAPTOR_DIR/rvd/rvd_ring_size.c" -o "$OUT/rvd_ring_size.o"
 $CC $CFLAGS $HAL_CFLAGS -c "$RAPTOR_DIR/rvd/rvd_frame_result.c" -o "$OUT/rvd_frame_result.o"
-$CC -o "$OUT/rvd" "$OUT"/rvd_main.o "$OUT"/rvd_pipeline.o "$OUT"/rvd_frame_loop.o "$OUT"/rvd_ctrl.o "$OUT"/rvd_osd.o "$OUT"/rvd_ivs.o "$OUT"/rvd_ring_size.o "$OUT"/rvd_frame_result.o $LIBS_HAL $LDFLAGS
+$CC -o "$OUT/rvd" "$OUT"/rvd_main.o "$OUT"/rvd_pipeline.o "$OUT"/rvd_frame_loop.o "$OUT"/rvd_ctrl.o "$OUT"/rvd_osd.o "$OUT"/rvd_osd_pos.o "$OUT"/rvd_ivs.o "$OUT"/rvd_ring_size.o "$OUT"/rvd_frame_result.o $LIBS_HAL $LDFLAGS
 echo "  -> rvd"
 
 echo "=== RAD (mock HAL) ==="

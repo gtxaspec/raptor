@@ -13,6 +13,7 @@ extern SUITE(ring_suite);
 extern SUITE(vui_suite);
 extern SUITE(ring_size_suite);
 extern SUITE(frame_result_suite);
+extern SUITE(osd_pos_suite);
 extern SUITE(rsp_url_suite);
 extern SUITE(rsp_amf0_suite);
 extern SUITE(rsp_chunk_suite);
@@ -54,6 +55,7 @@ int main(int argc, char **argv)
 	RUN_SUITE(vui_suite);
 	RUN_SUITE(ring_size_suite);
 	RUN_SUITE(frame_result_suite);
+	RUN_SUITE(osd_pos_suite);
 	RUN_SUITE(rsp_url_suite);
 	RUN_SUITE(rsp_amf0_suite);
 	RUN_SUITE(rsp_chunk_suite);

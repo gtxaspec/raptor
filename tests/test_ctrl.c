@@ -273,17 +273,6 @@ void rvd_osd_set_privacy(rvd_state_t *st, bool enable, int stream)
 	}
 }
 
-void rvd_osd_calc_position(int sw, int sh, int rw, int rh, const char *p, int *x, int *y)
-{
-	(void)sw;
-	(void)sh;
-	(void)rw;
-	(void)rh;
-	(void)p;
-	*x = 0;
-	*y = 0;
-}
-
 /* One region the osd-show tests can act on. Anything else is "not found",
  * which is the answer for a name no stream carries. */
 static rvd_osd_region_t test_region;
