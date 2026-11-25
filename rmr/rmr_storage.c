@@ -43,6 +43,8 @@ struct rmr_storage {
 	char pending[256]; /* main loop: picked, not applied yet */
 	bool pending_set;
 	int64_t next_wake_us;
+	bool root_checked, root_small; /* main loop: size of the root, once per mount */
+	bool small_warned;	       /* main loop: the small-root warning, once per root */
 	/* cleanup off the main loop: deleting 100+ MB files on a busy card
 	 * took up to 0.8 s there, enough to overflow a 32-slot ring */
 	pthread_mutex_t clean_lock;
@@ -308,6 +310,8 @@ int rmr_storage_pick_root(char *out, int out_size)
 		    strncmp(mnt, pick_prefix, strlen(pick_prefix)) != 0 || pick_fs(mnt, &v) != 0)
 			continue;
 		uint64_t size = (uint64_t)v.f_blocks * v.f_frsize;
+		if (size < RMR_AUTO_ROOT_MIN_MB * 1024ULL * 1024ULL)
+			continue;
 		if (size > best) {
 			best = size;
 			snprintf(out, out_size, "%s/raptor", mnt);
@@ -356,11 +360,13 @@ static void *pick_thread(void *arg)
 		pthread_mutex_unlock(&st->pick_lock);
 
 		char root[sizeof(st->base_path) - sizeof(st->subdir)], path[sizeof(st->base_path)];
-		rmr_storage_pick_root(root, sizeof(root));
+		/* no card big enough: keep the current root and wait there,
+		 * rather than fall back to what may be the small partition */
+		bool found = rmr_storage_pick_root(root, sizeof(root)) == 0;
 		snprintf(path, sizeof(path), "%s%s", root, st->subdir);
 
 		pthread_mutex_lock(&st->pick_lock);
-		if (strcmp(path, st->picked) != 0) {
+		if (found && strcmp(path, st->picked) != 0) {
 			snprintf(st->picked, sizeof(st->picked), "%s", path);
 			__atomic_store_n(&st->picked_new, true, __ATOMIC_RELEASE);
 		}
@@ -393,6 +399,8 @@ static void storage_take_pick(rmr_storage_t *st)
 	RSS_INFO("storage: %s", st->pending);
 	snprintf(st->base_path, sizeof(st->base_path), "%s", st->pending);
 	st->refuse_logged = false;
+	st->root_checked = false;
+	st->small_warned = false;
 	st->pending_set = false;
 	pthread_mutex_unlock(&st->clean_lock);
 }
@@ -410,17 +418,79 @@ static void storage_wake_picker(rmr_storage_t *st)
 	pthread_mutex_unlock(&st->pick_lock);
 }
 
+/* Is path on a card partition (/dev/mmcblk* in the pick mount table)? */
+static bool on_card_mount(const char *path)
+{
+	char line[512], dev[128], mnt[256];
+	bool on = false;
+	FILE *f = fopen(pick_mounts, "r");
+	while (f && !on && fgets(line, sizeof(line), f)) {
+		if (sscanf(line, "%127s %255s", dev, mnt) != 2 ||
+		    strncmp(dev, "/dev/mmcblk", 11) != 0)
+			continue;
+		size_t n = strlen(mnt);
+		on = strncmp(path, mnt, n) == 0 && (path[n] == '\0' || path[n] == '/');
+	}
+	if (f)
+		fclose(f);
+	return on;
+}
+
+/* Is the file system under the auto root smaller than RMR_AUTO_ROOT_MIN_MB?
+ * Sized on the deepest existing directory (the mount point before the
+ * root is created). Cached once the root is writable; until then the
+ * main loop only polls about once a second. Warns once per root. */
+static bool root_is_small(rmr_storage_t *st, bool writable)
+{
+	if (st->root_checked)
+		return st->root_small;
+	char anc[sizeof(st->base_path)];
+	snprintf(anc, sizeof(anc), "%s", st->base_path);
+	struct stat sb;
+	while (stat(anc, &sb) != 0) {
+		char *slash = strrchr(anc, '/');
+		if (!slash || slash == anc)
+			return false;
+		*slash = '\0';
+	}
+	/* no card at all leaves only rootfs directories here: that is a
+	 * missing card, for the rootfs refusal and the waiting log to report */
+	if (!on_card_mount(anc))
+		return false;
+	struct statvfs v;
+	bool small = pick_fs(anc, &v) == 0 &&
+		     (uint64_t)v.f_blocks * v.f_frsize < RMR_AUTO_ROOT_MIN_MB * 1024ULL * 1024ULL;
+	if (small && !st->small_warned) {
+		RSS_WARN("storage: %s is under %d MB, not recording there", st->base_path,
+			 RMR_AUTO_ROOT_MIN_MB);
+		st->small_warned = true;
+	}
+	if (writable) {
+		st->root_checked = true;
+		st->root_small = small;
+	}
+	return small;
+}
+
 bool rmr_storage_available(rmr_storage_t *st)
 {
 	if (!st)
 		return false;
 	if (st->auto_root)
 		storage_take_pick(st);
-	if (access(st->base_path, W_OK) == 0)
-		return true;
-	if (st->auto_root)
+	bool ok = access(st->base_path, W_OK) == 0;
+	if (!ok && st->auto_root) {
+		st->root_checked = false;
 		storage_wake_picker(st);
-	if (storage_try_create(st))
+	}
+	/* the fallback root, picked when no card was big enough, can be the
+	 * small partition itself: stand by instead of filling it, and check
+	 * before auto-creating anything there */
+	if (st->auto_root && root_is_small(st, ok)) {
+		storage_wake_picker(st);
+		return false;
+	}
+	if (ok || storage_try_create(st))
 		return true;
 
 	int64_t now = rss_timestamp_us();

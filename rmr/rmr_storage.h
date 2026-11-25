@@ -27,9 +27,13 @@ typedef struct {
 
 #define RMR_STORAGE_DEFAULT_ROOT "/mnt/mmcblk0p1/raptor"
 
+/* A picked root is never a card partition smaller than this: the small
+ * FAT boot/update partition beside a recording one is not for video. */
+#define RMR_AUTO_ROOT_MIN_MB 512
+
 /* "<mount>/raptor" on the largest mounted card partition (/dev/mmcblk*
- * under /mnt). Returns 0, or -1 with RMR_STORAGE_DEFAULT_ROOT when no
- * card is mounted. */
+ * under /mnt) of at least RMR_AUTO_ROOT_MIN_MB. Returns 0, or -1 with
+ * RMR_STORAGE_DEFAULT_ROOT when there is none. */
 int rmr_storage_pick_root(char *out, int out_size);
 
 /* Tests: where rmr_storage_pick_root reads mounts, which mount points

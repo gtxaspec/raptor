@@ -1,6 +1,8 @@
 #include "greatest.h"
 #include "../rmr/rmr_storage.h"
 
+#include <rss_common.h>
+
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -456,7 +458,7 @@ static int fake_statvfs(const char *path, struct statvfs *v)
 
 /* Mount table listing the given partitions ("p1", "p2", ...), each with
  * its raptor directory present. */
-static void fake_mounts(const char *const *parts, int n)
+static void fake_mounts_mk(const char *const *parts, int n, bool raptor_dirs)
 {
 	char path[128], dir[128];
 	snprintf(path, sizeof(path), "%s/mounts", fake_root);
@@ -465,10 +467,16 @@ static void fake_mounts(const char *const *parts, int n)
 		snprintf(dir, sizeof(dir), "%s/%s", fake_root, parts[i]);
 		mkdir(dir, 0755);
 		snprintf(dir, sizeof(dir), "%s/%s/raptor", fake_root, parts[i]);
-		mkdir(dir, 0755);
+		if (raptor_dirs)
+			mkdir(dir, 0755);
 		fprintf(f, "/dev/mmcblk0%s %s/%s f2fs rw 0 0\n", parts[i], fake_root, parts[i]);
 	}
 	fclose(f);
+}
+
+static void fake_mounts(const char *const *parts, int n)
+{
+	fake_mounts_mk(parts, n, true);
 }
 
 static void fake_card_setup(void)
@@ -534,6 +542,125 @@ TEST storage_auto_root_follows_larger_partition(void)
 	fake_card_teardown();
 	ASSERT(first_ok);
 	ASSERTm("root did not move to the larger partition", moved);
+	PASS();
+}
+
+/* (b) only the 64 MB partition mounted: nothing qualifies, and the
+ * picker keeps the current root rather than moving to the fallback */
+TEST storage_auto_root_keeps_root_without_large_card(void)
+{
+	fake_card_setup();
+	const char *big[] = {"p2"};
+	fake_mounts(big, 1);
+	rmr_storage_config_t cfg = {.base_path = "", .segment_minutes = 1, .repick_ms = 20};
+	rmr_storage_t *st = rmr_storage_create(&cfg);
+	char p2[256], root[256];
+	snprintf(p2, sizeof(p2), "%s/p2/raptor", fake_root);
+
+	const char *small[] = {"p1"};
+	fake_mounts(small, 1);
+	int r = rmr_storage_pick_root(root, sizeof(root));
+	for (int i = 0; i < 20 && st; i++) {
+		usleep(10000);
+		rmr_storage_available(st);
+	}
+	char now[256];
+	snprintf(now, sizeof(now), "%s", st ? rmr_storage_path(st) : "");
+	rmr_storage_destroy(st);
+	fake_card_teardown();
+	ASSERT_EQ(-1, r);
+	ASSERT_STR_EQ(p2, now);
+	PASS();
+}
+
+static int count_in_file(const char *path, const char *needle)
+{
+	char line[512];
+	int n = 0;
+	FILE *f = fopen(path, "r");
+	while (f && fgets(line, sizeof(line), f))
+		n += strstr(line, needle) != NULL;
+	if (f)
+		fclose(f);
+	return n;
+}
+
+/* (c) a writable fallback root on the small partition: stand by, and say
+ * so once per mount, not once per frame */
+TEST storage_auto_root_small_fallback_stands_by(void)
+{
+	fake_card_setup();
+	const char *small[] = {"p1"};
+	fake_mounts(small, 1);
+	char log[128];
+	snprintf(log, sizeof(log), "%s/log", fake_root);
+	rss_log_init("test", RSS_LOG_WARN, RSS_LOG_TARGET_FILE, log);
+	rmr_storage_config_t cfg = {.base_path = "", .segment_minutes = 1, .repick_ms = 10000};
+	rmr_storage_t *st = rmr_storage_create(&cfg);
+	int avail = 0;
+	for (int i = 0; i < 5 && st; i++)
+		avail += rmr_storage_available(st);
+	int warns = count_in_file(log, "not recording there");
+	rmr_storage_destroy(st);
+	rss_log_init("test", RSS_LOG_INFO, RSS_LOG_TARGET_STDERR, NULL);
+	fake_card_teardown();
+	ASSERT(st);
+	ASSERT_EQ(0, avail);
+	ASSERT_EQ(1, warns);
+	PASS();
+}
+
+/* (e) the small fallback root is checked before auto-create: nothing,
+ * not even the raptor directory, is made on the small partition */
+TEST storage_auto_root_small_not_created(void)
+{
+	fake_card_setup();
+	const char *small[] = {"p1"};
+	fake_mounts_mk(small, 1, false);
+	char log[128];
+	snprintf(log, sizeof(log), "%s/log", fake_root);
+	rss_log_init("test", RSS_LOG_WARN, RSS_LOG_TARGET_FILE, log);
+	rmr_storage_config_t cfg = {.base_path = "", .segment_minutes = 1, .repick_ms = 10000};
+	rmr_storage_t *st = rmr_storage_create(&cfg);
+	int avail = 0;
+	for (int i = 0; i < 3 && st; i++)
+		avail += rmr_storage_available(st);
+	char dir[256];
+	snprintf(dir, sizeof(dir), "%s/p1/raptor", fake_root);
+	struct stat sb;
+	bool created = stat(dir, &sb) == 0;
+	int warns = count_in_file(log, "not recording there");
+	rmr_storage_destroy(st);
+	rss_log_init("test", RSS_LOG_INFO, RSS_LOG_TARGET_STDERR, NULL);
+	fake_card_teardown();
+	ASSERT(st);
+	ASSERT_EQ(0, avail);
+	ASSERT_FALSEm("raptor directory created on the small partition", created);
+	ASSERT_EQ(1, warns);
+	PASS();
+}
+
+/* (f) no card mounted at all: stand by, but say nothing about a small
+ * partition: the root's directories are on the rootfs */
+TEST storage_auto_root_no_card_no_small_warning(void)
+{
+	fake_card_setup();
+	fake_mounts_mk(NULL, 0, false);
+	char dir[256], log[128];
+	snprintf(dir, sizeof(dir), "%s/p1", fake_root);
+	mkdir(dir, 0755);
+	snprintf(log, sizeof(log), "%s/log", fake_root);
+	rss_log_init("test", RSS_LOG_WARN, RSS_LOG_TARGET_FILE, log);
+	rmr_storage_config_t cfg = {.base_path = "", .segment_minutes = 1, .repick_ms = 10000};
+	rmr_storage_t *st = rmr_storage_create(&cfg);
+	for (int i = 0; i < 3 && st; i++)
+		rmr_storage_available(st);
+	int warns = count_in_file(log, "not recording there");
+	rmr_storage_destroy(st);
+	rss_log_init("test", RSS_LOG_INFO, RSS_LOG_TARGET_STDERR, NULL);
+	fake_card_teardown();
+	ASSERT(st);
+	ASSERT_EQ(0, warns);
 	PASS();
 }
 
@@ -713,4 +840,8 @@ SUITE(storage_suite)
 	RUN_TEST(storage_auto_root_without_card);
 	RUN_TEST(storage_pick_root_prefers_largest);
 	RUN_TEST(storage_auto_root_follows_larger_partition);
+	RUN_TEST(storage_auto_root_keeps_root_without_large_card);
+	RUN_TEST(storage_auto_root_small_fallback_stands_by);
+	RUN_TEST(storage_auto_root_small_not_created);
+	RUN_TEST(storage_auto_root_no_card_no_small_warning);
 }
