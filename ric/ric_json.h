@@ -8,8 +8,10 @@
 
 /*
  * Fill any still-unset (-1) IR-cut / IR LED pins and non-explicit
- * actuator timing in c from the JSON device description at path. A
- * missing file is silent; a file that exists but cannot be used warns.
+ * actuator timing in c from the JSON device description at path, and
+ * select the tmi8152 IR-cut backend where the description asks for
+ * it. A missing file is silent; a file that exists but cannot be used
+ * warns.
  */
 void ric_json_gpio_load(ric_config_t *c, const char *path);
 
