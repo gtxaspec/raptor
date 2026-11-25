@@ -2375,6 +2375,76 @@ else
         "paused client still connected 10s after set-resolution"
 fi
 
+# ── DESCRIBE right after rsd starts carries the parameter sets ──
+# A fresh reader has cached no SPS/PPS until its first keyframe, and a
+# client that reconnects the moment the port opens (go2rtc after a
+# restart) keeps the SDP it got for as long as it stays connected.
+# Without sprop-parameter-sets go2rtc builds its MSE init segment from a
+# placeholder SPS. Restart rsd, DESCRIBE both streams as soon as the
+# port accepts, and require the parameter sets in every answer.
+EARLY_RUNS=5
+EARLY_BAD=0
+EARLY_LAST=""
+for run in $(seq 1 $EARLY_RUNS); do
+    pkill -f "$OUT/rsd -c" 2>/dev/null || true
+    for i in $(seq 1 50); do
+        pgrep -f "$OUT/rsd -c" > /dev/null 2>&1 || break
+        sleep 0.1
+    done
+    "$OUT/rsd" -c "$CONFIG" -f -d > "$LOG_DIR/rsd-early-$run.log" 2>&1 &
+    DAEMON_PIDS="$DAEMON_PIDS $!"
+    EARLY_LAST=$(python3 - <<'EARLY_EOF'
+import socket, threading, time
+deadline = time.monotonic() + 10
+while True:
+    try:
+        socket.create_connection(("127.0.0.1", 15554), timeout=0.05).close()
+        break
+    except OSError:
+        if time.monotonic() > deadline:
+            print("NO_PORT"); raise SystemExit
+        time.sleep(0.005)
+res = {}
+def describe(path, want):
+    s = socket.create_connection(("127.0.0.1", 15554), timeout=5)
+    s.sendall(f"DESCRIBE rtsp://127.0.0.1:15554/{path} RTSP/1.0\r\n"
+              "CSeq: 1\r\nAccept: application/sdp\r\n\r\n".encode())
+    buf = b""
+    while True:
+        chunk = s.recv(4096)
+        if not chunk:
+            break
+        buf += chunk
+        head, sep, body = buf.partition(b"\r\n\r\n")
+        if sep:
+            n = [int(l.split(b":")[1]) for l in head.split(b"\r\n")
+                 if l.lower().startswith(b"content-length:")]
+            if not n or len(body) >= n[0]:
+                break
+    s.close()
+    res[path] = b" 200 " in buf.split(b"\r\n")[0] and all(w in buf for w in want)
+ts = [threading.Thread(target=describe, args=a) for a in
+      (("stream0", [b"sprop-parameter-sets="]),
+       ("stream1", [b"sprop-vps=", b"sprop-sps=", b"sprop-pps="]))]
+for t in ts:
+    t.start()
+for t in ts:
+    t.join()
+print(" ".join(f"{k}={'ok' if v else 'MISSING'}" for k, v in sorted(res.items())))
+EARLY_EOF
+)
+    case "$EARLY_LAST" in
+        "stream0=ok stream1=ok") ;;
+        *) EARLY_BAD=$((EARLY_BAD + 1)) ;;
+    esac
+done
+if [ "$EARLY_BAD" -eq 0 ]; then
+    pass "DESCRIBE right after rsd starts carries the parameter sets ($EARLY_RUNS restarts)"
+else
+    fail "DESCRIBE right after rsd starts carries the parameter sets" \
+        "$EARLY_BAD of $EARLY_RUNS restarts answered without them (last: $EARLY_LAST)"
+fi
+
 # ── Recovery invariants: RTP through disturbances ──
 # The slow-client legs above prove the server SURVIVES a stall; this
 # one proves the streams stay CORRECT through it: both tracks' RTP

@@ -198,6 +198,10 @@ typedef struct {
 	_Atomic uint16_t vps_len;
 	_Atomic uint16_t sps_len;
 	_Atomic uint16_t pps_len;
+
+	/* Set by a DESCRIBE that found no parameter sets cached; the reader
+	 * thread, which owns the ring, asks the producer for an IDR. */
+	atomic_bool params_wanted;
 } rsd_ring_ctx_t;
 
 /* Server state */
