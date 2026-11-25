@@ -127,7 +127,8 @@ struct rvd_state {
 
 	/* OSD */
 	bool osd_enabled;
-	bool use_isp_osd; /* true = ISP OSD (no bind chain), false = IPU OSD */
+	bool use_isp_osd;   /* true = ISP OSD (no bind chain), false = IPU OSD */
+	int direct_sensors; /* ISP driver's direct (IVDC) sensor count, -1 = unreadable */
 	rvd_osd_region_t osd_regions[RVD_MAX_STREAMS][RVD_OSD_MAX_REGIONS];
 	int osd_region_count[RVD_MAX_STREAMS];
 	int osd_retry_counter;

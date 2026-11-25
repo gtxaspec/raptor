@@ -283,6 +283,78 @@ fi
 kill "$IMP_PID" 2>/dev/null || true
 wait "$IMP_PID" 2>/dev/null || true
 
+# ── ISP direct mode (IVDC) ──
+# On T32/T33 the ISP driver's direct_mode parameter decides whether the
+# main channel goes straight to the encoder, and libimp does not survive a
+# disagreement: an IVDC encoder over a memory-mode ISP never gets a frame,
+# and the reverse rebooted a T32LQ. So where the HAL can read the driver,
+# the driver wins over the config's ivdc, loudly when the config said
+# otherwise. Where it cannot (other SoCs), the config is trusted as before.
+echo "=== ISP direct mode (IVDC) ==="
+# direct_run <label> <stream0 line or -> <osd: on|off|on-no-isp> [env...]
+direct_run() {
+    dr_label="$1"
+    dr_line="$2"
+    dr_osd="$3"
+    shift 3
+    DR_LOG="$LOG_DIR/rvd-direct-$dr_label.log"
+    dr_conf="$LOG_DIR/direct-$dr_label.conf"
+    cp "$CONFIG" "$dr_conf"
+    [ "$dr_line" != "-" ] && sed -i "/^\[stream0\]/a $dr_line" "$dr_conf"
+    case "$dr_osd" in
+    on) sed -i '/^\[osd\]/,/^$/ s/^enabled = false/enabled = true/' "$dr_conf" ;;
+    on-no-isp) sed -i '/^\[osd\]/,/^$/ s/^enabled = false/enabled = true\nisp_osd = false/' "$dr_conf" ;;
+    esac
+    env RSS_MOCK_TRACE_ENC=1 "$@" "$OUT/rvd" -c "$dr_conf" -f -d > "$DR_LOG" 2>&1 &
+    dr_pid=$!
+    for i in $(seq 1 30); do
+        grep -q "pipeline ready:" "$DR_LOG" 2>/dev/null && break
+        kill -0 "$dr_pid" 2>/dev/null || break
+        sleep 0.1
+    done
+    kill "$dr_pid" 2>/dev/null || true
+    wait "$dr_pid" 2>/dev/null || true
+}
+direct_expect() {
+    if grep -q -- "$2" "$DR_LOG" 2>/dev/null; then
+        pass "$1"
+    else
+        fail "$1" "expected '$2' in $DR_LOG"
+    fi
+}
+direct_absent() {
+    if grep -q -- "$2" "$DR_LOG" 2>/dev/null; then
+        fail "$1" "unexpected '$2' in $DR_LOG"
+    else
+        pass "$1"
+    fi
+}
+
+direct_run driver-direct - on RSS_MOCK_DIRECT_SENSORS=1 RSS_MOCK_ISP_OSD=1
+direct_expect "direct driver: the main stream encodes IVDC" "enc chn 0 video 1920x1080 ivdc=1"
+direct_expect "direct driver: the sub stream stays in memory" "enc chn 1 video 640x360 ivdc=0"
+direct_expect "direct driver: the main snapshot joins the IVDC group" "jpeg 1920x1080 ivdc=1"
+direct_expect "direct driver: the mains take the ISP OSD" "using hybrid OSD"
+direct_absent "direct driver with no ivdc key is not a disagreement" "WARN.*ivdc"
+
+direct_run driver-memory "ivdc = true" off RSS_MOCK_DIRECT_SENSORS=0
+direct_expect "memory-mode driver: ivdc = true is overruled" "enc chn 0 video 1920x1080 ivdc=0"
+direct_expect "memory-mode driver: the overrule is a warning naming the driver" "WARN.*ivdc.*direct_mode=0"
+direct_expect "memory-mode driver: the main snapshot is a plain channel" "jpeg 1920x1080 ivdc=0"
+
+direct_run driver-direct-cfg-off "ivdc = false" off RSS_MOCK_DIRECT_SENSORS=1 RSS_MOCK_ISP_OSD=1
+direct_expect "direct driver: ivdc = false is overruled" "enc chn 0 video 1920x1080 ivdc=1"
+direct_expect "direct driver: the overrule is a warning naming the driver" "WARN.*ivdc.*direct_mode=1"
+
+direct_run driver-direct-ipu-osd - on-no-isp RSS_MOCK_DIRECT_SENSORS=1 RSS_MOCK_ISP_OSD=1
+direct_expect "direct driver: isp_osd = false is overruled" "using hybrid OSD"
+direct_expect "direct driver: the OSD overrule is a warning" "WARN.*isp_osd"
+
+direct_run driver-unknown "ivdc = true" off
+direct_expect "unreadable driver: the configured ivdc is trusted" "enc chn 0 video 1920x1080 ivdc=1"
+direct_absent "unreadable driver: nothing is claimed about the driver" "WARN.*direct[ _]mode"
+direct_absent "unreadable driver: the IVDC main keeps no snapshot, as before" "jpeg 1920x1080"
+
 echo "=== Starting daemons ==="
 
 start_daemon() {

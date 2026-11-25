@@ -702,6 +702,43 @@ static void load_sensor_from_section(rss_config_t *cfg, const char *section,
 }
 
 /* FS channel base for a given sensor index (hardware mapping) */
+/* On T32/T33 the ISP driver's direct_mode decides which mains go straight
+ * to the encoder, and libimp cannot run against it: an IVDC encoder over a
+ * memory-mode ISP never receives a frame, and a memory-mode encoder over a
+ * direct ISP rebooted a T32LQ. Where the HAL can read the driver, the
+ * driver wins over the config's ivdc. */
+static void apply_isp_direct_mode(rvd_state_t *st, rss_config_t *cfg)
+{
+	int n = 0;
+	int ret = RSS_HAL_CALL(st->ops, isp_get_direct_sensors, st->hal_ctx, &n);
+
+	st->direct_sensors = -1;
+	if (ret == RSS_ERR_NOTSUP)
+		return;
+	if (ret != RSS_OK) {
+		RSS_WARN("ISP direct mode unreadable (%d); trusting the configured ivdc", ret);
+		return;
+	}
+	st->direct_sensors = n;
+
+	for (int i = 0; i < st->stream_count; i++) {
+		rvd_stream_t *s = &st->streams[i];
+		if (s->fs_chn % 3 != 0)
+			continue;
+		bool want = s->sensor_idx < n;
+		if (rss_config_get_str(cfg, s->cfg_sect, "ivdc", NULL) && s->enc_cfg.ivdc != want)
+			RSS_WARN("[%s] ivdc = %s, but the ISP driver was loaded with "
+				 "direct_mode=%d; "
+				 "encoding %s",
+				 s->cfg_sect, s->enc_cfg.ivdc ? "true" : "false", n,
+				 want ? "straight from the ISP" : "from memory");
+		s->enc_cfg.ivdc = want;
+		if (want)
+			RSS_INFO("%s: IVDC, the ISP driver feeds it straight to the encoder",
+				 s->cfg_sect);
+	}
+}
+
 static int fs_base_channel(int sensor_idx)
 {
 	return sensor_idx * 3; /* sensor 0→0, sensor 1→3, sensor 2→6 */
@@ -1256,6 +1293,8 @@ int rvd_pipeline_init(rvd_state_t *st)
 		}
 	}
 
+	apply_isp_direct_mode(st, cfg);
+
 	/* IVDC encoder group reorder: SDK requires IVDC channels in
 	 * groups 0..N-1. Reassign groups so IVDC mains come first. */
 	{
@@ -1292,10 +1331,12 @@ int rvd_pipeline_init(rvd_state_t *st)
 		int video_count = st->stream_count;
 
 		for (int v = 0; v < video_count && st->jpeg_count < RVD_MAX_JPEG; v++) {
-			/* IVDC streams: JPEG+IVDC registration fails on T23 dual-sensor
-			 * (SDK rejects second IVDC channel in same group). Skip JPEG
-			 * but keep index for consistent ring naming. */
-			if (st->streams[v].enc_cfg.ivdc) {
+			/* An IVDC main's snapshot shares its group and is IVDC too, as
+			 * in the vendor T32 sample. On T23 dual-sensor the SDK rejects
+			 * that second IVDC channel, so where the driver's direct mode
+			 * is unknown the snapshot is skipped, keeping the index for
+			 * consistent ring naming. */
+			if (st->streams[v].enc_cfg.ivdc && st->direct_sensors <= 0) {
 				st->jpeg_count++;
 				continue;
 			}
@@ -1323,6 +1364,7 @@ int rvd_pipeline_init(rvd_state_t *st)
 				.fps_den = 1,
 				.bitrate = 0,
 			};
+			st->streams[ji].enc_cfg.ivdc = st->streams[v].enc_cfg.ivdc;
 			st->streams[ji].fs_cfg = st->streams[v].fs_cfg;
 			st->streams[ji].fs_chn = st->streams[v].fs_chn;
 			st->streams[ji].chn = jpeg_chn;
@@ -1422,6 +1464,19 @@ int rvd_pipeline_init(rvd_state_t *st)
 	if (st->use_isp_osd && (!caps || !caps->has_isp_osd)) {
 		RSS_WARN("isp_osd requested but not supported on this platform, using IPU OSD");
 		st->use_isp_osd = false;
+	}
+	/* The IPU OSD sits between framesource and encoder, which an IVDC
+	 * main bypasses */
+	if (st->osd_enabled && !st->use_isp_osd && st->direct_sensors > 0) {
+		if (caps && caps->has_isp_osd) {
+			if (rss_config_get_str(cfg, "osd", "isp_osd", NULL))
+				RSS_WARN("isp_osd = false, but an IVDC main has no IPU OSD; "
+					 "using the ISP OSD on the mains");
+			st->use_isp_osd = true;
+		} else {
+			RSS_WARN("an IVDC main has no IPU OSD and this platform has no ISP OSD; "
+				 "the main stream shows no OSD");
+		}
 	}
 	if (st->osd_enabled && st->use_isp_osd) {
 		RSS_HAL_CALL(st->ops, isp_osd_set_pool_size, st->hal_ctx, 512 * 1024);

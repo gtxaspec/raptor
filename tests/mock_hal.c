@@ -177,6 +177,10 @@ static int mock_enc_create_channel(void *ctx, int chn, const rss_video_config_t 
 	ch->cfg = *cfg;
 	ch->frame_seq = 0;
 	ch->active = true;
+	if (getenv("RSS_MOCK_TRACE_ENC"))
+		fprintf(stderr, "mock: enc chn %d %s %ux%u ivdc=%d\n", chn,
+			cfg->codec == RSS_CODEC_JPEG ? "jpeg" : "video", cfg->width, cfg->height,
+			cfg->ivdc ? 1 : 0);
 	return RSS_OK;
 }
 
@@ -647,6 +651,24 @@ static int mock_isp_get_sensor_fps(void *ctx, uint32_t *fps_num, uint32_t *fps_d
 	return RSS_OK;
 }
 
+/*
+ * RSS_MOCK_DIRECT_SENSORS=<n>  the ISP driver was loaded with direct_mode=n;
+ *                              absent, the HAL cannot tell, as on SoCs where
+ *                              the parameter means something else
+ */
+static int mock_isp_get_direct_sensors(void *ctx, int *count)
+{
+	(void)ctx;
+	const char *v = getenv("RSS_MOCK_DIRECT_SENSORS");
+
+	if (!v)
+		return RSS_ERR_NOTSUP;
+	if (!count)
+		return RSS_ERR_INVAL;
+	*count = atoi(v);
+	return RSS_OK;
+}
+
 /* ── Audio ── */
 
 static int mock_audio_init(void *ctx, const rss_audio_config_t *cfg)
@@ -712,10 +734,18 @@ static const rss_hal_caps_t mock_caps = {
 	.has_bcsh_hue = true,
 };
 
+/* RSS_MOCK_ISP_OSD=1: report an ISP OSD, as T23/T32/T33/T40/T41 do */
 static const rss_hal_caps_t *mock_get_caps(void *ctx)
 {
 	(void)ctx;
-	return &mock_caps;
+	static rss_hal_caps_t with_isp_osd;
+
+	if (!getenv("RSS_MOCK_ISP_OSD"))
+		return &mock_caps;
+	with_isp_osd = mock_caps;
+	with_isp_osd.has_isp_osd = true;
+	with_isp_osd.max_isp_osd_regions = 8;
+	return &with_isp_osd;
 }
 
 /* ── Static ops table ── */
@@ -846,6 +876,7 @@ static const rss_hal_ops_t mock_ops = {
 	.isp_get_max_again = (void *)mock_isp_get_u32,
 	.isp_get_max_dgain = (void *)mock_isp_get_u32,
 	.isp_get_sensor_fps = mock_isp_get_sensor_fps,
+	.isp_get_direct_sensors = mock_isp_get_direct_sensors,
 	.isp_get_sinter_strength = (void *)mock_isp_get_u8,
 	.isp_get_temper_strength = (void *)mock_isp_get_u8,
 	.isp_get_dpc_strength = (void *)mock_isp_get_u8,
