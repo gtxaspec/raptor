@@ -5,6 +5,7 @@ extern SUITE(nal_suite);
 extern SUITE(prebuf_suite);
 extern SUITE(mux_suite);
 extern SUITE(gps_suite);
+extern SUITE(rtd_sim_suite);
 extern SUITE(io_suite);
 extern SUITE(ethcam_suite);
 extern SUITE(sdp_suite);
@@ -47,6 +48,7 @@ int main(int argc, char **argv)
 	RUN_SUITE(prebuf_suite);
 	RUN_SUITE(mux_suite);
 	RUN_SUITE(gps_suite);
+	RUN_SUITE(rtd_sim_suite);
 	RUN_SUITE(io_suite);
 	RUN_SUITE(sdp_suite);
 	RUN_SUITE(codec_suite);

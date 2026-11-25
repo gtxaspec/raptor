@@ -1,4 +1,4 @@
-SRCS := rtd_main.c rtd_nmea.c rtd_accel.c
+SRCS := rtd_main.c rtd_nmea.c rtd_accel.c rtd_sim.c
 OBJS := $(SRCS:.c=.o)
 BIN  := rtd
 

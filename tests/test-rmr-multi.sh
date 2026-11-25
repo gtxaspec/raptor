@@ -251,6 +251,7 @@ start rvd "$OUT/rvd" -c "$WORK/multi.conf" -f -d
 start rcd "$OUT/rcd" -c "$WORK/multi.conf" -f -d
 RCD_PID=$LAST_PID
 start rtd "$OUT/rtd" -c "$WORK/multi.conf" -f -d
+RTD_PID=$LAST_PID
 sleep 1
 start rmr "$OUT/rmr" -c "$WORK/multi.conf" -f -d
 RMR_PID=$LAST_PID
@@ -321,6 +322,36 @@ if [ -n "$CLIP" ]; then
 	[ "$R" = ok ] && pass "rear clip verifies" || fail "rear clip: $R"
 else
 	fail "no clip pair: $(find "$WORK/rec/clips" -name '*.mp4' 2> /dev/null | tr '\n' ' ')"
+fi
+
+echo "--- simulated drive: an impact makes a clip ---"
+kill "$RTD_PID"
+wait "$RTD_PID" 2> /dev/null
+sed 's|^gps_replay = .*|sim = true\nsim_fix_after_s = 1\nsim_impact_every_s = 8\nimpact_clip_sec = 3|' \
+	"$WORK/multi.conf" > "$WORK/sim.conf"
+touch "$WORK/.sim"
+start rtd-sim "$OUT/rtd" -c "$WORK/sim.conf" -f -d
+RTD_PID=$LAST_PID
+if wait_for 15 "all(t['clip'] for t in d['tracks'])"; then
+	pass "a simulated impact opens a clip on both tracks"
+else
+	fail "no clip from a simulated impact: $(status)"
+fi
+wait_for 10 "not any(t['clip'] for t in d['tracks'])" || fail "impact clip still open"
+kill "$RTD_PID"
+wait "$RTD_PID" 2> /dev/null
+start rtd "$OUT/rtd" -c "$WORK/multi.conf" -f -d
+RTD_PID=$LAST_PID
+grep -q "simulated drive" "$WORK/rtd-sim.log" && grep -q "impact: " "$WORK/rtd-sim.log" &&
+	pass "rtd logs the simulated impact" || fail "rtd-sim log: $(tail -3 "$WORK/rtd-sim.log")"
+SIMCLIP=$(closed_pairs "$WORK/rec/clips" | while read -r f; do [ "$f" -nt "$WORK/.sim" ] && echo "$f"; done | head -1)
+if [ -n "$SIMCLIP" ]; then
+	R=$(verify "$SIMCLIP")
+	[ "$R" = ok ] && pass "impact clip verifies" || fail "impact clip: $R"
+	grep -qE "^ +[0-9-]+ [0-9:]+ +51\.47[0-9]+ +-0\.00" "$SIMCLIP.rverify" &&
+		pass "impact clip carries the simulated route" || fail "no simulated fix in $(basename "$SIMCLIP")"
+else
+	fail "no impact clip pair"
 fi
 
 echo "--- rear camera unplugged ---"

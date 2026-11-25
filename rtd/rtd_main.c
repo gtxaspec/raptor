@@ -96,6 +96,9 @@ typedef struct {
 	int nvars;
 
 	rtd_record_t last;
+
+	bool sim;
+	rtd_sim_t simst;
 } rtd_state_t;
 
 /* ── Hardware description ── */
@@ -242,12 +245,23 @@ static void replay_epoch(rtd_state_t *st, int64_t now)
 	}
 }
 
+/* One epoch of the simulated drive, through the same parser as a receiver */
+static void sim_epoch(rtd_state_t *st, int64_t now)
+{
+	char buf[256];
+	rtd_sim_nmea(&st->simst, now, rss_wallclock_us(), buf, sizeof(buf));
+	for (char *line = strtok(buf, "\r\n"); line; line = strtok(NULL, "\r\n"))
+		gps_line(st, line, now);
+}
+
 /* ── Accelerometer ── */
 
 static void accel_sample(rtd_state_t *st, int64_t now)
 {
 	float g[3];
-	if (rtd_accel_read(&st->accel, g) < 0)
+	if (st->sim)
+		rtd_sim_accel(&st->simst, now, g);
+	else if (rtd_accel_read(&st->accel, g) < 0)
 		return;
 	if (st->accel_start_us == 0) {
 		st->accel_start_us = now;
@@ -385,7 +399,7 @@ static void rmr_clip(bool start)
  * too, so the next boot starts with this time (battery-backed RTC). */
 static void gps_set_clock(rtd_state_t *st, const rtd_record_t *r, int64_t now)
 {
-	if (!st->set_clock || st->replay || now < st->next_clock_check_us)
+	if (!st->set_clock || st->replay || st->sim || now < st->next_clock_check_us)
 		return;
 	if (!(r->flags & RTD_F_TIME) || !(r->flags & RTD_F_FIX) || r->sats < 4)
 		return;
@@ -534,6 +548,10 @@ static int ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_size,
 		cJSON_AddNumberToObject(o, "accel_dev", r->acc_dev_g);
 	}
 	cJSON_AddBoolToObject(o, "event", st->clip_stop_us != 0);
+	if (st->sim) {
+		cJSON_AddBoolToObject(o, "sim", true);
+		cJSON_AddNumberToObject(o, "sim_impacts", st->simst.impacts);
+	}
 	return rss_ctrl_resp_json(resp_buf, resp_buf_size, o);
 }
 
@@ -566,7 +584,31 @@ int main(int argc, char **argv)
 	int hz = rss_config_get_int(st.cfg, "telematics", "accel_hz", 50);
 	st.accel_period_us = 1000000 / (hz < 1 ? 1 : hz > 400 ? 400 : hz);
 
-	if (replay[0]) {
+	st.sim = rss_config_get_bool(st.cfg, "telematics", "sim", false);
+	if (st.sim) {
+		rtd_sim_cfg_t sc = {
+			.seed = (uint32_t)rss_config_get_int(st.cfg, "telematics", "sim_seed", 1),
+			.lat = strtod(
+				rss_config_get_str(st.cfg, "telematics", "sim_lat", "51.4779"),
+				NULL),
+			.lon = strtod(
+				rss_config_get_str(st.cfg, "telematics", "sim_lon", "-0.0015"),
+				NULL),
+			.fix_after_s =
+				rss_config_get_int(st.cfg, "telematics", "sim_fix_after_s", 30),
+			.dropout_every_s = rss_config_get_int(st.cfg, "telematics",
+							      "sim_dropout_every_s", 300),
+			.impact_every_s =
+				rss_config_get_int(st.cfg, "telematics", "sim_impact_every_s", 600),
+			.impact_g = strtof(
+				rss_config_get_str(st.cfg, "telematics", "sim_impact_g", "2.5"),
+				NULL),
+		};
+		rtd_sim_init(&st.simst, &sc, rss_timestamp_us());
+		st.have_accel = true;
+		RSS_INFO("simulated drive: fix after %d s, an impact every %d s", sc.fix_after_s,
+			 sc.impact_every_s);
+	} else if (replay[0]) {
 		st.replay = fopen(replay, "r");
 		if (!st.replay)
 			RSS_ERROR("gps replay %s: %m", replay);
@@ -575,10 +617,10 @@ int main(int argc, char **argv)
 	} else if (st.gps_dev[0]) {
 		gps_open(&st);
 	}
-	if (acc_bus >= 0 && acc_addr > 0)
+	if (!st.sim && acc_bus >= 0 && acc_addr > 0)
 		st.have_accel = rtd_accel_open(&st.accel, acc_bus, acc_addr) == 0;
 
-	if (st.gps_fd < 0 && !st.replay && !st.have_accel) {
+	if (st.gps_fd < 0 && !st.replay && !st.sim && !st.have_accel) {
 		RSS_INFO("no GPS or g-sensor on this camera");
 		goto out;
 	}
@@ -600,7 +642,7 @@ int main(int argc, char **argv)
 	while (*st.running) {
 		now = rss_timestamp_us();
 
-		int64_t wake = st.last_publish_us + (st.replay ? 1000000 : EPOCH_MAX_US);
+		int64_t wake = st.last_publish_us + (st.replay || st.sim ? 1000000 : EPOCH_MAX_US);
 		if (st.epoch_due_us && st.epoch_due_us < wake)
 			wake = st.epoch_due_us;
 		if (st.have_accel && st.next_sample_us < wake)
@@ -633,9 +675,12 @@ int main(int argc, char **argv)
 				st.next_sample_us = now + st.accel_period_us;
 		}
 
-		if (st.replay) {
+		if (st.replay || st.sim) {
 			if (now - st.last_publish_us >= 1000000) {
-				replay_epoch(&st, now);
+				if (st.sim)
+					sim_epoch(&st, now);
+				else
+					replay_epoch(&st, now);
 				publish(&st, now);
 			}
 		} else if ((st.epoch_due_us && now >= st.epoch_due_us) ||

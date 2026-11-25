@@ -361,7 +361,8 @@ echo "=== RTD ==="
 $CC $CFLAGS -c "$RAPTOR_DIR/rtd/rtd_main.c" -o "$OUT/rtd_main.o"
 $CC $CFLAGS -c "$RAPTOR_DIR/rtd/rtd_nmea.c" -o "$OUT/rtd_nmea.o"
 $CC $CFLAGS -c "$RAPTOR_DIR/rtd/rtd_accel.c" -o "$OUT/rtd_accel.o"
-$CC -o "$OUT/rtd" "$OUT/rtd_main.o" "$OUT/rtd_nmea.o" "$OUT/rtd_accel.o" $LIBS -lm $LDFLAGS
+$CC $CFLAGS -c "$RAPTOR_DIR/rtd/rtd_sim.c" -o "$OUT/rtd_sim.o"
+$CC -o "$OUT/rtd" "$OUT/rtd_main.o" "$OUT/rtd_nmea.o" "$OUT/rtd_accel.o" "$OUT/rtd_sim.o" $LIBS -lm $LDFLAGS
 echo "  -> rtd"
 $CC $CFLAGS $HAL_CFLAGS -c "$RAPTOR_DIR/rcd/rcd_main.c" -o "$OUT/rcd_main.o"
 $CC $CFLAGS $HAL_CFLAGS -c "$RAPTOR_DIR/rcd/rcd_drv_ethcam.c" -o "$OUT/rcd_drv_ethcam.o"

@@ -10,6 +10,7 @@
 #define RTD_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #define RTD_RING	"telematics"
@@ -76,5 +77,37 @@ typedef struct {
 int rtd_accel_open(rtd_accel_t *a, int bus, int addr);
 int rtd_accel_read(rtd_accel_t *a, float g[3]);
 void rtd_accel_close(rtd_accel_t *a);
+
+/* ── Simulated drive ([telematics] sim = true) ── */
+
+#define RTD_SIM_IMPACT_SAMPLES 4 /* 80 ms at 50 Hz: the filter wants two in a row */
+
+typedef struct {
+	uint32_t seed;
+	double lat, lon;     /* where the drive starts */
+	int fix_after_s;     /* cold start: no fix before this */
+	int dropout_every_s; /* fix lost for a few seconds once per period, 0 = never */
+	int impact_every_s;  /* 0 = no impacts */
+	float impact_g;	     /* size of a simulated impact */
+} rtd_sim_cfg_t;
+
+typedef struct {
+	rtd_sim_cfg_t cfg;
+	uint32_t rng;
+	int64_t start_us, last_us;
+	double lat, lon, alt_m, heading, speed_mps;
+	float rest[3];
+	int64_t next_impact_us; /* 0 = no impacts */
+	int impact_left;	/* samples left in the current impact */
+	int impacts;		/* started so far */
+} rtd_sim_t;
+
+void rtd_sim_init(rtd_sim_t *s, const rtd_sim_cfg_t *cfg, int64_t now_us);
+/* One epoch of NMEA (GGA then RMC, CRLF-terminated) into buf; returns its
+ * length. now_us drives the drive, utc_us is the time the receiver reports. */
+int rtd_sim_nmea(rtd_sim_t *s, int64_t now_us, int64_t utc_us, char *buf, size_t len);
+bool rtd_sim_has_fix(const rtd_sim_t *s, int64_t now_us);
+/* One g-sensor sample, at the configured rate */
+void rtd_sim_accel(rtd_sim_t *s, int64_t now_us, float g[3]);
 
 #endif /* RTD_H */
