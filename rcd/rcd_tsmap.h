@@ -5,6 +5,7 @@
 #ifndef RCD_TSMAP_H
 #define RCD_TSMAP_H
 
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -38,7 +39,7 @@ typedef struct {
 	bool init;
 	uint64_t last; /* effective timestamp of the last frame */
 	uint32_t seq;
-	uint32_t resets;
+	_Atomic uint32_t resets; /* read by the status reply on another thread */
 } rcd_seq_t;
 
 /* Returns the frame's sequence number; *eff gets its effective timestamp. */

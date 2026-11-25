@@ -143,20 +143,25 @@ void rcd_error(rcd_cam_t *c, const char *fmt, ...)
 int rcd_stream_open(rcd_cam_t *c, int idx, int codec, int width, int height, int fps)
 {
 	rcd_stream_t *s = &c->st[idx];
-	if (!s->ring) {
+	rss_ring_t *ring = s->ring;
+	if (!ring) {
 		char name[24];
 		snprintf(name, sizeof(name), "s%d_%s", c->slot, stream_name[idx]);
-		s->ring = rss_ring_create(name, 64, (uint32_t)c->data_mb[idx] * 1024 * 1024);
-		if (!s->ring) {
+		ring = rss_ring_create(name, 64, (uint32_t)c->data_mb[idx] * 1024 * 1024);
+		if (!ring) {
 			rcd_error(c, "cannot create ring %s", name);
 			return -1;
 		}
 		RSS_INFO("camera%d: ring %s (%d MB)", c->index, name, c->data_mb[idx]);
 	}
+	/* The status reply reads these from the control thread */
+	pthread_mutex_lock(&c->info_lock);
+	s->ring = ring;
 	s->codec = codec;
 	s->width = width;
 	s->height = height;
 	s->fps = fps > 0 ? fps : 30;
+	pthread_mutex_unlock(&c->info_lock);
 	s->info_set = false;
 	s->last_frame_us = rss_timestamp_us();
 	s->open = true;
@@ -541,20 +546,24 @@ static cJSON *cam_json(rcd_cam_t *c)
 	cJSON *arr = cJSON_AddArrayToObject(o, "streams");
 	for (int i = 0; i < 2; i++) {
 		rcd_stream_t *s = &c->st[i];
-		if (!s->ring)
+		pthread_mutex_lock(&c->info_lock);
+		bool have = s->ring != NULL;
+		int width = s->width, height = s->height, fps = s->fps;
+		pthread_mutex_unlock(&c->info_lock);
+		if (!have)
 			continue;
 		cJSON *so = cJSON_CreateObject();
 		if (!so)
 			continue;
 		cJSON_AddStringToObject(so, "name", stream_name[i]);
-		cJSON_AddNumberToObject(so, "width", s->width);
-		cJSON_AddNumberToObject(so, "height", s->height);
-		cJSON_AddNumberToObject(so, "fps", s->fps);
+		cJSON_AddNumberToObject(so, "width", width);
+		cJSON_AddNumberToObject(so, "height", height);
+		cJSON_AddNumberToObject(so, "fps", fps);
 		cJSON_AddNumberToObject(so, "frames", atomic_load(&s->frames));
 		cJSON_AddNumberToObject(so, "keyframes", atomic_load(&s->keyframes));
 		cJSON_AddNumberToObject(so, "bytes", (double)atomic_load(&s->bytes));
 		cJSON_AddNumberToObject(so, "dropped", atomic_load(&s->dropped));
-		cJSON_AddNumberToObject(so, "camera_restarts", s->seq.resets);
+		cJSON_AddNumberToObject(so, "camera_restarts", atomic_load(&s->seq.resets));
 		cJSON_AddItemToArray(arr, so);
 	}
 	return o;
