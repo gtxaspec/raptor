@@ -92,6 +92,17 @@ daemon_enabled() {
 	esac
 }
 
+# The recording path outlives a web request when memory runs out
+protect() {
+	for d in "$@"; do
+		case $d in
+			rvd | rcd | rmr | rtd)
+				for p in $(pidof "$d"); do echo -500 >"/proc/$p/oom_score_adj" 2>/dev/null; done
+				;;
+		esac
+	done
+}
+
 # rad: preload libimp-nodbg if available to avoid competing IMP debug thread
 daemon_env() {
 	[ "$1" = rad ] && [ -f /usr/lib/libimp-nodbg.so ] && echo LD_PRELOAD=/usr/lib/libimp-nodbg.so
@@ -134,7 +145,7 @@ start() {
 	start_daemon rsp
 	start_daemon rsr
 
-	for p in $(pidof rvd); do echo -500 >"/proc/$p/oom_score_adj" 2>/dev/null; done
+	protect rvd rcd rmr rtd
 
 	# Bring back whatever dies (an OOM kill must not end recording)
 	watched=""
@@ -180,6 +191,8 @@ watch() {
 				fi
 				logger -t raptor "$d died, restarting"
 				env $(daemon_env "$d") start-stop-daemon -S -b -x /usr/bin/$d -- -c "$CONF"
+				sleep 1
+				protect "$d"
 			fi
 			keep="$keep $d"
 		done
