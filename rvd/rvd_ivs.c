@@ -26,6 +26,7 @@
 #include <unistd.h>
 
 #include "rvd.h"
+#include "rvd_ivs_poll.h"
 
 #ifdef IVS_DETECT
 /* FrameSource direct access — for JZDL standalone inference.
@@ -592,11 +593,22 @@ void *rvd_ivs_thread(void *arg)
 {
 	rvd_state_t *st = arg;
 
+	switch (rvd_ivs_thread_mode(st->ivs_jzdl, st->ivs_algo_handle)) {
+	case RVD_IVS_THREAD_JZDL:
 #ifdef IVS_DETECT
-	/* JZDL standalone mode — different thread function */
-	if (st->ivs_jzdl)
+		/* JZDL standalone mode — different thread function */
 		return rvd_jzdl_thread(arg);
+#else
+		return NULL;
 #endif
+	case RVD_IVS_THREAD_NONE:
+		/* rvd_ivs_start() failed: no channel to poll, so a poll loop
+		 * would only spin on ivs_poll_result errors */
+		RSS_WARN("IVS: no detection algorithm running, IVS thread not started");
+		return NULL;
+	case RVD_IVS_THREAD_POLL:
+		break;
+	}
 
 	RSS_INFO("IVS poll thread started (algo=%s)", st->ivs_persondet ? "persondet" : "move");
 
