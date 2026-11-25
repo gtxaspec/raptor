@@ -664,6 +664,115 @@ TEST storage_auto_root_no_card_no_small_warning(void)
 	PASS();
 }
 
+/* Write a segment through the storage manager, as rmr does, size bytes */
+static void open_written(rmr_storage_t *st, int64_t rt, const char *suffix, off_t size, char *path,
+			 int path_size)
+{
+	int fd = rmr_storage_open_file(st, rt, suffix, path, path_size);
+	if (fd >= 0) {
+		if (ftruncate(fd, size) != 0) {
+		}
+		close(fd);
+	}
+}
+
+static bool path_exists(const char *p)
+{
+	struct stat sb;
+	return stat(p, &sb) == 0;
+}
+
+/* (g) After a timezone change (or a clock stepped back) this run's files
+ * are named before files from earlier runs. They are the newest
+ * recordings: everything older goes first. */
+TEST storage_cleanup_keeps_this_runs_files_after_tz_change(void)
+{
+	char dir[] = "/tmp/rmr_storage_test_XXXXXX";
+	ASSERT(mkdtemp(dir));
+	rmr_storage_config_t cfg = {.base_path = dir, .segment_minutes = 1, .max_storage_mb = 3};
+	rmr_storage_t *st = rmr_storage_create(&cfg);
+	ASSERT(st);
+	const off_t mb = 1024 * 1024;
+	/* an earlier run, UTC names: 2026-11-22 12:40 */
+	make_file(dir, "2026-11-22", "12-40-00.mp4", mb);
+	make_file(dir, "2026-11-22", "12-40-00_R.mp4", mb);
+	/* this run, local names four hours back: 08:46, 08:47 */
+	char a[256], ar[256], b[256], br[256];
+	open_written(st, local_rt_us(8, 46, 0, 22), NULL, mb / 2, a, sizeof(a));
+	open_written(st, local_rt_us(8, 46, 0, 22), "R", mb / 2, ar, sizeof(ar));
+	open_written(st, local_rt_us(8, 47, 0, 22), NULL, mb / 2, b, sizeof(b));
+	open_written(st, local_rt_us(8, 47, 0, 22), "R", mb / 2, br, sizeof(br));
+
+	int deleted = rmr_storage_enforce_limit(st);
+	bool old_gone = !file_exists(dir, "2026-11-22", "12-40-00.mp4") &&
+			!file_exists(dir, "2026-11-22", "12-40-00_R.mp4");
+	bool new_kept = path_exists(a) && path_exists(ar) && path_exists(b) && path_exists(br);
+	unlink(a);
+	unlink(ar);
+	unlink(b);
+	unlink(br);
+	rm_day(dir, "2026-11-22");
+	rmr_storage_destroy(st);
+	rmdir(dir);
+	ASSERT_EQ(2, deleted);
+	ASSERTm("an earlier run's files go first", old_gone);
+	ASSERTm("this run's newer recordings are kept", new_kept);
+	PASS();
+}
+
+/* (h) Within one run the clock steps back (a GPS fix, NTP): this run's
+ * files go in the order they were written, not by name. */
+TEST storage_cleanup_this_run_in_write_order(void)
+{
+	char dir[] = "/tmp/rmr_storage_test_XXXXXX";
+	ASSERT(mkdtemp(dir));
+	rmr_storage_config_t cfg = {.base_path = dir, .segment_minutes = 1, .max_storage_mb = 1};
+	rmr_storage_t *st = rmr_storage_create(&cfg);
+	ASSERT(st);
+	const off_t mb = 1024 * 1024;
+	char first[256], second[256];
+	open_written(st, local_rt_us(12, 0, 0, 22), NULL, mb, first, sizeof(first));
+	open_written(st, local_rt_us(11, 0, 0, 22), NULL, mb / 2, second, sizeof(second));
+
+	int deleted = rmr_storage_enforce_limit(st);
+	bool first_gone = !path_exists(first), second_kept = path_exists(second);
+	unlink(first);
+	unlink(second);
+	rm_day(dir, "2026-11-22");
+	rmr_storage_destroy(st);
+	rmdir(dir);
+	ASSERT_EQ(1, deleted);
+	ASSERTm("the first written goes first, though named later", first_gone);
+	ASSERTm("the last written is kept, though named earlier", second_kept);
+	PASS();
+}
+
+/* (i) Earlier runs left files named in two timezones: the older file
+ * (named 12-40, UTC) goes before the newer one (named 04-46, local), by
+ * the time each was written, not by name. */
+TEST storage_cleanup_earlier_runs_by_age_not_name(void)
+{
+	char dir[] = "/tmp/rmr_storage_test_XXXXXX";
+	ASSERT(mkdtemp(dir));
+	rmr_storage_config_t cfg = {.base_path = dir, .segment_minutes = 1, .max_storage_mb = 1};
+	rmr_storage_t *st = rmr_storage_create(&cfg);
+	ASSERT(st);
+	const off_t mb = 1024 * 1024;
+	make_file_aged(dir, "2026-11-22", "12-40-00.mp4", mb, 3600);
+	make_file_aged(dir, "2026-11-22", "04-46-00.mp4", mb / 2, 60);
+
+	int deleted = rmr_storage_enforce_limit(st);
+	bool older_gone = !file_exists(dir, "2026-11-22", "12-40-00.mp4");
+	bool newer_kept = file_exists(dir, "2026-11-22", "04-46-00.mp4");
+	rm_day(dir, "2026-11-22");
+	rmr_storage_destroy(st);
+	rmdir(dir);
+	ASSERT_EQ(1, deleted);
+	ASSERTm("the older file goes first, though named later", older_gone);
+	ASSERTm("the newer file is kept, though named earlier", newer_kept);
+	PASS();
+}
+
 TEST storage_cleanup_runs_in_background(void)
 {
 	char dir[] = "/tmp/rmr_storage_test_XXXXXX";
@@ -836,6 +945,9 @@ SUITE(storage_suite)
 	RUN_TEST(storage_hour_dirs_layout_and_cleanup);
 	RUN_TEST(storage_cleanup_order_many_mixed);
 	RUN_TEST(storage_cleanup_keeps_open_with_trailing_slash);
+	RUN_TEST(storage_cleanup_keeps_this_runs_files_after_tz_change);
+	RUN_TEST(storage_cleanup_this_run_in_write_order);
+	RUN_TEST(storage_cleanup_earlier_runs_by_age_not_name);
 	RUN_TEST(storage_enforce_min_free_oldest_first);
 	RUN_TEST(storage_auto_root_without_card);
 	RUN_TEST(storage_pick_root_prefers_largest);

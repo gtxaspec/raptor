@@ -21,6 +21,10 @@
 #include <time.h>
 #include <unistd.h>
 
+/* 16 KB: 512 front+rear pairs, over eight hours of one-minute segments;
+ * older files of this run are ordered by mtime like earlier runs' */
+#define RMR_MADE_MAX 1024
+
 struct rmr_storage {
 	char base_path[256];
 	int segment_minutes;
@@ -45,6 +49,15 @@ struct rmr_storage {
 	int64_t next_wake_us;
 	bool root_checked, root_small; /* main loop: size of the root, once per mount */
 	bool small_warned;	       /* main loop: the small-root warning, once per root */
+	/* Files this run wrote, oldest first (a ring): cleanup takes them
+	 * last and in this order, because their names can sort before older
+	 * files after a timezone change or a clock stepped back. */
+	pthread_mutex_t made_lock; /* held only to append or copy */
+	struct made_file {
+		dev_t dev;
+		ino_t ino;
+	} *made; /* RMR_MADE_MAX, only when loop recording deletes */
+	int made_n, made_head;
 	/* cleanup off the main loop: deleting 100+ MB files on a busy card
 	 * took up to 0.8 s there, enough to overflow a 32-slot ring */
 	pthread_mutex_t clean_lock;
@@ -103,6 +116,9 @@ rmr_storage_t *rmr_storage_create(const rmr_storage_config_t *cfg)
 	pthread_mutex_init(&st->req_lock, NULL);
 	pthread_cond_init(&st->req_cv, NULL);
 	pthread_mutex_init(&st->pick_lock, NULL);
+	pthread_mutex_init(&st->made_lock, NULL);
+	if (rmr_storage_loops(st))
+		st->made = calloc(RMR_MADE_MAX, sizeof(*st->made));
 	/* monotonic: NTP steps the wall clock back at boot, which would
 	 * stall a CLOCK_REALTIME wait by as much */
 	pthread_condattr_t ca;
@@ -146,6 +162,8 @@ void rmr_storage_destroy(rmr_storage_t *st)
 	pthread_mutex_destroy(&st->clean_lock);
 	pthread_cond_destroy(&st->pick_cv);
 	pthread_mutex_destroy(&st->pick_lock);
+	pthread_mutex_destroy(&st->made_lock);
+	free(st->made);
 	free(st);
 }
 
@@ -187,9 +205,21 @@ int rmr_storage_open_file(rmr_storage_t *st, int64_t rt_us, const char *suffix, 
 		if (fd >= 0 || errno != EEXIST)
 			break;
 	}
-	if (fd < 0)
+	if (fd < 0) {
 		RSS_ERROR("failed to open segment: %s: %m", path_out);
-
+		return fd;
+	}
+	struct stat sb;
+	if (st->made && fstat(fd, &sb) == 0) {
+		pthread_mutex_lock(&st->made_lock);
+		int at = (st->made_head + st->made_n) % RMR_MADE_MAX;
+		st->made[at] = (struct made_file){.dev = sb.st_dev, .ino = sb.st_ino};
+		if (st->made_n < RMR_MADE_MAX)
+			st->made_n++;
+		else
+			st->made_head = (st->made_head + 1) % RMR_MADE_MAX;
+		pthread_mutex_unlock(&st->made_lock);
+	}
 	return fd;
 }
 
@@ -726,22 +756,140 @@ static int open_files(held_file_t *held, int max)
 	return n;
 }
 
-static bool is_held(const held_file_t *held, int n, const char *path)
+static bool held_st(const held_file_t *held, int n, const struct stat *sb)
 {
-	struct stat fst;
-	if (stat(path, &fst) != 0)
-		return false;
 	for (int i = 0; i < n; i++)
-		if (held[i].dev == fst.st_dev && held[i].ino == fst.st_ino)
+		if (held[i].dev == sb->st_dev && held[i].ino == sb->st_ino)
 			return true;
 	return false;
 }
 
-/* Loop recording: whole segments go oldest name first, a file with its
+/* This run's files, sorted by inode for lookup; seq = write order */
+typedef struct {
+	dev_t dev;
+	ino_t ino;
+	int seq;
+} made_ix_t;
+
+static int made_ix_cmp(const void *a, const void *b)
+{
+	const made_ix_t *x = a, *y = b;
+	if (x->dev != y->dev)
+		return x->dev < y->dev ? -1 : 1;
+	return x->ino < y->ino ? -1 : x->ino > y->ino;
+}
+
+static made_ix_t *made_snapshot(rmr_storage_t *st, int *n)
+{
+	*n = 0;
+	if (!st->made)
+		return NULL;
+	pthread_mutex_lock(&st->made_lock);
+	int c = st->made_n;
+	made_ix_t *ix = c ? malloc((size_t)c * sizeof(*ix)) : NULL;
+	for (int i = 0; ix && i < c; i++) {
+		const struct made_file *m = &st->made[(st->made_head + i) % RMR_MADE_MAX];
+		ix[i] = (made_ix_t){.dev = m->dev, .ino = m->ino, .seq = i};
+	}
+	pthread_mutex_unlock(&st->made_lock);
+	if (ix) {
+		*n = c;
+		qsort(ix, (size_t)c, sizeof(*ix), made_ix_cmp);
+	}
+	return ix;
+}
+
+static int made_seq(const made_ix_t *ix, int n, const struct stat *sb)
+{
+	if (!n)
+		return -1;
+	made_ix_t key = {.dev = sb->st_dev, .ino = sb->st_ino};
+	const made_ix_t *m = bsearch(&key, ix, (size_t)n, sizeof(*ix), made_ix_cmp);
+	return m ? m->seq : -1;
+}
+
+/* A segment and its tagged siblings (X.mp4, X_R.mp4), deleted together */
+typedef struct {
+	int64_t age; /* earlier runs: newest mtime; this run: write order */
+	int day;     /* index into the day list, for pruning */
+	int n;
+	char *paths[4];
+} group_t;
+
+static int group_age_cmp(const void *a, const void *b)
+{
+	const group_t *x = a, *y = b;
+	if (x->age != y->age)
+		return x->age < y->age ? -1 : 1;
+	return strcmp(x->paths[0], y->paths[0]); /* equal ages: by name */
+}
+
+static int64_t unlink_paced(rmr_storage_t *st, const char *path, int *deleted, int64_t *need)
+{
+	struct stat fst;
+	if (stat(path, &fst) != 0 || unlink(path) != 0)
+		return 0;
+	(*deleted)++;
+	/* a fragmented segment's truncate holds f2fs locks the writer needs:
+	 * give it the card between files */
+	if (st->pacing)
+		usleep(500000);
+	if (__atomic_load_n(&st->clean_stop, __ATOMIC_RELAXED))
+		*need = 0; /* shutting down: the next pass resumes */
+	return fst.st_size;
+}
+
+#define CLEAN_WINDOW 64	 /* earlier runs' groups sorted together by age */
+#define CLEAN_LATER  256 /* this run's groups set aside per pass */
+
+typedef struct {
+	rmr_storage_t *st;
+	char **days;
+	int64_t need, freed;
+	int deleted;
+	group_t win[CLEAN_WINDOW];
+	int win_n;
+	group_t *later;
+	int later_n;
+} clean_t;
+
+/* Delete groups (front with rear) in order until the budget holds; free
+ * every path either way */
+static void clean_delete(clean_t *c, group_t *g, int n)
+{
+	for (int i = 0; i < n; i++) {
+		bool go = c->freed < c->need;
+		for (int k = 0; k < g[i].n; k++) {
+			if (go)
+				c->freed +=
+					unlink_paced(c->st, g[i].paths[k], &c->deleted, &c->need);
+			free(g[i].paths[k]);
+		}
+		if (go) {
+			char dir_path[512];
+			snprintf(dir_path, sizeof(dir_path), "%s/%s", c->st->base_path,
+				 c->days[g[i].day]);
+			prune_day(dir_path); /* only what is empty */
+		}
+	}
+}
+
+static void clean_flush_window(clean_t *c)
+{
+	if (c->win_n > 1)
+		qsort(c->win, (size_t)c->win_n, sizeof(*c->win), group_age_cmp);
+	clean_delete(c, c->win, c->win_n);
+	c->win_n = 0;
+}
+
+/* Loop recording: whole segments go oldest first, a file with its
  * tagged siblings (X.mp4, X_R.mp4), until the budget holds. Only files
  * this process has open are kept, so a clock that steps (RTC before NTP,
- * a GPS fix) can reorder what goes first but never stops the cleanup or
- * takes a file being written. Clips live elsewhere and are not touched. */
+ * a GPS fix) never stops the cleanup or takes a file being written.
+ * Names can lie about age (a timezone change, a clock stepped back):
+ * what earlier runs left goes by when it was written (mtime, which no
+ * timezone moves), and this run's own files go last, in the order they
+ * were written. Clips live elsewhere and are not touched. */
 static int enforce_limit_locked(rmr_storage_t *st)
 {
 	if (!st || (st->max_storage_mb <= 0 && st->min_free_mb <= 0))
@@ -752,14 +900,21 @@ static int enforce_limit_locked(rmr_storage_t *st)
 	if (!days)
 		return 0;
 
-	int64_t need = storage_need(st, days, day_count);
+	clean_t c = {.st = st, .days = days, .need = storage_need(st, days, day_count)};
+	if (c.need <= 0) {
+		free_names(days, day_count);
+		return 0;
+	}
 	held_file_t held[128];
 	int held_n = open_files(held, 128);
-	int64_t freed = 0;
-	int deleted = 0;
+	int made_n = 0;
+	made_ix_t *made = made_snapshot(st, &made_n);
+	c.later = made_n ? malloc(CLEAN_LATER * sizeof(*c.later)) : NULL;
 	bool kept_open = false;
 
-	for (int i = 0; i < day_count && freed < need; i++) {
+	/* Names first, as written: a window of earlier runs' groups at a time
+	 * goes oldest written first, until the budget holds. */
+	for (int i = 0; i < day_count && c.freed < c.need; i++) {
 		if (!is_day_dir(days[i]))
 			continue;
 		char dir_path[512];
@@ -769,15 +924,23 @@ static int enforce_limit_locked(rmr_storage_t *st)
 		if (!files)
 			continue;
 		int j = 0;
-		while (j < file_count && freed < need) {
+		while (j < file_count && c.freed < c.need) {
 			const char *first = DF_NAME(&files[j]);
 			size_t key = strcspn(first, "_.");
-			int g = j;
+			int g = j, seq = -1;
+			int64_t mtime = 0;
 			bool in_use = false;
 			while (g < file_count && strncmp(DF_NAME(&files[g]), first, key) == 0 &&
 			       (DF_NAME(&files[g])[key] == '_' || DF_NAME(&files[g])[key] == '.')) {
-				if (!in_use)
-					in_use = is_held(held, held_n, files[g].path);
+				struct stat fst; /* one stat per file serves all three */
+				if (stat(files[g].path, &fst) == 0) {
+					in_use = in_use || held_st(held, held_n, &fst);
+					int sq = made_seq(made, made_n, &fst);
+					if (sq > seq)
+						seq = sq;
+					if (fst.st_mtime > mtime)
+						mtime = fst.st_mtime;
+				}
 				g++;
 			}
 			if (g == j)
@@ -787,36 +950,46 @@ static int enforce_limit_locked(rmr_storage_t *st)
 				j = g;
 				continue;
 			}
-			for (int k = j; k < g; k++) {
-				if (!is_mp4(DF_NAME(&files[k])))
-					continue;
-				struct stat fst;
-				if (stat(files[k].path, &fst) == 0 && unlink(files[k].path) == 0) {
-					freed += fst.st_size;
-					deleted++;
-					/* a fragmented segment's truncate holds f2fs locks
-					 * the writer needs: give it the card between files */
-					if (st->pacing)
-						usleep(500000);
-					if (__atomic_load_n(&st->clean_stop, __ATOMIC_RELAXED))
-						need = 0; /* shutting down: the next pass resumes */
-				}
+			bool later = seq >= 0;
+			if (later && (!c.later || c.later_n == CLEAN_LATER)) {
+				j = g; /* this run's, set aside list full: a later pass */
+				continue;
+			}
+			group_t *gr = later ? &c.later[c.later_n] : &c.win[c.win_n];
+			gr->age = later ? seq : mtime;
+			gr->day = i;
+			gr->n = 0;
+			for (int k = j; k < g && gr->n < 4; k++)
+				if (is_mp4(DF_NAME(&files[k])))
+					gr->paths[gr->n++] = strdup(files[k].path);
+			if (gr->n) {
+				if (later)
+					c.later_n++;
+				else if (++c.win_n == CLEAN_WINDOW)
+					clean_flush_window(&c);
 			}
 			j = g;
 		}
 		free(files);
-		prune_day(dir_path); /* only what is empty */
 	}
+	clean_flush_window(&c);
+
+	/* Only then this run's own files, in the order they were written */
+	if (c.later_n > 1)
+		qsort(c.later, (size_t)c.later_n, sizeof(*c.later), group_age_cmp);
+	clean_delete(&c, c.later, c.later_n);
+	free(c.later);
+	free(made);
 	free_names(days, day_count);
 
-	if (deleted > 0)
-		RSS_INFO("storage cleanup: deleted %d files, %.1f MB", deleted,
-			 (double)freed / (1024.0 * 1024.0));
-	else if (need > 0 && kept_open)
+	if (c.deleted > 0)
+		RSS_INFO("storage cleanup: deleted %d files, %.1f MB", c.deleted,
+			 (double)c.freed / (1024.0 * 1024.0));
+	else if (c.need > 0 && kept_open)
 		RSS_WARN("storage cleanup: %.1f MB over budget, only open files left",
-			 (double)need / (1024.0 * 1024.0));
+			 (double)c.need / (1024.0 * 1024.0));
 
-	return deleted;
+	return c.deleted;
 }
 
 int rmr_storage_enforce_limit(rmr_storage_t *st)
