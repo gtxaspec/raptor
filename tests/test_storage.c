@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <time.h>
 #include <utime.h>
 #include <unistd.h>
@@ -432,6 +433,110 @@ TEST storage_auto_root_without_card(void)
 	PASS();
 }
 
+/* A fake card: mount points under a temp dir, sized by name (p1 64 MB,
+ * p2 1 GB, p3 4 GB) through the pick source hook. */
+static char fake_root[64];
+
+static int fake_statvfs(const char *path, struct statvfs *v)
+{
+	size_t n = strlen(fake_root);
+	if (strncmp(path, fake_root, n) != 0)
+		return statvfs(path, v);
+	uint64_t mb = strstr(path + n, "/p1") == path + n   ? 64
+		      : strstr(path + n, "/p2") == path + n ? 1024
+		      : strstr(path + n, "/p3") == path + n ? 4096
+							    : 0;
+	if (!mb)
+		return statvfs(path, v);
+	memset(v, 0, sizeof(*v));
+	v->f_frsize = v->f_bsize = 4096;
+	v->f_blocks = v->f_bfree = v->f_bavail = mb * 256;
+	return 0;
+}
+
+/* Mount table listing the given partitions ("p1", "p2", ...), each with
+ * its raptor directory present. */
+static void fake_mounts(const char *const *parts, int n)
+{
+	char path[128], dir[128];
+	snprintf(path, sizeof(path), "%s/mounts", fake_root);
+	FILE *f = fopen(path, "w");
+	for (int i = 0; i < n; i++) {
+		snprintf(dir, sizeof(dir), "%s/%s", fake_root, parts[i]);
+		mkdir(dir, 0755);
+		snprintf(dir, sizeof(dir), "%s/%s/raptor", fake_root, parts[i]);
+		mkdir(dir, 0755);
+		fprintf(f, "/dev/mmcblk0%s %s/%s f2fs rw 0 0\n", parts[i], fake_root, parts[i]);
+	}
+	fclose(f);
+}
+
+static void fake_card_setup(void)
+{
+	snprintf(fake_root, sizeof(fake_root), "/tmp/rmr_pick_test_XXXXXX");
+	mkdtemp(fake_root);
+	char mounts[128], fallback[128];
+	snprintf(mounts, sizeof(mounts), "%s/mounts", fake_root);
+	snprintf(fallback, sizeof(fallback), "%s/p1/raptor", fake_root);
+	static char prefix[80], fb[128], mt[128];
+	snprintf(prefix, sizeof(prefix), "%s/", fake_root);
+	snprintf(fb, sizeof(fb), "%s", fallback);
+	snprintf(mt, sizeof(mt), "%s", mounts);
+	rmr_storage_set_pick_source(mt, prefix, fake_statvfs, fb);
+}
+
+static void fake_card_teardown(void)
+{
+	rmr_storage_set_pick_source(NULL, NULL, NULL, NULL);
+	char cmd[128];
+	snprintf(cmd, sizeof(cmd), "rm -rf '%s'", fake_root);
+	if (system(cmd) != 0) {
+	}
+}
+
+/* (a) a small partition listed first must not win over a larger one */
+TEST storage_pick_root_prefers_largest(void)
+{
+	fake_card_setup();
+	const char *parts[] = {"p1", "p3"};
+	fake_mounts(parts, 2);
+	char root[256], want[256];
+	int r = rmr_storage_pick_root(root, sizeof(root));
+	snprintf(want, sizeof(want), "%s/p3/raptor", fake_root);
+	fake_card_teardown();
+	ASSERT_EQ(0, r);
+	ASSERT_STR_EQ(want, root);
+	PASS();
+}
+
+/* (d) a larger partition mounting while the current root stays writable
+ * is picked within a repick period */
+TEST storage_auto_root_follows_larger_partition(void)
+{
+	fake_card_setup();
+	const char *one[] = {"p2"};
+	fake_mounts(one, 1);
+	rmr_storage_config_t cfg = {.base_path = "", .segment_minutes = 1, .repick_ms = 50};
+	rmr_storage_t *st = rmr_storage_create(&cfg);
+	char p2[256], p3[256];
+	snprintf(p2, sizeof(p2), "%s/p2/raptor", fake_root);
+	snprintf(p3, sizeof(p3), "%s/p3/raptor", fake_root);
+	bool first_ok = st && strcmp(rmr_storage_path(st), p2) == 0;
+
+	const char *two[] = {"p2", "p3"};
+	fake_mounts(two, 2);
+	bool moved = false;
+	for (int i = 0; i < 100 && st && !moved; i++) {
+		usleep(10000);
+		moved = rmr_storage_available(st) && strcmp(rmr_storage_path(st), p3) == 0;
+	}
+	rmr_storage_destroy(st);
+	fake_card_teardown();
+	ASSERT(first_ok);
+	ASSERTm("root did not move to the larger partition", moved);
+	PASS();
+}
+
 TEST storage_cleanup_runs_in_background(void)
 {
 	char dir[] = "/tmp/rmr_storage_test_XXXXXX";
@@ -606,4 +711,6 @@ SUITE(storage_suite)
 	RUN_TEST(storage_cleanup_keeps_open_with_trailing_slash);
 	RUN_TEST(storage_enforce_min_free_oldest_first);
 	RUN_TEST(storage_auto_root_without_card);
+	RUN_TEST(storage_pick_root_prefers_largest);
+	RUN_TEST(storage_auto_root_follows_larger_partition);
 }

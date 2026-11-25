@@ -21,6 +21,8 @@ typedef struct {
 	bool hour_dirs;	       /* YYYY-MM-DD/HH/ instead of YYYY-MM-DD/ */
 	int cleanup_delay_ms;  /* background cleanup waits this long after a
 				* request and paces its deletes; 0 = at once */
+	int repick_ms;	       /* picked root: how often to look for a larger
+				* card partition; 0 = 10 s */
 } rmr_storage_config_t;
 
 #define RMR_STORAGE_DEFAULT_ROOT "/mnt/mmcblk0p1/raptor"
@@ -29,6 +31,14 @@ typedef struct {
  * under /mnt). Returns 0, or -1 with RMR_STORAGE_DEFAULT_ROOT when no
  * card is mounted. */
 int rmr_storage_pick_root(char *out, int out_size);
+
+/* Tests: where rmr_storage_pick_root reads mounts, which mount points
+ * count, how it sizes them and what it falls back to. NULL restores each
+ * default (/proc/mounts, "/mnt/", statvfs, RMR_STORAGE_DEFAULT_ROOT). */
+struct statvfs;
+typedef int (*rmr_statvfs_fn)(const char *path, struct statvfs *buf);
+void rmr_storage_set_pick_source(const char *mounts, const char *mnt_prefix, rmr_statvfs_fn fs,
+				 const char *fallback_root);
 
 /* True when a quota or a free-space floor makes room for new files */
 bool rmr_storage_loops(const rmr_storage_t *st);

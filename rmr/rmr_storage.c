@@ -27,10 +27,22 @@ struct rmr_storage {
 	int segment_seconds;
 	int max_storage_mb;
 	int min_free_mb;
-	/* base_path follows the largest card */
+	/* base_path follows the largest card. The picker thread reads
+	 * /proc/mounts and statvfs()s every card mount, which can block for
+	 * seconds on a dying card: never on the frame path. It hands its
+	 * pick over in picked; the main loop applies it. */
 	bool auto_root;
 	char subdir[32];
-	int64_t next_pick_us;
+	pthread_t pick_thr;
+	pthread_mutex_t pick_lock; /* never held across a pick */
+	pthread_cond_t pick_cv;
+	bool pick_started, pick_stop, pick_now;
+	int repick_ms;
+	char picked[256];  /* under pick_lock */
+	bool picked_new;   /* set by the picker, taken by the main loop */
+	char pending[256]; /* main loop: picked, not applied yet */
+	bool pending_set;
+	int64_t next_wake_us;
 	/* cleanup off the main loop: deleting 100+ MB files on a busy card
 	 * took up to 0.8 s there, enough to overflow a 32-slot ring */
 	pthread_mutex_t clean_lock;
@@ -44,6 +56,22 @@ struct rmr_storage {
 	bool refuse_logged;	   /* rootfs auto-create refusal logged once */
 	int64_t last_wait_warn_us; /* rate-limit for the waiting log       */
 };
+
+static const char *pick_mounts = "/proc/mounts";
+static const char *pick_prefix = "/mnt/";
+static rmr_statvfs_fn pick_fs = statvfs;
+static const char *pick_fallback = RMR_STORAGE_DEFAULT_ROOT;
+
+void rmr_storage_set_pick_source(const char *mounts, const char *mnt_prefix, rmr_statvfs_fn fs,
+				 const char *fallback_root)
+{
+	pick_mounts = mounts ? mounts : "/proc/mounts";
+	pick_prefix = mnt_prefix ? mnt_prefix : "/mnt/";
+	pick_fs = fs ? fs : statvfs;
+	pick_fallback = fallback_root ? fallback_root : RMR_STORAGE_DEFAULT_ROOT;
+}
+
+static void *pick_thread(void *arg);
 
 rmr_storage_t *rmr_storage_create(const rmr_storage_config_t *cfg)
 {
@@ -72,6 +100,23 @@ rmr_storage_t *rmr_storage_create(const rmr_storage_config_t *cfg)
 	pthread_mutex_init(&st->clean_lock, NULL);
 	pthread_mutex_init(&st->req_lock, NULL);
 	pthread_cond_init(&st->req_cv, NULL);
+	pthread_mutex_init(&st->pick_lock, NULL);
+	/* monotonic: NTP steps the wall clock back at boot, which would
+	 * stall a CLOCK_REALTIME wait by as much */
+	pthread_condattr_t ca;
+	pthread_condattr_init(&ca);
+	pthread_condattr_setclock(&ca, CLOCK_MONOTONIC);
+	pthread_cond_init(&st->pick_cv, &ca);
+	pthread_condattr_destroy(&ca);
+	if (st->auto_root) {
+		st->repick_ms = cfg->repick_ms > 0 ? cfg->repick_ms : 10000;
+		snprintf(st->picked, sizeof(st->picked), "%s", st->base_path);
+		pthread_attr_t ta;
+		pthread_attr_init(&ta);
+		pthread_attr_setstacksize(&ta, 64 * 1024);
+		st->pick_started = pthread_create(&st->pick_thr, &ta, pick_thread, st) == 0;
+		pthread_attr_destroy(&ta);
+	}
 
 	return st;
 }
@@ -80,6 +125,13 @@ void rmr_storage_destroy(rmr_storage_t *st)
 {
 	if (!st)
 		return;
+	if (st->pick_started) {
+		pthread_mutex_lock(&st->pick_lock);
+		st->pick_stop = true;
+		pthread_cond_signal(&st->pick_cv);
+		pthread_mutex_unlock(&st->pick_lock);
+		pthread_join(st->pick_thr, NULL);
+	}
 	if (st->clean_started) {
 		pthread_mutex_lock(&st->req_lock);
 		__atomic_store_n(&st->clean_stop, true, __ATOMIC_RELAXED);
@@ -90,6 +142,8 @@ void rmr_storage_destroy(rmr_storage_t *st)
 	pthread_cond_destroy(&st->req_cv);
 	pthread_mutex_destroy(&st->req_lock);
 	pthread_mutex_destroy(&st->clean_lock);
+	pthread_cond_destroy(&st->pick_cv);
+	pthread_mutex_destroy(&st->pick_lock);
 	free(st);
 }
 
@@ -244,14 +298,14 @@ int rmr_storage_pick_root(char *out, int out_size)
 {
 	uint64_t best = 0;
 	char line[512], dev[128], mnt[256];
-	FILE *f = fopen("/proc/mounts", "r");
+	FILE *f = fopen(pick_mounts, "r");
 
 	out[0] = '\0';
 	while (f && fgets(line, sizeof(line), f)) {
 		struct statvfs v;
 		if (sscanf(line, "%127s %255s", dev, mnt) != 2 ||
-		    strncmp(dev, "/dev/mmcblk", 11) != 0 || strncmp(mnt, "/mnt/", 5) != 0 ||
-		    statvfs(mnt, &v) != 0)
+		    strncmp(dev, "/dev/mmcblk", 11) != 0 ||
+		    strncmp(mnt, pick_prefix, strlen(pick_prefix)) != 0 || pick_fs(mnt, &v) != 0)
 			continue;
 		uint64_t size = (uint64_t)v.f_blocks * v.f_frsize;
 		if (size > best) {
@@ -263,7 +317,7 @@ int rmr_storage_pick_root(char *out, int out_size)
 		fclose(f);
 	if (out[0])
 		return 0;
-	snprintf(out, out_size, "%s", RMR_STORAGE_DEFAULT_ROOT);
+	snprintf(out, out_size, "%s", pick_fallback);
 	return -1;
 }
 
@@ -277,33 +331,95 @@ const char *rmr_storage_path(const rmr_storage_t *st)
 	return st ? st->base_path : "";
 }
 
-/* A card can mount after rmr starts, its partitions one by one: while the
- * picked directory is unusable, look again now and then. */
-static void storage_repick(rmr_storage_t *st)
+/* Look for the largest card partition every repick_ms, and at once when
+ * the main loop finds its root unusable. A card mounts its partitions one
+ * by one, so the first to appear after a reinsert need not be the largest. */
+static void *pick_thread(void *arg)
+{
+	rmr_storage_t *st = arg;
+	pthread_mutex_lock(&st->pick_lock);
+	while (!st->pick_stop) {
+		if (!st->pick_now) {
+			struct timespec until;
+			clock_gettime(CLOCK_MONOTONIC, &until);
+			until.tv_sec += st->repick_ms / 1000;
+			until.tv_nsec += (long)(st->repick_ms % 1000) * 1000000L;
+			if (until.tv_nsec >= 1000000000L) {
+				until.tv_sec++;
+				until.tv_nsec -= 1000000000L;
+			}
+			pthread_cond_timedwait(&st->pick_cv, &st->pick_lock, &until);
+			if (st->pick_stop)
+				break;
+		}
+		st->pick_now = false;
+		pthread_mutex_unlock(&st->pick_lock);
+
+		char root[sizeof(st->base_path) - sizeof(st->subdir)], path[sizeof(st->base_path)];
+		rmr_storage_pick_root(root, sizeof(root));
+		snprintf(path, sizeof(path), "%s%s", root, st->subdir);
+
+		pthread_mutex_lock(&st->pick_lock);
+		if (strcmp(path, st->picked) != 0) {
+			snprintf(st->picked, sizeof(st->picked), "%s", path);
+			__atomic_store_n(&st->picked_new, true, __ATOMIC_RELEASE);
+		}
+	}
+	pthread_mutex_unlock(&st->pick_lock);
+	return NULL;
+}
+
+/* Main loop: take the picker's choice. The cleanup thread walks base_path
+ * under clean_lock and a paced pass holds it for minutes, so never wait on
+ * it here: a busy lock leaves the change pending for the next call, and
+ * the next segment opens on the new root. */
+static void storage_take_pick(rmr_storage_t *st)
+{
+	if (__atomic_load_n(&st->picked_new, __ATOMIC_ACQUIRE)) {
+		pthread_mutex_lock(&st->pick_lock);
+		snprintf(st->pending, sizeof(st->pending), "%s", st->picked);
+		st->picked_new = false;
+		pthread_mutex_unlock(&st->pick_lock);
+		st->pending_set = true;
+	}
+	if (!st->pending_set)
+		return;
+	if (strcmp(st->pending, st->base_path) == 0) {
+		st->pending_set = false;
+		return;
+	}
+	if (pthread_mutex_trylock(&st->clean_lock) != 0)
+		return;
+	RSS_INFO("storage: %s", st->pending);
+	snprintf(st->base_path, sizeof(st->base_path), "%s", st->pending);
+	st->refuse_logged = false;
+	st->pending_set = false;
+	pthread_mutex_unlock(&st->clean_lock);
+}
+
+/* Root unusable: have the picker look now rather than at its next period. */
+static void storage_wake_picker(rmr_storage_t *st)
 {
 	int64_t now = rss_timestamp_us();
-	if (!st->auto_root || now < st->next_pick_us)
+	if (!st->pick_started || now < st->next_wake_us)
 		return;
-	st->next_pick_us = now + 10000000LL;
-	char root[sizeof(st->base_path) - sizeof(st->subdir)], path[sizeof(st->base_path)];
-	rmr_storage_pick_root(root, sizeof(root));
-	snprintf(path, sizeof(path), "%s%s", root, st->subdir);
-	if (strcmp(path, st->base_path) != 0) {
-		RSS_INFO("storage: %s", path);
-		snprintf(st->base_path, sizeof(st->base_path), "%s", path);
-		st->refuse_logged = false;
-	}
+	st->next_wake_us = now + 1000000LL;
+	pthread_mutex_lock(&st->pick_lock);
+	st->pick_now = true;
+	pthread_cond_signal(&st->pick_cv);
+	pthread_mutex_unlock(&st->pick_lock);
 }
 
 bool rmr_storage_available(rmr_storage_t *st)
 {
 	if (!st)
 		return false;
+	if (st->auto_root)
+		storage_take_pick(st);
 	if (access(st->base_path, W_OK) == 0)
 		return true;
-	storage_repick(st);
-	if (access(st->base_path, W_OK) == 0)
-		return true;
+	if (st->auto_root)
+		storage_wake_picker(st);
 	if (storage_try_create(st))
 		return true;
 
