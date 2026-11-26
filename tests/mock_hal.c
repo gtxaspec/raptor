@@ -654,7 +654,8 @@ static int mock_isp_get_sensor_fps(void *ctx, uint32_t *fps_num, uint32_t *fps_d
 /*
  * RSS_MOCK_DIRECT_SENSORS=<n>  the ISP driver was loaded with direct_mode=n;
  *                              absent, the HAL cannot tell, as on SoCs where
- *                              the parameter means something else
+ *                              the parameter means something else; "error",
+ *                              the parameter exists but cannot be read
  */
 static int mock_isp_get_direct_sensors(void *ctx, int *count)
 {
@@ -663,6 +664,8 @@ static int mock_isp_get_direct_sensors(void *ctx, int *count)
 
 	if (!v)
 		return RSS_ERR_NOTSUP;
+	if (strcmp(v, "error") == 0)
+		return RSS_ERR_IO;
 	if (!count)
 		return RSS_ERR_INVAL;
 	*count = atoi(v);

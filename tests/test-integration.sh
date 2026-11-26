@@ -367,6 +367,14 @@ direct_run driver-direct-ipu-osd - on-no-isp RSS_MOCK_DIRECT_SENSORS=1 RSS_MOCK_
 direct_expect "direct driver: isp_osd = false is overruled" "using hybrid OSD"
 direct_expect "direct driver: the OSD overrule is a warning" "WARN.*isp_osd"
 
+direct_run driver-unreadable "ivdc = true" off RSS_MOCK_DIRECT_SENSORS=error
+direct_expect "unreadable parameter: the configured ivdc is trusted" "enc chn 0 video 1920x1080 ivdc=1"
+direct_expect "unreadable parameter: the failure is a warning" "WARN.*ISP direct mode unreadable"
+
+direct_run driver-direct-no-isp-osd - on RSS_MOCK_DIRECT_SENSORS=1
+direct_expect "direct driver, no ISP OSD: the missing main OSD is a warning" "WARN.*no IPU OSD and this platform has no ISP OSD"
+direct_absent "direct driver, no ISP OSD: the mains are not handed to it" "using hybrid OSD"
+
 direct_run driver-unknown "ivdc = true" off
 direct_expect "unreadable driver: the configured ivdc is trusted" "enc chn 0 video 1920x1080 ivdc=1"
 direct_absent "unreadable driver: nothing is claimed about the driver" "WARN.*direct[ _]mode"
