@@ -672,6 +672,13 @@ static int mock_isp_get_direct_sensors(void *ctx, int *count)
 	return RSS_OK;
 }
 
+/* The per-sensor slot takes the sensor index before the struct */
+static int mock_get_exposure_n(void *ctx, int sensor_idx, rss_exposure_t *exp)
+{
+	(void)sensor_idx;
+	return mock_get_exposure(ctx, exp);
+}
+
 /* ── Audio ── */
 
 static int mock_audio_init(void *ctx, const rss_audio_config_t *cfg)
@@ -905,7 +912,7 @@ static const rss_hal_ops_t mock_ops = {
 	.isp_set_ae_comp_n = (void *)mock_ok,
 	.isp_set_max_again_n = (void *)mock_ok,
 	.isp_set_max_dgain_n = (void *)mock_ok,
-	.isp_get_exposure_n = (void *)mock_get_exposure,
+	.isp_get_exposure_n = mock_get_exposure_n,
 
 	/* OSD */
 	.osd_set_pool_size = (void *)mock_ok,
