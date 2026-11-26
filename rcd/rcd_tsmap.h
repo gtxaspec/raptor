@@ -45,4 +45,40 @@ typedef struct {
 /* Returns the frame's sequence number; *eff gets its effective timestamp. */
 uint32_t rcd_seq(rcd_seq_t *q, uint64_t cam_us, uint64_t period_us, uint64_t *eff);
 
+/*
+ * Spacing between recovery power cycles of the shared camera supply. After
+ * each cycle the minimum gap before the next doubles (15 s, 30, 60, 120,
+ * then 300 s); ten minutes of streaming without a cycle resets it. A
+ * camera that flaps can then cut the supply only every few minutes at
+ * worst, while a real outage is retried at most 5 minutes apart. Pure:
+ * the caller supplies the clock.
+ */
+/* LAST is the last doubling; the step after it is the cap. Streaming notes
+ * further apart than GAP do not make one stretch. */
+#define RCD_BACKOFF_MIN_US    (15 * 1000000LL)
+#define RCD_BACKOFF_LAST_US   (120 * 1000000LL)
+#define RCD_BACKOFF_MAX_US    (300 * 1000000LL)
+#define RCD_BACKOFF_STABLE_US (600 * 1000000LL)
+#define RCD_BACKOFF_GAP_US    (30 * 1000000LL)
+
+typedef struct {
+	int64_t spacing;      /* gap that follows the next cycle; 0 = not started */
+	int64_t next_ok;      /* earliest time of the next cycle */
+	int64_t warned_for;   /* next_ok value a refusal was already reported for */
+	int64_t stream_since; /* start of the current streaming stretch, 0 = none */
+	int64_t last_note;
+} rcd_backoff_t;
+
+enum { RCD_BACKOFF_GO, RCD_BACKOFF_REFUSE_WARN, RCD_BACKOFF_REFUSE_QUIET };
+
+/* GO: the cycle may happen now and the spacing advances. Otherwise it is
+ * refused, with *wait_us = time until the next cycle is allowed; WARN is
+ * returned once per refusal period so a flapping camera cannot flood the
+ * log. */
+int rcd_backoff_take(rcd_backoff_t *b, int64_t now_us, int64_t *wait_us);
+
+/* Call while any camera is streaming; a stretch of RCD_BACKOFF_STABLE_US
+ * without a cycle resets the spacing. */
+void rcd_backoff_streaming(rcd_backoff_t *b, int64_t now_us);
+
 #endif

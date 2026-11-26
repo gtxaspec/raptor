@@ -88,6 +88,7 @@ class Module:
         self.info_w, self.info_h = (int(v) for v in args.info_size.split("x"))
         self.skip = args.skip
         self.corrupt = args.corrupt
+        self.drop_after = args.drop_after
         self.delay = args.delay
         self.clips = {False: access_units(args.h264, False)}
         if args.h265:
@@ -227,6 +228,10 @@ class Module:
                 rec[-1] ^= 0xFF
             try:
                 conn.sendall(rec)
+                if self.drop_after and sent >= self.drop_after:
+                    conn.shutdown(socket.SHUT_RDWR)
+                    with self.lock:
+                        self.running[port] = False
             except OSError:
                 pass
 
@@ -254,6 +259,8 @@ def main():
                     help="frame rate the status replies claim (default: --fps)")
     ap.add_argument("--info-size", default="320x240",
                     help="WxH the status replies claim")
+    ap.add_argument("--drop-after", type=int, default=0,
+                    help="close the data sockets after this many frames of a session")
     ap.add_argument("--skip", type=int, default=0)
     ap.add_argument("--corrupt", type=int, default=0)
     ap.add_argument("--delay", type=float, default=0,

@@ -268,6 +268,88 @@ TEST ethcam_untrusted_stream_info(void)
 	PASS();
 }
 
+#define SEC(n) ((n) * 1000000LL)
+
+/* The first recovery cycle is allowed at once: nothing before it (the
+ * start cycle never reaches the helper) delays it. */
+TEST rcd_backoff_first_cycle_is_free(void)
+{
+	rcd_backoff_t b = {0};
+	int64_t w = -1;
+	ASSERT_EQ(RCD_BACKOFF_GO, rcd_backoff_take(&b, SEC(1), &w));
+	ASSERT_EQ(0, w);
+	PASS();
+}
+
+TEST rcd_backoff_doubles_and_caps(void)
+{
+	rcd_backoff_t b = {0};
+	int64_t w, t = SEC(100);
+	const int gaps[] = {15, 30, 60, 120, 300, 300, 300};
+	for (unsigned i = 0; i < sizeof(gaps) / sizeof(gaps[0]); i++) {
+		ASSERT_EQ(RCD_BACKOFF_GO, rcd_backoff_take(&b, t, &w));
+		/* one second early is refused and says when */
+		ASSERT(rcd_backoff_take(&b, t + SEC(gaps[i]) - SEC(1), &w) != RCD_BACKOFF_GO);
+		ASSERT_EQ(SEC(1), w);
+		t += SEC(gaps[i]);
+	}
+	PASS();
+}
+
+TEST rcd_backoff_stable_stretch_resets(void)
+{
+	rcd_backoff_t b = {0};
+	int64_t w, t = SEC(100);
+	for (int i = 0; i < 4; i++) { /* spacing is now 240 s after the next cycle */
+		ASSERT_EQ(RCD_BACKOFF_GO, rcd_backoff_take(&b, t, &w));
+		t += SEC(300);
+	}
+	/* streaming for just under ten minutes does not reset */
+	for (int64_t s = 0; s < RCD_BACKOFF_STABLE_US; s += SEC(5))
+		rcd_backoff_streaming(&b, t + s);
+	ASSERT_EQ(RCD_BACKOFF_GO, rcd_backoff_take(&b, t + RCD_BACKOFF_STABLE_US, &w));
+	ASSERT(rcd_backoff_take(&b, t + RCD_BACKOFF_STABLE_US + SEC(200), &w) != RCD_BACKOFF_GO);
+	t += RCD_BACKOFF_STABLE_US + SEC(300);
+	/* a full ten minutes does */
+	for (int64_t s = 0; s <= RCD_BACKOFF_STABLE_US; s += SEC(5))
+		rcd_backoff_streaming(&b, t + s);
+	t += RCD_BACKOFF_STABLE_US;
+	ASSERT_EQ(RCD_BACKOFF_GO, rcd_backoff_take(&b, t, &w));
+	ASSERT(rcd_backoff_take(&b, t + SEC(14), &w) != RCD_BACKOFF_GO);
+	ASSERT_EQ(RCD_BACKOFF_GO, rcd_backoff_take(&b, t + SEC(15), &w));
+	PASS();
+}
+
+/* streaming notes with a gap in them are not one stretch */
+TEST rcd_backoff_gap_restarts_stretch(void)
+{
+	rcd_backoff_t b = {0};
+	int64_t w, t = SEC(100);
+	ASSERT_EQ(RCD_BACKOFF_GO, rcd_backoff_take(&b, t, &w));
+	t += SEC(15);
+	ASSERT_EQ(RCD_BACKOFF_GO, rcd_backoff_take(&b, t, &w));
+	rcd_backoff_streaming(&b, t);
+	rcd_backoff_streaming(&b, t + RCD_BACKOFF_STABLE_US); /* nothing in between */
+	ASSERT_EQ(RCD_BACKOFF_GO, rcd_backoff_take(&b, t + RCD_BACKOFF_STABLE_US, &w));
+	ASSERT(rcd_backoff_take(&b, t + RCD_BACKOFF_STABLE_US + SEC(40), &w) != RCD_BACKOFF_GO);
+	PASS();
+}
+
+TEST rcd_backoff_warns_once_per_period(void)
+{
+	rcd_backoff_t b = {0};
+	int64_t w;
+	ASSERT_EQ(RCD_BACKOFF_GO, rcd_backoff_take(&b, SEC(100), &w));
+	ASSERT_EQ(RCD_BACKOFF_REFUSE_WARN, rcd_backoff_take(&b, SEC(105), &w));
+	ASSERT_EQ(SEC(10), w);
+	ASSERT_EQ(RCD_BACKOFF_REFUSE_QUIET, rcd_backoff_take(&b, SEC(108), &w));
+	ASSERT_EQ(RCD_BACKOFF_REFUSE_QUIET, rcd_backoff_take(&b, SEC(114), &w));
+	ASSERT_EQ(RCD_BACKOFF_GO, rcd_backoff_take(&b, SEC(115), &w));
+	/* the next period warns again */
+	ASSERT_EQ(RCD_BACKOFF_REFUSE_WARN, rcd_backoff_take(&b, SEC(116), &w));
+	PASS();
+}
+
 SUITE(ethcam_suite)
 {
 	RUN_TEST(ethcam_cmd_has_nul);
@@ -282,4 +364,9 @@ SUITE(ethcam_suite)
 	RUN_TEST(rcd_seq_gaps_and_reboots);
 	RUN_TEST(rcd_seq_zero_period);
 	RUN_TEST(ethcam_untrusted_stream_info);
+	RUN_TEST(rcd_backoff_first_cycle_is_free);
+	RUN_TEST(rcd_backoff_doubles_and_caps);
+	RUN_TEST(rcd_backoff_stable_stretch_resets);
+	RUN_TEST(rcd_backoff_gap_restarts_stretch);
+	RUN_TEST(rcd_backoff_warns_once_per_period);
 }

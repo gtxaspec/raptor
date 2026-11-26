@@ -60,6 +60,8 @@ typedef struct {
 	char iface[IFNAMSIZ];
 	pid_t dhcp_pid;
 	int power_gpio;
+	rcd_backoff_t power_backoff;
+	pthread_mutex_t backoff_lock;
 	pthread_mutex_t power_lock;
 	rcd_cam_t cams[RCD_MAX_CAMS];
 	int cam_count;
@@ -279,6 +281,11 @@ int rcd_tick(rcd_cam_t *c)
 			return -1;
 		}
 	}
+	if (atomic_load(&c->state) == ST_STREAMING) {
+		pthread_mutex_lock(&rs.backoff_lock);
+		rcd_backoff_streaming(&rs.power_backoff, now);
+		pthread_mutex_unlock(&rs.backoff_lock);
+	}
 	int64_t *next = &rs.next_utc[c - rs.cams];
 	if (now >= *next) {
 		int64_t wall = rss_wallclock_us(), mono = rss_timestamp_us();
@@ -295,12 +302,28 @@ int rcd_tick(rcd_cam_t *c)
 static int gpio_write(int gpio, int val);
 
 /* Cut the camera supply for 3 s. It feeds every camera on the link, so
- * the lock keeps two failing cameras from cycling it at once. */
-static void power_cycle(const char *why)
+ * the lock keeps two failing cameras from cycling it at once. A recovery
+ * cycle is spaced by a growing backoff: a camera that streams and drops
+ * again and again would otherwise cut the supply every few seconds. The
+ * cycle at start is not a recovery and neither counts nor waits. */
+static void power_cycle(const char *why, bool recovery)
 {
 	if (rs.power_gpio < 0)
 		return;
 	pthread_mutex_lock(&rs.power_lock);
+	if (recovery) {
+		int64_t wait_us;
+		pthread_mutex_lock(&rs.backoff_lock);
+		int r = rcd_backoff_take(&rs.power_backoff, rss_timestamp_us(), &wait_us);
+		pthread_mutex_unlock(&rs.backoff_lock);
+		if (r != RCD_BACKOFF_GO) {
+			if (r == RCD_BACKOFF_REFUSE_WARN)
+				RSS_WARN("power cycle refused (%s); next one allowed in %d s", why,
+					 (int)((wait_us + 999999) / 1000000));
+			pthread_mutex_unlock(&rs.power_lock);
+			return;
+		}
+	}
 	RSS_WARN("power-cycling the cameras: %s", why);
 	gpio_write(rs.power_gpio, 0);
 	for (int i = 0; i < 30 && rss_running(rs.running); i++)
@@ -329,9 +352,9 @@ static void *cam_thread(void *arg)
 		if (streamed && c->driver->one_session_per_boot) {
 			if (rs.power_gpio < 0)
 				rcd_error(c, "needs a power cycle to stream again (no power_gpio)");
-			power_cycle("a camera needs a fresh boot to stream again");
+			power_cycle("a camera needs a fresh boot to stream again", true);
 		} else if (failed >= RCD_POWER_AFTER) {
-			power_cycle("a camera did not come up");
+			power_cycle("a camera did not come up", true);
 			failed = 0;
 		}
 		atomic_store(&c->state, ret < 0 ? ST_ERROR : ST_CONNECTING);
@@ -451,7 +474,7 @@ static void link_up(void)
 		return;
 	/* a fresh boot clears whatever state a previous session left in a camera */
 	if (rss_config_get_bool(rs.cfg, "cameras", "power_cycle", true))
-		power_cycle("start");
+		power_cycle("start", false);
 	else if (gpio_write(rs.power_gpio, 1) < 0)
 		RSS_WARN("cannot switch camera power (gpio %d)", rs.power_gpio);
 }
@@ -627,6 +650,7 @@ int main(int argc, char **argv)
 	rs.running = dctx.running;
 	rs.power_gpio = -1;
 	pthread_mutex_init(&rs.power_lock, NULL);
+	pthread_mutex_init(&rs.backoff_lock, NULL);
 	rs.cfg = dctx.cfg;
 	rs.config_path = dctx.config_path;
 

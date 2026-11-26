@@ -256,5 +256,56 @@ kill "$HOSTILE_PID"
 wait "$HOSTILE_PID" 2> /dev/null
 grep -q "ERROR: AddressSanitizer\|runtime error:\|LeakSanitizer" "$WORK/hostile.log" && fail "sanitizer report (hostile)" || pass "no sanitizer reports (hostile)"
 
+# a camera that streams and drops again and again may cut the shared supply
+# only at growing intervals (power_gpio 99999 does not exist: the writes fail
+# harmlessly). The cycle at start does not count against the spacing.
+rm -f /var/run/rss/rcd.pid /var/run/rss/rcd.sock
+fake_start 127.0.0.16 --drop-after 5 || fail "churning fake start"
+cat > "$WORK/churn.conf" << EOF
+[cameras]
+enabled = true
+iface =
+dhcp = false
+power_gpio = 99999
+
+[camera1]
+enabled = true
+ip = 127.0.0.16
+slot = 1
+codec = h264
+sub = false
+EOF
+"$OUT/rcd" -c "$WORK/churn.conf" -f -d > "$WORK/churn.log" 2>&1 &
+PIDS+=($!)
+CHURN_PID=$!
+# the first recovery must not wait for the spacing the start cycle would leave
+FIRST=0
+for _ in $(seq 70); do
+	grep -q "power-cycling the cameras: a camera" "$WORK/churn.log" && FIRST=1 && break
+	sleep 0.2
+done
+[ $FIRST = 1 ] && pass "first recovery cycle within 14 s of start" || fail "first recovery cycle delayed"
+sleep 46
+STARTS=$(grep -c "power-cycling the cameras: start" "$WORK/churn.log")
+CYCLES=$(grep -c "power-cycling the cameras: a camera" "$WORK/churn.log")
+REFUSED=$(grep -c "power cycle refused" "$WORK/churn.log")
+[ "$STARTS" = "1" ] && pass "start cycle done once" || fail "start cycles: $STARTS"
+# unspaced, a session of about 5 s would give 9 or more in a minute
+if [ "$CYCLES" -ge 2 ] && [ "$CYCLES" -le 4 ]; then
+	pass "recovery cycles spaced by the backoff ($CYCLES in 60 s)"
+else
+	fail "recovery cycles in 60 s: $CYCLES"
+fi
+if [ "$REFUSED" -ge 1 ] && [ "$REFUSED" -le $((CYCLES + 1)) ]; then
+	pass "refusals warn once per period ($REFUSED)"
+else
+	fail "refusal warnings: $REFUSED for $CYCLES cycles"
+fi
+grep -q "power cycle refused (.*); next one allowed in [0-9]* s" "$WORK/churn.log" &&
+	pass "refusal says when the next cycle is allowed" || fail "refusal message"
+kill "$CHURN_PID"
+wait "$CHURN_PID" 2> /dev/null
+grep -q "ERROR: AddressSanitizer\|runtime error:\|LeakSanitizer" "$WORK/churn.log" && fail "sanitizer report (churn)" || pass "no sanitizer reports (churn)"
+
 echo "=== Results: $PASS passed, $FAIL failed, $SKIP skipped ==="
 [ $FAIL -eq 0 ]
