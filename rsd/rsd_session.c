@@ -16,6 +16,7 @@
 #include <rss_aac.h>
 
 #include "rsd.h"
+#include "rsd_rtp_info.h"
 
 /* Base64 encode for sprop-parameter-sets */
 static int b64_encode(const uint8_t *src, int len, char *dst, int dst_size)
@@ -921,7 +922,6 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 static void rsd_client_t_play(VSelf, Compy_Context *ctx, const Compy_Request *req)
 {
 	VSELF(rsd_client_t);
-	(void)req;
 
 	/* A session may carry only the ONVIF backchannel: with the
 	 * backchannel Require tag, PLAY also starts the client-to-server
@@ -939,64 +939,33 @@ static void rsd_client_t_play(VSelf, Compy_Context *ctx, const Compy_Request *re
 
 	/* Build RTP-Info header (RFC 2326 Section 12.33).
 	 * Generate random initial RTP timestamps (RFC 3550 §5.1) so clients
-	 * can distinguish "timestamp=0" from "no timestamp".
-	 * Strip userinfo (credentials) from the URI — ffmpeg strips them
-	 * internally and fails to match if they're present in RTP-Info. */
+	 * can distinguish "timestamp=0" from "no timestamp". */
 	{
 		char rtp_info[512];
-		int off = 0;
-
-		/* Strip trailing '/' from base URI */
-		CharSlice99 base = req->start_line.uri;
-		while (base.len > 0 && base.ptr[base.len - 1] == '/')
-			base.len--;
-
-		/* Strip userinfo: rtsp://user:pass@host → rtsp://host */
-		const char *at = NULL;
-		for (size_t i = 0; i < base.len; i++) {
-			if (base.ptr[i] == '@') {
-				at = base.ptr + i;
-				break;
-			}
-			if (base.ptr[i] == '/')
-				break;
-		}
-		char clean_url[512];
-		if (at) {
-			const char *scheme_end = NULL;
-			for (size_t i = 0; i + 2 < base.len; i++) {
-				if (base.ptr[i] == '/' && base.ptr[i + 1] == '/') {
-					scheme_end = base.ptr + i + 2;
-					break;
-				}
-			}
-			if (scheme_end && at > scheme_end) {
-				int slen = (int)(scheme_end - base.ptr);
-				int rlen = (int)(base.len - (at + 1 - base.ptr));
-				snprintf(clean_url, sizeof(clean_url), "%.*s%.*s", slen, base.ptr,
-					 rlen, at + 1);
-				base = CharSlice99_from_str(clean_url);
-			}
-		}
+		rsd_rtp_info_track_t video = {0}, audio = {0};
 
 		if (self->video.rtp) {
 			self->video_ts_rand = (uint32_t)rand();
-			uint16_t vseq = Compy_RtpTransport_get_seq(self->video.rtp);
-			off += snprintf(rtp_info + off, sizeof(rtp_info) - off,
-					"url=%.*s/video;seq=%u;rtptime=%u", (int)base.len, base.ptr,
-					vseq, self->video_ts_rand);
+			video = (rsd_rtp_info_track_t){true,
+						       Compy_RtpTransport_get_seq(self->video.rtp),
+						       self->video_ts_rand};
 		}
 		if (self->audio.rtp) {
 			self->audio_ts_rand = (uint32_t)rand();
-			uint16_t aseq = Compy_RtpTransport_get_seq(self->audio.rtp);
-			if (off > 0)
-				off += snprintf(rtp_info + off, sizeof(rtp_info) - off, ",");
-			off += snprintf(rtp_info + off, sizeof(rtp_info) - off,
-					"url=%.*s/audio;seq=%u;rtptime=%u", (int)base.len, base.ptr,
-					aseq, self->audio_ts_rand);
+			audio = (rsd_rtp_info_track_t){true,
+						       Compy_RtpTransport_get_seq(self->audio.rtp),
+						       self->audio_ts_rand};
 		}
-
-		if (off > 0)
+		int n = rsd_rtp_info_build(rtp_info, sizeof(rtp_info), req->start_line.uri.ptr,
+					   req->start_line.uri.len, &video, &audio);
+		if (n < 0) {
+			RSS_WARN("PLAY refused: a %zu-byte request URI does not fit RTP-Info",
+				 req->start_line.uri.len);
+			compy_respond(ctx, COMPY_STATUS_REQUEST_URI_TOO_LARGE,
+				      "Request-URI Too Large");
+			return;
+		}
+		if (n > 0)
 			compy_header(ctx, COMPY_HEADER_RTP_INFO, "%s", rtp_info);
 	}
 

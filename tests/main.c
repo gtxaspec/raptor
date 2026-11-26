@@ -9,6 +9,7 @@ extern SUITE(rtd_sim_suite);
 extern SUITE(io_suite);
 extern SUITE(ethcam_suite);
 extern SUITE(sdp_suite);
+extern SUITE(rtp_info_suite);
 extern SUITE(codec_suite);
 extern SUITE(ring_suite);
 extern SUITE(vui_suite);
@@ -51,6 +52,7 @@ int main(int argc, char **argv)
 	RUN_SUITE(rtd_sim_suite);
 	RUN_SUITE(io_suite);
 	RUN_SUITE(sdp_suite);
+	RUN_SUITE(rtp_info_suite);
 	RUN_SUITE(codec_suite);
 	RUN_SUITE(ring_suite);
 	RUN_SUITE(vui_suite);

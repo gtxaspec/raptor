@@ -890,6 +890,83 @@ else
     fail "session after refused re-SETUP" "$(echo "$RESETUP_OUT" | grep ALIVE=)"
 fi
 
+# ── PLAY with a URI too long for RTP-Info ──
+# RTP-Info repeats the request URI once per track in a 512-byte buffer. A
+# PLAY whose URI did not fit, sent with video and audio set up, wrote the
+# client's bytes past it on the stack: before authentication when no RTSP
+# credentials are set. It must be refused 414 with the session intact, and
+# the refusal logged.
+LONGURI_WARNS_BEFORE=$(grep -c "PLAY refused" "$LOG_DIR/rsd.log" 2>/dev/null || true)
+LONGURI_OUT=$(python3 - <<'LONGURI_EOF'
+import socket
+
+def req(sock, buf, method, url, cseq, extra=""):
+    sock.sendall(f"{method} {url} RTSP/1.0\r\nCSeq: {cseq}\r\n{extra}\r\n".encode())
+    try:
+        while b"\r\n\r\n" not in buf[0]:
+            d = sock.recv(4096)
+            if not d:
+                return "closed"
+            buf[0] += d
+    except OSError:
+        return "closed"
+    head, _, rest = buf[0].partition(b"\r\n\r\n")
+    headers = head.decode(errors="replace")
+    clen = 0
+    for line in headers.split("\r\n"):
+        if line.lower().startswith("content-length:"):
+            clen = int(line.split(":", 1)[1])
+    while len(rest) < clen:
+        rest += sock.recv(4096)
+    buf[0] = rest[clen:]
+    return headers
+
+def code(r):
+    parts = r.split("\r\n")[0].split(" ")
+    return parts[1] if len(parts) > 1 else r[:20]
+
+s = socket.create_connection(("127.0.0.1", 15554), timeout=5)
+buf = [b""]
+base = "rtsp://127.0.0.1:15554/stream0"
+req(s, buf, "DESCRIBE", base, 1, "Accept: application/sdp\r\n")
+r1 = req(s, buf, "SETUP", base + "/video", 2, "Transport: RTP/AVP;unicast;client_port=45410-45411\r\n")
+sid = ""
+for line in r1.split("\r\n"):
+    if line.lower().startswith("session:"):
+        sid = line.split(":", 1)[1].split(";")[0].strip()
+sess = f"Session: {sid}\r\n"
+r2 = req(s, buf, "SETUP", base + "/audio", 3, "Transport: RTP/AVP;unicast;client_port=45412-45413\r\n" + sess)
+r3 = req(s, buf, "PLAY", base + "/" + "A" * 560, 4, sess)
+r4 = req(s, buf, "PLAY", base, 5, sess + "Range: npt=0.000-\r\n")
+req(s, buf, "TEARDOWN", base, 6, sess)
+s.close()
+print("AUDIO=" + code(r2))
+print("LONG=" + code(r3))
+print("NORMAL=" + code(r4))
+print("RTPINFO=" + ("both" if "/video;" in r4 and "/audio;" in r4 else "missing"))
+LONGURI_EOF
+)
+if echo "$LONGURI_OUT" | grep -q "AUDIO=200"; then
+    if echo "$LONGURI_OUT" | grep -q "LONG=414"; then
+        pass "PLAY with a URI too long for RTP-Info is refused (414)"
+    else
+        fail "PLAY with a URI too long for RTP-Info" "expected 414: $(echo "$LONGURI_OUT" | grep LONG=)"
+    fi
+    if echo "$LONGURI_OUT" | grep -q "NORMAL=200" && echo "$LONGURI_OUT" | grep -q "RTPINFO=both"; then
+        pass "session plays normally after the refused PLAY, RTP-Info for both tracks"
+    else
+        fail "session after the refused PLAY" "$(echo "$LONGURI_OUT" | tr '\n' ' ')"
+    fi
+    LONGURI_WARNS=$(grep -c "PLAY refused" "$LOG_DIR/rsd.log" 2>/dev/null || true)
+    if [ $((LONGURI_WARNS - LONGURI_WARNS_BEFORE)) -eq 1 ]; then
+        pass "the refused PLAY is warned once"
+    else
+        fail "the refused PLAY is warned once" "$((LONGURI_WARNS - LONGURI_WARNS_BEFORE)) warnings"
+    fi
+else
+    fail "long-URI PLAY leg" "audio SETUP did not succeed: $(echo "$LONGURI_OUT" | tr '\n' ' ')"
+fi
+
 echo ""
 echo "=== Multi-client stress test ==="
 

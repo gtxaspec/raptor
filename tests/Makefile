@@ -20,7 +20,7 @@ CFLAGS = -Wall -Wextra -std=$(RAPTOR_STD) -D_GNU_SOURCE -g $(SAN_FLAGS) $(RAPTOR
          -I../../raptor-ipc/include -I.
 LDFLAGS = $(SAN_FLAGS) -lpthread -lrt -lm -Wl,--wrap=fdatasync,--wrap=fsync
 
-TEST_SRCS = main.c test_ric_json.c test_nal.c test_prebuf.c test_mux.c test_codec.c test_sdp.c test_ring.c test_rsp.c \
+TEST_SRCS = main.c test_rtp_info.c test_ric_json.c test_nal.c test_prebuf.c test_mux.c test_codec.c test_sdp.c test_ring.c test_rsp.c \
             test_ctrl.c test_sign.c test_storage.c test_timelapse.c test_sendq.c test_idr_recovery.c test_rwd_sendq.c test_rwd_pacer.c test_rwd_rtcp.c test_rad_clock.c test_media_clock.c test_resync.c test_vui.c \
             test_backchannel.c test_config.c test_rhd_slots.c test_gps.c test_rtd_sim.c test_io.c test_ethcam.c test_streams.c \
             test_ring_size.c ../rvd/rvd_ring_size.c \
