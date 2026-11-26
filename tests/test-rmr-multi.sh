@@ -320,6 +320,13 @@ if [ -n "$CLIP" ]; then
 	[ "$R" = ok ] && pass "front clip verifies" || fail "front clip: $R"
 	R=$(verify "${CLIP%.mp4}_R.mp4")
 	[ "$R" = ok ] && pass "rear clip verifies" || fail "rear clip: $R"
+	# The pre-buffer replay ends with the frame that opened the clip;
+	# writing that frame again as live doubled it at the join
+	DUP=$(for f in "$CLIP" "${CLIP%.mp4}_R.mp4"; do
+		ffprobe -v error -select_streams v -show_entries packet=dts -of csv=p=0 "$f" | uniq -d | head -1
+	done)
+	[ -z "$DUP" ] && pass "no frame written twice where the pre-roll meets the live frames" ||
+		fail "repeated video DTS in the clip: $(echo $DUP)"
 else
 	fail "no clip pair: $(find "$WORK/rec/clips" -name '*.mp4' 2> /dev/null | tr '\n' ' ')"
 fi

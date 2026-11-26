@@ -647,7 +647,7 @@ static int open_clip_with_prebuffer(rmr_track_t *t)
 			  audio_frame_count, v_duration_us / 1000000.0);
 	}
 
-	return 0;
+	return vcount > 0; /* replayed the current frame: it is in the pre-buffer */
 }
 
 /* ── Control socket handler ── */
@@ -1199,17 +1199,22 @@ static void track_write_clip(rmr_track_t *t, bool clip_want, const rss_ring_slot
 	rmr_state_t *st = t->st;
 
 	/* Start clip with pre-buffer */
+	bool replayed = false;
 	if (clip_want && !t->clip_mux && rmr_storage_available(st->clip_storage)) {
-		if (open_clip_with_prebuffer(t) == 0) {
+		int r = open_clip_with_prebuffer(t);
+		if (r >= 0) {
 			RSS_INFO("motion clip active");
 			/* the seconds before the event are on the medium first */
 			rmr_io_sync(st->io, t->clip_fd);
+			replayed = r > 0;
 		}
 	}
 	if (!t->clip_mux)
 		return;
 
-	clip_write_video(t, mux_data, mux_len, meta->timestamp, meta->is_key);
+	/* the pre-buffer replay ended with this frame: it is in the clip */
+	if (!replayed)
+		clip_write_video(t, mux_data, mux_len, meta->timestamp, meta->is_key);
 
 	/* Check clip length cap */
 	if (st->clip_length_sec > 0) {
