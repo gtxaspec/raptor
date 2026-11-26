@@ -4,6 +4,8 @@
 
 #include "rmr_io.h"
 
+#include <rss_common.h>
+
 #include <errno.h>
 #include <pthread.h>
 #include <stdbool.h>
@@ -158,8 +160,11 @@ static void *syncer(void *arg)
 			if (!failed && fdatasync(fd) < 0)
 				err = errno;
 		} else {
-			if (!failed)
-				fsync(fd);
+			/* The file's last chance to reach the card (a crash clip's
+			 * included): nobody is left to fail, so say so */
+			if (!failed && fsync(fd) < 0)
+				RSS_WARN("recording fd %d: fsync at close failed: %s", fd,
+					 strerror(errno));
 			/* before close frees the number for the next open */
 			pthread_mutex_lock(&io->lock);
 			err_clear(io, fd);

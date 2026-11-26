@@ -1,10 +1,13 @@
 #include "greatest.h"
 #include "rmr_io.h"
 
+#include <rss_common.h>
+
 #include <errno.h>
 #include <pthread.h>
 #include <time.h>
 #include <fcntl.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -65,6 +68,10 @@ int __wrap_fsync(int fd)
 	if (sync_delay_ms)
 		usleep((useconds_t)sync_delay_ms * 1000);
 	log_sync('f', fd);
+	if (fd == sync_fail_fd) {
+		errno = EIO;
+		return -1;
+	}
 	return __real_fsync(fd);
 }
 
@@ -81,6 +88,43 @@ static int64_t now_ms(void)
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+static int count_in_file(const char *path, const char *needle)
+{
+	FILE *f = fopen(path, "r");
+	if (!f)
+		return -1;
+	char line[512];
+	int n = 0;
+	while (fgets(line, sizeof(line), f))
+		n += strstr(line, needle) != NULL;
+	fclose(f);
+	return n;
+}
+
+/* Close fd through the writer with the log in a file; the number of
+ * close-time fsync warnings it logged */
+static int close_and_count_warnings(int fd, const char *path, bool fail)
+{
+	char log[96];
+	snprintf(log, sizeof(log), "%s.log", path);
+	rss_log_init("test", RSS_LOG_WARN, RSS_LOG_TARGET_FILE, log);
+	rmr_io_t *io = rmr_io_create(64 * 1024);
+	if (!io)
+		return -1;
+	sync_reset(0);
+	if (fail)
+		sync_fail_fd = fd;
+	rmr_io_write(io, fd, "x", 1);
+	rmr_io_close(io, fd);
+	rmr_io_drain(io);
+	rmr_io_destroy(io);
+	sync_reset(0);
+	rss_log_init("test", RSS_LOG_INFO, RSS_LOG_TARGET_STDERR, NULL);
+	int n = count_in_file(log, "fsync at close failed");
+	unlink(log);
+	return n;
 }
 
 TEST io_order_across_wraps(void)
@@ -311,6 +355,32 @@ TEST io_sync_error_reported(void)
 	PASS();
 }
 
+/* A failed fsync at close is logged once, and the file still closes */
+TEST io_close_fsync_failure_still_closes(void)
+{
+	char a[64];
+	int fd = tmp_fd(a, sizeof(a));
+	ASSERT(fd >= 0);
+	int warns = close_and_count_warnings(fd, a, true);
+	int still_open = fcntl(fd, F_GETFD) != -1;
+	unlink(a);
+	ASSERT_EQ(1, warns);
+	ASSERTm("closed despite the failed fsync", !still_open);
+	PASS();
+}
+
+/* A clean close logs nothing */
+TEST io_close_clean_is_quiet(void)
+{
+	char a[64];
+	int fd = tmp_fd(a, sizeof(a));
+	ASSERT(fd >= 0);
+	int warns = close_and_count_warnings(fd, a, false);
+	unlink(a);
+	ASSERT_EQ(0, warns);
+	PASS();
+}
+
 SUITE(io_suite)
 {
 	RUN_TEST(io_room_reports_free_space);
@@ -322,4 +392,6 @@ SUITE(io_suite)
 	RUN_TEST(io_close_after_its_syncs);
 	RUN_TEST(io_syncs_coalesce);
 	RUN_TEST(io_sync_error_reported);
+	RUN_TEST(io_close_fsync_failure_still_closes);
+	RUN_TEST(io_close_clean_is_quiet);
 }
