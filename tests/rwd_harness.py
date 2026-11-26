@@ -259,9 +259,16 @@ def ws_read(conn):
     return exact(n)
 
 
+def is_wire_id(v):
+    """A 20-byte binary string, as trackers require for every identifier."""
+    return isinstance(v, str) and len(v) == 20 and all(ord(c) < 256 for c in v)
+
+
 class Tracker:
     """Accepts one camera at a time; `send(msg)` queues a frame for it and
-    answers received from the camera land in `answers`."""
+    answers received from the camera land in `answers`. Like the public
+    trackers it relays only an offer's or answer's type and sdp, and notes in
+    `bad_ids` any message whose identifiers are not 20-byte binary strings."""
 
     def __init__(self, cert, key):
         self.ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -277,6 +284,7 @@ class Tracker:
         self.accepted = 0
         self.announce = None
         self.answers = []
+        self.bad_ids = []
         self.lock = threading.Lock()
         self.t = threading.Thread(target=self.run, daemon=True)
         self.t.start()
@@ -295,6 +303,7 @@ class Tracker:
                     req += conn.recv(1024)
                 conn.sendall(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\r\n")
                 self.announce = json.loads(ws_read(conn))
+                self.check_ids(self.announce, ("info_hash", "peer_id"))
                 self.conn = conn
                 self.connected.set()
                 conn.settimeout(0.5)
@@ -303,13 +312,25 @@ class Tracker:
                         msg = ws_read(conn)
                     except socket.timeout:
                         continue
+                    m = json.loads(msg)
+                    if "answer" in m:
+                        self.check_ids(m, ("info_hash", "peer_id", "to_peer_id", "offer_id"))
+                        m["answer"] = {k: m["answer"][k] for k in ("type", "sdp")
+                                       if k in m["answer"]}
                     with self.lock:
-                        self.answers.append(json.loads(msg))
+                        self.answers.append(m)
             except (OSError, ssl.SSLError, ValueError):
                 pass
             self.connected.clear()
 
+    def check_ids(self, m, fields):
+        for f in fields:
+            if not is_wire_id(m.get(f)):
+                self.bad_ids.append("%s=%r" % (f, m.get(f)))
+
     def send(self, obj):
+        if "offer" in obj:
+            obj = dict(obj, offer={k: obj["offer"][k] for k in ("type", "sdp")})
         with self.lock:
             self.conn.sendall(ws_frame(json.dumps(obj).encode()))
 
@@ -329,17 +350,33 @@ class Tracker:
 
 
 def auth_tag(key, direction, offer_id, sdp):
-    msg = (direction + "\n" + offer_id + "\n" + sdp).encode()
+    """HMAC-SHA256(key, dir \\n hex(offer_id bytes) \\n sdp-without-the-tag-line)"""
+    oid_hex = offer_id.encode("latin-1").hex()
+    msg = (direction + "\n" + oid_hex + "\n" + sdp).encode()
     return hmac.new(key.encode(), msg, hashlib.sha256).hexdigest()
 
 
-def wt_offer(key, offer_id, sdp, auth="good"):
-    o = {"type": "offer", "sdp": sdp}
+def new_offer_id():
+    return os.urandom(20).decode("latin-1")
+
+
+def wt_offer(key, offer_id, sdp, auth="good", stream=None):
+    if stream is not None:
+        sdp += "a=x-raptor-stream:%d\r\n" % stream
     if auth == "good":
-        o["auth"] = auth_tag(key, "offer", offer_id, sdp)
+        sdp += "a=x-raptor-auth:%s\r\n" % auth_tag(key, "offer", offer_id, sdp)
     elif auth == "wrong":
-        o["auth"] = auth_tag("not-the-key", "offer", offer_id, sdp)
-    return {"action": "announce", "peer_id": "P" * 20, "offer_id": offer_id, "offer": o}
+        sdp += "a=x-raptor-auth:%s\r\n" % auth_tag("not-the-key", "offer", offer_id, sdp)
+    return {"action": "announce", "peer_id": "-PY0001-" + "p" * 12, "offer_id": offer_id,
+            "offer": {"type": "offer", "sdp": sdp}}
+
+
+def answer_tag_ok(key, offer_id, sdp):
+    m = re.search(r"a=x-raptor-auth:([0-9a-f]{64})\r\n", sdp)
+    if not m:
+        return False
+    rest = sdp[:m.start()] + sdp[m.end():]
+    return hmac.compare_digest(m.group(1), auth_tag(key, "answer", offer_id, rest))
 
 
 def wt_extra(tls_verify="false", key="viewerkey-123"):
@@ -410,27 +447,40 @@ def scenario_cors():
 
 
 def scenario_wt_auth(cert, key):
-    print("WebTorrent offers must carry the share key")
+    print("WebTorrent offers must carry the share key, in tracker wire form")
     tr = Tracker(cert, key)
     d = Daemon("wt-auth", extra=wt_extra())
     sk = share_key(d)
     check("share key announced", sk is not None)
     check("camera reached the tracker", tr.connected.wait(10))
+    ann = tr.announce or {}
+    check("announce ids are 20-byte binary strings", not tr.bad_ids, ", ".join(tr.bad_ids))
+    want_ih = hashlib.sha256(("raptor:" + (sk or "")).encode()).digest()[:20].decode("latin-1")
+    check("info_hash is SHA-256(raptor:key) cut to 20 bytes", ann.get("info_hash") == want_ih)
+    check("peer_id is Azureus-style -RP0001-",
+          str(ann.get("peer_id", "")).startswith("-RP0001-"))
 
     sdp = offer(ufrag="wtpeer")
-    tr.send(wt_offer(sk, "s0_noauth", sdp, auth="none"))
+    tr.send(wt_offer(sk, new_offer_id(), sdp, auth="none"))
     check("offer without auth gets no answer", not tr.wait_answers(1, 3))
     check("missing auth logged", "not authenticated with the share key" in d.logtext())
-    tr.send(wt_offer(sk, "s0_wrong", sdp, auth="wrong"))
+    tr.send(wt_offer(sk, new_offer_id(), sdp, auth="wrong"))
     check("offer with a wrong key gets no answer", not tr.wait_answers(1, 3))
+    tr.send(wt_offer(sk, "s0_" + "x" * 10, sdp))
+    check("13-character offer_id gets no answer", not tr.wait_answers(1, 3))
+    check("bad offer_id logged", "offer_id is not a 20-byte binary string" in d.logtext())
 
-    good = wt_offer(sk, "s0_good", sdp)
+    oid = new_offer_id()
+    good = wt_offer(sk, oid, sdp, stream=1)
     tr.send(good)
     check("authenticated offer is answered", tr.wait_answers(1, 5))
     if tr.answers:
-        ans = tr.answers[0]["answer"]
-        check("answer proves the camera knows the key",
-              ans.get("auth") == auth_tag(sk, "answer", "s0_good", ans["sdp"]))
+        a = tr.answers[0]
+        check("answer ids are 20-byte binary strings", not tr.bad_ids, ", ".join(tr.bad_ids))
+        check("answer echoes the offer_id", a.get("offer_id") == oid)
+        check("answer's SDP proves the camera knows the key",
+              answer_tag_ok(sk, oid, a["answer"]["sdp"]))
+    check("stream chosen in the SDP is served", "(stream 1)" in d.logtext())
     tr.send(good)
     check("replayed offer is not answered twice", not tr.wait_answers(2, 3))
     check("replay logged", "offer_id already used" in d.logtext())
@@ -496,7 +546,7 @@ def scenario_wt_race(cert, key):
     end = time.time() + 25
     while time.time() < end and d.alive():
         n += 1
-        oid = "s0_race%d" % n
+        oid = new_offer_id()
         try:
             tr.send(wt_offer(sk, oid, offer(ufrag="wt%d" % n, cands=cands)))
         except OSError:

@@ -32,6 +32,7 @@
 #include <mbedtls/x509_crt.h>
 
 #include "rwd.h"
+#include "rwd_wt_proto.h"
 
 #define WT_MIN_KEY_LEN 8
 
@@ -560,39 +561,19 @@ int rwd_stun_discover_srflx(int udp_fd, const char *server, int port, char *ip_o
 	return -1;
 }
 
-/* ── info_hash computation ── */
+/* ── Tracker identifiers ── */
 
-/* Base64 encode (no padding variant not needed — standard base64 with padding) */
-static size_t b64_encode(const uint8_t *in, size_t in_len, char *out, size_t out_size)
+/* info_hash: SHA-256("raptor:" + key) cut to 20 bytes, as BEP 52 does for a
+ * v2 info hash in 20-byte fields, sent as a binary string. */
+static void compute_info_hash(const char *share_key, char *out)
 {
-	static const char t[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-	size_t j = 0;
-	for (size_t i = 0; i < in_len && j + 4 < out_size; i += 3) {
-		uint32_t v = (uint32_t)in[i] << 16;
-		if (i + 1 < in_len)
-			v |= (uint32_t)in[i + 1] << 8;
-		if (i + 2 < in_len)
-			v |= in[i + 2];
-		out[j++] = t[(v >> 18) & 0x3F];
-		out[j++] = t[(v >> 12) & 0x3F];
-		out[j++] = (i + 1 < in_len) ? t[(v >> 6) & 0x3F] : '=';
-		out[j++] = (i + 2 < in_len) ? t[v & 0x3F] : '=';
-	}
-	out[j] = '\0';
-	return j;
-}
-
-/* info_hash = base64(SHA-256("raptor:" + key)) */
-static void compute_info_hash(const char *share_key, char *b64_out)
-{
-	char input[128]; /* "raptor:" (7) + share_key (up to 36 with prefix) + null */
+	char input[128]; /* "raptor:" (7) + share_key (up to 31) + null */
 	snprintf(input, sizeof(input), "raptor:%s", share_key);
 
 	uint8_t hash[32];
 	const mbedtls_md_info_t *md = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
 	mbedtls_md(md, (const uint8_t *)input, strlen(input), hash);
-
-	b64_encode(hash, 32, b64_out, 48);
+	wt_bin_to_json(hash, WT_ID_LEN, out);
 }
 
 static void generate_random_id(char *out, size_t len)
@@ -652,15 +633,18 @@ static int wt_announce(wt_tls_t *tls, const char *info_hash, const char *peer_id
  *
  * The tracker (a third party) relays offers and cannot be told apart from an
  * impostor, and the room name is a hash of the key, so a valid offer has to
- * prove knowledge of the share key itself: offer.auth is the hex
- * HMAC-SHA256, keyed with the share key, over "offer\n<offer_id>\n<sdp>".
- * The answer carries the same construction with "answer" so the viewer can
- * check it is talking to the camera. */
+ * prove knowledge of the share key itself. Trackers pass on only an offer's
+ * type and sdp, so the proof is an SDP line, a=x-raptor-auth:<hex>, the
+ * HMAC-SHA256 keyed with the share key over
+ * "offer\n" + hex(offer_id) + "\n" + the SDP without that line.
+ * The camera signs its answer the same way with "answer", so the viewer can
+ * check it is talking to the camera. The viewer picks the stream with
+ * a=x-raptor-stream:<n>, covered by the tag. */
 
 #define WT_AUTH_HEX    64
 #define WT_SEEN_OFFERS 16
 
-static void wt_auth_tag(const char *share_key, const char *dir, const char *offer_id,
+static void wt_auth_tag(const char *share_key, const char *dir, const char *offer_hex,
 			const char *sdp, char out[WT_AUTH_HEX + 1])
 {
 	uint8_t mac[32];
@@ -671,7 +655,7 @@ static void wt_auth_tag(const char *share_key, const char *dir, const char *offe
 	mbedtls_md_hmac_starts(&md, (const uint8_t *)share_key, strlen(share_key));
 	mbedtls_md_hmac_update(&md, (const uint8_t *)dir, strlen(dir));
 	mbedtls_md_hmac_update(&md, (const uint8_t *)"\n", 1);
-	mbedtls_md_hmac_update(&md, (const uint8_t *)offer_id, strlen(offer_id));
+	mbedtls_md_hmac_update(&md, (const uint8_t *)offer_hex, strlen(offer_hex));
 	mbedtls_md_hmac_update(&md, (const uint8_t *)"\n", 1);
 	mbedtls_md_hmac_update(&md, (const uint8_t *)sdp, strlen(sdp));
 	mbedtls_md_hmac_finish(&md, mac);
@@ -680,7 +664,7 @@ static void wt_auth_tag(const char *share_key, const char *dir, const char *offe
 		snprintf(out + i * 2, 3, "%02x", mac[i]);
 }
 
-static bool wt_auth_ok(const char *share_key, const char *offer_id, const char *sdp,
+static bool wt_auth_ok(const char *share_key, const char *offer_hex, const char *sdp,
 		       const char *got)
 {
 	char want[WT_AUTH_HEX + 1];
@@ -688,7 +672,7 @@ static bool wt_auth_ok(const char *share_key, const char *offer_id, const char *
 
 	if (!got || strlen(got) != WT_AUTH_HEX)
 		return false;
-	wt_auth_tag(share_key, "offer", offer_id, sdp, want);
+	wt_auth_tag(share_key, "offer", offer_hex, sdp, want);
 	for (int i = 0; i < WT_AUTH_HEX; i++)
 		diff |= (unsigned char)(want[i] ^ tolower((unsigned char)got[i]));
 	return diff == 0;
@@ -698,7 +682,7 @@ static bool wt_auth_ok(const char *share_key, const char *offer_id, const char *
  * already answered. Single thread (the tracker loop) touches this. */
 static bool wt_offer_seen(const char *offer_id)
 {
-	static char seen[WT_SEEN_OFFERS][64];
+	static char seen[WT_SEEN_OFFERS][2 * WT_ID_LEN + 1];
 	static int next;
 
 	for (int i = 0; i < WT_SEEN_OFFERS; i++)
@@ -709,10 +693,18 @@ static bool wt_offer_seen(const char *offer_id)
 	return false;
 }
 
+/* sdp_answer is RWD_SDP_BUF_SIZE bytes: the auth line is appended in place */
 static int wt_send_answer(wt_tls_t *tls, const char *share_key, const char *info_hash,
 			  const char *peer_id, const char *to_peer_id, const char *offer_id,
-			  const char *sdp_answer)
+			  const char *offer_hex, char *sdp_answer)
 {
+	char tag[WT_AUTH_HEX + 1];
+	wt_auth_tag(share_key, "answer", offer_hex, sdp_answer, tag);
+	size_t len = strlen(sdp_answer);
+	if (snprintf(sdp_answer + len, RWD_SDP_BUF_SIZE - len, "a=x-raptor-auth:%s\r\n", tag) >=
+	    (int)(RWD_SDP_BUF_SIZE - len))
+		return -1;
+
 	cJSON *msg = cJSON_CreateObject();
 	if (!msg)
 		return -1;
@@ -724,9 +716,6 @@ static int wt_send_answer(wt_tls_t *tls, const char *share_key, const char *info
 	if (answer) {
 		cJSON_AddStringToObject(answer, "type", "answer");
 		cJSON_AddStringToObject(answer, "sdp", sdp_answer);
-		char tag[WT_AUTH_HEX + 1];
-		wt_auth_tag(share_key, "answer", offer_id, sdp_answer, tag);
-		cJSON_AddStringToObject(answer, "auth", tag);
 	}
 	cJSON_AddStringToObject(msg, "offer_id", offer_id);
 	return wt_send_json(tls, msg);
@@ -765,32 +754,49 @@ static void handle_tracker_offer(rwd_webtorrent_t *wt, wt_tls_t *tls, const char
 		cJSON_Delete(root);
 		return;
 	}
-	const char *sdp = sdp_item->valuestring;
+	uint8_t oid_bin[WT_ID_LEN];
+	char offer_hex[2 * WT_ID_LEN + 1];
+	if (!wt_json_to_bin(offer_id_str, oid_bin, WT_ID_LEN)) {
+		RSS_WARN("webtorrent: offer rejected, offer_id is not a 20-byte binary string");
+		cJSON_Delete(root);
+		return;
+	}
+	for (int i = 0; i < WT_ID_LEN; i++)
+		snprintf(offer_hex + i * 2, 3, "%02x", oid_bin[i]);
 
-	cJSON *auth_item = cJSON_GetObjectItem(offer_obj, "auth");
-	if (!wt_auth_ok(wt->share_key, offer_id_str, sdp,
-			cJSON_IsString(auth_item) ? auth_item->valuestring : NULL)) {
+	/* Our own copy: the auth and stream lines come out before it is parsed */
+	char *sdp = strdup(sdp_item->valuestring);
+	if (!sdp) {
+		cJSON_Delete(root);
+		return;
+	}
+	char auth[WT_AUTH_HEX + 1];
+	if (!wt_sdp_take_attr(sdp, "x-raptor-auth", auth, sizeof(auth)) ||
+	    !wt_auth_ok(wt->share_key, offer_hex, sdp, auth)) {
 		RSS_WARN("webtorrent: offer rejected, not authenticated with the share key");
+		free(sdp);
 		cJSON_Delete(root);
 		return;
 	}
-	if (wt_offer_seen(offer_id_str)) {
+	if (wt_offer_seen(offer_hex)) {
 		RSS_WARN("webtorrent: offer rejected, offer_id already used");
+		free(sdp);
 		cJSON_Delete(root);
 		return;
 	}
 
-	/* Parse stream index from offer_id: "sN_..." where N is 0 or 1 */
 	int stream_idx = 0;
-	if (offer_id_str[0] == 's' && (offer_id_str[1] == '0' || offer_id_str[1] == '1') &&
-	    offer_id_str[2] == '_')
-		stream_idx = offer_id_str[1] - '0';
+	char stream[4];
+	if (wt_sdp_take_attr(sdp, "x-raptor-stream", stream, sizeof(stream)) && stream[0] >= '0' &&
+	    stream[0] < '0' + RWD_STREAM_COUNT && !stream[1])
+		stream_idx = stream[0] - '0';
 
 	RSS_DEBUG("webtorrent: offer from peer %.16s... (stream %d)", viewer_peer_id, stream_idx);
 
 	char *sdp_answer = malloc(RWD_SDP_BUF_SIZE);
 	if (!sdp_answer) {
 		RSS_ERROR("webtorrent: OOM in handle_tracker_offer");
+		free(sdp);
 		cJSON_Delete(root);
 		return;
 	}
@@ -801,12 +807,14 @@ static void handle_tracker_offer(rwd_webtorrent_t *wt, wt_tls_t *tls, const char
 				   session_id)) {
 		RSS_WARN("webtorrent: failed to create client from offer");
 		free(sdp_answer);
+		free(sdp);
 		cJSON_Delete(root);
 		return;
 	}
+	free(sdp);
 
 	if (wt_send_answer(tls, wt->share_key, wt->info_hash, wt->peer_id, viewer_peer_id,
-			   offer_id_str, sdp_answer) != 0) {
+			   offer_id_str, offer_hex, sdp_answer) != 0) {
 		RSS_ERROR("webtorrent: failed to send answer");
 		free(sdp_answer);
 		cJSON_Delete(root);
@@ -993,10 +1001,9 @@ int rwd_webtorrent_start(rwd_webtorrent_t *wt, rwd_server_t *srv)
 	}
 	compute_info_hash(wt->share_key, wt->info_hash);
 
-	uint8_t pid[20];
-	rwd_random_bytes(pid, sizeof(pid));
-	for (int i = 0; i < 20; i++)
-		snprintf(wt->peer_id + i * 2, 3, "%02x", pid[i]);
+	/* Azureus-style client tag, then 12 random characters: 20 bytes */
+	memcpy(wt->peer_id, "-RP0001-", 8);
+	generate_random_id(wt->peer_id + 8, WT_ID_LEN - 8 + 1);
 
 	/* Discover server-reflexive address via STUN (before threads start) */
 	if (rwd_stun_discover_srflx(srv->udp_fd, wt->stun_server, wt->stun_port, srv->srflx_ip,

@@ -366,8 +366,8 @@ typedef struct {
 	atomic_bool running; /* cleared by rwd_webtorrent_stop on the main thread */
 
 	char share_key[32];
-	char info_hash[48]; /* base64 SHA256, 44 chars + null */
-	char peer_id[41];   /* hex random, 40 chars + null */
+	char info_hash[48]; /* 20-byte binary string as UTF-8: up to 40 + null */
+	char peer_id[21];   /* "-RP0001-" + 12 random characters + null */
 
 	char tracker_url[256];
 	char stun_server[128];
