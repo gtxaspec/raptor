@@ -15,6 +15,34 @@
 
 #include "rwd.h"
 
+/* A candidate address becomes a destination for a STUN request from the
+ * camera, so an offer must not be able to aim it at the camera itself, at
+ * multicast or broadcast, or at a name rather than an address. Private
+ * ranges stay: a viewer on the same LAN is a legitimate peer. */
+static bool candidate_addr_allowed(const char *addr)
+{
+	struct in_addr a4;
+	struct in6_addr a6;
+
+	if (inet_pton(AF_INET6, addr, &a6) == 1) {
+		if (IN6_IS_ADDR_UNSPECIFIED(&a6) || IN6_IS_ADDR_LOOPBACK(&a6) ||
+		    IN6_IS_ADDR_LINKLOCAL(&a6) || IN6_IS_ADDR_MULTICAST(&a6))
+			return false;
+		if (IN6_IS_ADDR_V4MAPPED(&a6)) {
+			memcpy(&a4, &a6.s6_addr[12], 4);
+			goto v4;
+		}
+		return true;
+	}
+	if (inet_pton(AF_INET, addr, &a4) != 1)
+		return false;
+v4:;
+	uint32_t h = ntohl(a4.s_addr);
+	if ((h >> 24) == 0 || (h >> 24) == 127 || (h >> 16) == 0xA9FE || h >= 0xE0000000u)
+		return false;
+	return true;
+}
+
 /* ── Line-by-line SDP parser helpers ── */
 
 /* Get next SDP line. Handles both CRLF and bare LF line endings.
@@ -223,7 +251,8 @@ static rwd_sdp_reject_t parse_offer_internal(const char *sdp, rwd_sdp_offer_t *o
 			uint32_t prio;
 			if (sscanf(line + 12, "%31s %d %7s %u %63s %d typ %15s", foundation,
 				   &component, transport, &prio, addr, &cport, ctype) == 7 &&
-			    strcasecmp(transport, "UDP") == 0 && cport > 0 && cport <= 65535) {
+			    strcasecmp(transport, "UDP") == 0 && cport > 0 && cport <= 65535 &&
+			    candidate_addr_allowed(addr)) {
 				rss_strlcpy(offer->candidates[offer->candidate_count].ip, addr,
 					    sizeof(offer->candidates[0].ip));
 				offer->candidates[offer->candidate_count].port = (uint16_t)cport;

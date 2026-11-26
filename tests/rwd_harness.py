@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Security behavior harness for rwd: DTLS pinning, session slots, CORS and
+"""Security behavior harness for rwd: DTLS pinning, CORS and
 WebTorrent offer authentication, against the real daemon.
 
 Runs inside the private user/mount/net namespace set up by test-rwd.sh, so
@@ -388,6 +388,22 @@ def scenario_dtls():
     d.stop()
 
 
+def scenario_cors():
+    print("cross-origin access only with credentials")
+    d = Daemon("cors-open")
+    st, hdrs, _ = http_request("OPTIONS", "/whip")
+    check("no credentials: no CORS on preflight", "access-control-allow-origin" not in hdrs)
+    st, hdrs, _ = http_request("POST", "/whip", offer())
+    check("no credentials: no CORS on POST", "access-control-allow-origin" not in hdrs)
+    d.stop()
+    d = Daemon("cors-auth", auth="username = u\npassword = p")
+    st, hdrs, _ = http_request("OPTIONS", "/whip")
+    check("credentials: CORS offered", hdrs.get("access-control-allow-origin") == "*")
+    st, hdrs, _ = http_request("POST", "/whip", offer())
+    check("credentials: unauthenticated POST refused", st == 401)
+    d.stop()
+
+
 def scenario_wt_auth(cert, key):
     print("WebTorrent offers must carry the share key")
     tr = Tracker(cert, key)
@@ -496,10 +512,10 @@ def main():
     os.makedirs(WORK, exist_ok=True)
     cert, key, _ = make_cert("tracker")
     only = os.environ.get("RWD_ONLY", "").split(",")
-    for sc in (scenario_dtls, scenario_wt_key,):
+    for sc in (scenario_dtls, scenario_cors, scenario_wt_key):
         if only == [""] or sc.__name__[9:] in only:
             sc()
-    for sc in (scenario_wt_auth, scenario_wt_tls, scenario_wt_race,):
+    for sc in (scenario_wt_auth, scenario_wt_tls, scenario_wt_race):
         if only == [""] or sc.__name__[9:] in only:
             sc(cert, key)
     print("%d passed, %d failed" % (PASS, len(FAILED)))

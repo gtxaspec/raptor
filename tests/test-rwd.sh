@@ -1,6 +1,6 @@
 #!/bin/sh
 # Security behavior suite for rwd against the real daemon: DTLS fingerprint
-# pinning, session-slot eviction, CORS, WebTorrent offer authentication and
+# pinning, CORS, WebTorrent offer authentication and
 # the tracker/signaling race. Everything runs in a private user, mount and
 # network namespace (own ports, /dev/shm, /run).
 #

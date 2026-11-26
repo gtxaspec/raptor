@@ -56,24 +56,30 @@ static ssize_t http_read(int fd, void *buf, size_t len)
 	return read(fd, buf, len);
 }
 
+/* Cross-origin access is offered only when credentials gate the endpoint:
+ * without them a web page in any LAN browser could open a session. Set per
+ * request by the single-threaded accept loop. */
+static bool cors_enabled;
+
 static void http_send(int fd, const char *status, const char *content_type, const char *body,
 		      size_t body_len, const char *extra_headers)
 {
 	char hdr[1024];
-	int hdr_len = snprintf(hdr, sizeof(hdr),
-			       "HTTP/1.1 %s\r\n"
-			       "Content-Type: %s\r\n"
-			       "Content-Length: %zu\r\n"
-			       /* CORS: wildcard required -- WHIP clients (go2rtc, HA,
-				  browsers) connect cross-origin by design. Auth
-				  headers protect against unauthorized access. */
-			       "Access-Control-Allow-Origin: *\r\n"
-			       "Access-Control-Allow-Methods: POST, DELETE, OPTIONS\r\n"
-			       "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
-			       "%s"
-			       "Connection: close\r\n"
-			       "\r\n",
-			       status, content_type, body_len, extra_headers ? extra_headers : "");
+	int hdr_len =
+		snprintf(hdr, sizeof(hdr),
+			 "HTTP/1.1 %s\r\n"
+			 "Content-Type: %s\r\n"
+			 "Content-Length: %zu\r\n"
+			 "%s%s"
+			 "Connection: close\r\n"
+			 "\r\n",
+			 status, content_type, body_len,
+			 cors_enabled ? "Access-Control-Allow-Origin: *\r\n"
+					"Access-Control-Allow-Methods: POST, DELETE, OPTIONS\r\n"
+					"Access-Control-Allow-Headers: Content-Type, "
+					"Authorization\r\n"
+				      : "",
+			 extra_headers ? extra_headers : "");
 
 	if (hdr_len < 0)
 		hdr_len = 0;
@@ -162,6 +168,10 @@ bool rwd_client_from_offer(rwd_server_t *srv, const char *sdp, int stream_idx, c
 
 	pthread_mutex_lock(&srv->clients_lock);
 	if (srv->client_count >= srv->max_clients) {
+		/* Known gap: this lets any caller who may POST disconnect the
+		 * oldest viewer. Refusing instead locks a viewer out of their
+		 * own reload, because a closed tab's session lingers until
+		 * consent expires; needs dead-session detection first. */
 		int oldest_idx = -1;
 		int64_t oldest_ts = INT64_MAX;
 		for (int i = 0; i < RWD_MAX_CLIENTS; i++) {
@@ -343,6 +353,7 @@ void rwd_signaling_cleanup(void)
 void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 			  const struct sockaddr_storage *local_addr)
 {
+	cors_enabled = srv->auth_user[0] && srv->auth_pass[0];
 #ifdef RSS_HAS_TLS
 	/* TLS handshake if HTTPS context available */
 	tls_conn = NULL;

@@ -208,6 +208,36 @@ TEST sdp_candidate_parsing(void)
 	PASS();
 }
 
+TEST sdp_candidates_cannot_aim_the_camera_at_itself(void)
+{
+	const char *sdp = "v=0\r\n"
+			  "a=ice-ufrag:cand\r\n"
+			  "a=ice-pwd:candidatepassword12345678\r\n"
+			  "a=fingerprint:sha-256 AA:BB\r\n"
+			  "m=video 9 UDP/TLS/RTP/SAVPF 96\r\n"
+			  "a=rtpmap:96 H264/90000\r\n"
+			  "a=candidate:1 1 UDP 1 127.0.0.1 4000 typ host\r\n"
+			  "a=candidate:2 1 UDP 1 0.0.0.0 4000 typ host\r\n"
+			  "a=candidate:3 1 UDP 1 224.0.0.251 5353 typ host\r\n"
+			  "a=candidate:4 1 UDP 1 255.255.255.255 4000 typ host\r\n"
+			  "a=candidate:5 1 UDP 1 169.254.1.1 4000 typ host\r\n"
+			  "a=candidate:6 1 UDP 1 ::1 4000 typ host\r\n"
+			  "a=candidate:7 1 UDP 1 fe80::1 4000 typ host\r\n"
+			  "a=candidate:8 1 UDP 1 ff02::fb 5353 typ host\r\n"
+			  "a=candidate:9 1 UDP 1 ::ffff:127.0.0.1 4000 typ host\r\n"
+			  "a=candidate:10 1 UDP 1 ::ffff:10.0.0.1 4000 typ host\r\n"
+			  "a=candidate:11 1 UDP 1 abcd.local 4000 typ host\r\n"
+			  "a=candidate:12 1 UDP 1 10.1.2.3 4000 typ host\r\n"
+			  "a=candidate:13 1 UDP 1 2001:db8::1 4000 typ host\r\n";
+	rwd_sdp_offer_t offer;
+	ASSERT_EQ(0, rwd_sdp_parse_offer(sdp, &offer));
+	ASSERT_EQ(3, offer.candidate_count);
+	ASSERT_STR_EQ("::ffff:10.0.0.1", offer.candidates[0].ip);
+	ASSERT_STR_EQ("10.1.2.3", offer.candidates[1].ip);
+	ASSERT_STR_EQ("2001:db8::1", offer.candidates[2].ip);
+	PASS();
+}
+
 TEST sdp_max_candidates(void)
 {
 	char sdp[4096];
@@ -376,6 +406,7 @@ SUITE(sdp_suite)
 	RUN_TEST(sdp_no_crlf);
 	RUN_TEST(sdp_long_line);
 	RUN_TEST(sdp_candidate_parsing);
+	RUN_TEST(sdp_candidates_cannot_aim_the_camera_at_itself);
 	RUN_TEST(sdp_max_candidates);
 	RUN_TEST(sdp_extmap_sdes_mid);
 	RUN_TEST(sdp_multiple_video_codecs);
