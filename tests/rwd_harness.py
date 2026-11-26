@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Security behavior harness for rwd: DTLS pinning, CORS and
+"""Security behavior harness for rwd: DTLS pinning, CORS, stalled signaling and
 WebTorrent offer authentication, against the real daemon.
 
 Runs inside the private user/mount/net namespace set up by test-rwd.sh, so
@@ -75,15 +75,16 @@ def offer(ufrag="atk1", fp=ZERO_FP, cands=""):
 
 
 class Daemon:
-    def __init__(self, name, maxc=2, auth="", extra=""):
+    def __init__(self, name, maxc=2, auth="", extra="", https=False):
         self.log = os.path.join(WORK, name + ".rwd.log")
         conf = os.path.join(WORK, name + ".conf")
         cert, key, _ = make_cert("rwd-" + name)
         with open(conf, "w") as f:
             f.write("[webrtc]\nenabled = true\nudp_port = %d\nhttp_port = %d\n"
                     "max_clients = %d\ncert = %s\nkey = %s\nlocal_ip = 127.0.0.1\n"
-                    "https = false\n%s\n\n%s\n\n[log]\nlevel = debug\n"
-                    % (UDP_PORT, HTTP_PORT, maxc, cert, key, auth, extra))
+                    "https = %s\n%s\n\n%s\n\n[log]\nlevel = debug\n"
+                    % (UDP_PORT, HTTP_PORT, maxc, cert, key, "true" if https else "false",
+                       auth, extra))
         env = dict(os.environ)
         env["ASAN_OPTIONS"] = "abort_on_error=0:detect_leaks=1:halt_on_error=1"
         env["UBSAN_OPTIONS"] = "print_stacktrace=1"
@@ -128,8 +129,12 @@ class Daemon:
         return None if i < 0 else self.logtext()[i:i + 1500]
 
 
-def http_request(method, path, body=None, headers=None):
-    c = httpc.HTTPConnection("127.0.0.1", HTTP_PORT, timeout=10)
+def http_request(method, path, body=None, headers=None, tls=False):
+    if tls:
+        c = httpc.HTTPSConnection("127.0.0.1", HTTP_PORT, timeout=10,
+                                  context=ssl._create_unverified_context())
+    else:
+        c = httpc.HTTPConnection("127.0.0.1", HTTP_PORT, timeout=10)
     h = {"Content-Type": "application/sdp"}
     h.update(headers or {})
     c.request(method, path, body=body, headers=h)
@@ -141,8 +146,8 @@ def http_request(method, path, body=None, headers=None):
 
 
 
-def whip(sdp, headers=None):
-    st, hdrs, body = http_request("POST", "/whip", sdp, headers)
+def whip(sdp, headers=None, tls=False):
+    st, hdrs, body = http_request("POST", "/whip", sdp, headers, tls)
     if st != 201:
         return st, None
     return st, {
@@ -508,11 +513,82 @@ def scenario_wt_race(cert, key):
     tr.close()
 
 
+def stun_rate(info, seconds):
+    """Fraction of STUN checks (one per 250 ms) the media loop answers."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(("127.0.0.1", 0))
+    ok = n = 0
+    end = time.time() + seconds
+    while time.time() < end:
+        t0 = time.time()
+        ok += stun_ping(sock, info, timeout=0.25)
+        n += 1
+        time.sleep(max(0, 0.25 - (time.time() - t0)))
+    sock.close()
+    return ok / max(n, 1)
+
+
+def hold_connections(stop, tls_drip=False, body_drip=False):
+    """Keep stalled signaling connections open until stop is set."""
+    socks = []
+    while not stop.is_set():
+        try:
+            s = socket.create_connection(("127.0.0.1", HTTP_PORT), timeout=2)
+            if body_drip:
+                s.sendall(b"POST /whip HTTP/1.1\r\nHost: x\r\nContent-Type: application/sdp\r\n"
+                          b"Content-Length: 16000\r\n\r\nv=0\r\n")
+            if tls_drip:
+                s.sendall(b"\x16\x03\x01")
+            socks.append(s)
+        except OSError:
+            pass
+        for s in socks:
+            try:
+                if body_drip:
+                    s.send(b"a")
+                elif tls_drip:
+                    s.send(b"\x02")
+            except OSError:
+                pass
+        time.sleep(0.4)
+    for s in socks:
+        s.close()
+
+
+def scenario_stall():
+    print("a stalled signaling connection does not stop media")
+    for name, https, kw in (("tls-idle", True, {}), ("tls-drip", True, {"tls_drip": True}),
+                            ("body-drip", False, {"body_drip": True})):
+        d = Daemon("stall-" + name, https=https)
+        st, info = whip(offer(ufrag="viewer"), tls=https)
+        check(name + ": viewer session created", st == 201, "status %s" % st)
+        if st != 201:
+            d.stop()
+            continue
+        base = stun_rate(info, 2)
+        stop = threading.Event()
+        t = threading.Thread(target=hold_connections, args=(stop,), kwargs=kw)
+        t.start()
+        under = stun_rate(info, 8)
+        stop.set()
+        t.join()
+        check(name + ": STUN answered before the attack", base >= 0.9, "%.2f" % base)
+        check(name + ": STUN answered during the attack", under >= 0.9, "%.2f" % under)
+        time.sleep(6)  # the stalled requests' deadline
+        st2, _ = whip(offer(ufrag="after"), tls=https)
+        check(name + ": signaling serves again afterwards", st2 == 201, "status %s" % st2)
+        check(name + ": rwd alive, no sanitizer report",
+              d.alive() and not d.sanitizer_report())
+        d.stop()
+    log = open(os.path.join(WORK, "stall-tls-idle.rwd.log"), errors="replace").read()
+    check("busy workers are logged once", log.count("requests in progress") >= 1)
+
+
 def main():
     os.makedirs(WORK, exist_ok=True)
     cert, key, _ = make_cert("tracker")
     only = os.environ.get("RWD_ONLY", "").split(",")
-    for sc in (scenario_dtls, scenario_cors, scenario_wt_key):
+    for sc in (scenario_dtls, scenario_cors, scenario_wt_key, scenario_stall):
         if only == [""] or sc.__name__[9:] in only:
             sc()
     for sc in (scenario_wt_auth, scenario_wt_tls, scenario_wt_race):

@@ -327,6 +327,9 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 
 void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 			  const struct sockaddr_storage *local_addr);
+/* Serve one connection on a worker thread (or refuse it when all are busy) */
+void rwd_signaling_dispatch(rwd_server_t *srv, int client_fd,
+			    const struct sockaddr_storage *local_addr);
 void rwd_signaling_cleanup(void);
 bool rwd_client_from_offer(rwd_server_t *srv, const char *sdp, int stream_idx, char *sdp_answer,
 			   size_t sdp_answer_size, rwd_sdp_reject_t *reject,

@@ -15,6 +15,8 @@
 #include <unistd.h>
 #include <errno.h>
 #include <poll.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include <sys/socket.h>
 
 #ifdef RSS_HAS_TLS
@@ -31,6 +33,22 @@
 #define WEBRTC_HTML_PATH "/usr/share/raptor/webrtc.html"
 static char *webrtc_html;
 static int webrtc_html_len;
+static pthread_mutex_t webrtc_html_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* Signaling runs on worker threads, never on the media loop: a client that
+ * connects and stalls must not stop STUN, DTLS and RTP for every viewer.
+ * At most this many requests at once, each bounded by one deadline. */
+#define RWD_SIGNALING_WORKERS	  4
+#define RWD_SIGNALING_DEADLINE_MS 5000
+
+static atomic_int signaling_workers;
+static __thread int64_t req_deadline_us;
+
+static int req_wait_ms(void)
+{
+	int64_t left = (req_deadline_us - rss_timestamp_us()) / 1000;
+	return left > 0 ? (int)left : 0;
+}
 
 /* ── HTTP I/O helpers (plain or TLS) ── */
 
@@ -38,13 +56,30 @@ static int webrtc_html_len;
 static __thread rss_tls_conn_t *tls_conn; /* set per-request */
 #endif
 
+/* The socket is non-blocking: both helpers wait, but only until the
+ * request's deadline. */
 static ssize_t http_write(int fd, const void *buf, size_t len)
 {
 #ifdef RSS_HAS_TLS
 	if (tls_conn)
 		return rss_tls_write(tls_conn, buf, len);
 #endif
-	return write(fd, buf, len);
+	const char *p = buf;
+	size_t done = 0;
+	while (done < len) {
+		ssize_t w = write(fd, p + done, len - done);
+		if (w > 0) {
+			done += (size_t)w;
+			continue;
+		}
+		if (w < 0 && errno == EINTR)
+			continue;
+		struct pollfd pfd = {.fd = fd, .events = POLLOUT};
+		if (w < 0 && errno == EAGAIN && poll(&pfd, 1, req_wait_ms()) > 0)
+			continue;
+		break;
+	}
+	return done > 0 ? (ssize_t)done : -1;
 }
 
 static ssize_t http_read(int fd, void *buf, size_t len)
@@ -53,13 +88,24 @@ static ssize_t http_read(int fd, void *buf, size_t len)
 	if (tls_conn)
 		return rss_tls_read(tls_conn, buf, len);
 #endif
-	return read(fd, buf, len);
+	for (;;) {
+		ssize_t r = read(fd, buf, len);
+		if (r >= 0)
+			return r;
+		if (errno == EINTR)
+			continue;
+		if (errno != EAGAIN && errno != EWOULDBLOCK)
+			return -1;
+		struct pollfd pfd = {.fd = fd, .events = POLLIN};
+		if (poll(&pfd, 1, req_wait_ms()) <= 0)
+			return -1;
+	}
 }
 
 /* Cross-origin access is offered only when credentials gate the endpoint:
  * without them a web page in any LAN browser could open a session. Set per
- * request by the single-threaded accept loop. */
-static bool cors_enabled;
+ * request by the worker serving it. */
+static __thread bool cors_enabled;
 
 static void http_send(int fd, const char *status, const char *content_type, const char *body,
 		      size_t body_len, const char *extra_headers)
@@ -344,8 +390,15 @@ static void handle_whip_delete(rwd_server_t *srv, int fd, const char *session_id
 
 void rwd_signaling_cleanup(void)
 {
+	/* Workers hold the server: let them finish before it is torn down */
+	for (int i = 0;
+	     i < (RWD_SIGNALING_DEADLINE_MS + 1000) / 20 && atomic_load(&signaling_workers) > 0;
+	     i++)
+		usleep(20000);
+	pthread_mutex_lock(&webrtc_html_lock);
 	free(webrtc_html);
 	webrtc_html = NULL;
+	pthread_mutex_unlock(&webrtc_html_lock);
 }
 
 /* ── Main HTTP request handler ── */
@@ -354,15 +407,17 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 			  const struct sockaddr_storage *local_addr)
 {
 	cors_enabled = srv->auth_user[0] && srv->auth_pass[0];
+	req_deadline_us = rss_timestamp_us() + (int64_t)RWD_SIGNALING_DEADLINE_MS * 1000;
 #ifdef RSS_HAS_TLS
 	/* TLS handshake if HTTPS context available */
 	tls_conn = NULL;
 	if (srv->tls) {
-		tls_conn = rss_tls_accept(srv->tls, client_fd, 5000);
+		tls_conn = rss_tls_accept(srv->tls, client_fd, req_wait_ms());
 		if (!tls_conn) {
 			http_close(client_fd);
 			return;
 		}
+		rss_tls_set_deadline(tls_conn, req_deadline_us);
 	}
 #endif
 
@@ -375,29 +430,20 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 		return;
 	}
 	ssize_t n = 0;
-	for (int i = 0; i < 50 && n < (ssize_t)(RWD_HTTP_BUF_SIZE - 1); i++) {
+	while (n < (ssize_t)(RWD_HTTP_BUF_SIZE - 1)) {
 		ssize_t r = http_read(client_fd, buf + n, RWD_HTTP_BUF_SIZE - 1 - n);
-		if (r > 0) {
-			n += r;
-			buf[n] = '\0';
-			const char *hdr_end = strstr(buf, "\r\n\r\n");
-			if (hdr_end) {
-				const char *cl = strcasestr(buf, "Content-Length:");
-				if (!cl)
-					break; /* no body expected */
-				size_t clen = strtoul(cl + 15, NULL, 10);
-				if ((size_t)n >= (size_t)(hdr_end + 4 - buf) + clen)
-					break; /* full body received */
-			}
-		} else if (r == 0) {
-			break;
-		} else if (i == 0) {
-			/* First read failed — poll briefly for plain HTTP */
-			struct pollfd pfd = {.fd = client_fd, .events = POLLIN};
-			if (poll(&pfd, 1, 100) <= 0)
-				break;
-		} else {
-			usleep(5000);
+		if (r <= 0)
+			break; /* closed, failed or out of time */
+		n += r;
+		buf[n] = '\0';
+		const char *hdr_end = strstr(buf, "\r\n\r\n");
+		if (hdr_end) {
+			const char *cl = strcasestr(buf, "Content-Length:");
+			if (!cl)
+				break; /* no body expected */
+			size_t clen = strtoul(cl + 15, NULL, 10);
+			if ((size_t)n >= (size_t)(hdr_end + 4 - buf) + clen)
+				break; /* full body received */
 		}
 	}
 	if (n <= 0)
@@ -441,6 +487,7 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 
 	/* GET /webrtc — serve player page */
 	if (strcmp(method, "GET") == 0 && strcmp(path, "/webrtc") == 0) {
+		pthread_mutex_lock(&webrtc_html_lock);
 		if (!webrtc_html) {
 			webrtc_html = rss_read_file(WEBRTC_HTML_PATH, &webrtc_html_len);
 			if (webrtc_html)
@@ -455,6 +502,7 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 		else
 			http_send(client_fd, "404 Not Found", "text/plain", "player not installed",
 				  20, NULL);
+		pthread_mutex_unlock(&webrtc_html_lock);
 		goto done;
 	}
 
@@ -489,14 +537,9 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 		body += 4;
 		size_t body_len = n - (body - buf);
 
-		/* Read remaining body if we didn't get it all.
-		 * Poll with a tight timeout — legitimate clients deliver
-		 * the body within milliseconds of the header. */
+		/* Read the rest of the body, within the request's deadline */
 		size_t need = content_length > 0 ? content_length : 0;
 		while (body_len < need && (size_t)n < RWD_HTTP_BUF_SIZE - 1) {
-			struct pollfd pfd = {.fd = client_fd, .events = POLLIN};
-			if (poll(&pfd, 1, 500) <= 0)
-				break;
 			ssize_t more = http_read(client_fd, buf + n, RWD_HTTP_BUF_SIZE - 1 - n);
 			if (more <= 0)
 				break;
@@ -523,4 +566,58 @@ void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 done:
 	free(buf);
 	http_close(client_fd);
+}
+
+struct signaling_job {
+	rwd_server_t *srv;
+	int fd;
+	struct sockaddr_storage local;
+};
+
+static void *signaling_worker(void *arg)
+{
+	struct signaling_job *job = arg;
+	rwd_signaling_handle(job->srv, job->fd, &job->local);
+	free(job);
+	atomic_fetch_sub(&signaling_workers, 1);
+	return NULL;
+}
+
+void rwd_signaling_dispatch(rwd_server_t *srv, int client_fd,
+			    const struct sockaddr_storage *local_addr)
+{
+	static int64_t last_warn;
+
+	if (atomic_fetch_add(&signaling_workers, 1) >= RWD_SIGNALING_WORKERS) {
+		atomic_fetch_sub(&signaling_workers, 1);
+		int64_t now = rss_timestamp_us();
+		if (now - last_warn > 10000000) {
+			RSS_WARN("http: %d requests in progress, refusing connections",
+				 RWD_SIGNALING_WORKERS);
+			last_warn = now;
+		}
+		close(client_fd);
+		return;
+	}
+
+	struct signaling_job *job = malloc(sizeof(*job));
+	pthread_attr_t attr;
+	pthread_t tid;
+	bool started = false;
+	if (job) {
+		job->srv = srv;
+		job->fd = client_fd;
+		job->local = *local_addr;
+		pthread_attr_init(&attr);
+		pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+		pthread_attr_setstacksize(&attr, 256 * 1024);
+		started = pthread_create(&tid, &attr, signaling_worker, job) == 0;
+		pthread_attr_destroy(&attr);
+	}
+	if (!started) {
+		RSS_WARN("http: cannot start a signaling worker");
+		free(job);
+		close(client_fd);
+		atomic_fetch_sub(&signaling_workers, 1);
+	}
 }

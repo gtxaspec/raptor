@@ -70,9 +70,9 @@ static int addr_is_usable(const struct sockaddr *sa)
 {
 	if (sa->sa_family == AF_INET) {
 		uint32_t v4 = ntohl(((const struct sockaddr_in *)sa)->sin_addr.s_addr);
-		if ((v4 >> 24) == 127)			/* 127.0.0.0/8   loopback */
+		if ((v4 >> 24) == 127) /* 127.0.0.0/8   loopback */
 			return 0;
-		if ((v4 & 0xffff0000u) == 0xa9fe0000u)	/* 169.254.0.0/16 link-local */
+		if ((v4 & 0xffff0000u) == 0xa9fe0000u) /* 169.254.0.0/16 link-local */
 			return 0;
 		return 1;
 	}
@@ -697,11 +697,8 @@ static void rwd_run(rwd_server_t *srv)
 				if (client_fd < 0)
 					continue;
 
-				/* Non-blocking socket — the read loop in
-				 * rwd_signaling_handle still retries for up to
-				 * ~250ms (50 × 5ms) plus TLS handshake time.
-				 * Blocks the main loop during signaling, which
-				 * is acceptable for ≤4 WebRTC clients. */
+				/* Non-blocking: the worker waits with poll, up
+				 * to the request's deadline */
 				fcntl(client_fd, F_SETFL, fcntl(client_fd, F_GETFL) | O_NONBLOCK);
 
 				char addrstr[INET6_ADDRSTRLEN];
@@ -714,7 +711,7 @@ static void rwd_run(rwd_server_t *srv)
 				socklen_t local_len = sizeof(local_addr);
 				getsockname(client_fd, (struct sockaddr *)&local_addr, &local_len);
 
-				rwd_signaling_handle(srv, client_fd, &local_addr);
+				rwd_signaling_dispatch(srv, client_fd, &local_addr);
 			} else if (fd == ctrl_fd) {
 				rss_ctrl_accept_and_handle(srv->ctrl, rwd_ctrl_handler, srv);
 			}
@@ -940,6 +937,8 @@ int main(int argc, char **argv)
 #endif
 
 cleanup:
+	/* First: signaling workers still use the clients, sockets and TLS */
+	rwd_signaling_cleanup();
 	if (srv.udp_fd >= 0)
 		close(srv.udp_fd);
 	if (srv.http_fd >= 0)
@@ -961,7 +960,6 @@ cleanup:
 #ifdef RSS_HAS_TLS
 	rss_tls_free(srv.tls);
 #endif
-	rwd_signaling_cleanup();
 	pthread_cond_destroy(&srv.clients_cond);
 	pthread_mutex_destroy(&srv.clients_lock);
 	rss_config_free(dctx.cfg);
