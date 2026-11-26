@@ -1669,6 +1669,50 @@ static int validate_video_channel(rvd_state_t *st, const char *cmd_json, int *ou
 	return 0;
 }
 
+/* save raw on the channel the JZDL thread reads: it owns that channel's frame
+ * depth, so the frame comes from it (rvd_ivs_grab_raw) instead of a second
+ * SetFrameDepth/GetFrame user, which crashes the SDK. */
+static int rvd_ctrl_save_raw_ivs(rvd_state_t *st, int ch, const char *file, char *resp,
+				 int resp_size)
+{
+	size_t cap = (size_t)st->streams[ch].enc_cfg.width * st->streams[ch].enc_cfg.height * 3 / 2;
+	uint8_t *buf = malloc(cap);
+	if (!buf)
+		return rss_ctrl_resp_error(resp, resp_size, "out of memory");
+	uint32_t size = 0, w = 0, h = 0;
+	if (rvd_ivs_grab_raw(st, buf, cap, &size, &w, &h, 2000) != 0 || size == 0) {
+		free(buf);
+		return rss_ctrl_resp_error(resp, resp_size, "raw frame grab failed");
+	}
+
+	char tmp[272];
+	snprintf(tmp, sizeof(tmp), "%s.tmp", file);
+	int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	ssize_t wr = -1;
+	if (fd >= 0) {
+		wr = write(fd, buf, size);
+		close(fd);
+	}
+	free(buf);
+	if (fd < 0 || wr != (ssize_t)size || rename(tmp, file) != 0) {
+		unlink(tmp);
+		return rss_ctrl_resp_error(resp, resp_size, strerror(errno));
+	}
+
+	RSS_INFO("save: %s (%u bytes, raw %ux%u, from the JZDL thread)", file, size, w, h);
+	cJSON *r = cJSON_CreateObject();
+	if (!r)
+		return rss_ctrl_resp_error(resp, resp_size, "out of memory");
+	cJSON_AddStringToObject(r, "status", "ok");
+	cJSON_AddStringToObject(r, "file", file);
+	cJSON_AddStringToObject(r, "format", "raw");
+	cJSON_AddStringToObject(r, "pixfmt", "nv12");
+	cJSON_AddNumberToObject(r, "width", w);
+	cJSON_AddNumberToObject(r, "height", h);
+	cJSON_AddNumberToObject(r, "bytes", (double)size);
+	return rss_ctrl_resp_json(resp, resp_size, r);
+}
+
 static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st, char *resp,
 			       int resp_size)
 {
@@ -2044,6 +2088,8 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 			if (jpeg_ch < 0 || jpeg_ch >= st->stream_count)
 				return rss_ctrl_resp_error(resp, resp_size, "bad video channel");
 			int fs_chn = st->streams[jpeg_ch].fs_chn;
+			if (rvd_ivs_owns_fs(st, fs_chn))
+				return rvd_ctrl_save_raw_ivs(st, jpeg_ch, file, resp, resp_size);
 			int ret = RSS_HAL_CALL(st->ops, fs_set_frame_depth, st->hal_ctx, fs_chn, 1);
 			if (ret == RSS_ERR_NOTSUP)
 				return rss_ctrl_resp_error(resp, resp_size,
