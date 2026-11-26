@@ -351,9 +351,14 @@ static int open_clip(rmr_track_t *t)
 	return 0;
 }
 
+static void clip_replay_step(rmr_track_t *t, bool force);
+
 static void close_clip(rmr_track_t *t)
 {
 	rmr_state_t *st = t->st;
+	if (t->replaying) /* a short clip still gets all of its pre-roll */
+		clip_replay_step(t, true);
+	t->replaying = false;
 	if (t->clip_mux) {
 		rmr_mux_finalize(t->clip_mux);
 		if (st->sign_enabled)
@@ -567,14 +572,6 @@ static uint32_t audio_frame_samples(const rmr_state_t *st, uint32_t len)
 	return st->audio_samples_per_frame ? st->audio_samples_per_frame : len / st->audio_bps;
 }
 
-static int replay_video_frame(const rmr_prebuf_slot_t *slot, const uint8_t *data, void *ctx)
-{
-	replay_ctx_t *rc = ctx;
-	clip_write_video(rc->t, data, slot->data_length, slot->timestamp, slot->is_key);
-	rc->count++;
-	return 0;
-}
-
 static int replay_audio_frame(const rmr_prebuf_slot_t *slot, const uint8_t *data, void *ctx)
 {
 	replay_ctx_t *rc = ctx;
@@ -586,68 +583,122 @@ static int replay_audio_frame(const rmr_prebuf_slot_t *slot, const uint8_t *data
 	return 0;
 }
 
+/* Writer room the continuous segments may need before the next pre-roll
+ * fragment goes in: each one's next fragment, as big as its last, and a
+ * margin; at most half the writer, or a small one never replays. */
+static uint32_t segment_reserve(const rmr_state_t *st, uint32_t io_size)
+{
+	uint32_t r = io_size / 8;
+	for (int i = 0; i < st->track_count; i++) {
+		const rmr_track_t *s = &st->tracks[i];
+		uint32_t pend = rmr_mux_pending_bytes(s->mux);
+		r += pend > s->last_frag_bytes ? pend : s->last_frag_bytes;
+	}
+	return r < io_size / 2 ? r : io_size / 2;
+}
+
+/* Audio for the replayed video: the newest frames covering its span */
+static void clip_replay_audio(rmr_track_t *t)
+{
+	rmr_state_t *st = t->st;
+	int64_t v_duration_us = t->replay_last_ts - t->replay_first_ts;
+	if (!st->audio_pb || rmr_prebuf_count(st->audio_pb) == 0 || v_duration_us <= 0)
+		return;
+	/* Timestamp matching is unreliable across rings: count frames */
+	int64_t audio_frame_us = 20000;
+	if (st->audio_samples_per_frame > 0 && st->audio_sample_rate > 0)
+		audio_frame_us =
+			(int64_t)st->audio_samples_per_frame * 1000000 / st->audio_sample_rate;
+	int n = (int)(v_duration_us / audio_frame_us);
+	if (n < 1)
+		n = 1;
+	if ((uint32_t)n > rmr_prebuf_count(st->audio_pb))
+		n = (int)rmr_prebuf_count(st->audio_pb);
+	replay_ctx_t rc = {.t = t, .max_frames = n};
+	rmr_prebuf_iterate(st->audio_pb, rmr_prebuf_write_idx(st->audio_pb) - (uint32_t)n,
+			   replay_audio_frame, &rc);
+}
+
+/* Replay pre-roll video while the writer has room to spare; force writes
+ * the rest now, waiting on the writer (the clip is closing). The live
+ * frames land in the pre-buffer too, so the replay runs into them and
+ * the clip goes live once it has caught up. */
+static void clip_replay_step(rmr_track_t *t, bool force)
+{
+	rmr_state_t *st = t->st;
+	rmr_prebuf_t *pb = t->video_pb;
+	uint32_t io_size = rmr_io_room(st->io) + rmr_io_pending(st->io);
+	uint32_t reserve = force ? 0 : segment_reserve(st, io_size);
+	while (t->replaying && t->clip_mux) {
+		uint32_t head = rmr_prebuf_write_idx(pb);
+		/* Live clip frames flush without asking: go live only once the
+		 * writer can take the fragment this replay leaves pending. */
+		uint32_t need = rmr_mux_pending_bytes(t->clip_mux) + reserve;
+		if (need > io_size)
+			need = io_size;
+		if (t->replay_v == head) {
+			if (!force && rmr_io_room(st->io) < need)
+				return;
+			t->replaying = false;
+			clip_replay_audio(t);
+			/* the seconds before the event are on the medium first */
+			rmr_io_sync(st->io, t->clip_fd);
+			RSS_DEBUG("%s: clip caught up (%.1f s replayed)", t->ring_name,
+				  (t->replay_last_ts - t->replay_first_ts) / 1e6);
+			return;
+		}
+		uint32_t oldest = head - rmr_prebuf_count(pb);
+		if ((int32_t)(t->replay_v - oldest) < 0) {
+			/* the writer fell a whole pre-buffer behind: resume at a keyframe */
+			uint32_t k = oldest;
+			while (k != head && !pb->slots[k & pb->mask].is_key)
+				k++;
+			RSS_WARN("%s: clip pre-roll overrun, skipped %u frames", t->ring_name,
+				 k - t->replay_v);
+			t->replay_v = k;
+			continue;
+		}
+		const rmr_prebuf_slot_t *sl = &pb->slots[t->replay_v & pb->mask];
+		/* a keyframe flushes the clip's fragment into the writer */
+		if (sl->is_key && !force && rmr_io_room(st->io) < need)
+			return;
+		clip_write_video(t, pb->data + sl->data_offset, sl->data_length, sl->timestamp,
+				 sl->is_key);
+		t->replay_last_ts = sl->timestamp;
+		t->replay_v++;
+	}
+}
+
+/* Room for the clip's pending fragment beyond what the segments need */
+static bool clip_has_room(rmr_track_t *t)
+{
+	rmr_state_t *st = t->st;
+	uint32_t io_size = rmr_io_room(st->io) + rmr_io_pending(st->io);
+	uint32_t need = rmr_mux_pending_bytes(t->clip_mux) + segment_reserve(st, io_size);
+	return rmr_io_room(st->io) >= (need < io_size ? need : io_size);
+}
+
 static int open_clip_with_prebuffer(rmr_track_t *t)
 {
 	rmr_state_t *st = t->st;
 	if (open_clip(t) < 0)
 		return -1;
+	if (!t->video_pb)
+		return 0;
 
 	/* Search one extra second back so the keyframe-aligned pre-buffer
 	 * always meets or exceeds the configured duration. */
 	int64_t max_age_us = ((int64_t)st->prebuffer_sec + 1) * 1000000;
-
-	/* Find the oldest keyframe within the pre-buffer window */
 	uint32_t vstart = rmr_prebuf_find_keyframe(t->video_pb, max_age_us);
 	if (vstart == UINT32_MAX) {
 		RSS_WARN("no keyframe in pre-buffer, clip starts without pre-buffer");
 		return 0;
 	}
-
-	/* Get the video pre-buffer time range */
-	int64_t kf_ts = rmr_prebuf_timestamp(t->video_pb, vstart);
-	int64_t newest_v_ts = rmr_prebuf_timestamp(t->video_pb, rmr_prebuf_newest(t->video_pb));
-	int64_t v_duration_us = newest_v_ts - kf_ts;
-
-	replay_ctx_t rc = {
-		.t = t,
-		.max_frames = -1,
-		.count = 0,
-	};
-
-	/* Replay video pre-buffer */
-	int vcount = rmr_prebuf_iterate(t->video_pb, vstart, replay_video_frame, &rc);
-	RSS_DEBUG("pre-buffer: replayed %d video frames (%.1fs)", vcount,
-		  v_duration_us / 1000000.0);
-
-	/* Replay audio pre-buffer — match video duration by frame count.
-	 * Timestamp matching is unreliable across rings, so calculate
-	 * how many audio frames fit in the video pre-buffer duration. */
-	if (st->audio_pb && rmr_prebuf_count(st->audio_pb) > 0 && v_duration_us > 0) {
-		/* Audio frame duration in microseconds */
-		int64_t audio_frame_us;
-		if (st->audio_samples_per_frame > 0 && st->audio_sample_rate > 0)
-			audio_frame_us = (int64_t)st->audio_samples_per_frame * 1000000 /
-					 st->audio_sample_rate;
-		else
-			audio_frame_us = 20000; /* fallback: 20ms */
-
-		int audio_frame_count = (int)(v_duration_us / audio_frame_us);
-		if (audio_frame_count < 1)
-			audio_frame_count = 1;
-		if ((uint32_t)audio_frame_count > rmr_prebuf_count(st->audio_pb))
-			audio_frame_count = (int)rmr_prebuf_count(st->audio_pb);
-
-		/* Rewind from the head by audio_frame_count frames */
-		uint32_t astart = rmr_prebuf_write_idx(st->audio_pb) - (uint32_t)audio_frame_count;
-
-		rc.max_frames = audio_frame_count;
-		rc.count = 0;
-		int acount = rmr_prebuf_iterate(st->audio_pb, astart, replay_audio_frame, &rc);
-		RSS_DEBUG("pre-buffer: replayed %d audio frames (target %d, %.1fs)", acount,
-			  audio_frame_count, v_duration_us / 1000000.0);
-	}
-
-	return vcount > 0; /* replayed the current frame: it is in the pre-buffer */
+	t->replay_v = vstart;
+	t->replay_first_ts = rmr_prebuf_timestamp(t->video_pb, vstart);
+	t->replay_last_ts = t->replay_first_ts;
+	t->replaying = true;
+	return 0;
 }
 
 /* ── Control socket handler ── */
@@ -1115,6 +1166,7 @@ static bool segment_flush(rmr_track_t *t)
 		}
 		return false;
 	}
+	t->last_frag_bytes = need;
 	rmr_mux_flush_fragment(t->mux);
 	if (st->sign_enabled)
 		rmr_sign_stream_emit(&t->sign_seg, false, direct_write, t);
@@ -1199,21 +1251,27 @@ static void track_write_clip(rmr_track_t *t, bool clip_want, const rss_ring_slot
 	rmr_state_t *st = t->st;
 
 	/* Start clip with pre-buffer */
-	bool replayed = false;
 	if (clip_want && !t->clip_mux && rmr_storage_available(st->clip_storage)) {
-		int r = open_clip_with_prebuffer(t);
-		if (r >= 0) {
+		if (open_clip_with_prebuffer(t) == 0)
 			RSS_INFO("motion clip active");
-			/* the seconds before the event are on the medium first */
-			rmr_io_sync(st->io, t->clip_fd);
-			replayed = r > 0;
-		}
 	}
 	if (!t->clip_mux)
 		return;
 
-	/* the pre-buffer replay ended with this frame: it is in the clip */
-	if (!replayed)
+	/* While replaying, this frame is in the pre-buffer: the replay
+	 * writes it in turn. A keyframe flushes the clip's fragment: when
+	 * the writer is short, the clip falls back to replaying from this
+	 * frame rather than hold up the main loop (rings overflow, every
+	 * file loses frames); it catches up as the card drains. */
+	if (!t->replaying && meta->is_key && t->video_pb && !clip_has_room(t)) {
+		t->replay_v = rmr_prebuf_write_idx(t->video_pb) - 1;
+		t->replay_first_ts = meta->timestamp;
+		t->replay_last_ts = meta->timestamp;
+		t->replaying = true;
+	}
+	if (t->replaying)
+		clip_replay_step(t, false);
+	else
 		clip_write_video(t, mux_data, mux_len, meta->timestamp, meta->is_key);
 
 	/* Check clip length cap */
@@ -1443,7 +1501,8 @@ static void audio_write_tracks(rmr_state_t *st, const uint8_t *data, uint32_t le
 			rmr_mux_write_audio(t->mux, &as);
 			t->a_dts += samples;
 		}
-		clip_write_audio(t, data, len, samples, ts);
+		if (!t->replaying) /* the replay writes the clip's audio from the pre-buffer */
+			clip_write_audio(t, data, len, samples, ts);
 	}
 }
 

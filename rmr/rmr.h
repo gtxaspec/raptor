@@ -93,6 +93,13 @@ typedef struct {
 	int64_t clip_a_ts_base;
 	int64_t clip_start_us; /* monotonic, when the clip opened */
 	uint64_t clip_bytes;
+	/* Pre-roll still to write: replayed a step at a time while the writer
+	 * has room beyond what the segments need, never waiting for it */
+	bool replaying;
+	uint32_t replay_v;	  /* next video pre-buffer index */
+	int64_t replay_first_ts;  /* the pre-roll's first keyframe */
+	int64_t replay_last_ts;	  /* the newest frame replayed */
+	uint32_t last_frag_bytes; /* the segment's last fragment */
 
 	/* Stats */
 	uint64_t frames_written;

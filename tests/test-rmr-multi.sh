@@ -444,6 +444,50 @@ else
 	fail "legacy file names: $(echo "$NAMES" | tr '\n' ' ')"
 fi
 
+echo "--- clip pre-roll on a slow card: the main loop never waits ---"
+# The streams here total ~93 KB/s, written twice while a clip is open; a
+# card at 260 KB/s keeps up with that. A 5 s pre-roll (~550 KB) replayed
+# in one go into the 256 KB writer blocked the main loop until the card
+# took it -- over a second of rings unread. Replayed as the writer has
+# room, the loop never waits and the clip still gets all of it.
+SHIM="$OUT/slow_write_shim.so"
+if cc -shared -fPIC -O2 -o "$SHIM" "$SCRIPT_DIR/slow_write_shim.c" -ldl -lpthread; then
+	ASAN_RT="$(ldd "$OUT/rmr" 2> /dev/null | awk '/libasan|libtsan/{print $3; exit}')"
+	mkdir -p "$WORK/slow"
+	base_conf "$WORK/slow" | sed 's/^prebuffer_sec = .*/prebuffer_sec = 5/' > "$WORK/slow.conf"
+	printf 'mode = both\nstreams = main, s1_main:R\nwrite_buffer_kb = 256\n\n[log]\nlevel = debug\n' >> "$WORK/slow.conf"
+	LD_PRELOAD="$ASAN_RT $SHIM" SLOW_WRITE_KBPS=${SLOW_KBPS:-260} start rmr-slow "$OUT/rmr" -c "$WORK/slow.conf" -f -d
+	RMR_PID=$LAST_PID
+	wait_for 10 "len(d['tracks']) == 2 and all(t['frames'] > 0 for t in d['tracks'])" || fail "slow rmr not recording: $(status)"
+	sleep 8 # a full pre-roll
+	T0=$(date +%s.%N)
+	ev start
+	sleep 8
+	ev stop
+	T1=$(date +%s.%N)
+	wait_for 15 "not any(t['clip'] for t in d['tracks'])" || fail "slow clip still open"
+	echo "  info  segment card drops: $(st_get "[t['card_drops'] for t in d['tracks']]")"
+	kill "$RMR_PID"
+	wait "$RMR_PID" 2> /dev/null
+	STALL=$(grep -o "main loop stalled [0-9]* ms" "$WORK/rmr-slow.log" | head -3 | tr '\n' ' ')
+	[ -z "$STALL" ] && pass "the main loop never waits while the clip replays its pre-roll" ||
+		{ fail "main loop waited on the writer: $STALL"
+		  grep -E "stalled|motion clip|pre-roll|behind|clip closed" "$WORK/rmr-slow.log" | sed 's/^/        /' | head -14; }
+	C=$(closed_pairs "$WORK/slow/clips" | head -1)
+	if [ -n "$C" ]; then
+		R=$(verify "$C")
+		[ "$R" = ok ] && pass "slow-card clip verifies" || fail "slow-card clip: $R"
+		D=$(ffprobe -v quiet -show_entries format=duration -of csv=p=0 "$C")
+		python3 -c "import sys; sys.exit(0 if float('$D') >= $T1 - $T0 + 4 else 1)" &&
+			pass "slow-card clip carries its pre-roll (${D%.*} s for $(python3 -c "print(round($T1 - $T0))") s open)" ||
+			fail "slow-card clip ${D} s, open $(python3 -c "print(round($T1 - $T0, 1))") s: pre-roll missing"
+	else
+		fail "no slow-card clip pair"
+	fi
+else
+	fail "slow write shim did not build"
+fi
+
 echo "--- slow flushes with a clip open: the segments drop nothing ---"
 # An SD card's fdatasync takes 200-500 ms; with a clip open rmr flushes
 # four files a second. Run on the writer thread, those flushes left it
