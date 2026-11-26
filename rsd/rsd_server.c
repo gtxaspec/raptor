@@ -16,6 +16,7 @@
 #include <pthread.h>
 
 #include "rsd.h"
+#include "rsd_net.h"
 #include <rss_net.h>
 
 #define client_addr_str rss_addr_str
@@ -719,7 +720,7 @@ void rsd_server_run(rsd_server_t *srv)
 										: COMPY_CHANNEL_RTP;
 					uint8_t pkt[2048];
 					ssize_t rn;
-					while ((rn = recv(fd, pkt, sizeof(pkt), 0)) > 0) {
+					while ((rn = rsd_recv_nowait(fd, pkt, sizeof(pkt))) > 0) {
 						if (bc->backchannel) {
 							Compy_RtpReceiver *rcv =
 								Compy_Backchannel_get_receiver(
@@ -739,7 +740,8 @@ void rsd_server_run(rsd_server_t *srv)
 				rsd_client_t *rc = find_client_by_rtcp_fd(srv, fd);
 				if (rc) {
 					uint8_t rtcp_buf[512];
-					ssize_t rn = recv(fd, rtcp_buf, sizeof(rtcp_buf), 0);
+					ssize_t rn =
+						rsd_recv_nowait(fd, rtcp_buf, sizeof(rtcp_buf));
 					Compy_Rtcp *dest = (fd == rc->audio_udp_rtcp_fd)
 								   ? rc->audio.rtcp
 								   : rc->video.rtcp;
