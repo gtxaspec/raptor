@@ -18,6 +18,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <ctype.h>
 #include <poll.h>
 #include <netdb.h>
 #include <sys/socket.h>
@@ -31,6 +32,8 @@
 #include <mbedtls/x509_crt.h>
 
 #include "rwd.h"
+
+#define WT_MIN_KEY_LEN 8
 
 /* ── TLS WebSocket state ── */
 
@@ -144,17 +147,21 @@ static int wt_tls_connect(wt_tls_t *tls, const char *host, const char *port, boo
 	if (ret != 0)
 		goto fail;
 
-	/* Try to load system CA bundle for tracker cert verification.
-	 * If unavailable or tls_verify is disabled, fall back to no verification
-	 * (DTLS-SRTP still secures the media path regardless). */
-	if (tls_verify &&
-	    mbedtls_x509_crt_parse_file(&tls->ca_cert, "/etc/ssl/certs/ca-certificates.crt") >= 0) {
+	/* tls_verify = false is the operator's explicit choice. Anything else
+	 * must verify: a missing CA bundle fails the connection rather than
+	 * quietly trusting whoever answers, since the tracker sees every offer. */
+	if (tls_verify) {
+		if (mbedtls_x509_crt_parse_file(&tls->ca_cert,
+						"/etc/ssl/certs/ca-certificates.crt") < 0) {
+			RSS_ERROR(
+				"webtorrent: CA bundle not found, refusing unverified tracker TLS "
+				"(set tls_verify = false to override)");
+			goto fail;
+		}
 		mbedtls_ssl_conf_ca_chain(&tls->conf, &tls->ca_cert, NULL);
 		mbedtls_ssl_conf_authmode(&tls->conf, MBEDTLS_SSL_VERIFY_REQUIRED);
 		tls->has_ca = true;
 	} else {
-		if (tls_verify)
-			RSS_WARN("webtorrent: CA bundle not found, TLS verify disabled");
 		mbedtls_ssl_conf_authmode(&tls->conf, MBEDTLS_SSL_VERIFY_NONE);
 	}
 	mbedtls_ssl_conf_rng(&tls->conf, mbedtls_ctr_drbg_random, &tls->ctr_drbg);
@@ -641,8 +648,70 @@ static int wt_announce(wt_tls_t *tls, const char *info_hash, const char *peer_id
 	return wt_send_json(tls, msg);
 }
 
-static int wt_send_answer(wt_tls_t *tls, const char *info_hash, const char *peer_id,
-			  const char *to_peer_id, const char *offer_id, const char *sdp_answer)
+/* ── Offer authentication ──
+ *
+ * The tracker (a third party) relays offers and cannot be told apart from an
+ * impostor, and the room name is a hash of the key, so a valid offer has to
+ * prove knowledge of the share key itself: offer.auth is the hex
+ * HMAC-SHA256, keyed with the share key, over "offer\n<offer_id>\n<sdp>".
+ * The answer carries the same construction with "answer" so the viewer can
+ * check it is talking to the camera. */
+
+#define WT_AUTH_HEX    64
+#define WT_SEEN_OFFERS 16
+
+static void wt_auth_tag(const char *share_key, const char *dir, const char *offer_id,
+			const char *sdp, char out[WT_AUTH_HEX + 1])
+{
+	uint8_t mac[32];
+	mbedtls_md_context_t md;
+
+	mbedtls_md_init(&md);
+	mbedtls_md_setup(&md, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 1);
+	mbedtls_md_hmac_starts(&md, (const uint8_t *)share_key, strlen(share_key));
+	mbedtls_md_hmac_update(&md, (const uint8_t *)dir, strlen(dir));
+	mbedtls_md_hmac_update(&md, (const uint8_t *)"\n", 1);
+	mbedtls_md_hmac_update(&md, (const uint8_t *)offer_id, strlen(offer_id));
+	mbedtls_md_hmac_update(&md, (const uint8_t *)"\n", 1);
+	mbedtls_md_hmac_update(&md, (const uint8_t *)sdp, strlen(sdp));
+	mbedtls_md_hmac_finish(&md, mac);
+	mbedtls_md_free(&md);
+	for (int i = 0; i < 32; i++)
+		snprintf(out + i * 2, 3, "%02x", mac[i]);
+}
+
+static bool wt_auth_ok(const char *share_key, const char *offer_id, const char *sdp,
+		       const char *got)
+{
+	char want[WT_AUTH_HEX + 1];
+	unsigned diff = 0;
+
+	if (!got || strlen(got) != WT_AUTH_HEX)
+		return false;
+	wt_auth_tag(share_key, "offer", offer_id, sdp, want);
+	for (int i = 0; i < WT_AUTH_HEX; i++)
+		diff |= (unsigned char)(want[i] ^ tolower((unsigned char)got[i]));
+	return diff == 0;
+}
+
+/* An offer replayed by the tracker would pass the HMAC; refuse an offer_id
+ * already answered. Single thread (the tracker loop) touches this. */
+static bool wt_offer_seen(const char *offer_id)
+{
+	static char seen[WT_SEEN_OFFERS][64];
+	static int next;
+
+	for (int i = 0; i < WT_SEEN_OFFERS; i++)
+		if (strcmp(seen[i], offer_id) == 0)
+			return true;
+	rss_strlcpy(seen[next], offer_id, sizeof(seen[next]));
+	next = (next + 1) % WT_SEEN_OFFERS;
+	return false;
+}
+
+static int wt_send_answer(wt_tls_t *tls, const char *share_key, const char *info_hash,
+			  const char *peer_id, const char *to_peer_id, const char *offer_id,
+			  const char *sdp_answer)
 {
 	cJSON *msg = cJSON_CreateObject();
 	if (!msg)
@@ -655,6 +724,9 @@ static int wt_send_answer(wt_tls_t *tls, const char *info_hash, const char *peer
 	if (answer) {
 		cJSON_AddStringToObject(answer, "type", "answer");
 		cJSON_AddStringToObject(answer, "sdp", sdp_answer);
+		char tag[WT_AUTH_HEX + 1];
+		wt_auth_tag(share_key, "answer", offer_id, sdp_answer, tag);
+		cJSON_AddStringToObject(answer, "auth", tag);
 	}
 	cJSON_AddStringToObject(msg, "offer_id", offer_id);
 	return wt_send_json(tls, msg);
@@ -695,6 +767,19 @@ static void handle_tracker_offer(rwd_webtorrent_t *wt, wt_tls_t *tls, const char
 	}
 	const char *sdp = sdp_item->valuestring;
 
+	cJSON *auth_item = cJSON_GetObjectItem(offer_obj, "auth");
+	if (!wt_auth_ok(wt->share_key, offer_id_str, sdp,
+			cJSON_IsString(auth_item) ? auth_item->valuestring : NULL)) {
+		RSS_WARN("webtorrent: offer rejected, not authenticated with the share key");
+		cJSON_Delete(root);
+		return;
+	}
+	if (wt_offer_seen(offer_id_str)) {
+		RSS_WARN("webtorrent: offer rejected, offer_id already used");
+		cJSON_Delete(root);
+		return;
+	}
+
 	/* Parse stream index from offer_id: "sN_..." where N is 0 or 1 */
 	int stream_idx = 0;
 	if (offer_id_str[0] == 's' && (offer_id_str[1] == '0' || offer_id_str[1] == '1') &&
@@ -720,8 +805,8 @@ static void handle_tracker_offer(rwd_webtorrent_t *wt, wt_tls_t *tls, const char
 		return;
 	}
 
-	if (wt_send_answer(tls, wt->info_hash, wt->peer_id, viewer_peer_id, offer_id_str,
-			   sdp_answer) != 0) {
+	if (wt_send_answer(tls, wt->share_key, wt->info_hash, wt->peer_id, viewer_peer_id,
+			   offer_id_str, sdp_answer) != 0) {
 		RSS_ERROR("webtorrent: failed to send answer");
 		free(sdp_answer);
 		cJSON_Delete(root);
@@ -883,8 +968,9 @@ int rwd_webtorrent_start(rwd_webtorrent_t *wt, rwd_server_t *srv)
 	const char *cfg_key = rss_config_get_str(srv->cfg, "webtorrent", "share_key", "");
 	if (cfg_key[0]) {
 		size_t klen = strlen(cfg_key);
-		if (klen < 4) {
-			RSS_ERROR("webtorrent: share_key must be at least 4 characters");
+		if (klen < WT_MIN_KEY_LEN) {
+			RSS_ERROR("webtorrent: share_key must be at least %d characters",
+				  WT_MIN_KEY_LEN);
 			return -1;
 		}
 		if (klen > sizeof(wt->share_key) - 6) { /* 4 prefix + '_' + null */

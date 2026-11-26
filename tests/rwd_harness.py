@@ -388,6 +388,63 @@ def scenario_dtls():
     d.stop()
 
 
+def scenario_wt_auth(cert, key):
+    print("WebTorrent offers must carry the share key")
+    tr = Tracker(cert, key)
+    d = Daemon("wt-auth", extra=wt_extra())
+    sk = share_key(d)
+    check("share key announced", sk is not None)
+    check("camera reached the tracker", tr.connected.wait(10))
+
+    sdp = offer(ufrag="wtpeer")
+    tr.send(wt_offer(sk, "s0_noauth", sdp, auth="none"))
+    check("offer without auth gets no answer", not tr.wait_answers(1, 3))
+    check("missing auth logged", "not authenticated with the share key" in d.logtext())
+    tr.send(wt_offer(sk, "s0_wrong", sdp, auth="wrong"))
+    check("offer with a wrong key gets no answer", not tr.wait_answers(1, 3))
+
+    good = wt_offer(sk, "s0_good", sdp)
+    tr.send(good)
+    check("authenticated offer is answered", tr.wait_answers(1, 5))
+    if tr.answers:
+        ans = tr.answers[0]["answer"]
+        check("answer proves the camera knows the key",
+              ans.get("auth") == auth_tag(sk, "answer", "s0_good", ans["sdp"]))
+    tr.send(good)
+    check("replayed offer is not answered twice", not tr.wait_answers(2, 3))
+    check("replay logged", "offer_id already used" in d.logtext())
+    check("daemon healthy", d.alive() and d.sanitizer_report() is None, str(d.sanitizer_report()))
+    d.stop()
+    tr.close()
+
+
+def scenario_wt_tls(cert, key):
+    print("WebTorrent tracker TLS fails closed")
+    tr = Tracker(cert, key)
+    sh("mount", "-t", "tmpfs", "none", "/etc/ssl/certs")
+    try:
+        d = Daemon("wt-nocabundle", extra=wt_extra(tls_verify="true"))
+        end = time.time() + 20
+        while time.time() < end and "refusing unverified" not in d.logtext():
+            time.sleep(0.3)
+        log = d.logtext()
+        check("missing CA bundle refuses the connection", "refusing unverified tracker TLS" in log)
+        check("the tracker never got a TLS session or announce", tr.announce is None)
+        d.stop()
+    finally:
+        sh("umount", "/etc/ssl/certs")
+    tr.close()
+
+
+def scenario_wt_key():
+    print("WebTorrent share key length")
+    d = Daemon("wt-shortkey", extra=wt_extra(key="abc1234"))
+    time.sleep(2)
+    log = d.logtext()
+    check("7-character key rejected", "share_key must be at least 8 characters" in log)
+    d.stop()
+
+
 def scenario_wt_race(cert, key):
     print("WebTorrent offers racing WHIP posts")
     tr = Tracker(cert, key)
@@ -439,10 +496,10 @@ def main():
     os.makedirs(WORK, exist_ok=True)
     cert, key, _ = make_cert("tracker")
     only = os.environ.get("RWD_ONLY", "").split(",")
-    for sc in (scenario_dtls,):
+    for sc in (scenario_dtls, scenario_wt_key,):
         if only == [""] or sc.__name__[9:] in only:
             sc()
-    for sc in (scenario_wt_race,):
+    for sc in (scenario_wt_auth, scenario_wt_tls, scenario_wt_race,):
         if only == [""] or sc.__name__[9:] in only:
             sc(cert, key)
     print("%d passed, %d failed" % (PASS, len(FAILED)))
