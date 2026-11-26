@@ -437,6 +437,50 @@ else
 	fail "legacy file names: $(echo "$NAMES" | tr '\n' ' ')"
 fi
 
+echo "--- slow flushes with a clip open: the segments drop nothing ---"
+# An SD card's fdatasync takes 200-500 ms; with a clip open rmr flushes
+# four files a second. Run on the writer thread, those flushes left it
+# no time to write, the 256 KB writer filled and the continuous segments
+# dropped fragments; on their own thread they cost the writes nothing.
+SHIM="$OUT/slow_write_shim.so"
+if cc -shared -fPIC -O2 -o "$SHIM" "$SCRIPT_DIR/slow_write_shim.c" -ldl -lpthread; then
+	ASAN_RT="$(ldd "$OUT/rmr" 2> /dev/null | awk '/libasan|libtsan/{print $3; exit}')"
+	mkdir -p "$WORK/slowsync"
+	base_conf "$WORK/slowsync" > "$WORK/slowsync.conf"
+	printf 'mode = both\nstreams = main, s1_main:R\nwrite_buffer_kb = 256\nsync_interval_ms = 1000\n\n[log]\nlevel = debug\n' >> "$WORK/slowsync.conf"
+	LD_PRELOAD="$ASAN_RT $SHIM" SLOW_SYNC_MS=${SLOW_SYNC_MS:-300} start rmr-slowsync "$OUT/rmr" -c "$WORK/slowsync.conf" -f -d
+	RMR_PID=$LAST_PID
+	wait_for 10 "len(d['tracks']) == 2 and all(t['frames'] > 0 for t in d['tracks'])" || fail "slow-sync rmr not recording: $(status)"
+	sleep 3
+	ev start
+	sleep 8
+	ev stop
+	wait_for 15 "not any(t['clip'] for t in d['tracks'])" || fail "slow-sync clip still open"
+	sleep 2
+	DROPS=$(st_get "[t['card_drops'] for t in d['tracks']]")
+	LOST=$(st_get "[t['frames_lost'] for t in d['tracks']]")
+	[ "$DROPS" = "[0, 0]" ] && pass "no segment fragment dropped behind ${SLOW_SYNC_MS:-300} ms flushes" ||
+		fail "segment card drops behind slow flushes: $DROPS"
+	[ "$LOST" = "[0, 0]" ] && pass "no frame lost behind slow flushes" || fail "frames lost: $LOST"
+	kill "$RMR_PID"
+	wait "$RMR_PID" 2> /dev/null
+	C=$(closed_pairs "$WORK/slowsync/clips" | head -1)
+	if [ -n "$C" ]; then
+		R=$(verify "$C")
+		[ "$R" = ok ] && pass "clip written behind slow flushes verifies" || fail "slow-flush clip: $R"
+	else
+		fail "no clip pair behind slow flushes"
+	fi
+	S=$(closed_pairs "$WORK/slowsync" | grep -v /clips/ | head -1)
+	R=$([ -n "$S" ] && verify "$S")
+	case "$R" in
+	ok) pass "segment written behind slow flushes verifies" ;;
+	*) fail "slow-flush segment: ${S:-none} $R" ;;
+	esac
+else
+	fail "slow write shim did not build"
+fi
+
 echo "--- rear stream info published after rmr attached ---"
 kill "$FAKE_PID" "$RCD_PID" 2> /dev/null
 wait "$FAKE_PID" "$RCD_PID" 2> /dev/null

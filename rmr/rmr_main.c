@@ -888,15 +888,20 @@ static void io_service(rmr_state_t *st)
 	if (now < st->next_sync_us)
 		return;
 	st->next_sync_us = now + (int64_t)st->sync_interval_ms * 1000;
+	/* Flushes run in queue order: event clips first, the files a power
+	 * cut must not take */
+	for (int i = 0; i < st->track_count; i++) {
+		rmr_track_t *t = &st->tracks[i];
+		if (t->clip_mux && t->clip_fd >= 0) {
+			gps_patch_index(st, t->clip_mux, t->clip_fd);
+			rmr_io_sync(st->io, t->clip_fd);
+		}
+	}
 	for (int i = 0; i < st->track_count; i++) {
 		rmr_track_t *t = &st->tracks[i];
 		if (t->mux && t->segment_fd >= 0) {
 			gps_patch_index(st, t->mux, t->segment_fd);
 			rmr_io_sync(st->io, t->segment_fd);
-		}
-		if (t->clip_mux && t->clip_fd >= 0) {
-			gps_patch_index(st, t->clip_mux, t->clip_fd);
-			rmr_io_sync(st->io, t->clip_fd);
 		}
 	}
 }

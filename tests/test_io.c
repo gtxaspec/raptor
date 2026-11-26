@@ -2,6 +2,8 @@
 #include "rmr_io.h"
 
 #include <errno.h>
+#include <pthread.h>
+#include <time.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,6 +24,63 @@ static size_t slurp(const char *path, uint8_t *buf, size_t cap)
 	size_t n = fread(buf, 1, cap, f);
 	fclose(f);
 	return n;
+}
+
+/* Link-time wraps (tests/Makefile): an SD card's slow flushes, on demand */
+int __real_fdatasync(int fd);
+int __real_fsync(int fd);
+static int sync_delay_ms;
+static int sync_fail_fd = -1;
+static int sync_count;
+static int sync_log_n;
+static struct {
+	char kind;
+	int fd;
+} sync_log[64];
+static pthread_mutex_t sync_log_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void log_sync(char kind, int fd)
+{
+	pthread_mutex_lock(&sync_log_lock);
+	if (sync_log_n < 64)
+		sync_log[sync_log_n++] = (typeof(sync_log[0])){kind, fd};
+	sync_count++;
+	pthread_mutex_unlock(&sync_log_lock);
+}
+
+int __wrap_fdatasync(int fd)
+{
+	if (sync_delay_ms)
+		usleep((useconds_t)sync_delay_ms * 1000);
+	log_sync('d', fd);
+	if (fd == sync_fail_fd) {
+		errno = EIO;
+		return -1;
+	}
+	return __real_fdatasync(fd);
+}
+
+int __wrap_fsync(int fd)
+{
+	if (sync_delay_ms)
+		usleep((useconds_t)sync_delay_ms * 1000);
+	log_sync('f', fd);
+	return __real_fsync(fd);
+}
+
+static void sync_reset(int delay_ms)
+{
+	sync_delay_ms = delay_ms;
+	sync_fail_fd = -1;
+	sync_count = 0;
+	sync_log_n = 0;
+}
+
+static int64_t now_ms(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
 TEST io_order_across_wraps(void)
@@ -133,6 +192,125 @@ TEST io_room_reports_free_space(void)
 	PASS();
 }
 
+/* A 300 ms flush must not hold up the writes queued behind it: on a
+ * card the writer would otherwise sit out every sync, and the segments
+ * drop fragments while it does. */
+TEST io_slow_sync_does_not_block_writes(void)
+{
+	char a[64], b[64];
+	int fa = tmp_fd(a, sizeof(a)), fb = tmp_fd(b, sizeof(b));
+	ASSERT(fa >= 0 && fb >= 0);
+	rmr_io_t *io = rmr_io_create(64 * 1024);
+	ASSERT(io);
+	sync_reset(300);
+	static uint8_t chunk[16 * 1024];
+	ASSERT_EQ(0, rmr_io_write(io, fa, chunk, sizeof(chunk)));
+	rmr_io_sync(io, fa);
+	int64_t t0 = now_ms();
+	/* 512 KB through a 64 KB ring: the writer has to keep going */
+	for (int i = 0; i < 32; i++)
+		ASSERT_EQ(0, rmr_io_write(io, fb, chunk, sizeof(chunk)));
+	int64_t queued = now_ms() - t0;
+	rmr_io_drain(io);
+	int64_t drained = now_ms() - t0;
+	int syncs = sync_count;
+	sync_reset(0);
+	rmr_io_close(io, fa);
+	rmr_io_close(io, fb);
+	rmr_io_destroy(io);
+	unlink(a);
+	unlink(b);
+	ASSERTm("writes waited on the flush", queued < 150);
+	ASSERTm("drain waits for the flush too", drained >= 250);
+	ASSERT_EQ(1, syncs);
+	PASS();
+}
+
+/* Syncs and the close of one file run in the order queued: the file is
+ * flushed twice, then fsync'd and closed, never closed under a flush */
+TEST io_close_after_its_syncs(void)
+{
+	char a[64];
+	int fd = tmp_fd(a, sizeof(a));
+	ASSERT(fd >= 0);
+	rmr_io_t *io = rmr_io_create(64 * 1024);
+	ASSERT(io);
+	sync_reset(50);
+	ASSERT_EQ(0, rmr_io_write(io, fd, "a", 1));
+	rmr_io_sync(io, fd);
+	rmr_io_drain(io); /* the first flush runs before the second is queued */
+	ASSERT_EQ(0, rmr_io_write(io, fd, "b", 1));
+	rmr_io_sync(io, fd);
+	rmr_io_close(io, fd);
+	rmr_io_drain(io);
+	char seq[8] = "";
+	for (int i = 0; i < sync_log_n && i < 7; i++)
+		seq[i] = sync_log[i].kind;
+	int still_open = fcntl(fd, F_GETFD) != -1;
+	sync_reset(0);
+	rmr_io_destroy(io);
+	uint8_t buf[4];
+	size_t n = slurp(a, buf, sizeof(buf));
+	unlink(a);
+	ASSERT_STR_EQ("ddf", seq);
+	ASSERTm("closed after its syncs", !still_open);
+	ASSERT_EQ(2, (int)n);
+	PASS();
+}
+
+/* Syncs piling up behind a slow one coalesce: one flush covers them */
+TEST io_syncs_coalesce(void)
+{
+	char a[64], b[64];
+	int fa = tmp_fd(a, sizeof(a)), fb = tmp_fd(b, sizeof(b));
+	ASSERT(fa >= 0 && fb >= 0);
+	rmr_io_t *io = rmr_io_create(64 * 1024);
+	ASSERT(io);
+	sync_reset(200);
+	rmr_io_sync(io, fa); /* occupies the sync thread */
+	usleep(20000);
+	for (int i = 0; i < 5; i++) {
+		ASSERT_EQ(0, rmr_io_write(io, fb, "x", 1));
+		rmr_io_sync(io, fb);
+	}
+	rmr_io_drain(io);
+	int nb = 0;
+	for (int i = 0; i < sync_log_n; i++)
+		nb += sync_log[i].fd == fb;
+	sync_reset(0);
+	rmr_io_close(io, fa);
+	rmr_io_close(io, fb);
+	rmr_io_destroy(io);
+	unlink(a);
+	unlink(b);
+	ASSERT_EQ(1, nb);
+	PASS();
+}
+
+/* A failed flush fails the file, like a failed write */
+TEST io_sync_error_reported(void)
+{
+	char a[64];
+	int fd = tmp_fd(a, sizeof(a));
+	ASSERT(fd >= 0);
+	rmr_io_t *io = rmr_io_create(64 * 1024);
+	ASSERT(io);
+	sync_reset(0);
+	sync_fail_fd = fd;
+	ASSERT_EQ(0, rmr_io_write(io, fd, "x", 1));
+	rmr_io_sync(io, fd);
+	rmr_io_drain(io);
+	int err = rmr_io_error(io, fd);
+	int later = rmr_io_write(io, fd, "y", 1);
+	sync_reset(0);
+	rmr_io_close(io, fd);
+	rmr_io_destroy(io);
+	unlink(a);
+	ASSERT_EQ(EIO, err);
+	ASSERT_EQ(-1, later);
+	PASS();
+}
+
 SUITE(io_suite)
 {
 	RUN_TEST(io_room_reports_free_space);
@@ -140,4 +318,8 @@ SUITE(io_suite)
 	RUN_TEST(io_pwrite_after_appends);
 	RUN_TEST(io_write_larger_than_ring);
 	RUN_TEST(io_error_reported);
+	RUN_TEST(io_slow_sync_does_not_block_writes);
+	RUN_TEST(io_close_after_its_syncs);
+	RUN_TEST(io_syncs_coalesce);
+	RUN_TEST(io_sync_error_reported);
 }

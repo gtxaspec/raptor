@@ -14,6 +14,7 @@
 
 #define IO_OPS	   1024 /* queued operations (power of 2) */
 #define IO_ERR_FDS 8	/* files tracked for errors at once */
+#define SYNC_Q	   32	/* syncs and closes handed to the sync thread (power of 2) */
 
 enum { OP_WRITE, OP_PWRITE, OP_SYNC, OP_CLOSE };
 
@@ -45,6 +46,20 @@ struct rmr_io {
 		int fd;
 		int err;
 	} errs[IO_ERR_FDS];
+
+	/* fdatasync and close-time fsync take 200-500 ms on an SD card: they
+	 * run here, so the writer keeps writing meanwhile. In queue order,
+	 * on one thread, so a file is closed only after its earlier syncs. */
+	pthread_t sync_tid;
+	pthread_cond_t sync_wake;
+	pthread_cond_t sync_room;
+	struct {
+		int fd;
+		int kind;
+	} sq[SYNC_Q];
+	uint32_t sq_rd, sq_wr; /* monotonic */
+	bool sync_busy;
+	bool sync_stop;
 };
 
 static int err_get(rmr_io_t *io, int fd)
@@ -102,6 +117,69 @@ static int write_all(int fd, struct iovec *iov, int cnt, uint64_t off, bool posi
 	return 0;
 }
 
+/* Called with the lock held */
+static void hand_to_sync(rmr_io_t *io, int fd, int kind)
+{
+	if (kind == OP_SYNC)
+		for (uint32_t i = io->sq_rd; i != io->sq_wr; i++)
+			if (io->sq[i & (SYNC_Q - 1)].fd == fd)
+				return; /* not started yet: it covers this one too */
+	while (io->sq_wr - io->sq_rd == SYNC_Q)
+		pthread_cond_wait(&io->sync_room, &io->lock);
+	io->sq[io->sq_wr & (SYNC_Q - 1)].fd = fd;
+	io->sq[io->sq_wr & (SYNC_Q - 1)].kind = kind;
+	io->sq_wr++;
+	pthread_cond_signal(&io->sync_wake);
+}
+
+static bool all_idle(const rmr_io_t *io)
+{
+	return io->op_rd == io->op_wr && !io->busy && io->sq_rd == io->sq_wr && !io->sync_busy;
+}
+
+static void *syncer(void *arg)
+{
+	rmr_io_t *io = arg;
+
+	pthread_mutex_lock(&io->lock);
+	for (;;) {
+		while (io->sq_rd == io->sq_wr && !io->sync_stop)
+			pthread_cond_wait(&io->sync_wake, &io->lock);
+		if (io->sq_rd == io->sq_wr)
+			break;
+		int fd = io->sq[io->sq_rd & (SYNC_Q - 1)].fd;
+		int kind = io->sq[io->sq_rd & (SYNC_Q - 1)].kind;
+		bool failed = err_get(io, fd) != 0;
+		io->sync_busy = true;
+		pthread_mutex_unlock(&io->lock);
+
+		int err = 0;
+		if (kind == OP_SYNC) {
+			if (!failed && fdatasync(fd) < 0)
+				err = errno;
+		} else {
+			if (!failed)
+				fsync(fd);
+			/* before close frees the number for the next open */
+			pthread_mutex_lock(&io->lock);
+			err_clear(io, fd);
+			pthread_mutex_unlock(&io->lock);
+			close(fd);
+		}
+
+		pthread_mutex_lock(&io->lock);
+		io->sync_busy = false;
+		if (err)
+			err_set(io, fd, err);
+		io->sq_rd++;
+		pthread_cond_broadcast(&io->sync_room);
+		if (all_idle(io))
+			pthread_cond_broadcast(&io->idle);
+	}
+	pthread_mutex_unlock(&io->lock);
+	return NULL;
+}
+
 static void *writer(void *arg)
 {
 	rmr_io_t *io = arg;
@@ -128,27 +206,19 @@ static void *writer(void *arg)
 			iov[1] = (struct iovec){io->buf, op.len - first};
 			err = write_all(op.fd, iov, op.len > first ? 2 : 1, op.off,
 					op.kind == OP_PWRITE);
-		} else if (op.kind == OP_SYNC && !failed) {
-			if (fdatasync(op.fd) < 0)
-				err = errno;
-		} else if (op.kind == OP_CLOSE) {
-			if (!failed)
-				fsync(op.fd);
-			/* before close frees the number for the next open */
-			pthread_mutex_lock(&io->lock);
-			err_clear(io, op.fd);
-			pthread_mutex_unlock(&io->lock);
-			close(op.fd);
 		}
 
 		pthread_mutex_lock(&io->lock);
+		/* Everything queued before a sync or close is written by now */
+		if (op.kind == OP_SYNC || op.kind == OP_CLOSE)
+			hand_to_sync(io, op.fd, op.kind);
 		io->busy = false;
 		if (err)
 			err_set(io, op.fd, err);
 		io->rd += op.len;
 		io->op_rd++;
 		pthread_cond_broadcast(&io->not_full);
-		if (io->op_rd == io->op_wr)
+		if (all_idle(io))
 			pthread_cond_broadcast(&io->idle);
 	}
 	pthread_mutex_unlock(&io->lock);
@@ -215,7 +285,23 @@ rmr_io_t *rmr_io_create(uint32_t buffer_bytes)
 	pthread_cond_init(&io->not_empty, NULL);
 	pthread_cond_init(&io->not_full, NULL);
 	pthread_cond_init(&io->idle, NULL);
-	if (pthread_create(&io->tid, NULL, writer, io) != 0) {
+	pthread_cond_init(&io->sync_wake, NULL);
+	pthread_cond_init(&io->sync_room, NULL);
+	pthread_attr_t attr;
+	pthread_attr_init(&attr);
+	pthread_attr_setstacksize(&attr, 64 * 1024);
+	int sret = pthread_create(&io->sync_tid, &attr, syncer, io);
+	pthread_attr_destroy(&attr);
+	if (sret != 0 || pthread_create(&io->tid, NULL, writer, io) != 0) {
+		if (sret == 0) {
+			pthread_mutex_lock(&io->lock);
+			io->sync_stop = true;
+			pthread_cond_signal(&io->sync_wake);
+			pthread_mutex_unlock(&io->lock);
+			pthread_join(io->sync_tid, NULL);
+		}
+		pthread_cond_destroy(&io->sync_room);
+		pthread_cond_destroy(&io->sync_wake);
 		pthread_cond_destroy(&io->idle);
 		pthread_cond_destroy(&io->not_full);
 		pthread_cond_destroy(&io->not_empty);
@@ -236,6 +322,14 @@ void rmr_io_destroy(rmr_io_t *io)
 	pthread_cond_signal(&io->not_empty);
 	pthread_mutex_unlock(&io->lock);
 	pthread_join(io->tid, NULL);
+	/* the writer has handed over its last syncs and closes */
+	pthread_mutex_lock(&io->lock);
+	io->sync_stop = true;
+	pthread_cond_signal(&io->sync_wake);
+	pthread_mutex_unlock(&io->lock);
+	pthread_join(io->sync_tid, NULL);
+	pthread_cond_destroy(&io->sync_room);
+	pthread_cond_destroy(&io->sync_wake);
 	pthread_cond_destroy(&io->idle);
 	pthread_cond_destroy(&io->not_full);
 	pthread_cond_destroy(&io->not_empty);
@@ -275,7 +369,7 @@ void rmr_io_close(rmr_io_t *io, int fd)
 void rmr_io_drain(rmr_io_t *io)
 {
 	pthread_mutex_lock(&io->lock);
-	while (io->op_rd != io->op_wr || io->busy)
+	while (!all_idle(io))
 		pthread_cond_wait(&io->idle, &io->lock);
 	pthread_mutex_unlock(&io->lock);
 }

@@ -7,8 +7,10 @@
  * are lost. Operations queue in order behind a preallocated byte ring
  * and run on one writer thread: data reaches each file in the order
  * it was queued, and a sync or close covers everything queued before
- * it. A full queue blocks the caller -- the ring then absorbs the
- * stall for as long as its own depth allows.
+ * it. Syncs and closes run on a second thread, in the order queued,
+ * so a slow flush never holds up the writes behind it. A full queue
+ * blocks the caller -- the ring then absorbs the stall for as long as
+ * its own depth allows.
  */
 
 #ifndef RMR_IO_H
