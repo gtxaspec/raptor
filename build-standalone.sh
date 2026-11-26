@@ -116,6 +116,9 @@ OPUS_VERSION=1.6.1
 FAAC_VERSION=b92b7f81e53b1027107c900b11609abf32a1fb1a
 HELIX_VERSION=05f2fb0045cc294b4e0d1a1a9747b89c22c1fea4
 SCHRIFT_VERSION=24737d2922b23df4a5692014f5ba03da0c296112
+# c046389 (2026-10-10) turned on a debug box-tree dump that needs a
+# DEBUG-only field: libmov no longer compiles without -DDEBUG
+MEDIA_SERVER_VERSION=5b9d159a7e3a029852407009d388ccd298627dcf
 MUSL_SHIM_VERSION=HEAD
 UCLIBC_SHIM_VERSION=HEAD
 LIBSRT_VERSION=v1.5.6
@@ -397,7 +400,8 @@ clone_repo() {
         current=$(git -C "$dir" rev-parse HEAD 2>/dev/null || echo "")
         if [ "$current" != "$version" ]; then
             echo "Checking out $name @ ${version:0:10}..."
-            git -C "$dir" fetch --quiet origin
+            # by name: a clone made while the dep followed HEAD is shallow
+            git -C "$dir" fetch --quiet origin "$version" || git -C "$dir" fetch --quiet origin
             git -C "$dir" checkout --quiet --force "$version"
         fi
     fi
@@ -983,7 +987,7 @@ clone_repo raptor-ipc   https://github.com/gtxaspec/raptor-ipc       "$RAPTOR_IP
 clone_repo raptor-common https://github.com/gtxaspec/raptor-common   "$RAPTOR_COMMON_VERSION"
 clone_repo compy        https://github.com/gtxaspec/compy            "$COMPY_VERSION"
 clone_repo libschrift   https://github.com/tomolt/libschrift         "$SCHRIFT_VERSION"
-[ "$OPT_RFS" = 1 ] && clone_repo media-server https://github.com/ireader/media-server      HEAD
+[ "$OPT_RFS" = 1 ] && clone_repo media-server https://github.com/ireader/media-server      "$MEDIA_SERVER_VERSION"
 
 # live555 — download tarball (not a git repo); only needed for rsd-555
 LIVE555_VERSION=2026.07.23
