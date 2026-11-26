@@ -892,8 +892,79 @@ SUITE(rsp_audio_suite)
 }
 
 /* ================================================================
- * Peer stalls: zero-window send
+ * Peer stalls: connect-phase deadline, zero-window send
  * ================================================================ */
+
+static void *drip_thread(void *arg)
+{
+	int fd = *(int *)arg;
+	for (int i = 0; i < 40; i++) {
+		if (send(fd, "x", 1, MSG_NOSIGNAL) != 1)
+			break;
+		usleep(100000);
+	}
+	return NULL;
+}
+
+/* One byte per 100 ms must not satisfy a 600 ms budget for 40 bytes */
+TEST recv_full_deadline_covers_whole_call(void)
+{
+	int sv[2];
+	ASSERT_EQ(0, socketpair(AF_UNIX, SOCK_STREAM, 0, sv));
+	rsp_rtmp_t ctx;
+	test_ctx_init(&ctx);
+	ctx.fd = sv[0];
+	pthread_t th;
+	pthread_create(&th, NULL, drip_thread, &sv[1]);
+	uint8_t buf[40];
+	int64_t t0 = rss_timestamp_us();
+	int ret = rtmp_recv_full(&ctx, buf, sizeof(buf), 600);
+	int64_t took_ms = (rss_timestamp_us() - t0) / 1000;
+	close(sv[0]);
+	pthread_join(th, NULL);
+	close(sv[1]);
+	ASSERT_EQ(-1, ret);
+	ASSERT(took_ms < 1500);
+	PASS();
+}
+
+/* A server that opens a 16 MB message and trickles it: the connect-phase
+ * budget must end the wait, not the end of the message. */
+static void *trickle_message_thread(void *arg)
+{
+	int fd = *(int *)arg;
+	/* fmt 0, csid 3; ts 0; length 0xFFFFFF; type 9 (video); stream 0 */
+	const uint8_t hdr[12] = {0x03, 0, 0, 0, 0xFF, 0xFF, 0xFF, 9, 0, 0, 0, 0};
+	if (send(fd, hdr, sizeof(hdr), MSG_NOSIGNAL) != sizeof(hdr))
+		return NULL;
+	for (int i = 0; i < 600; i++) {
+		if (send(fd, "x", 1, MSG_NOSIGNAL) != 1)
+			break;
+		usleep(10000);
+	}
+	return NULL;
+}
+
+TEST read_responses_deadline_covers_trickled_message(void)
+{
+	int sv[2];
+	ASSERT_EQ(0, socketpair(AF_UNIX, SOCK_STREAM, 0, sv));
+	rsp_rtmp_t ctx;
+	test_ctx_init(&ctx);
+	ctx.fd = sv[0];
+	ctx.in_chunk_size = RTMP_DEFAULT_CHUNK_SZ;
+	pthread_t th;
+	pthread_create(&th, NULL, trickle_message_thread, &sv[1]);
+	int64_t t0 = rss_timestamp_us();
+	int ret = rtmp_read_responses(&ctx, RSP_STATE_PUBLISHING, 400);
+	int64_t took_ms = (rss_timestamp_us() - t0) / 1000;
+	close(sv[0]);
+	pthread_join(th, NULL);
+	close(sv[1]);
+	ASSERT_EQ(-1, ret);
+	ASSERT(took_ms < 1000);
+	PASS();
+}
 
 /* A peer that stops reading must make a retrying writer (rss_tls_write
  * retries WANT_WRITE the way this loop does) fail instead of spin. */
@@ -938,6 +1009,8 @@ TEST send_stall_is_bounded(void)
 
 SUITE(rsp_stall_suite)
 {
+	RUN_TEST(recv_full_deadline_covers_whole_call);
+	RUN_TEST(read_responses_deadline_covers_trickled_message);
 	RUN_TEST(send_stall_is_bounded);
 }
 

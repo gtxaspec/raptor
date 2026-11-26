@@ -113,16 +113,20 @@ static ssize_t rtmp_recv(rsp_rtmp_t *ctx, void *buf, size_t len)
 	return read(ctx->fd, buf, len);
 }
 
+/* timeout_ms bounds the whole call, not each read: a peer that sends one
+ * byte at a time must not keep the connect phase open. */
 static int rtmp_recv_full(rsp_rtmp_t *ctx, void *buf, size_t len, int timeout_ms)
 {
 	uint8_t *p = buf;
 	size_t got = 0;
-
-	/* Set socket timeout so blocking reads don't hang forever */
-	struct timeval tv = {.tv_sec = timeout_ms / 1000, .tv_usec = (timeout_ms % 1000) * 1000};
-	setsockopt(ctx->fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+	int64_t deadline = rss_timestamp_us() + (int64_t)timeout_ms * 1000;
 
 	while (got < len) {
+		int64_t left_us = deadline - rss_timestamp_us();
+		if (left_us <= 0)
+			return -1;
+		struct timeval tv = {.tv_sec = left_us / 1000000, .tv_usec = left_us % 1000000};
+		setsockopt(ctx->fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 		ssize_t n = rtmp_recv(ctx, p + got, len - got);
 		if (n <= 0)
 			return -1;
@@ -138,6 +142,13 @@ static int rtmp_recv_full(rsp_rtmp_t *ctx, void *buf, size_t len, int timeout_ms
 static void rtmp_bound_stall(int fd, unsigned int ms)
 {
 	setsockopt(fd, IPPROTO_TCP, TCP_USER_TIMEOUT, &ms, sizeof(ms));
+}
+
+/* Milliseconds to a deadline, never 0 (SO_RCVTIMEO 0 would mean forever) */
+static int rtmp_ms_left(int64_t deadline_us)
+{
+	int64_t ms = (deadline_us - rss_timestamp_us()) / 1000;
+	return ms < 1 ? 1 : (int)ms;
 }
 
 /* ── Big-endian helpers ── */
@@ -527,12 +538,12 @@ static int rtmp_read_responses(rsp_rtmp_t *ctx, rsp_conn_state_t target_state, i
 		/* Extended chunk stream ID */
 		if (csid == 0) {
 			uint8_t b;
-			if (rtmp_recv_full(ctx, &b, 1, remaining) < 0)
+			if (rtmp_recv_full(ctx, &b, 1, rtmp_ms_left(deadline)) < 0)
 				return -1;
 			csid = (uint32_t)b + 64;
 		} else if (csid == 1) {
 			uint8_t b[2];
-			if (rtmp_recv_full(ctx, b, 2, remaining) < 0)
+			if (rtmp_recv_full(ctx, b, 2, rtmp_ms_left(deadline)) < 0)
 				return -1;
 			csid = (uint32_t)b[1] * 256 + (uint32_t)b[0] + 64;
 		}
@@ -544,7 +555,7 @@ static int rtmp_read_responses(rsp_rtmp_t *ctx, rsp_conn_state_t target_state, i
 		/* Read message header based on fmt */
 		if (fmt == 0) {
 			uint8_t mh[11];
-			if (rtmp_recv_full(ctx, mh, 11, remaining) < 0)
+			if (rtmp_recv_full(ctx, mh, 11, rtmp_ms_left(deadline)) < 0)
 				return -1;
 			uint32_t ts = ((uint32_t)mh[0] << 16) | ((uint32_t)mh[1] << 8) | mh[2];
 			c->msg_len = ((uint32_t)mh[3] << 16) | ((uint32_t)mh[4] << 8) | mh[5];
@@ -554,12 +565,12 @@ static int rtmp_read_responses(rsp_rtmp_t *ctx, rsp_conn_state_t target_state, i
 			c->msg_got = 0;
 			if (ts == 0xFFFFFF) {
 				uint8_t ext[4];
-				if (rtmp_recv_full(ctx, ext, 4, remaining) < 0)
+				if (rtmp_recv_full(ctx, ext, 4, rtmp_ms_left(deadline)) < 0)
 					return -1;
 			}
 		} else if (fmt == 1) {
 			uint8_t mh[7];
-			if (rtmp_recv_full(ctx, mh, 7, remaining) < 0)
+			if (rtmp_recv_full(ctx, mh, 7, rtmp_ms_left(deadline)) < 0)
 				return -1;
 			uint32_t ts = ((uint32_t)mh[0] << 16) | ((uint32_t)mh[1] << 8) | mh[2];
 			c->msg_len = ((uint32_t)mh[3] << 16) | ((uint32_t)mh[4] << 8) | mh[5];
@@ -567,17 +578,17 @@ static int rtmp_read_responses(rsp_rtmp_t *ctx, rsp_conn_state_t target_state, i
 			c->msg_got = 0;
 			if (ts == 0xFFFFFF) {
 				uint8_t ext[4];
-				if (rtmp_recv_full(ctx, ext, 4, remaining) < 0)
+				if (rtmp_recv_full(ctx, ext, 4, rtmp_ms_left(deadline)) < 0)
 					return -1;
 			}
 		} else if (fmt == 2) {
 			uint8_t mh[3];
-			if (rtmp_recv_full(ctx, mh, 3, remaining) < 0)
+			if (rtmp_recv_full(ctx, mh, 3, rtmp_ms_left(deadline)) < 0)
 				return -1;
 			uint32_t ts = ((uint32_t)mh[0] << 16) | ((uint32_t)mh[1] << 8) | mh[2];
 			if (ts == 0xFFFFFF) {
 				uint8_t ext[4];
-				if (rtmp_recv_full(ctx, ext, 4, remaining) < 0)
+				if (rtmp_recv_full(ctx, ext, 4, rtmp_ms_left(deadline)) < 0)
 					return -1;
 			}
 			/* msg_len, msg_type inherited from previous chunk on this csid */
@@ -598,13 +609,14 @@ static int rtmp_read_responses(rsp_rtmp_t *ctx, rsp_conn_state_t target_state, i
 			uint32_t skip = chunk;
 			while (skip > 0) {
 				uint32_t rd = skip > sizeof(tmp) ? sizeof(tmp) : skip;
-				if (rtmp_recv_full(ctx, tmp, rd, remaining) < 0)
+				if (rtmp_recv_full(ctx, tmp, rd, rtmp_ms_left(deadline)) < 0)
 					return -1;
 				skip -= rd;
 			}
 			c->msg_got += chunk;
 		} else {
-			if (rtmp_recv_full(ctx, ctx->recv_buf + c->msg_got, chunk, remaining) < 0)
+			if (rtmp_recv_full(ctx, ctx->recv_buf + c->msg_got, chunk,
+					   rtmp_ms_left(deadline)) < 0)
 				return -1;
 			c->msg_got += chunk;
 		}
