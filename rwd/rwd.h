@@ -17,6 +17,7 @@
 #include "rwd_sendq.h"
 
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <netinet/in.h>
@@ -359,7 +360,7 @@ int rwd_random_bytes(uint8_t *buf, size_t len);
 typedef struct {
 	rwd_server_t *srv;
 	pthread_t thread;
-	volatile bool running;
+	atomic_bool running; /* cleared by rwd_webtorrent_stop on the main thread */
 
 	char share_key[32];
 	char info_hash[48]; /* base64 SHA256, 44 chars + null */
