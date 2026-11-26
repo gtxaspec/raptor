@@ -547,10 +547,14 @@ install_jz_crypto_alt() {
 build_mbedtls() {
     local src="$DEPS_DIR/mbedtls"
     local builddir="$src/build-cross"
-    if [ "$OPT_STATIC" = 1 ]; then
-        [ -f "$SYSROOT_DIR/usr/lib/libmbedtls.a" ] && return
-    else
-        [ -f "$SYSROOT_DIR/usr/lib/libmbedtls.so" ] && return
+    # Threading as in thingino's mbedTLS: rhd and rwd handshake on several threads
+    if grep -q '^#define MBEDTLS_THREADING_PTHREAD' \
+            "$SYSROOT_DIR/usr/include/mbedtls/mbedtls_config.h" 2>/dev/null; then
+        if [ "$OPT_STATIC" = 1 ]; then
+            [ -f "$SYSROOT_DIR/usr/lib/libmbedtls.a" ] && return
+        else
+            [ -f "$SYSROOT_DIR/usr/lib/libmbedtls.so" ] && return
+        fi
     fi
 
     echo "Building mbedtls..."
@@ -564,6 +568,7 @@ build_mbedtls() {
         sed -i 's|^//#define MBEDTLS_SSL_DTLS_SRTP|#define MBEDTLS_SSL_DTLS_SRTP|' "$config_h" 2>/dev/null || \
         echo "#define MBEDTLS_SSL_DTLS_SRTP" >> "$config_h"
     fi
+    sed -i 's|^//#define MBEDTLS_THREADING_C|#define MBEDTLS_THREADING_C|; s|^//#define MBEDTLS_THREADING_PTHREAD|#define MBEDTLS_THREADING_PTHREAD|' "$config_h"
     # Use /dev/urandom instead of /dev/random to avoid blocking on low-entropy devices
     sed -i 's|#define MBEDTLS_PLATFORM_DEV_RANDOM "/dev/random"|#define MBEDTLS_PLATFORM_DEV_RANDOM "/dev/urandom"|' \
         "$src/include/mbedtls/platform.h"

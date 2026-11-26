@@ -157,7 +157,10 @@ MBEDTLS_VER="3.6.6"
 MBEDTLS_DIR="$DEPS/mbedtls-$MBEDTLS_VER"
 MBEDTLS_BUILD="$OUT/mbedtls-build"
 MBEDTLS_PREFIX="$OUT/mbedtls-install"
-if [ ! -f "$MBEDTLS_PREFIX/lib/libmbedtls.a" ]; then
+# Threading as in thingino's mbedTLS: rhd and rwd handshake on several threads
+if [ ! -f "$MBEDTLS_PREFIX/lib/libmbedtls.a" ] ||
+   ! grep -q '^#define MBEDTLS_THREADING_PTHREAD' "$MBEDTLS_PREFIX/include/mbedtls/mbedtls_config.h"; then
+    rm -rf "$MBEDTLS_BUILD" "$MBEDTLS_PREFIX"
     if [ ! -d "$MBEDTLS_DIR" ]; then
         echo "  fetch   mbedtls-$MBEDTLS_VER"
         curl -sL "https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-$MBEDTLS_VER/mbedtls-$MBEDTLS_VER.tar.bz2" \
@@ -168,6 +171,11 @@ if [ ! -f "$MBEDTLS_PREFIX/lib/libmbedtls.a" ]; then
     sed -i 's|//#define MBEDTLS_SSL_DTLS_SRTP|#define MBEDTLS_SSL_DTLS_SRTP|' \
         "$MBEDTLS_DIR/include/mbedtls/mbedtls_config.h"
     sed -i 's|//#define MBEDTLS_SSL_PROTO_DTLS|#define MBEDTLS_SSL_PROTO_DTLS|' \
+        "$MBEDTLS_DIR/include/mbedtls/mbedtls_config.h"
+    sed -i 's|^//#define MBEDTLS_THREADING_C|#define MBEDTLS_THREADING_C|; s|^//#define MBEDTLS_THREADING_PTHREAD|#define MBEDTLS_THREADING_PTHREAD|' \
+        "$MBEDTLS_DIR/include/mbedtls/mbedtls_config.h"
+    # Its unlocked operation counters are all TSan would report under concurrent handshakes
+    sed -i 's|^#define MBEDTLS_SELF_TEST|//#define MBEDTLS_SELF_TEST|' \
         "$MBEDTLS_DIR/include/mbedtls/mbedtls_config.h"
     mkdir -p "$MBEDTLS_BUILD"
     cmake -S "$MBEDTLS_DIR" -B "$MBEDTLS_BUILD" \
