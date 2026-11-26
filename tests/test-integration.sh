@@ -561,6 +561,38 @@ else
     fail "audio stream starts" "exit $ret"
 fi
 
+# ── Bytes after a stream request ──
+# /mjpeg and /audio keep the connection for the stream. The request stayed in
+# the receive buffer, so any further byte from the client ran it again:
+# the live send queue was re-initialised and a second send thread started
+# over the first, ending in a use-after-free or a main loop stuck joining.
+# What a streaming client sends is not a request and must change nothing.
+for stream_path in /mjpeg /audio; do
+    python3 - "$stream_path" <<'RESEND_EOF'
+import socket, sys, time
+s = socket.create_connection(("127.0.0.1", 18080), timeout=5)
+s.sendall(f"GET {sys.argv[1]} HTTP/1.0\r\n\r\n".encode())
+s.recv(4096)
+for chunk in (b"X", b"Y", b"\r\n\r\n", b"Z" * 9000):
+    try:
+        s.sendall(chunk)
+    except OSError:
+        break
+    time.sleep(0.2)
+time.sleep(0.5)
+s.close()
+RESEND_EOF
+    sleep 1
+    code=$(curl -s -m 5 -o /dev/null -w "%{http_code}" "http://127.0.0.1:18080/snap" 2>/dev/null) || true
+    clients=$(timeout 5 "$OUT/raptorctl" rhd clients 2>&1) || true
+    if [ "$code" = "200" ] && echo "$clients" | grep -q '"ok"' &&
+        ! grep -q "AddressSanitizer" "$LOG_DIR/rhd.log" 2>/dev/null; then
+        pass "bytes after GET $stream_path change nothing (rhd serves on, no sanitizer report)"
+    else
+        fail "bytes after GET $stream_path" "snap=$code clients=$(echo "$clients" | head -c 80) asan=$(grep -c AddressSanitizer "$LOG_DIR/rhd.log" 2>/dev/null)"
+    fi
+done
+
 # 404
 check_http "GET /invalid" "http://127.0.0.1:18080/nonexistent" "404"
 

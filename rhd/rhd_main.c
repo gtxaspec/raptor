@@ -328,6 +328,10 @@ static void *rhd_client_send_thread(void *arg)
 
 static void rhd_start_send_thread(rhd_client_t *c)
 {
+	/* One per client: a second init would reset a queue the first thread
+	 * is waiting on, and only the last thread is joined */
+	if (c->send_thread_running)
+		return;
 	if (rhd_sendq_init(&c->sendq) != 0)
 		return;
 	pthread_attr_t sa;
@@ -983,6 +987,14 @@ static void server_run(rhd_server_t *srv)
 				continue;
 			}
 
+			/* A streaming client has had its one request. What it sends
+			 * now is read to notice a disconnect and thrown away: left
+			 * in the buffer, the old request would run again with every
+			 * byte that arrives. */
+			bool streaming = c->is_mjpeg || c->is_audio;
+			if (streaming)
+				c->recv_len = 0;
+
 			size_t space = sizeof(c->recv_buf) - c->recv_len - 1;
 			if (space == 0) {
 				/* Request too large — reject */
@@ -1006,7 +1018,7 @@ static void server_run(rhd_server_t *srv)
 			 * pipelined request that cannot be answered or noise, and
 			 * acting on it would re-park with a new deadline.
 			 */
-			if (strstr(c->recv_buf, "\r\n\r\n") && !c->snap_pending) {
+			if (!streaming && strstr(c->recv_buf, "\r\n\r\n") && !c->snap_pending) {
 				handle_request(srv, c);
 				/* Close non-streaming, non-async connections. A
 				 * parked snapshot has neither a send buffer nor a
