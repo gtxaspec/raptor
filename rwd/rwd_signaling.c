@@ -199,11 +199,8 @@ bool rwd_client_from_offer(rwd_server_t *srv, const char *sdp, int stream_idx, c
 	if (stream_idx < 0 || stream_idx >= RWD_STREAM_COUNT)
 		stream_idx = 0;
 
-	/* Default reason covers later failures; the most common is having no
-	 * local address for the answer. Parse failure overrides it below. */
 	if (reject)
-		*reject =
-			(srv->local_ip[0] == '\0') ? RWD_SDP_ERR_NO_LOCAL_IP : RWD_SDP_ERR_UNKNOWN;
+		*reject = RWD_SDP_ERR_UNKNOWN;
 	rwd_sdp_offer_t offer;
 	rwd_sdp_reject_t parsed = rwd_sdp_parse_offer_r(sdp, &offer);
 	if (parsed != RWD_SDP_OK) {
@@ -286,6 +283,9 @@ bool rwd_client_from_offer(rwd_server_t *srv, const char *sdp, int stream_idx, c
 
 	int sdp_len = rwd_sdp_generate_answer(c, srv, sdp_answer, sdp_answer_size);
 	if (sdp_len < 0) {
+		/* Read under the lock: signaling workers refresh local_ip above */
+		if (reject && srv->local_ip[0] == '\0')
+			*reject = RWD_SDP_ERR_NO_LOCAL_IP;
 		rwd_dtls_client_free(c);
 		free(c);
 		pthread_mutex_unlock(&srv->clients_lock);
