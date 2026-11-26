@@ -22,6 +22,7 @@
 
 #include <errno.h>
 #include <netdb.h>
+#include <netinet/tcp.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -78,6 +79,9 @@
 #define FLV_PACKET_TYPE_SEQ_START    0
 #define FLV_PACKET_TYPE_CODED_FRAMES 1
 
+#define RTMP_STALL_CONNECT_MS	     10000
+#define RTMP_STALL_STREAM_MS	     5000
+
 /* ── I/O helpers ── */
 
 static ssize_t rtmp_send(rsp_rtmp_t *ctx, const void *buf, size_t len)
@@ -125,6 +129,15 @@ static int rtmp_recv_full(rsp_rtmp_t *ctx, void *buf, size_t len, int timeout_ms
 		got += (size_t)n;
 	}
 	return 0;
+}
+
+/* rss_tls_write retries WANT_WRITE forever, so a peer holding the TCP window
+ * at zero would hang the sender. The kernel aborts the connection once data
+ * has gone unacknowledged (or window probes unanswered) for this long, which
+ * fails the write. */
+static void rtmp_bound_stall(int fd, unsigned int ms)
+{
+	setsockopt(fd, IPPROTO_TCP, TCP_USER_TIMEOUT, &ms, sizeof(ms));
 }
 
 /* ── Big-endian helpers ── */
@@ -703,6 +716,7 @@ int rsp_rtmp_connect(rsp_rtmp_t *ctx, const char *host, int port, bool use_tls)
 	}
 
 	rss_set_tcp_nodelay(ctx->fd);
+	rtmp_bound_stall(ctx->fd, RTMP_STALL_CONNECT_MS);
 	if (ctx->tcp_sndbuf > 0) {
 		int sndbuf = ctx->tcp_sndbuf;
 		setsockopt(ctx->fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
@@ -834,6 +848,7 @@ int rsp_rtmp_publish(rsp_rtmp_t *ctx)
 	 * into the reconnect backoff instead. */
 	struct timeval tv = {.tv_sec = 2};
 	setsockopt(ctx->fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+	rtmp_bound_stall(ctx->fd, RTMP_STALL_STREAM_MS);
 	return 0;
 }
 

@@ -10,6 +10,8 @@
 
 #include <string.h>
 #include <arpa/inet.h>
+#include <pthread.h>
+#include <sys/socket.h>
 
 /* Include rsp_rtmp.c directly to test static functions.
  * Stub out the I/O functions — tests don't need real sockets. */
@@ -887,6 +889,56 @@ SUITE(rsp_audio_suite)
 	RUN_TEST(alaw_silence);
 	RUN_TEST(alaw_full_range);
 	RUN_TEST(l16_byte_swap);
+}
+
+/* ================================================================
+ * Peer stalls: zero-window send
+ * ================================================================ */
+
+/* A peer that stops reading must make a retrying writer (rss_tls_write
+ * retries WANT_WRITE the way this loop does) fail instead of spin. */
+TEST send_stall_is_bounded(void)
+{
+	int ls = socket(AF_INET, SOCK_STREAM, 0);
+	struct sockaddr_in a = {.sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
+	ASSERT_EQ(0, bind(ls, (struct sockaddr *)&a, sizeof(a)));
+	ASSERT_EQ(0, listen(ls, 1));
+	socklen_t al = sizeof(a);
+	getsockname(ls, (struct sockaddr *)&a, &al);
+	int c = socket(AF_INET, SOCK_STREAM, 0);
+	ASSERT_EQ(0, connect(c, (struct sockaddr *)&a, sizeof(a)));
+	int srv = accept(ls, NULL, NULL);
+	int sndbuf = 4096;
+	setsockopt(c, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+	struct timeval tv = {.tv_usec = 200000};
+	setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+	rtmp_bound_stall(c, 1000);
+
+	char chunk[4096] = {0};
+	int64_t t0 = rss_timestamp_us();
+	bool failed = false;
+	while (rss_timestamp_us() - t0 < 8000000) {
+		ssize_t n = write(c, chunk, sizeof(chunk));
+		if (n >= 0)
+			continue;
+		if (errno == EAGAIN || errno == EWOULDBLOCK) {
+			struct pollfd pfd = {.fd = c, .events = POLLOUT};
+			poll(&pfd, 1, 100);
+			continue;
+		}
+		failed = true;
+		break;
+	}
+	close(c);
+	close(srv);
+	close(ls);
+	ASSERT(failed);
+	PASS();
+}
+
+SUITE(rsp_stall_suite)
+{
+	RUN_TEST(send_stall_is_bounded);
 }
 
 SUITE(rsp_annexb_suite)
