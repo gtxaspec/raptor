@@ -151,8 +151,11 @@ int rwd_dtls_init(rwd_dtls_ctx_t *ctx, const char *cert_path, const char *key_pa
 		return -1;
 	}
 
-	/* WebRTC uses self-signed certs — trust is via SDP fingerprint */
-	mbedtls_ssl_conf_authmode(&ctx->conf, MBEDTLS_SSL_VERIFY_NONE);
+	/* WebRTC peers use self-signed certs, so chain verification cannot
+	 * pass: OPTIONAL makes the server request the client certificate and
+	 * carry on regardless, and the handshake step then pins it to the SDP
+	 * fingerprint. With VERIFY_NONE no certificate is ever requested. */
+	mbedtls_ssl_conf_authmode(&ctx->conf, MBEDTLS_SSL_VERIFY_OPTIONAL);
 
 	/* Prefer SHA256-based ciphersuites for SRTP key derivation compatibility.
 	 * Include SHA1 fallbacks for broader client support (Chrome, go2rtc).
@@ -314,26 +317,28 @@ int rwd_dtls_handshake_step(rwd_client_t *c)
 		return -1;
 	}
 
-	/* Verify peer certificate fingerprint against SDP offer.
-	 * WebRTC uses self-signed certs — trust is established by matching
-	 * the cert fingerprint to the one declared in the SDP exchange. */
+	/* WebRTC trust is the SDP fingerprint: a peer that presents no
+	 * certificate, or one that does not match, never gets keys. */
 	const mbedtls_x509_crt *peer_cert = mbedtls_ssl_get_peer_cert(&c->ssl);
-	if (peer_cert && c->offer.fingerprint[0]) {
-		char peer_fp[128];
-		if (compute_cert_fingerprint(peer_cert, peer_fp, sizeof(peer_fp)) != 0) {
-			RSS_ERROR("DTLS: failed to compute peer fingerprint");
-			c->dtls_state = RWD_DTLS_FAILED;
-			return -1;
-		}
-		if (strcasecmp(peer_fp, c->offer.fingerprint) != 0) {
-			RSS_ERROR("DTLS: peer fingerprint mismatch");
-			RSS_ERROR("  expected: %s", c->offer.fingerprint);
-			RSS_ERROR("  got:      %s", peer_fp);
-			c->dtls_state = RWD_DTLS_FAILED;
-			return -1;
-		}
-		RSS_DEBUG("DTLS: peer fingerprint verified");
+	if (!peer_cert || !c->offer.fingerprint[0]) {
+		RSS_ERROR("DTLS: peer presented no certificate to check against the offer");
+		c->dtls_state = RWD_DTLS_FAILED;
+		return -1;
 	}
+	char peer_fp[128];
+	if (compute_cert_fingerprint(peer_cert, peer_fp, sizeof(peer_fp)) != 0) {
+		RSS_ERROR("DTLS: failed to compute peer fingerprint");
+		c->dtls_state = RWD_DTLS_FAILED;
+		return -1;
+	}
+	if (strcasecmp(peer_fp, c->offer.fingerprint) != 0) {
+		RSS_ERROR("DTLS: peer fingerprint mismatch");
+		RSS_ERROR("  expected: %s", c->offer.fingerprint);
+		RSS_ERROR("  got:      %s", peer_fp);
+		c->dtls_state = RWD_DTLS_FAILED;
+		return -1;
+	}
+	RSS_DEBUG("DTLS: peer fingerprint verified");
 
 	/* Handshake complete — verify SRTP profile was negotiated */
 	mbedtls_dtls_srtp_info srtp_info;
