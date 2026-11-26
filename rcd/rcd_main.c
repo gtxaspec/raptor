@@ -32,6 +32,7 @@
 #include <raptor_hal.h>
 
 #include "rcd.h"
+#include "rcd_ethcam.h"
 
 #define RCD_SOCK	RSS_RUN_DIR "/rcd.sock"
 #define RCD_DHCP_CONF	RSS_RUN_DIR "/rcd-udhcpd.conf"
@@ -144,6 +145,11 @@ int rcd_stream_open(rcd_cam_t *c, int idx, int codec, int width, int height, int
 {
 	rcd_stream_t *s = &c->st[idx];
 	rss_ring_t *ring = s->ring;
+	if (!ethcam_sane_size(width, height)) {
+		rcd_error(c, "%s stream: unusable size %dx%d", stream_name[idx], width, height);
+		return -1;
+	}
+	fps = ethcam_sane_fps(fps);
 	if (!ring) {
 		char name[24];
 		snprintf(name, sizeof(name), "s%d_%s", c->slot, stream_name[idx]);
@@ -160,7 +166,7 @@ int rcd_stream_open(rcd_cam_t *c, int idx, int codec, int width, int height, int
 	s->codec = codec;
 	s->width = width;
 	s->height = height;
-	s->fps = fps > 0 ? fps : 30;
+	s->fps = fps;
 	pthread_mutex_unlock(&c->info_lock);
 	s->info_set = false;
 	s->last_frame_us = rss_timestamp_us();

@@ -95,6 +95,7 @@ ip = 127.0.0.13
 slot = 2
 codec = h265
 sub = false
+
 EOF
 
 "$OUT/rcd" -c "$WORK/raptor.conf" -f -d > "$WORK/rcd.log" 2>&1 &
@@ -206,6 +207,54 @@ if grep -q "ERROR: AddressSanitizer\|runtime error:\|LeakSanitizer\|WARNING: Thr
 else
 	pass "no sanitizer reports"
 fi
+
+# modules that report hostile stream info: a frame rate of 2000000 used to
+# divide by zero in the sequence tracker; a size of 7680x99999 went into the
+# ring header unchecked
+rm -f /var/run/rss/rcd.pid /var/run/rss/rcd.sock
+fake_start 127.0.0.14 --info-fps 2000000 || fail "hostile fps fake start"
+fake_start 127.0.0.15 --info-size 7680x99999 || fail "hostile size fake start"
+cat > "$WORK/hostile.conf" << EOF
+[cameras]
+enabled = true
+iface =
+dhcp = false
+power_gpio = -1
+
+[camera1]
+enabled = true
+ip = 127.0.0.14
+slot = 1
+codec = h264
+sub = false
+
+[camera2]
+enabled = true
+ip = 127.0.0.15
+slot = 2
+codec = h264
+sub = false
+EOF
+"$OUT/rcd" -c "$WORK/hostile.conf" -f -d > "$WORK/hostile.log" 2>&1 &
+PIDS+=($!)
+HOSTILE_PID=$!
+if wait_state 1 streaming 10; then
+	sleep 2
+	if kill -0 "$HOSTILE_PID" 2> /dev/null && [ "$(cam_field 1 streams.0.frames)" -gt 10 ]; then
+		pass "absurd fps: rcd alive, camera1 streaming"
+	else
+		fail "absurd fps: rcd died or camera1 produced no frames"
+	fi
+else
+	fail "absurd fps: camera1 not streaming"
+fi
+[ "$(cam_field 1 streams.0.fps)" = "30" ] && pass "absurd fps replaced by 30" || fail "absurd fps not replaced"
+if wait_state 2 error 10; then pass "absurd stream size refused"; else fail "absurd stream size accepted"; fi
+grep -q "camera2: main stream: unusable size 7680x99999" "$WORK/hostile.log" && pass "size refusal logged" || fail "size refusal not logged"
+[ ! -e /dev/shm/rss_ring_s2_main ] && pass "no ring for the refused stream" || fail "ring created for the refused stream"
+kill "$HOSTILE_PID"
+wait "$HOSTILE_PID" 2> /dev/null
+grep -q "ERROR: AddressSanitizer\|runtime error:\|LeakSanitizer" "$WORK/hostile.log" && fail "sanitizer report (hostile)" || pass "no sanitizer reports (hostile)"
 
 echo "=== Results: $PASS passed, $FAIL failed, $SKIP skipped ==="
 [ $FAIL -eq 0 ]

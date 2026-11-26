@@ -59,6 +59,16 @@ int ethcam_build_cmd(char *dst, size_t cap, const char *ip, int port, int cmd, i
  * field). Returns bytes consumed, 0 if more data is needed. */
 int ethcam_parse_reply(const char *buf, size_t len, ethcam_reply_t *out);
 
+/* What the module reports about a stream is untrusted: a frame rate outside
+ * 1..ETHCAM_MAX_FPS becomes ETHCAM_DEFAULT_FPS, and a size outside
+ * 16..ETHCAM_MAX_DIM per side is refused. */
+#define ETHCAM_MAX_FPS	   240
+#define ETHCAM_DEFAULT_FPS 30
+#define ETHCAM_MAX_DIM	   8192
+
+int ethcam_sane_fps(int fps);
+bool ethcam_sane_size(int width, int height);
+
 typedef struct {
 	/* H.264 I frames carry SPS/PPS before the header; Annex-B, start codes included */
 	const uint8_t *sps, *pps;

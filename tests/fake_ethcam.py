@@ -84,6 +84,8 @@ class Module:
     def __init__(self, args):
         self.ip = args.ip
         self.fps = args.fps
+        self.info_fps = args.info_fps or args.fps
+        self.info_w, self.info_h = (int(v) for v in args.info_size.split("x"))
         self.skip = args.skip
         self.corrupt = args.corrupt
         self.delay = args.delay
@@ -124,9 +126,9 @@ class Module:
         if cmd == 9025:
             return self.reply(port, "<Function>\n<Cmd>9025</Cmd>\n<Status>0</Status>\n<String>2019-12-12-Ver1.00</String>\n</Function>")
         if cmd == 9012:
-            return self.lst(port, cmd, [320, 240, self.fps, 2048000, 0, 30, codec, 2, 2, 8] + [0] * 23)
+            return self.lst(port, cmd, [self.info_w, self.info_h, self.info_fps, 2048000, 0, 30, codec, 2, 2, 8] + [0] * 23)
         if cmd == 9017:
-            return self.lst(port, cmd, [0, 0, 153600, self.fps, 320, 240, 1800, codec])
+            return self.lst(port, cmd, [0, 0, 153600, self.info_fps, self.info_w, self.info_h, 1800, codec])
         if cmd == 9008:
             with self.lock:
                 self.running[port] = True
@@ -248,6 +250,10 @@ def main():
     ap.add_argument("--h264", required=True)
     ap.add_argument("--h265")
     ap.add_argument("--fps", type=int, default=30)
+    ap.add_argument("--info-fps", type=int, default=0,
+                    help="frame rate the status replies claim (default: --fps)")
+    ap.add_argument("--info-size", default="320x240",
+                    help="WxH the status replies claim")
     ap.add_argument("--skip", type=int, default=0)
     ap.add_argument("--corrupt", type=int, default=0)
     ap.add_argument("--delay", type=float, default=0,

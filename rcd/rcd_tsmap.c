@@ -45,6 +45,8 @@ int64_t rcd_tsmap(rcd_tsmap_t *m, uint64_t cam_us, int64_t local_us)
 
 uint32_t rcd_seq(rcd_seq_t *q, uint64_t cam_us, uint64_t period_us, uint64_t *eff)
 {
+	if (period_us == 0)
+		period_us = 1;
 	if (!q->init) {
 		q->init = true;
 		q->last = cam_us;

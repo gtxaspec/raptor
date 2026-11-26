@@ -155,3 +155,13 @@ int ethcam_parse_frame(const uint8_t *buf, size_t len, bool h265, ethcam_frame_t
 	out->key = out->gop_idx == 1;
 	return (int)(h + 16 + size);
 }
+
+int ethcam_sane_fps(int fps)
+{
+	return fps >= 1 && fps <= ETHCAM_MAX_FPS ? fps : ETHCAM_DEFAULT_FPS;
+}
+
+bool ethcam_sane_size(int width, int height)
+{
+	return width >= 16 && width <= ETHCAM_MAX_DIM && height >= 16 && height <= ETHCAM_MAX_DIM;
+}

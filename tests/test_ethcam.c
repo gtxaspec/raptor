@@ -235,6 +235,39 @@ TEST rcd_seq_gaps_and_reboots(void)
 	PASS();
 }
 
+TEST rcd_seq_zero_period(void)
+{
+	rcd_seq_t q = {0};
+	uint64_t eff;
+	rcd_seq(&q, 1000000, 0, &eff);
+	/* the same-timestamp path adds one period: it must still advance */
+	uint32_t s = rcd_seq(&q, 1000000, 0, &eff);
+	ASSERT(s >= 1);
+	PASS();
+}
+
+TEST ethcam_untrusted_stream_info(void)
+{
+	ASSERT_EQ(30, ethcam_sane_fps(30));
+	ASSERT_EQ(1, ethcam_sane_fps(1));
+	ASSERT_EQ(240, ethcam_sane_fps(240));
+	ASSERT_EQ(ETHCAM_DEFAULT_FPS, ethcam_sane_fps(0));
+	ASSERT_EQ(ETHCAM_DEFAULT_FPS, ethcam_sane_fps(-5));
+	ASSERT_EQ(ETHCAM_DEFAULT_FPS, ethcam_sane_fps(241));
+	ASSERT_EQ(ETHCAM_DEFAULT_FPS, ethcam_sane_fps(2000000));
+	ASSERT(ethcam_sane_size(1920, 1080));
+	ASSERT(ethcam_sane_size(16, 16));
+	ASSERT(ethcam_sane_size(8192, 8192));
+	ASSERT(!ethcam_sane_size(0, 1080));
+	ASSERT(!ethcam_sane_size(1920, 0));
+	ASSERT(!ethcam_sane_size(-1, 1080));
+	ASSERT(!ethcam_sane_size(15, 1080));
+	ASSERT(!ethcam_sane_size(8193, 1080));
+	ASSERT(!ethcam_sane_size(7680, 2147483647));
+	ASSERT(!ethcam_sane_size(7680, -2147483647 - 1));
+	PASS();
+}
+
 SUITE(ethcam_suite)
 {
 	RUN_TEST(ethcam_cmd_has_nul);
@@ -247,4 +280,6 @@ SUITE(ethcam_suite)
 	RUN_TEST(ethcam_tsmap_slews_and_stays_monotonic);
 	RUN_TEST(rcd_seq_stale_startup_stamps);
 	RUN_TEST(rcd_seq_gaps_and_reboots);
+	RUN_TEST(rcd_seq_zero_period);
+	RUN_TEST(ethcam_untrusted_stream_info);
 }
