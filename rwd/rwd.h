@@ -327,9 +327,10 @@ int rwd_sdp_generate_answer(rwd_client_t *c, const rwd_server_t *srv, char *buf,
 void rwd_signaling_handle(rwd_server_t *srv, int client_fd,
 			  const struct sockaddr_storage *local_addr);
 void rwd_signaling_cleanup(void);
-rwd_client_t *rwd_client_from_offer(rwd_server_t *srv, const char *sdp, int stream_idx,
-				    char *sdp_answer, size_t sdp_answer_size,
-				    rwd_sdp_reject_t *reject);
+bool rwd_client_from_offer(rwd_server_t *srv, const char *sdp, int stream_idx, char *sdp_answer,
+			   size_t sdp_answer_size, rwd_sdp_reject_t *reject,
+			   char session_id_out[RWD_SESSION_ID_LEN * 2 + 1]);
+int rwd_session_punch(rwd_server_t *srv, const char *session_id);
 
 /* ── rwd_media.c ── */
 

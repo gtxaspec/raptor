@@ -388,6 +388,53 @@ def scenario_dtls():
     d.stop()
 
 
+def scenario_wt_race(cert, key):
+    print("WebTorrent offers racing WHIP posts")
+    tr = Tracker(cert, key)
+    d = Daemon("wt-race", maxc=1, extra=wt_extra())
+    sk = share_key(d)
+    tr.connected.wait(10)
+    cands = "".join("a=candidate:%d 1 UDP 2122260223 127.0.0.1 %d typ host\r\n" % (i, 41000 + i)
+                    for i in range(16))
+    stop = threading.Event()
+
+    def poster():
+        body = offer(ufrag="whip").encode()
+        req = (b"POST /whip HTTP/1.1\r\nHost: x\r\nContent-Type: application/sdp\r\n"
+               b"Content-Length: %d\r\n\r\n" % len(body)) + body
+        while not stop.is_set():
+            try:
+                s = socket.create_connection(("127.0.0.1", HTTP_PORT), timeout=3)
+                s.sendall(req)
+                s.recv(8192)
+                s.close()
+            except OSError:
+                time.sleep(0.05)
+
+    ths = [threading.Thread(target=poster, daemon=True) for _ in range(2)]
+    for t in ths:
+        t.start()
+    n = 0
+    end = time.time() + 25
+    while time.time() < end and d.alive():
+        n += 1
+        oid = "s0_race%d" % n
+        try:
+            tr.send(wt_offer(sk, oid, offer(ufrag="wt%d" % n, cands=cands)))
+        except OSError:
+            break
+        time.sleep(0.02)
+    stop.set()
+    for t in ths:
+        t.join(5)
+    alive = d.alive()
+    d.stop()
+    rep = d.sanitizer_report()
+    check("no use-after-free under concurrent offers", alive and rep is None,
+          (rep or "rwd died")[:600])
+    tr.close()
+
+
 def main():
     os.makedirs(WORK, exist_ok=True)
     cert, key, _ = make_cert("tracker")
@@ -395,6 +442,9 @@ def main():
     for sc in (scenario_dtls,):
         if only == [""] or sc.__name__[9:] in only:
             sc()
+    for sc in (scenario_wt_race,):
+        if only == [""] or sc.__name__[9:] in only:
+            sc(cert, key)
     print("%d passed, %d failed" % (PASS, len(FAILED)))
     for f in FAILED:
         print("  failed: " + f)

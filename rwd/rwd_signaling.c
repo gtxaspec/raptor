@@ -140,9 +140,9 @@ static void generate_session_id(char *out, size_t out_size)
 
 /* ── Create client from SDP offer (shared by WHIP and WebTorrent) ── */
 
-rwd_client_t *rwd_client_from_offer(rwd_server_t *srv, const char *sdp, int stream_idx,
-				    char *sdp_answer, size_t sdp_answer_size,
-				    rwd_sdp_reject_t *reject)
+bool rwd_client_from_offer(rwd_server_t *srv, const char *sdp, int stream_idx, char *sdp_answer,
+			   size_t sdp_answer_size, rwd_sdp_reject_t *reject,
+			   char session_id_out[RWD_SESSION_ID_LEN * 2 + 1])
 {
 	if (stream_idx < 0 || stream_idx >= RWD_STREAM_COUNT)
 		stream_idx = 0;
@@ -157,7 +157,7 @@ rwd_client_t *rwd_client_from_offer(rwd_server_t *srv, const char *sdp, int stre
 	if (parsed != RWD_SDP_OK) {
 		if (reject)
 			*reject = parsed;
-		return NULL;
+		return false;
 	}
 
 	pthread_mutex_lock(&srv->clients_lock);
@@ -172,7 +172,7 @@ rwd_client_t *rwd_client_from_offer(rwd_server_t *srv, const char *sdp, int stre
 		}
 		if (oldest_idx < 0) {
 			pthread_mutex_unlock(&srv->clients_lock);
-			return NULL;
+			return false;
 		}
 		rwd_client_t *old = srv->clients[oldest_idx];
 		RSS_WARN("WHIP: evicting oldest session %s to make room", old->session_id);
@@ -186,7 +186,7 @@ rwd_client_t *rwd_client_from_offer(rwd_server_t *srv, const char *sdp, int stre
 	rwd_client_t *c = calloc(1, sizeof(*c));
 	if (!c) {
 		pthread_mutex_unlock(&srv->clients_lock);
-		return NULL;
+		return false;
 	}
 
 	c->server = srv;
@@ -218,7 +218,7 @@ rwd_client_t *rwd_client_from_offer(rwd_server_t *srv, const char *sdp, int stre
 	if (rwd_dtls_client_init(c, srv->dtls) != 0) {
 		free(c);
 		pthread_mutex_unlock(&srv->clients_lock);
-		return NULL;
+		return false;
 	}
 
 	/* Re-detect local IP per session (handles late DHCP / IP change) */
@@ -233,7 +233,7 @@ rwd_client_t *rwd_client_from_offer(rwd_server_t *srv, const char *sdp, int stre
 		rwd_dtls_client_free(c);
 		free(c);
 		pthread_mutex_unlock(&srv->clients_lock);
-		return NULL;
+		return false;
 	}
 
 	for (int i = 0; i < RWD_MAX_CLIENTS; i++) {
@@ -243,11 +243,35 @@ rwd_client_t *rwd_client_from_offer(rwd_server_t *srv, const char *sdp, int stre
 			break;
 		}
 	}
+	/* The client belongs to the table from here on and any thread may
+	 * free it: hand back a copy of what the caller needs, not the pointer. */
+	memcpy(session_id_out, c->session_id, sizeof(c->session_id));
 	pthread_mutex_unlock(&srv->clients_lock);
 
-	RSS_DEBUG("client created: session %s (video_pt=%d audio_pt=%d)", c->session_id,
-		  c->offer.video_pt, c->offer.audio_pt);
-	return c;
+	RSS_DEBUG("client created: session %s", session_id_out);
+	return true;
+}
+
+/* Send ICE checks to the candidates of a session created from an offer.
+ * Runs under clients_lock so a concurrent teardown cannot free the client
+ * mid-use; returns the number of candidates, or -1 if the session is gone. */
+int rwd_session_punch(rwd_server_t *srv, const char *session_id)
+{
+	int n = -1;
+
+	pthread_mutex_lock(&srv->clients_lock);
+	for (int i = 0; i < RWD_MAX_CLIENTS; i++) {
+		rwd_client_t *c = srv->clients[i];
+		if (c && strcmp(c->session_id, session_id) == 0) {
+			n = c->offer.candidate_count;
+			for (int k = 0; k < n; k++)
+				rwd_ice_send_check(srv, c, c->offer.candidates[k].ip,
+						   c->offer.candidates[k].port);
+			break;
+		}
+	}
+	pthread_mutex_unlock(&srv->clients_lock);
+	return n;
 }
 
 /* ── WHIP POST handler: SDP offer → answer ── */
@@ -260,9 +284,9 @@ static void handle_whip_post(rwd_server_t *srv, int fd, const char *body, size_t
 
 	char sdp_answer[RWD_SDP_BUF_SIZE];
 	rwd_sdp_reject_t reject = RWD_SDP_ERR_UNKNOWN;
-	rwd_client_t *c = rwd_client_from_offer(srv, body, stream_idx, sdp_answer,
-						sizeof(sdp_answer), &reject);
-	if (!c) {
+	char session_id[RWD_SESSION_ID_LEN * 2 + 1];
+	if (!rwd_client_from_offer(srv, body, stream_idx, sdp_answer, sizeof(sdp_answer), &reject,
+				   session_id)) {
 		/*
 		 * Distinguish our failure from the caller's. Having no local
 		 * address to put in the answer is a server fault even when the
@@ -280,10 +304,10 @@ static void handle_whip_post(rwd_server_t *srv, int fd, const char *body, size_t
 
 	char extra[256];
 	snprintf(extra, sizeof(extra), "Location: /whip/%s\r\nCache-Control: no-store\r\n",
-		 c->session_id);
+		 session_id);
 	http_send(fd, "201 Created", "application/sdp", sdp_answer, strlen(sdp_answer), extra);
 
-	RSS_INFO("WHIP: session %s created", c->session_id);
+	RSS_INFO("WHIP: session %s created", session_id);
 }
 
 /* ── WHIP DELETE handler: teardown session ── */

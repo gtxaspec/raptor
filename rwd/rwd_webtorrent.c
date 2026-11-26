@@ -711,9 +711,9 @@ static void handle_tracker_offer(rwd_webtorrent_t *wt, wt_tls_t *tls, const char
 	}
 	sdp_answer[0] = '\0';
 
-	rwd_client_t *c =
-		rwd_client_from_offer(srv, sdp, stream_idx, sdp_answer, RWD_SDP_BUF_SIZE, NULL);
-	if (!c) {
+	char session_id[RWD_SESSION_ID_LEN * 2 + 1];
+	if (!rwd_client_from_offer(srv, sdp, stream_idx, sdp_answer, RWD_SDP_BUF_SIZE, NULL,
+				   session_id)) {
 		RSS_WARN("webtorrent: failed to create client from offer");
 		free(sdp_answer);
 		cJSON_Delete(root);
@@ -729,11 +729,10 @@ static void handle_tracker_offer(rwd_webtorrent_t *wt, wt_tls_t *tls, const char
 	}
 
 	/* NAT hole punch: send ICE checks to browser's candidates */
-	for (int i = 0; i < c->offer.candidate_count; i++)
-		rwd_ice_send_check(srv, c, c->offer.candidates[i].ip, c->offer.candidates[i].port);
+	int punched = rwd_session_punch(srv, session_id);
 
-	RSS_DEBUG("webtorrent: answer sent (session %s, %d candidates punched)", c->session_id,
-		  c->offer.candidate_count);
+	RSS_DEBUG("webtorrent: answer sent (session %s, %d candidates punched)", session_id,
+		  punched);
 
 	free(sdp_answer);
 	cJSON_Delete(root);
