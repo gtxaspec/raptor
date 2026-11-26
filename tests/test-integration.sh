@@ -380,6 +380,19 @@ direct_expect "unreadable driver: the configured ivdc is trusted" "enc chn 0 vid
 direct_absent "unreadable driver: nothing is claimed about the driver" "WARN.*direct[ _]mode"
 direct_absent "unreadable driver: the IVDC main keeps no snapshot, as before" "jpeg 1920x1080"
 
+# An IVDC main chosen by the config (T23/T41, where the driver cannot be
+# read) has no IPU OSD either: on a T41 the IPU regions on it panicked the
+# kernel as soon as rod drew. It takes the ISP OSD like a driver-chosen one.
+direct_run config-ivdc-osd "ivdc = true" on RSS_MOCK_ISP_OSD=1
+direct_expect "configured IVDC main: the mains take the ISP OSD" "using hybrid OSD"
+direct_run config-ivdc-ipu-osd "ivdc = true" on-no-isp RSS_MOCK_ISP_OSD=1
+direct_expect "configured IVDC main: isp_osd = false is overruled" "using hybrid OSD"
+direct_expect "configured IVDC main: the OSD overrule is a warning" "WARN.*isp_osd"
+direct_run config-ivdc-no-isp-osd "ivdc = true" on
+direct_expect "configured IVDC main, no ISP OSD: the missing main OSD is a warning" "WARN.*no IPU OSD and this platform has no ISP OSD"
+direct_run no-ivdc-osd - on RSS_MOCK_ISP_OSD=1
+direct_absent "no IVDC main: the IPU OSD stays" "using hybrid OSD"
+
 echo "=== Starting daemons ==="
 
 start_daemon() {

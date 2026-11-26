@@ -1478,8 +1478,13 @@ int rvd_pipeline_init(rvd_state_t *st)
 		st->use_isp_osd = false;
 	}
 	/* The IPU OSD sits between framesource and encoder, which an IVDC
-	 * main bypasses */
-	if (st->osd_enabled && !st->use_isp_osd && st->direct_sensors > 0) {
+	 * main bypasses, whether the driver or the config chose IVDC: IPU
+	 * regions on one panicked a T41's kernel as soon as they were drawn */
+	bool ivdc_main = false;
+	for (int i = 0; i < st->stream_count; i++)
+		if (!st->streams[i].is_jpeg && st->streams[i].enc_cfg.ivdc)
+			ivdc_main = true;
+	if (st->osd_enabled && !st->use_isp_osd && ivdc_main) {
 		if (caps && caps->has_isp_osd) {
 			if (rss_config_get_str(cfg, "osd", "isp_osd", NULL))
 				RSS_WARN("isp_osd = false, but an IVDC main has no IPU OSD; "
