@@ -385,6 +385,16 @@ def wt_extra(tls_verify="false", key="viewerkey-123"):
             % (TRACKER_PORT, tls_verify, key))
 
 
+def wait_log(d, text, timeout=10):
+    """The daemon logs after it acts; under TSan that can trail the reply by seconds."""
+    end = time.time() + timeout
+    while time.time() < end:
+        if text in d.logtext():
+            return True
+        time.sleep(0.2)
+    return False
+
+
 def share_key(d, timeout=10):
     end = time.time() + timeout
     while time.time() < end:
@@ -463,12 +473,12 @@ def scenario_wt_auth(cert, key):
     sdp = offer(ufrag="wtpeer")
     tr.send(wt_offer(sk, new_offer_id(), sdp, auth="none"))
     check("offer without auth gets no answer", not tr.wait_answers(1, 3))
-    check("missing auth logged", "not authenticated with the share key" in d.logtext())
+    check("missing auth logged", wait_log(d, "not authenticated with the share key"))
     tr.send(wt_offer(sk, new_offer_id(), sdp, auth="wrong"))
     check("offer with a wrong key gets no answer", not tr.wait_answers(1, 3))
     tr.send(wt_offer(sk, "s0_" + "x" * 10, sdp))
     check("13-character offer_id gets no answer", not tr.wait_answers(1, 3))
-    check("bad offer_id logged", "offer_id is not a 20-byte binary string" in d.logtext())
+    check("bad offer_id logged", wait_log(d, "offer_id is not a 20-byte binary string"))
 
     oid = new_offer_id()
     good = wt_offer(sk, oid, sdp, stream=1)
@@ -480,10 +490,10 @@ def scenario_wt_auth(cert, key):
         check("answer echoes the offer_id", a.get("offer_id") == oid)
         check("answer's SDP proves the camera knows the key",
               answer_tag_ok(sk, oid, a["answer"]["sdp"]))
-    check("stream chosen in the SDP is served", "(stream 1)" in d.logtext())
+    check("stream chosen in the SDP is served", wait_log(d, "(stream 1)"))
     tr.send(good)
     check("replayed offer is not answered twice", not tr.wait_answers(2, 3))
-    check("replay logged", "offer_id already used" in d.logtext())
+    check("replay logged", wait_log(d, "offer_id already used"))
     check("daemon healthy", d.alive() and d.sanitizer_report() is None, str(d.sanitizer_report()))
     d.stop()
     tr.close()
