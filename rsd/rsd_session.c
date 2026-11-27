@@ -680,6 +680,42 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 			return;
 		}
 	}
+	/* Everything that can refuse this SETUP is checked before anything the
+	 * client already set up is dropped: a refused request must leave the
+	 * session as it was. */
+	uint16_t cli_rtp = 0, cli_rtcp = 0;
+	if (tcfg.lower != Compy_LowerTransport_TCP) {
+		bool have_ports = false;
+		match(tcfg.client_port)
+		{
+			of(Compy_PortPair_Some, pp)
+			{
+				cli_rtp = pp->rtp_port;
+				cli_rtcp = pp->rtcp_port;
+				have_ports = true;
+			}
+			otherwise
+			{
+			}
+		}
+		if (!have_ports) {
+			compy_respond(ctx, COMPY_STATUS_BAD_REQUEST, "`client_port' not found");
+			return;
+		}
+		if (!compy_sockaddr_ip((const struct sockaddr *)&self->addr)) {
+			compy_respond(ctx, COMPY_STATUS_BAD_REQUEST, "Cannot determine client IP");
+			return;
+		}
+	}
+	if (is_audio && !is_backchannel && !self->srv->has_audio) {
+		compy_respond(ctx, COMPY_STATUS_NOT_FOUND, "Audio not available");
+		return;
+	}
+	if (!is_audio && !is_backchannel && !self->srv->video[self->stream_idx].last_width) {
+		compy_respond(ctx, COMPY_STATUS_NOT_FOUND, "Video not available");
+		return;
+	}
+
 	if (is_backchannel && self->backchannel) {
 		VCALL(DYN(Compy_Backchannel, Compy_Droppable, self->backchannel), drop);
 		self->backchannel = NULL;
@@ -750,31 +786,8 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 		}
 	} else {
 		/* UDP */
-		uint16_t cli_rtp = 0, cli_rtcp = 0;
-		bool have_ports = false;
-		match(tcfg.client_port)
-		{
-			of(Compy_PortPair_Some, pp)
-			{
-				cli_rtp = pp->rtp_port;
-				cli_rtcp = pp->rtcp_port;
-				have_ports = true;
-			}
-			otherwise
-			{
-			}
-		}
-		if (!have_ports) {
-			compy_respond(ctx, COMPY_STATUS_BAD_REQUEST, "`client_port' not found");
-			return;
-		}
-
 		const struct sockaddr *sa = (const struct sockaddr *)&self->addr;
 		const void *client_ip = compy_sockaddr_ip(sa);
-		if (!client_ip) {
-			compy_respond(ctx, COMPY_STATUS_BAD_REQUEST, "Cannot determine client IP");
-			return;
-		}
 
 		/* Each track owns its UDP pair -- the backchannel included,
 		 * which once borrowed the video pointers here and clobbered

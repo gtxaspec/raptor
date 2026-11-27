@@ -524,13 +524,30 @@ def leg_slots():
     lab.finish()
 
 
+def leg_setup_failure():
+    print("== a refused SETUP leaves the session alone")
+    lab = Lab("setupfail")
+    c = Rtsp()
+    r, p = play_tcp(c)
+    sid = session_id(r)
+    check("setupfail: session plays", ok(p) and c.media_frames(3))
+    check("setupfail: PAUSE", ok(c.req("PAUSE", "/stream0", "Session: %s\r\n" % sid)))
+    r = c.req("SETUP", "/stream0/video", "Transport: RTP/AVP;unicast\r\nSession: %s\r\n" % sid)
+    check("setupfail: UDP SETUP without client_port is refused", status(r).startswith("RTSP/1.0 400"), status(r))
+    r = c.req("PLAY", "/stream0", "Session: %s\r\n" % sid)
+    check("setupfail: PLAY still works on the transport set up before", ok(r), status(r))
+    check("setupfail: media flows again", c.media_frames(3))
+    c.close()
+    lab.finish()
+
+
 def main():
     os.makedirs(WORK, exist_ok=True)
     rings = subprocess.Popen([os.path.join(OUT, "create_rings")],
                              stdout=open(os.path.join(WORK, "rings.log"), "w"),
                              stderr=subprocess.STDOUT)
     time.sleep(1.5)
-    legs = [leg_stalled_player, leg_alias_gate, leg_uri_resolution, leg_userinfo, leg_tls_stalls, leg_tls_fail_closed, leg_request_framing, leg_slots]
+    legs = [leg_stalled_player, leg_alias_gate, leg_uri_resolution, leg_userinfo, leg_tls_stalls, leg_tls_fail_closed, leg_request_framing, leg_slots, leg_setup_failure]
     only = sys.argv[1:]
     try:
         for leg in legs:

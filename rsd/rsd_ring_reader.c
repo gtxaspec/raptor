@@ -217,6 +217,12 @@ static void rsd_send_video_interleaved(rsd_client_t *c, const uint8_t *data, uin
 		}
 
 		rsd_send_lock(c);
+		/* SETUP swaps the transports under this lock: what the check at
+		 * the top saw may be gone by now. */
+		if (!c->video.nal) {
+			pthread_mutex_unlock(&c->write_lock);
+			return;
+		}
 		(void)!Compy_NalTransport_send_packet(c->video.nal, Compy_RtpTimestamp_Raw(rtp_ts),
 						      nalu);
 		pthread_mutex_unlock(&c->write_lock);
@@ -236,6 +242,10 @@ static void rsd_send_video_interleaved(rsd_client_t *c, const uint8_t *data, uin
 	 * here makes every five-second SR expose queue/Wi-Fi latency as a PTS
 	 * correction at the receiver. */
 	rsd_send_lock(c);
+	if (!c->video.rtp) {
+		pthread_mutex_unlock(&c->write_lock);
+		return;
+	}
 	Compy_RtpTransport_set_clock_reference(c->video.rtp, rtp_ts, (uint64_t)capture_us);
 	if (c->srv->rtcp_sr) {
 		int64_t now = rss_timestamp_us();
@@ -705,6 +715,10 @@ static void rsd_send_jpeg_frame(rsd_client_t *c, const uint8_t *data, uint32_t l
 		return;
 
 	rsd_send_lock(c);
+	if (!c->video.jpeg || !c->video.rtp) {
+		pthread_mutex_unlock(&c->write_lock);
+		return;
+	}
 	(void)!Compy_JpegTransport_send_frame(c->video.jpeg, Compy_RtpTimestamp_Raw(rtp_ts),
 					      U8Slice99_new((uint8_t *)data, len));
 	Compy_RtpTransport_set_clock_reference(c->video.rtp, rtp_ts, (uint64_t)capture_us);
