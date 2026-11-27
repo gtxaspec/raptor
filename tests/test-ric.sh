@@ -25,6 +25,13 @@ if ! unshare -rm true 2>/dev/null; then
     exit 0
 fi
 
+# The harness builds its GPIO tree on a tmpfs over /sys. LXC's default
+# AppArmor profile denies writes under /sys by path, whatever is mounted there.
+if ! unshare -rm sh -c 'mount -t tmpfs none /sys && mkdir /sys/probe' 2>/dev/null; then
+    echo "SKIP: cannot write a tmpfs over /sys here (container AppArmor?)"
+    exit 0
+fi
+
 # ADC shim: plain cc, no sanitizer -- it is preloaded after the ASan
 # runtime, so interceptor chains still terminate here via RTLD_NEXT.
 SHIM="$OUT/ric_adc_shim.so"
