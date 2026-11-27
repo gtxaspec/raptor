@@ -221,13 +221,85 @@ def leg_stalled_player():
     lab.finish()
 
 
+def leg_alias_gate():
+    print("== endpoint alias gate")
+    lab = Lab("alias", "endpoint_main = camA\n")
+    c = Rtsp()
+    check("alias: DESCRIBE of the default path is refused",
+          status(c.req("DESCRIBE", "/stream0", "Accept: application/sdp\r\n")).startswith("RTSP/1.0 404"))
+    c.close()
+
+    c = Rtsp()
+    r = c.req("SETUP", "/stream0/video", "Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n")
+    check("alias: SETUP without DESCRIBE cannot use the default path",
+          status(r).startswith("RTSP/1.0 404"), status(r))
+    r = c.req("SETUP", "/stream0/trackID=0", "Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n")
+    check("alias: SETUP of a trackID control cannot use the default path either",
+          status(r).startswith("RTSP/1.0 404"), status(r))
+    r = c.req("PLAY", "/stream0")
+    check("alias: PLAY without a session starts nothing", not ok(r), status(r))
+    check("alias: no media reaches the bypassing client", not c.media_frames(1.5))
+    c.close()
+
+    c = Rtsp()
+    r = c.req("DESCRIBE", "/camA", "Accept: application/sdp\r\n")
+    check("alias: DESCRIBE of the alias works", ok(r), status(r))
+    r = c.req("SETUP", "/camA/video", "Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n")
+    check("alias: SETUP of the alias works", ok(r), status(r))
+    sid = session_id(r)
+    r = c.req("SETUP", "/stream0/video", "Transport: RTP/AVP/TCP;unicast;interleaved=2-3\r\nSession: %s\r\n" % sid)
+    check("alias: a later SETUP naming the default path is refused", status(r).startswith("RTSP/1.0 404"), status(r))
+    r = c.req("PLAY", "/stream0", "Session: %s\r\n" % sid)
+    check("alias: PLAY naming the default path is refused", status(r).startswith("RTSP/1.0 404"), status(r))
+    r = c.req("PLAY", "/camA", "Session: %s\r\n" % sid)
+    check("alias: PLAY of the alias works", ok(r), status(r))
+    check("alias: media flows on the alias", c.media_frames(3))
+    c.close()
+    lab.finish()
+
+
+def leg_uri_resolution():
+    print("== stream resolution of request URIs")
+    lab = Lab("resolve")
+    c = Rtsp()
+    r = c.req("DESCRIBE", "/stream1/", "Accept: application/sdp\r\n")
+    check("resolve: a Content-Base style trailing slash names its own stream",
+          ok(r) and "b=AS:1000" in r, status(r))
+    c.close()
+
+    c = Rtsp()
+    r = c.req("SETUP", "/nothing/here/video", "Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n")
+    check("resolve: SETUP of an unknown path is refused", status(r).startswith("RTSP/1.0 404"), status(r))
+    r = c.req("SETUP", "/stream0/video", "Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n")
+    check("resolve: SETUP without DESCRIBE works on a default path", ok(r), status(r))
+    c.close()
+    c = Rtsp()
+    r = c.req("SETUP", "/stream0/trackID=0", "Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n")
+    check("resolve: a trackID control resolves to its stream", ok(r), status(r))
+    r = c.req("SETUP", "/stream0/trackID=1", "Transport: RTP/AVP/TCP;unicast;interleaved=2-3\r\nSession: %s\r\n" % session_id(r))
+    check("resolve: and so does a second track of the same stream", ok(r), status(r))
+    c.close()
+    c = Rtsp()
+    r = c.req("SETUP", "/stream0/video", "Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n")
+    sid = session_id(r)
+    r = c.req("SETUP", "/stream1/video", "Transport: RTP/AVP/TCP;unicast;interleaved=2-3\r\nSession: %s\r\n" % sid)
+    check("resolve: a later SETUP naming another stream is refused", status(r).startswith("RTSP/1.0 404"), status(r))
+    r = c.req("PLAY", "/stream1", "Session: %s\r\n" % sid)
+    check("resolve: PLAY naming another stream is refused", status(r).startswith("RTSP/1.0 404"), status(r))
+    r = c.req("PLAY", "/stream0/", "Session: %s\r\n" % sid)
+    check("resolve: PLAY on the trailing-slash form works", ok(r), status(r))
+    check("resolve: media flows", c.media_frames(3))
+    c.close()
+    lab.finish()
+
+
 def main():
     os.makedirs(WORK, exist_ok=True)
     rings = subprocess.Popen([os.path.join(OUT, "create_rings")],
                              stdout=open(os.path.join(WORK, "rings.log"), "w"),
                              stderr=subprocess.STDOUT)
     time.sleep(1.5)
-    legs = [leg_stalled_player]
+    legs = [leg_stalled_player, leg_alias_gate, leg_uri_resolution]
     only = sys.argv[1:]
     try:
         for leg in legs:

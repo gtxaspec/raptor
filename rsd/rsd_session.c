@@ -252,7 +252,7 @@ void rsd_endpoints_load(rsd_server_t *srv, rss_config_t *cfg)
  *   3. Legacy /main, /sub, / — only if that stream has a blank alias.
  *   4. Bare /audio, /backchannel → main — only if main has a blank alias.
  */
-static int detect_stream_idx(const rsd_server_t *srv, CharSlice99 uri)
+static int resolve_path(const rsd_server_t *srv, CharSlice99 uri)
 {
 	CharSlice99 base = uri;
 	bool is_subresource = false;
@@ -294,6 +294,26 @@ static int detect_stream_idx(const rsd_server_t *srv, CharSlice99 uri)
 		return RSD_STREAM_MAIN;
 
 	return -1;
+}
+
+/* The stream a request URI names, or -1. DESCRIBE, SETUP and PLAY all go
+ * through here, so the alias gate holds whichever request a client opens
+ * with. A trailing '/' (the Content-Base form) and the track control a
+ * SETUP appends ("/video", "/trackID=0", ...) name the same stream as the
+ * bare path. */
+static int detect_stream_idx(const rsd_server_t *srv, CharSlice99 uri)
+{
+	if (uri.len > 1 && uri.ptr[uri.len - 1] == '/') {
+		CharSlice99 bare = uri;
+		bare.len--;
+		int idx = detect_stream_idx(srv, bare);
+		if (idx >= 0)
+			return idx;
+	}
+	int idx = resolve_path(srv, uri);
+	if (idx < 0)
+		idx = resolve_path(srv, uri_strip_last(uri));
+	return idx;
 }
 
 static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request *req)
@@ -611,6 +631,22 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 {
 	VSELF(rsd_client_t);
 
+	/* The alias gate lives here as well as in DESCRIBE: a client may open
+	 * with SETUP and never describe anything. */
+	int idx = detect_stream_idx(self->srv, req->start_line.uri);
+	if (idx < 0) {
+		compy_respond(ctx, COMPY_STATUS_NOT_FOUND, "Unknown stream endpoint");
+		return;
+	}
+	if (idx != self->stream_idx) {
+		if (self->video.rtp || self->audio.rtp || self->backchannel) {
+			compy_respond(ctx, COMPY_STATUS_NOT_FOUND,
+				      "Stream endpoint differs from the session's");
+			return;
+		}
+		self->stream_idx = idx;
+	}
+
 	/* Determine stream type from URI */
 	bool is_audio = CharSlice99_primitive_ends_with(req->start_line.uri,
 							CharSlice99_from_str("/audio"));
@@ -893,6 +929,7 @@ static void rsd_client_t_setup(VSelf, Compy_Context *ctx, const Compy_Request *r
 			compy_respond(ctx, COMPY_STATUS_NOT_FOUND, "Video not available");
 			return;
 		}
+		self->video_codec = self->srv->video[self->stream_idx].last_codec;
 		if (self->video_codec == 2 || self->video_codec == 3) {
 			self->video.rtp =
 				Compy_RtpTransport_new(rtp_t, RSD_JPEG_PT, RSD_VIDEO_CLOCK);
@@ -934,6 +971,12 @@ static void rsd_client_t_play(VSelf, Compy_Context *ctx, const Compy_Request *re
 	 * set up nothing else. */
 	if (!self->video.nal && !self->video.jpeg && !self->audio.rtp && !self->backchannel) {
 		compy_respond(ctx, COMPY_STATUS_METHOD_NOT_VALID_IN_THIS_STATE, "SETUP not done");
+		return;
+	}
+
+	int idx = detect_stream_idx(self->srv, req->start_line.uri);
+	if (idx < 0 || idx != self->stream_idx) {
+		compy_respond(ctx, COMPY_STATUS_NOT_FOUND, "Unknown stream endpoint");
 		return;
 	}
 

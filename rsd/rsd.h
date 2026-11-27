@@ -112,7 +112,7 @@ typedef struct rsd_client {
 	uint32_t last_audio_client_ts; /* per-client monotonic enforcement */
 	bool has_last_audio_client_ts;
 	bool is_tcp;
-	int stream_idx;	      /* RSD_STREAM_MAIN or RSD_STREAM_SUB */
+	int stream_idx;	      /* RSD_STREAM_*, -1 until a request names one */
 	uint32_t video_codec; /* RSS_CODEC_H264 or RSS_CODEC_H265 */
 
 	/* Backchannel (client → server audio) */

@@ -233,6 +233,7 @@ static void accept_client(rsd_server_t *srv)
 		return;
 	}
 	client->srv = srv;
+	client->stream_idx = -1; /* until a request names one */
 	client->udp_rtp_fd = -1;
 	client->udp_rtcp_fd = -1;
 	client->audio_udp_rtp_fd = -1;
