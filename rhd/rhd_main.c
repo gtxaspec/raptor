@@ -19,6 +19,7 @@
 #include <time.h>
 #include <sys/socket.h>
 #include <sys/epoll.h>
+#include <sys/eventfd.h>
 #include <poll.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -354,6 +355,8 @@ static void remove_client(rhd_server_t *srv, int idx)
 	RSS_INFO("client %s:%u disconnected%s", client_addr_str(&c->addr, addrstr, sizeof(addrstr)),
 		 client_port(&c->addr), c->is_mjpeg ? " (mjpeg)" : "");
 
+	rhd_tls_handshake_abort(c);
+
 	/* Stop send thread before closing fd/TLS */
 	if (c->send_thread_running) {
 		pthread_mutex_lock(&c->sendq.lock);
@@ -374,6 +377,34 @@ static void remove_client(rhd_server_t *srv, int idx)
 	free(c->send_buf);
 	free(c);
 	srv->clients[idx] = srv->clients[--srv->client_count];
+}
+
+static int client_watch(rhd_server_t *srv, rhd_client_t *c)
+{
+	struct epoll_event cev = {.events = EPOLLIN, .data.fd = c->fd};
+	if (epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, c->fd, &cev) < 0) {
+		RSS_ERROR("epoll_ctl add client fd: %s", strerror(errno));
+		return -1;
+	}
+	return 0;
+}
+
+/* Take over the clients whose TLS handshake has ended, and drop the failed ones */
+static void tls_handshakes_poll(rhd_server_t *srv)
+{
+	for (int i = srv->client_count - 1; i >= 0; i--) {
+		rhd_client_t *c = srv->clients[i];
+		if (!c->hs_running)
+			continue;
+		int st = rhd_tls_handshake_poll(c);
+		if (st == 0)
+			continue;
+		if (st < 0 || client_watch(srv, c) < 0) {
+			remove_client(srv, i);
+			continue;
+		}
+		c->recv_start = rhd_now_ms();
+	}
 }
 
 /*
@@ -663,6 +694,16 @@ static int server_init(rhd_server_t *srv)
 	if (epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, srv->listen_fd, &ev) < 0)
 		RSS_ERROR("epoll_ctl add listen_fd: %s", strerror(errno));
 
+	/* A TLS handshake thread that ends wakes the loop to take the client over */
+	srv->wake_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+	if (srv->wake_fd < 0) {
+		RSS_FATAL("eventfd: %s", strerror(errno));
+		return -1;
+	}
+	ev = (struct epoll_event){.events = EPOLLIN, .data.fd = srv->wake_fd};
+	if (epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, srv->wake_fd, &ev) < 0)
+		RSS_ERROR("epoll_ctl add wake_fd: %s", strerror(errno));
+
 	/* Control socket */
 	rss_mkdir_p(RSS_RUN_DIR);
 	srv->ctrl = rss_ctrl_listen(RSS_RUN_DIR "/rhd.sock");
@@ -900,6 +941,13 @@ static void server_run(rhd_server_t *srv)
 				continue;
 			}
 
+			if (fd == srv->wake_fd) {
+				uint64_t n;
+				if (read(srv->wake_fd, &n, sizeof(n)) < 0 && errno != EAGAIN)
+					RSS_DEBUG("wake_fd read: %s", strerror(errno));
+				continue;
+			}
+
 			if (fd == srv->listen_fd) {
 				/* Accept new client */
 				struct sockaddr_storage sa;
@@ -949,13 +997,16 @@ static void server_run(rhd_server_t *srv)
 					 client_addr_str(&sa, addrstr, sizeof(addrstr)),
 					 client_port(&sa), srv->client_count, srv->max_clients);
 
-				struct epoll_event cev = {.events = EPOLLIN, .data.fd = cfd};
-				if (epoll_ctl(srv->epoll_fd, EPOLL_CTL_ADD, cfd, &cev) < 0) {
-					RSS_ERROR("epoll_ctl add client fd: %s", strerror(errno));
-					srv->client_count--;
-					free(c);
-					close(cfd);
+#ifdef RSS_HAS_TLS
+				if (srv->tls) {
+					/* Joins the epoll set when its handshake is done */
+					if (rhd_tls_handshake_start(c, srv->wake_fd) < 0)
+						remove_client(srv, srv->client_count - 1);
+					continue;
 				}
+#endif
+				if (client_watch(srv, c) < 0)
+					remove_client(srv, srv->client_count - 1);
 				continue;
 			}
 
@@ -974,7 +1025,7 @@ static void server_run(rhd_server_t *srv)
 			/* Async send in progress — drain via EPOLLOUT */
 			if (c->send_buf && (events[i].events & EPOLLOUT)) {
 				uint32_t remain = c->send_len - c->send_off;
-				ssize_t nw = rhd_write(c, c->send_buf + c->send_off, remain);
+				ssize_t nw = rhd_write_nb(c, c->send_buf + c->send_off, remain);
 				if (nw > 0) {
 					c->send_off += (uint32_t)nw;
 					if (c->send_off >= c->send_len) {
@@ -991,7 +1042,7 @@ static void server_run(rhd_server_t *srv)
 			 * now is read to notice a disconnect and thrown away: left
 			 * in the buffer, the old request would run again with every
 			 * byte that arrives. */
-			bool streaming = c->is_mjpeg || c->is_audio;
+			bool streaming = rhd_client_streaming(c);
 			if (streaming)
 				c->recv_len = 0;
 
@@ -1002,7 +1053,8 @@ static void server_run(rhd_server_t *srv)
 				remove_client(srv, ci);
 				continue;
 			}
-			ssize_t nr = rhd_read(c, c->recv_buf + c->recv_len, space);
+			ssize_t nr = streaming ? rhd_read_raw(c, c->recv_buf, space)
+					       : rhd_read(c, c->recv_buf + c->recv_len, space);
 			if (nr <= 0) {
 				remove_client(srv, ci);
 				continue;
@@ -1028,6 +1080,8 @@ static void server_run(rhd_server_t *srv)
 					remove_client(srv, ci);
 			}
 		}
+
+		tls_handshakes_poll(srv);
 
 		/* Reap stalled async sends and clients still owing a request */
 		{
@@ -1128,6 +1182,7 @@ static void server_run(rhd_server_t *srv)
 		rss_ctrl_destroy(srv->ctrl);
 	close(srv->listen_fd);
 	close(srv->epoll_fd);
+	close(srv->wake_fd);
 }
 
 /* ── Entry point ── */

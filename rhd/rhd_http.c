@@ -24,28 +24,122 @@
 
 /* ── TLS-aware I/O wrappers ── */
 
-ssize_t rhd_write(rhd_client_t *c, const void *buf, size_t len)
+/* A TLS write waits for the peer until @deadline_us; a plain one never waits. */
+static ssize_t rhd_write_until(rhd_client_t *c, const void *buf, size_t len, int64_t deadline_us)
 {
 #ifdef RSS_HAS_TLS
-	if (c->tls)
+	if (c->tls) {
+		rss_tls_set_deadline(c->tls, deadline_us);
 		return rss_tls_write(c->tls, buf, len);
+	}
 #endif
+	(void)deadline_us;
 	return write(c->fd, buf, len);
+}
+
+/* For the small one-shot replies written from the main thread */
+ssize_t rhd_write(rhd_client_t *c, const void *buf, size_t len)
+{
+	return rhd_write_until(c, buf, len, rss_timestamp_us() + RHD_SEND_TIMEOUT_MS * 1000LL);
+}
+
+/* Takes what the socket takes now and returns: -1/EAGAIN when that is nothing */
+ssize_t rhd_write_nb(rhd_client_t *c, const void *buf, size_t len)
+{
+	return rhd_write_until(c, buf, len, rss_timestamp_us());
 }
 
 ssize_t rhd_read(rhd_client_t *c, void *buf, size_t len)
 {
 #ifdef RSS_HAS_TLS
-	/* Lazy TLS handshake on first read */
-	if (!c->tls && c->srv_tls) {
-		c->tls = rss_tls_accept(c->srv_tls, c->fd, 5000);
-		if (!c->tls)
-			return -1;
-	}
 	if (c->tls)
 		return rss_tls_read(c->tls, buf, len);
 #endif
 	return read(c->fd, buf, len);
+}
+
+/*
+ * Read the socket under any TLS layer. A streaming client's connection is
+ * in use by its send thread, and an mbedTLS context is not safe for a read
+ * and a write at once, so the main thread only watches such a socket for
+ * data to throw away and for the peer going away.
+ */
+ssize_t rhd_read_raw(rhd_client_t *c, void *buf, size_t len)
+{
+	return read(c->fd, buf, len);
+}
+
+#ifdef RSS_HAS_TLS
+static void *tls_handshake_thread(void *arg)
+{
+	rhd_client_t *c = arg;
+
+	c->tls = rss_tls_accept(c->srv_tls, c->fd, RHD_TLS_HANDSHAKE_MS);
+	atomic_store(&c->hs_state, c->tls ? RHD_HS_OK : RHD_HS_FAILED);
+	uint64_t one = 1;
+	if (write(c->wake_fd, &one, sizeof(one)) < 0)
+		RSS_DEBUG("handshake wake-up write failed: %s", strerror(errno));
+	return NULL;
+}
+#endif
+
+/*
+ * The handshake of a TLS client runs on a thread of its own: it waits on the
+ * peer, and the main loop serves everyone else. Returns 0 if there is none to
+ * run (plain HTTP) or it started, -1 if the thread could not be created.
+ */
+int rhd_tls_handshake_start(rhd_client_t *c, int wake_fd)
+{
+#ifdef RSS_HAS_TLS
+	if (!c->srv_tls)
+		return 0;
+	c->wake_fd = wake_fd;
+	atomic_store(&c->hs_state, RHD_HS_RUNNING);
+	pthread_attr_t attr;
+	pthread_attr_init(&attr);
+	pthread_attr_setstacksize(&attr, 256 * 1024);
+	int rc = pthread_create(&c->hs_tid, &attr, tls_handshake_thread, c);
+	pthread_attr_destroy(&attr);
+	if (rc != 0)
+		return -1;
+	c->hs_running = true;
+#else
+	(void)c;
+	(void)wake_fd;
+#endif
+	return 0;
+}
+
+/* 0 while it runs, 1 when it has finished and the connection is usable, -1 if it failed */
+int rhd_tls_handshake_poll(rhd_client_t *c)
+{
+#ifdef RSS_HAS_TLS
+	if (!c->hs_running)
+		return 1;
+	int st = atomic_load(&c->hs_state);
+	if (st == RHD_HS_RUNNING)
+		return 0;
+	pthread_join(c->hs_tid, NULL);
+	c->hs_running = false;
+	return st == RHD_HS_OK ? 1 : -1;
+#else
+	(void)c;
+	return 1;
+#endif
+}
+
+/* Cut a handshake short: the shutdown makes its pending read fail at once */
+void rhd_tls_handshake_abort(rhd_client_t *c)
+{
+#ifdef RSS_HAS_TLS
+	if (!c->hs_running)
+		return;
+	shutdown(c->fd, SHUT_RDWR);
+	pthread_join(c->hs_tid, NULL);
+	c->hs_running = false;
+#else
+	(void)c;
+#endif
 }
 
 /* ── HTTP response helpers ── */
@@ -200,31 +294,32 @@ void http_send_mjpeg_header(rhd_client_t *c)
 }
 
 /*
- * Write all bytes to a non-blocking fd, retrying on EAGAIN with poll().
- * Returns 0 on success, -1 if the client is dead or stalled beyond timeout.
+ * Write all bytes to a non-blocking fd within RHD_STREAM_WRITE_MS.
+ * Returns 0 on success, -1 if the client is dead or stalled beyond that.
  */
 int nb_write_all(rhd_client_t *c, const void *buf, size_t len)
 {
 	const uint8_t *p = buf;
 	size_t remaining = len;
-	int retries = 0;
+	int64_t deadline = rss_timestamp_us() + RHD_STREAM_WRITE_MS * 1000LL;
 
 	while (remaining > 0) {
-		ssize_t n = rhd_write(c, p, remaining);
+		ssize_t n = rhd_write_until(c, p, remaining, deadline);
 		if (n > 0) {
 			p += n;
 			remaining -= (size_t)n;
-			retries = 0;
-		} else if (n < 0) {
-			if ((errno == EAGAIN || errno == EWOULDBLOCK) && retries < 50) {
-				/* Back off: poll for write-ready, 100ms max per retry */
-				struct pollfd pfd = {.fd = c->fd, .events = POLLOUT};
-				poll(&pfd, 1, 100);
-				retries++;
-			} else {
-				return -1; /* dead or stalled too long */
-			}
+			continue;
 		}
+		/* A TLS write has already waited out the deadline */
+		bool stalled = n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK);
+#ifdef RSS_HAS_TLS
+		stalled = stalled && !c->tls;
+#endif
+		int64_t left_ms = (deadline - rss_timestamp_us()) / 1000;
+		if (!stalled || left_ms <= 0)
+			return -1;
+		struct pollfd pfd = {.fd = c->fd, .events = POLLOUT};
+		poll(&pfd, 1, left_ms < 100 ? (int)left_ms : 100);
 	}
 	return 0;
 }

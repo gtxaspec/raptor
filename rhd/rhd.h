@@ -6,6 +6,7 @@
 #define RHD_H
 
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <signal.h>
 #include <pthread.h>
@@ -24,19 +25,21 @@
 /* ── Constants ── */
 
 /* Audio codec IDs (same as RAD/RSD ring header values) */
-#define RHD_CODEC_PCMU	    0
-#define RHD_CODEC_PCMA	    8
-#define RHD_CODEC_L16	    11
-#define RHD_CODEC_AAC	    97
-#define RHD_CODEC_OPUS	    111
+#define RHD_CODEC_PCMU	     0
+#define RHD_CODEC_PCMA	     8
+#define RHD_CODEC_L16	     11
+#define RHD_CODEC_AAC	     97
+#define RHD_CODEC_OPUS	     111
 
-#define RHD_MAX_CLIENTS	    8
-#define RHD_RECV_BUF	    4096
-#define RHD_MJPEG_BOUNDARY  "raptorframe"
-#define RHD_SEND_TIMEOUT_MS 3000  /* max time to drain a one-shot response */
-#define RHD_RECV_TIMEOUT_MS 10000 /* max time a client may take to finish its request */
-#define RHD_SNAP_TIMEOUT_MS 5000  /* max wait for a JPEG encoder to produce a fresh frame */
-#define RHD_MAX_JPEG	    6	  /* up to 2 per sensor, 3 sensors */
+#define RHD_MAX_CLIENTS	     8
+#define RHD_RECV_BUF	     4096
+#define RHD_MJPEG_BOUNDARY   "raptorframe"
+#define RHD_SEND_TIMEOUT_MS  3000  /* max time to drain a one-shot response */
+#define RHD_RECV_TIMEOUT_MS  10000 /* max time a client may take to finish its request */
+#define RHD_TLS_HANDSHAKE_MS 5000  /* max time for a whole TLS handshake */
+#define RHD_STREAM_WRITE_MS  5000  /* max time to hand one stream write to a client */
+#define RHD_SNAP_TIMEOUT_MS  5000  /* max wait for a JPEG encoder to produce a fresh frame */
+#define RHD_MAX_JPEG	     6	   /* up to 2 per sensor, 3 sensors */
 
 /* Index page — loaded from file on first request, cached */
 #define RHD_INDEX_PATH "/usr/share/raptor/index.html"
@@ -66,6 +69,10 @@ typedef struct {
 	pthread_cond_t cond;
 	bool shutdown;
 } rhd_sendq_t;
+
+#define RHD_HS_RUNNING 0
+#define RHD_HS_OK      1
+#define RHD_HS_FAILED  2
 
 /* ── Types ── */
 
@@ -101,8 +108,12 @@ typedef struct {
 
 #ifdef RSS_HAS_TLS
 	rss_tls_conn_t *tls;
-	rss_tls_ctx_t *srv_tls; /* server TLS context for lazy handshake */
+	rss_tls_ctx_t *srv_tls; /* server TLS context; handshake runs on hs_tid */
+	pthread_t hs_tid;
+	_Atomic int hs_state; /* RHD_HS_* */
+	int wake_fd;	      /* written by the handshake thread when it ends */
 #endif
+	bool hs_running; /* hs_tid has not been joined */
 
 	/* Send queue (streaming clients only) */
 	rhd_sendq_t sendq;
@@ -111,15 +122,32 @@ typedef struct {
 } rhd_client_t;
 
 /*
+ * A streaming client's connection belongs to its send thread, which writes to
+ * it while the main loop watches the socket. An mbedTLS context is not safe
+ * for a read and a write at once, so the main loop never reads such a client
+ * through the TLS layer: see rhd_read_raw().
+ */
+static inline bool rhd_client_streaming(const rhd_client_t *c)
+{
+	return c->is_mjpeg || c->is_audio;
+}
+
+/*
  * True for a client that connected, took a slot, and has still not asked for
  * anything. There are only RHD_MAX_CLIENTS slots and nothing else bounds this
  * state: a stream, a parked snapshot and a draining response each carry their
  * own deadline, so none of them are still reading a request and none are
  * reaped here.
  */
+static inline bool rhd_client_owes_request(const rhd_client_t *c)
+{
+	return !(rhd_client_streaming(c) || c->send_buf || c->snap_pending);
+}
+
+/* A TLS handshake has its own deadline, on the thread that runs it */
 static inline bool rhd_client_recv_expired(const rhd_client_t *c, int64_t now)
 {
-	if (c->is_mjpeg || c->is_audio || c->send_buf || c->snap_pending)
+	if (!rhd_client_owes_request(c) || c->hs_running)
 		return false;
 	return now - c->recv_start > RHD_RECV_TIMEOUT_MS;
 }
@@ -127,6 +155,7 @@ static inline bool rhd_client_recv_expired(const rhd_client_t *c, int64_t now)
 typedef struct {
 	int listen_fd;
 	int epoll_fd;
+	int wake_fd; /* eventfd: a TLS handshake thread has finished */
 	rss_config_t *cfg;
 	const char *config_path;
 	int port;
@@ -183,7 +212,12 @@ typedef struct {
 /* ── HTTP I/O functions (rhd_http.c) ── */
 
 ssize_t rhd_write(rhd_client_t *c, const void *buf, size_t len);
+ssize_t rhd_write_nb(rhd_client_t *c, const void *buf, size_t len);
 ssize_t rhd_read(rhd_client_t *c, void *buf, size_t len);
+ssize_t rhd_read_raw(rhd_client_t *c, void *buf, size_t len);
+int rhd_tls_handshake_start(rhd_client_t *c, int wake_fd);
+int rhd_tls_handshake_poll(rhd_client_t *c);
+void rhd_tls_handshake_abort(rhd_client_t *c);
 void http_send(rhd_client_t *c, const char *status, const char *content_type, const void *body,
 	       int body_len);
 void http_send_fd(int fd, const char *status, const char *content_type, const void *body,

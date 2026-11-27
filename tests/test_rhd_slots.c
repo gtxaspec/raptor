@@ -124,8 +124,40 @@ TEST a_draining_response_is_kept(void)
 	PASS();
 }
 
+/*
+ * A TLS handshake runs on its own thread under RHD_TLS_HANDSHAKE_MS. Reaping
+ * the client here would close the socket under that thread.
+ */
+TEST a_client_in_its_tls_handshake_is_kept(void)
+{
+	rhd_client_t c = at_rest();
+	c.hs_running = true;
+
+	ASSERT_FALSE(rhd_client_recv_expired(&c, LATE));
+	PASS();
+}
+
+/*
+ * The main loop reads a client under the TLS layer only while the client has
+ * no send thread using the same connection.
+ */
+TEST only_streaming_clients_are_kept_off_the_tls_layer(void)
+{
+	rhd_client_t plain = at_rest(), mjpeg = at_rest(), audio = at_rest();
+
+	mjpeg.is_mjpeg = true;
+	audio.is_audio = true;
+
+	ASSERT_FALSE(rhd_client_streaming(&plain));
+	ASSERT(rhd_client_streaming(&mjpeg));
+	ASSERT(rhd_client_streaming(&audio));
+	PASS();
+}
+
 SUITE(rhd_slots_suite)
 {
+	RUN_TEST(only_streaming_clients_are_kept_off_the_tls_layer);
+	RUN_TEST(a_client_in_its_tls_handshake_is_kept);
 	RUN_TEST(a_client_that_never_asks_for_anything_is_dropped);
 	RUN_TEST(a_half_sent_request_does_not_buy_more_time);
 	RUN_TEST(a_client_still_within_the_window_is_kept);

@@ -8,7 +8,8 @@
 #   3. Unit tests (host x86, ASAN)
 #   4. Integration tests (daemons + curl/ffprobe), then the ric
 #      behavior suite (stub rvd + fake sysfs GPIO, test-ric.sh),
-#      the rac beep suite, the rsd and rwd security suites, the pre-auth parser fuzzers, and the
+#      the rac beep suite, the rsd and rwd security suites, the rhd
+#      client-handling suite, the pre-auth parser fuzzers, and the
 #      net-fallback suite
 #   5. Leak/race detection (lifecycle soak)
 #
@@ -233,6 +234,12 @@ if "$SCRIPT_DIR/test-rwd.sh"; then
     stage_pass "rwd security suite"
 else
     stage_fail "rwd security suite"
+fi
+
+if "$SCRIPT_DIR/test-rhd.sh"; then
+    stage_pass "rhd client handling suite"
+else
+    stage_fail "rhd client handling suite"
 fi
 
 if "$SCRIPT_DIR/test-fuzz.sh"; then

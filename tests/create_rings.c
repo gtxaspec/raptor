@@ -10,6 +10,7 @@
  * Usage:
  *   create_rings              # all rings, L16 audio (default)
  *   create_rings --skip-video # audio/JPEG/speaker only (RVD owns video)
+ *   create_rings --jpeg-kb N  # jpeg0 frames of N KB (COM padding after SOI)
  *   create_rings pcmu         # G.711 mu-law audio
  *   create_rings pcma         # G.711 A-law audio
  *   create_rings aac          # fake AAC frames
@@ -44,6 +45,31 @@ static const uint8_t fake_jpeg[] = {
 	0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00,
 	0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xD9,
 };
+
+/* A jpeg0 frame of about @kb KB: the fake JPEG with COM segments after SOI */
+static uint8_t *make_big_jpeg(int kb, uint32_t *len)
+{
+	size_t segs = ((size_t)kb * 1024 + 65532) / 65533;
+	size_t total = sizeof(fake_jpeg) + segs * (65533 + 4);
+	uint8_t *buf = malloc(total);
+	if (!buf)
+		return NULL;
+	size_t off = 0;
+	buf[off++] = 0xFF;
+	buf[off++] = 0xD8;
+	for (size_t i = 0; i < segs; i++) {
+		buf[off++] = 0xFF;
+		buf[off++] = 0xFE;
+		buf[off++] = 0xFF;
+		buf[off++] = 0xFF;
+		memset(buf + off, 'x', 65533);
+		off += 65533;
+	}
+	memcpy(buf + off, fake_jpeg + 2, sizeof(fake_jpeg) - 2);
+	off += sizeof(fake_jpeg) - 2;
+	*len = (uint32_t)off;
+	return buf;
+}
 
 /* H.264 NAL units */
 static const uint8_t sps[] = {0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0xC0,
@@ -134,9 +160,12 @@ int main(int argc, char **argv)
 	bool no_audio = false;
 	bool skip_video = false;
 	const char *codec_arg = NULL;
+	int jpeg_kb = 0;
 	for (int i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "--no-audio") == 0)
 			no_audio = true;
+		else if (strcmp(argv[i], "--jpeg-kb") == 0 && i + 1 < argc)
+			jpeg_kb = atoi(argv[++i]);
 		else if (strcmp(argv[i], "--skip-video") == 0)
 			skip_video = true;
 		else
@@ -226,6 +255,8 @@ int main(int argc, char **argv)
 	int64_t vts = 0; /* video timestamp (us) */
 	int64_t ats = 0; /* audio timestamp (us) */
 	uint32_t frame_num = 0;
+	uint32_t big_len = 0;
+	uint8_t *big_jpeg = jpeg_kb > 0 ? make_big_jpeg(jpeg_kb, &big_len) : NULL;
 
 	RSS_INFO("publishing%s at 25fps (audio codec=%d)...",
 		 skip_video ? " auxiliary rings" : " fake H.264+audio", audio_codec);
@@ -251,8 +282,10 @@ int main(int argc, char **argv)
 		/* Publish JPEG snapshot at 5fps (every 5th video frame) */
 		if (frame_num % 5 == 0) {
 			rss_iov_t jiov = {.data = fake_jpeg, .length = sizeof(fake_jpeg)};
+			rss_iov_t j0iov =
+				big_jpeg ? (rss_iov_t){.data = big_jpeg, .length = big_len} : jiov;
 			if (jpeg0)
-				rss_ring_publish_iov(jpeg0, &jiov, 1, vts, 0x30, 1,
+				rss_ring_publish_iov(jpeg0, &j0iov, 1, vts, 0x30, 1,
 						     RSS_SRC_SEQ_NONE);
 			if (jpeg1)
 				rss_ring_publish_iov(jpeg1, &jiov, 1, vts, 0x30, 1,
@@ -282,6 +315,7 @@ int main(int argc, char **argv)
 		rss_ring_destroy(main_ring);
 	if (sub_ring)
 		rss_ring_destroy(sub_ring);
+	free(big_jpeg);
 	if (jpeg0)
 		rss_ring_destroy(jpeg0);
 	if (jpeg1)
