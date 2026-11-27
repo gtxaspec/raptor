@@ -254,6 +254,13 @@ COMPY_CFLAGS="$COMPY_CFLAGS -I$COMPY_BUILD/_deps/metalang99-src/include"
 CC=gcc
 CFLAGS="-Wall -Wextra -Werror -std=$RAPTOR_STD -D_GNU_SOURCE -DPLATFORM_T31 -O1 -g $SANITIZE"
 CFLAGS="$CFLAGS -I$IPC_DIR/include -I$COMMON_DIR/include -I$COMMON_DIR/third_party/monocypher $MBEDTLS_CFLAGS"
+# libhelix-aac's headers need a platform: x86 is built in, other hosts (the
+# arm64 build hosts) take its generic C path. Every unit that includes them
+# needs the same answer, so it is set here.
+case "$(uname -m)" in
+    x86_64|i?86) HOST_X86=1 ;;
+    *) HOST_X86=0; CFLAGS="$CFLAGS -DARDUINO" ;;
+esac
 LDFLAGS="$SANITIZE -lpthread -lrt -lm"
 
 HAL_CFLAGS="-I$HAL_DIR/include"
@@ -279,10 +286,10 @@ $CC $CFLAGS -c "$COMMON_DIR/src/rss_vui.c" -o "$OUT/rss_vui.o"
 $CC $CFLAGS -c "$COMMON_DIR/third_party/monocypher/monocypher.c" -o "$OUT/monocypher.o"
 $CC $CFLAGS -c "$COMMON_DIR/third_party/monocypher/monocypher-ed25519.c" -o "$OUT/monocypher-ed25519.o"
 $CC $CFLAGS -c "$COMMON_DIR/src/cJSON.c" -o "$OUT/cJSON.o"
-cat > "$OUT/rss_build_info.c" << 'BUILDEOF'
+cat > "$OUT/rss_build_info.c" << BUILDEOF
 const char *rss_build_hash = "asan";
 const char *rss_build_time = "asan-build";
-const char *rss_build_platform = "x86_64";
+const char *rss_build_platform = "$(uname -m)";
 BUILDEOF
 $CC $CFLAGS -c "$OUT/rss_build_info.c" -o "$OUT/rss_build_info.o"
 ar rcs "$OUT/librss_common.a" "$OUT"/rss_log.o "$OUT"/rss_config.o "$OUT"/rss_daemon.o "$OUT"/rss_util.o "$OUT"/rss_ctrl_common.o "$OUT"/rss_ctrl_client.o "$OUT"/rss_http.o "$OUT"/rss_ts.o "$OUT"/rss_sei.o "$OUT"/rss_sign.o "$OUT"/rss_jpeg.o "$OUT"/rss_aac.o "$OUT"/rss_media_clock.o "$OUT"/rss_vui.o "$OUT"/monocypher.o "$OUT"/monocypher-ed25519.o "$OUT"/cJSON.o
@@ -490,6 +497,8 @@ if [ ! -f "$FAAC_BUILD/libfaac.a" ]; then
     # API (faac.c) and SBR, and drifted exactly the way the comment
     # above warns.
     FAAC_SRCS=$(cd "$FAAC_DIR/libfaac" && ls *.c)
+    # quantize_sse.c is x86 intrinsics, used only with HAVE_SSE2 (unset here)
+    [ "$HOST_X86" = 1 ] || FAAC_SRCS=$(echo "$FAAC_SRCS" | grep -v '^quantize_sse\.c$')
     # -w silences upstream libfaac warnings (sign-compare, unused-parameter,
     # missing-field-initializers). Not our code to fix.
     for f in $FAAC_SRCS; do
