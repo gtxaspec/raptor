@@ -17,6 +17,7 @@
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <unistd.h>
 #include <netinet/in.h>
 
 #define RSD_MAX_CLIENTS	     8
@@ -78,6 +79,13 @@ typedef struct {
 } rsd_stream_t;
 
 /* Send queue: types and policy live in rsd_sendq.h */
+
+/* Writer handed to compy for every byte a client's connection carries; see
+ * rsd_session.c. */
+typedef struct rsd_conn_writer {
+	Compy_Writer inner;
+	struct rsd_client *client;
+} rsd_conn_writer_t;
 
 /* Per-client state */
 typedef struct rsd_client {
@@ -151,6 +159,11 @@ typedef struct rsd_client {
 	/* Write mutex — serializes RTP data (send thread) and RTSP
 	 * responses (server thread) on TCP interleaved connections. */
 	pthread_mutex_t write_lock;
+	rsd_conn_writer_t cw;
+	atomic_bool aborted;	/* a write failed or timed out; the fd is shut down */
+	atomic_bool ctl_wanted; /* the event loop is waiting to take write_lock */
+	bool deferred;		/* a buffered request awaits write_lock; fd out of epoll */
+	int64_t deferred_since;
 
 	/* Send queue (per-client, decouples reader from I/O) */
 	rsd_sendq_t sendq;
@@ -235,6 +248,7 @@ typedef struct rsd_server {
 	int max_clients;     /* runtime limit (≤ RSD_MAX_CLIENTS) */
 	int session_timeout; /* RTSP session timeout in seconds */
 	int tcp_sndbuf;	     /* TCP send buffer size (bytes) */
+	int send_timeout;    /* seconds a TCP write may make no progress before the client is cut */
 	bool rtcp_sr;	     /* send RTCP Sender Reports (default true) */
 	bool jpeg_enabled;   /* expose JPEG streams (default false) */
 	bool sei_timecode;   /* per-frame ST 0604 UTC SEI (default true) */
@@ -265,13 +279,26 @@ typedef struct rsd_server {
 #endif
 } rsd_server_t;
 
+/* Send-thread side of write_lock: let a waiting event loop in first, so a
+ * connection that keeps the lock busy cannot starve its own keepalives. */
+static inline void rsd_send_lock(rsd_client_t *c)
+{
+	for (int i = 0; i < 20 && atomic_load_explicit(&c->ctl_wanted, memory_order_relaxed); i++)
+		usleep(1000);
+	pthread_mutex_lock(&c->write_lock);
+}
+
 /* rsd_server.c */
 int rsd_server_init(rsd_server_t *srv);
 void rsd_server_run(rsd_server_t *srv);
 void rsd_server_deinit(rsd_server_t *srv);
 
 /* rsd_session.c */
-void rsd_handle_rtsp_data(rsd_client_t *client, const char *data, size_t len);
+/* False when the connection's write_lock was busy: nothing was consumed, call
+ * again with the same buffer. */
+bool rsd_handle_rtsp_data(rsd_client_t *client, const char *data, size_t len);
+void rsd_conn_writer_init(rsd_client_t *client);
+void rsd_client_abort(rsd_client_t *client, bool stalled);
 void rsd_endpoints_load(rsd_server_t *srv, rss_config_t *cfg);
 
 /* rsd_ring_reader.c */

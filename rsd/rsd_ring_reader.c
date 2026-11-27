@@ -154,7 +154,7 @@ static void sendq_drain_audio(rsd_client_t *c)
 	pthread_mutex_unlock(&q->lock);
 
 	if (got) {
-		pthread_mutex_lock(&c->write_lock);
+		rsd_send_lock(c);
 		rsd_send_audio_frame(c, audio.codec, audio.data, audio.len, audio.rtp_ts,
 				     audio.capture_us);
 		pthread_mutex_unlock(&c->write_lock);
@@ -216,7 +216,7 @@ static void rsd_send_video_interleaved(rsd_client_t *c, const uint8_t *data, uin
 			};
 		}
 
-		pthread_mutex_lock(&c->write_lock);
+		rsd_send_lock(c);
 		(void)!Compy_NalTransport_send_packet(c->video.nal, Compy_RtpTimestamp_Raw(rtp_ts),
 						      nalu);
 		pthread_mutex_unlock(&c->write_lock);
@@ -235,7 +235,7 @@ static void rsd_send_video_interleaved(rsd_client_t *c, const uint8_t *data, uin
 	 * RTCP sender report projects it to now.  Using the network send time
 	 * here makes every five-second SR expose queue/Wi-Fi latency as a PTS
 	 * correction at the receiver. */
-	pthread_mutex_lock(&c->write_lock);
+	rsd_send_lock(c);
 	Compy_RtpTransport_set_clock_reference(c->video.rtp, rtp_ts, (uint64_t)capture_us);
 	if (c->srv->rtcp_sr) {
 		int64_t now = rss_timestamp_us();
@@ -277,7 +277,7 @@ void *rsd_client_send_thread(void *arg)
 				rsd_send_video_interleaved(c, entry.data, entry.len, entry.rtp_ts,
 							   entry.capture_us);
 		} else {
-			pthread_mutex_lock(&c->write_lock);
+			rsd_send_lock(c);
 			rsd_send_audio_frame(c, entry.codec, entry.data, entry.len, entry.rtp_ts,
 					     entry.capture_us);
 			pthread_mutex_unlock(&c->write_lock);
@@ -704,7 +704,7 @@ static void rsd_send_jpeg_frame(rsd_client_t *c, const uint8_t *data, uint32_t l
 	if (!c->video.jpeg || !c->video.playing)
 		return;
 
-	pthread_mutex_lock(&c->write_lock);
+	rsd_send_lock(c);
 	(void)!Compy_JpegTransport_send_frame(c->video.jpeg, Compy_RtpTimestamp_Raw(rtp_ts),
 					      U8Slice99_new((uint8_t *)data, len));
 	Compy_RtpTransport_set_clock_reference(c->video.rtp, rtp_ts, (uint64_t)capture_us);

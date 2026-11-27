@@ -10,12 +10,14 @@
 #include <fcntl.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <pthread.h>
 
 #include "rsd.h"
+#include "rsd_conn.h"
 #include "rsd_net.h"
 #include <rss_net.h>
 
@@ -220,6 +222,11 @@ static void accept_client(rsd_server_t *srv)
 			RSS_DEBUG("TCP send buffer requested=%d actual=%d", sndbuf, actual);
 	}
 
+	/* A write that makes no progress for this long means the player stopped
+	 * reading; rsd_client_abort() then cuts the connection. */
+	struct timeval snd_to = {.tv_sec = srv->send_timeout};
+	setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &snd_to, sizeof(snd_to));
+
 	rsd_client_t *client = calloc(1, sizeof(*client));
 	if (!client) {
 		close(fd);
@@ -255,6 +262,8 @@ static void accept_client(rsd_server_t *srv)
 		}
 	}
 #endif
+
+	rsd_conn_writer_init(client);
 
 	struct epoll_event ev = {
 		.events = EPOLLIN,
@@ -341,11 +350,44 @@ accept_done:;
 		 srv->client_count, srv->max_clients);
 }
 
-static void handle_client_data(rsd_server_t *srv, int fd)
+/* Stop or resume the epoll interest in a client's socket. A client whose
+ * buffered request cannot be answered yet must not wake the loop again for
+ * the bytes already queued behind it; errors and hangups still arrive. */
+static void client_watch(rsd_server_t *srv, rsd_client_t *client, bool on)
+{
+	struct epoll_event ev = {.events = on ? EPOLLIN : 0, .data.fd = client->fd};
+	epoll_ctl(srv->epoll_fd, EPOLL_CTL_MOD, client->fd, &ev);
+}
+
+/* Answer the buffered request, or park the client until its connection can
+ * take the answer without the loop waiting (see rsd_control_lock). */
+static void client_dispatch(rsd_server_t *srv, rsd_client_t *client)
+{
+	if (rsd_handle_rtsp_data(client, client->recv_buf, client->recv_len)) {
+		if (client->deferred) {
+			client->deferred = false;
+			client_watch(srv, client, true);
+		}
+		return;
+	}
+	if (!client->deferred) {
+		client->deferred = true;
+		client->deferred_since = rss_timestamp_us();
+		client_watch(srv, client, false);
+	}
+}
+
+static void handle_client_data(rsd_server_t *srv, int fd, uint32_t events)
 {
 	rsd_client_t *client = find_client_by_fd(srv, fd);
 	if (!client)
 		return;
+
+	if (client->deferred) {
+		if (events & (EPOLLERR | EPOLLHUP))
+			remove_client(srv, client);
+		return;
+	}
 
 	/* Read into client's buffer */
 	size_t avail = sizeof(client->recv_buf) - client->recv_len;
@@ -369,7 +411,7 @@ static void handle_client_data(rsd_server_t *srv, int fd)
 
 	client->recv_len += (size_t)n;
 	client->last_activity = rss_timestamp_us();
-	rsd_handle_rtsp_data(client, client->recv_buf, client->recv_len);
+	client_dispatch(srv, client);
 }
 
 int rsd_server_init(rsd_server_t *srv)
@@ -703,7 +745,10 @@ void rsd_server_run(rsd_server_t *srv)
 	int audio_retry_count = 0;
 
 	while (rss_running(srv->running)) {
-		int n = epoll_wait(srv->epoll_fd, events, 16, 500);
+		bool any_deferred = false;
+		for (int i = 0; i < srv->client_count; i++)
+			any_deferred |= srv->clients[i] && srv->clients[i]->deferred;
+		int n = epoll_wait(srv->epoll_fd, events, 16, any_deferred ? 5 : 500);
 		for (int i = 0; i < n; i++) {
 			int fd = events[i].data.fd;
 
@@ -751,7 +796,7 @@ void rsd_server_run(rsd_server_t *srv)
 					if (rn > 0)
 						rc->last_activity = rss_timestamp_us();
 				} else if (find_client_by_fd(srv, fd)) {
-					handle_client_data(srv, fd);
+					handle_client_data(srv, fd, events[i].events);
 				} else {
 					/* Stray fd no client owns (leak guard):
 					 * deregister so it cannot spin the loop. */
@@ -759,6 +804,13 @@ void rsd_server_run(rsd_server_t *srv)
 					epoll_ctl(srv->epoll_fd, EPOLL_CTL_DEL, fd, NULL);
 				}
 			}
+		}
+
+		/* Requests parked because their connection's write_lock was busy */
+		for (int i = srv->client_count - 1; i >= 0; i--) {
+			rsd_client_t *c = srv->clients[i];
+			if (c && c->deferred)
+				client_dispatch(srv, c);
 		}
 
 		/* Register any new UDP RTCP fds with epoll (created by SETUP) */
@@ -813,20 +865,22 @@ void rsd_server_run(rsd_server_t *srv)
 				continue;
 			if (rr_now - c->bc_last_rr < RSD_SR_INTERVAL_US)
 				continue;
-			c->bc_last_rr = rr_now;
 			Compy_RtpReceiver *rcv = Compy_Backchannel_get_receiver(c->backchannel);
 			if (!rcv)
 				continue;
+			if (!rsd_control_lock(&c->write_lock, c->fd))
+				continue; /* due again on the next pass */
+			c->bc_last_rr = rr_now;
 			uint8_t rr_buf[96];
 			ssize_t rr_len = Compy_RtpReceiver_write_rr(
 				rcv, RSD_BC_REPORTER_SSRC(c->session_id), rr_now, RSD_BC_CNAME,
 				rr_buf, sizeof(rr_buf));
-			if (rr_len <= 0)
-				continue; /* nothing received yet */
-			struct iovec rr_iov[1] = {{.iov_base = rr_buf, .iov_len = (size_t)rr_len}};
-			pthread_mutex_lock(&c->write_lock);
-			VCALL(c->bc_rtcp_t, transmit,
-			      (Compy_IoVecSlice)Slice99_typed_from_array(rr_iov));
+			if (rr_len > 0) {
+				struct iovec rr_iov[1] = {
+					{.iov_base = rr_buf, .iov_len = (size_t)rr_len}};
+				VCALL(c->bc_rtcp_t, transmit,
+				      (Compy_IoVecSlice)Slice99_typed_from_array(rr_iov));
+			}
 			pthread_mutex_unlock(&c->write_lock);
 		}
 

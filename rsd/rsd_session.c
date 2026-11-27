@@ -6,16 +6,21 @@
  */
 
 #include <ctype.h>
+#include <errno.h>
 #include <inttypes.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <poll.h>
 #include <sys/epoll.h>
+#include <sys/socket.h>
 #include <rss_net.h>
 #include <rss_aac.h>
 
 #include "rsd.h"
+#include "rsd_conn.h"
 #include "rsd_rtp_info.h"
 
 /* Base64 encode for sprop-parameter-sets */
@@ -1159,9 +1164,169 @@ static void rsd_client_t_drop(VSelf)
 impl(Compy_Droppable, rsd_client_t);
 impl(Compy_Controller, rsd_client_t);
 
+/* ── Connection writer ── */
+
+/* A write that fails or runs out of time leaves the interleaved stream cut
+ * mid-packet, so the connection cannot continue: shut it down. Every thread
+ * blocked on it wakes, and the event loop sees the EOF and reaps the
+ * client. */
+void rsd_client_abort(rsd_client_t *client, bool stalled)
+{
+	if (atomic_exchange(&client->aborted, true))
+		return;
+	char addrstr[INET6_ADDRSTRLEN];
+	const char *who = rss_addr_str(&client->addr, addrstr, sizeof(addrstr));
+	if (stalled)
+		RSS_WARN("client %s:%u not reading for %ds, disconnecting", who,
+			 rss_addr_port(&client->addr), client->srv->send_timeout);
+	else
+		RSS_DEBUG("client %s:%u write failed, disconnecting", who,
+			  rss_addr_port(&client->addr));
+	shutdown(client->fd, SHUT_RDWR);
+}
+
+/* One write call gets send_timeout seconds in total. SO_SNDTIMEO alone is
+ * per syscall, so a peer that opens its window a byte at a time keeps
+ * resetting it and the writer never gives up. */
+static ssize_t rsd_conn_send(rsd_client_t *c, const char *p, size_t len)
+{
+	int64_t deadline = rss_timestamp_us() + (int64_t)c->srv->send_timeout * 1000000;
+	size_t off = 0;
+
+	while (off < len) {
+		ssize_t n = send(c->fd, p + off, len - off, MSG_NOSIGNAL | MSG_DONTWAIT);
+		if (n > 0) {
+			off += (size_t)n;
+			continue;
+		}
+		if (n < 0 && errno == EINTR)
+			continue;
+		if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+			int64_t left = deadline - rss_timestamp_us();
+			if (left <= 0) {
+				errno = EAGAIN;
+				return -1;
+			}
+			struct pollfd pfd = {.fd = c->fd, .events = POLLOUT};
+			(void)poll(&pfd, 1, (int)((left + 999) / 1000));
+			continue;
+		}
+		return -1;
+	}
+	return (ssize_t)off;
+}
+
+static void rsd_conn_check(rsd_conn_writer_t *self, bool ok, int err)
+{
+	if (!ok)
+		rsd_client_abort(self->client, err == EAGAIN || err == EWOULDBLOCK);
+}
+
+static ssize_t rsd_conn_write(rsd_conn_writer_t *self, const char *p, size_t len)
+{
+	ssize_t n;
+#ifdef COMPY_HAS_TLS
+	if (self->client->tls)
+		n = VCALL(self->inner, write, CharSlice99_new((char *)p, len));
+	else
+#endif
+		n = rsd_conn_send(self->client, p, len);
+	int err = errno;
+	rsd_conn_check(self, n == (ssize_t)len, err);
+	return n;
+}
+
+static ssize_t rsd_conn_writer_t_write(VSelf, CharSlice99 data)
+{
+	VSELF(rsd_conn_writer_t);
+	return rsd_conn_write(self, data.ptr, data.len);
+}
+
+static void rsd_conn_writer_t_lock(VSelf)
+{
+	VSELF(rsd_conn_writer_t);
+#ifdef COMPY_HAS_TLS
+	if (self->client->tls)
+		VCALL(self->inner, lock);
+#else
+	(void)self;
+#endif
+}
+
+static void rsd_conn_writer_t_unlock(VSelf)
+{
+	VSELF(rsd_conn_writer_t);
+#ifdef COMPY_HAS_TLS
+	if (self->client->tls)
+		VCALL(self->inner, unlock);
+#else
+	(void)self;
+#endif
+}
+
+static size_t rsd_conn_writer_t_filled(VSelf)
+{
+	VSELF(rsd_conn_writer_t);
+#ifdef COMPY_HAS_TLS
+	if (self->client->tls)
+		return VCALL(self->inner, filled);
+#else
+	(void)self;
+#endif
+	return 0;
+}
+
+static int rsd_conn_vwritef(rsd_conn_writer_t *self, const char *restrict fmt, va_list ap)
+{
+	char buf[1024];
+	va_list ap2;
+	va_copy(ap2, ap);
+	int n = vsnprintf(buf, sizeof(buf), fmt, ap2);
+	va_end(ap2);
+	if (n < 0)
+		return -1;
+	if ((size_t)n < sizeof(buf))
+		return rsd_conn_write(self, buf, (size_t)n) == n ? n : -1;
+
+	char *big = malloc((size_t)n + 1);
+	if (!big)
+		return -1;
+	vsnprintf(big, (size_t)n + 1, fmt, ap);
+	int rc = rsd_conn_write(self, big, (size_t)n) == n ? n : -1;
+	free(big);
+	return rc;
+}
+
+static int rsd_conn_writer_t_vwritef(VSelf, const char *restrict fmt, va_list ap)
+{
+	VSELF(rsd_conn_writer_t);
+	return rsd_conn_vwritef(self, fmt, ap);
+}
+
+static int rsd_conn_writer_t_writef(VSelf, const char *restrict fmt, ...)
+{
+	VSELF(rsd_conn_writer_t);
+	va_list ap;
+	va_start(ap, fmt);
+	int n = rsd_conn_vwritef(self, fmt, ap);
+	va_end(ap);
+	return n;
+}
+
+impl(Compy_Writer, rsd_conn_writer_t);
+
 /* ── RTSP request parsing and dispatch ── */
 
-void rsd_handle_rtsp_data(rsd_client_t *client, const char *data, size_t len)
+void rsd_conn_writer_init(rsd_client_t *client)
+{
+	client->cw.client = client;
+#ifdef COMPY_HAS_TLS
+	if (client->tls)
+		client->cw.inner = compy_tls_writer(client->tls);
+#endif
+}
+
+bool rsd_handle_rtsp_data(rsd_client_t *client, const char *data, size_t len)
 {
 	/* Handle TCP interleaved frames ($ + channel + 2-byte length + payload).
 	 * These arrive on the same TCP connection as RTSP signaling.
@@ -1211,7 +1376,7 @@ void rsd_handle_rtsp_data(rsd_client_t *client, const char *data, size_t len)
 	}
 
 	if (len == 0)
-		return;
+		return true;
 
 	/* Try to parse an RTSP request from the buffer */
 	Compy_Request req = Compy_Request_uninit();
@@ -1219,15 +1384,13 @@ void rsd_handle_rtsp_data(rsd_client_t *client, const char *data, size_t len)
 	Compy_ParseResult result = Compy_Request_parse(&req, input);
 
 	if (Compy_ParseResult_is_complete(result)) {
-		Compy_Writer writer;
-#ifdef COMPY_HAS_TLS
-		if (client->tls)
-			writer = compy_tls_writer(client->tls);
-		else
-#endif
-			writer = compy_fd_writer(&client->fd);
+		Compy_Writer writer = DYN(rsd_conn_writer_t, Compy_Writer, &client->cw);
 		Compy_Controller ctrl = DYN(rsd_client_t, Compy_Controller, client);
-		pthread_mutex_lock(&client->write_lock);
+		if (!rsd_control_lock(&client->write_lock, client->fd)) {
+			atomic_store_explicit(&client->ctl_wanted, true, memory_order_relaxed);
+			return false;
+		}
+		atomic_store_explicit(&client->ctl_wanted, false, memory_order_relaxed);
 		compy_dispatch(writer, ctrl, &req);
 		pthread_mutex_unlock(&client->write_lock);
 
@@ -1299,4 +1462,5 @@ void rsd_handle_rtsp_data(rsd_client_t *client, const char *data, size_t len)
 		}
 	}
 	/* If incomplete, data stays in recv_buf for next read */
+	return true;
 }
