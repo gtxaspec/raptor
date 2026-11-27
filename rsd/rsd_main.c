@@ -223,13 +223,14 @@ early_exit:
 	return ret;
 
 cleanup:
+	/* Clients first: closing a TLS client uses the context it was made with */
+	rsd_server_deinit(&srv);
 #ifdef COMPY_HAS_TLS
 	if (srv.tls_ctx)
 		Compy_TlsContext_free(srv.tls_ctx);
 #endif
 	if (srv.auth)
 		Compy_Auth_free(srv.auth);
-	rsd_server_deinit(&srv);
 	pthread_mutex_destroy(&srv.clients_lock);
 	rss_config_free(dctx.cfg);
 
