@@ -98,6 +98,73 @@ TEST the_last_byte_decides(void)
 	PASS();
 }
 
+/* RFC 2326 12.33 / the dev guide: ffmpeg strips credentials from the URL it
+ * requested and then fails to match an RTP-Info url that still carries them.
+ * The strip in the first implementation stopped at the "/" of "rtsp://" and
+ * never matched. */
+static void url_of(const char *uri, char *s, size_t n)
+{
+	build(512, uri, &V, &OFF, s, n);
+}
+
+TEST userinfo_is_stripped(void)
+{
+	char s[256];
+	url_of("rtsp://user:pass@cam/stream0", s, sizeof(s));
+	ASSERT_STR_EQ("url=rtsp://cam/stream0/video;seq=7;rtptime=9", s);
+	url_of("rtsp://user@cam:554/stream0", s, sizeof(s));
+	ASSERT_STR_EQ("url=rtsp://cam:554/stream0/video;seq=7;rtptime=9", s);
+	url_of("rtsps://@cam/stream0", s, sizeof(s));
+	ASSERT_STR_EQ("url=rtsps://cam/stream0/video;seq=7;rtptime=9", s);
+	PASS();
+}
+
+TEST an_unescaped_at_in_the_password_does_not_leak_its_tail(void)
+{
+	char s[256];
+	url_of("rtsp://u:p@ss@cam/stream0", s, sizeof(s));
+	ASSERT_STR_EQ("url=rtsp://cam/stream0/video;seq=7;rtptime=9", s);
+	PASS();
+}
+
+TEST an_ipv6_host_keeps_its_brackets(void)
+{
+	char s[256];
+	url_of("rtsp://u:p@[fe80::1]:554/stream0", s, sizeof(s));
+	ASSERT_STR_EQ("url=rtsp://[fe80::1]:554/stream0/video;seq=7;rtptime=9", s);
+	PASS();
+}
+
+TEST an_at_after_the_authority_is_path_not_credentials(void)
+{
+	char s[256];
+	url_of("rtsp://cam/a@b", s, sizeof(s));
+	ASSERT_STR_EQ("url=rtsp://cam/a@b/video;seq=7;rtptime=9", s);
+	url_of("rtsp://cam/stream0?t=a@b", s, sizeof(s));
+	ASSERT_STR_EQ("url=rtsp://cam/stream0?t=a@b/video;seq=7;rtptime=9", s);
+	url_of("rtsp://cam", s, sizeof(s));
+	ASSERT_STR_EQ("url=rtsp://cam/video;seq=7;rtptime=9", s);
+	PASS();
+}
+
+TEST a_uri_without_a_scheme_is_left_alone(void)
+{
+	char s[256];
+	url_of("/stream0/a@b", s, sizeof(s));
+	ASSERT_STR_EQ("url=/stream0/a@b/video;seq=7;rtptime=9", s);
+	PASS();
+}
+
+TEST stripping_both_tracks_and_slashes_together(void)
+{
+	char s[256];
+	build(512, "rtsp://u:p@cam/stream0//", &V, &A, s, sizeof(s));
+	ASSERT_STR_EQ("url=rtsp://cam/stream0/video;seq=7;rtptime=9,"
+		      "url=rtsp://cam/stream0/audio;seq=11;rtptime=13",
+		      s);
+	PASS();
+}
+
 SUITE(rtp_info_suite)
 {
 	RUN_TEST(both_tracks);
@@ -107,4 +174,10 @@ SUITE(rtp_info_suite)
 	RUN_TEST(a_long_uri_is_refused_not_written);
 	RUN_TEST(video_fitting_alone_is_not_enough);
 	RUN_TEST(the_last_byte_decides);
+	RUN_TEST(userinfo_is_stripped);
+	RUN_TEST(an_unescaped_at_in_the_password_does_not_leak_its_tail);
+	RUN_TEST(an_ipv6_host_keeps_its_brackets);
+	RUN_TEST(an_at_after_the_authority_is_path_not_credentials);
+	RUN_TEST(a_uri_without_a_scheme_is_left_alone);
+	RUN_TEST(stripping_both_tracks_and_slashes_together);
 }

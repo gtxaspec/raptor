@@ -293,13 +293,32 @@ def leg_uri_resolution():
     lab.finish()
 
 
+def leg_userinfo():
+    print("== credentials in the request URI")
+    lab = Lab("userinfo")
+    c = Rtsp()
+    base = "rtsp://admin:pa55@127.0.0.1:%d/stream0" % PORT
+    c.req("DESCRIBE", base, "Accept: application/sdp\r\n")
+    r = c.req("SETUP", base + "/video", "Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n")
+    r = c.req("PLAY", base, "Session: %s\r\n" % session_id(r))
+    m = re.search(r"RTP-Info: *(.*)", r or "")
+    info = m.group(1).strip() if m else ""
+    check("userinfo: PLAY answered", ok(r), status(r))
+    check("userinfo: RTP-Info url carries no credentials",
+          bool(info) and "@" not in info and "pa55" not in info, info)
+    check("userinfo: RTP-Info url is the plain URL",
+          info.startswith("url=rtsp://127.0.0.1:%d/stream0/video;" % PORT), info)
+    c.close()
+    lab.finish()
+
+
 def main():
     os.makedirs(WORK, exist_ok=True)
     rings = subprocess.Popen([os.path.join(OUT, "create_rings")],
                              stdout=open(os.path.join(WORK, "rings.log"), "w"),
                              stderr=subprocess.STDOUT)
     time.sleep(1.5)
-    legs = [leg_stalled_player, leg_alias_gate, leg_uri_resolution]
+    legs = [leg_stalled_player, leg_alias_gate, leg_uri_resolution, leg_userinfo]
     only = sys.argv[1:]
     try:
         for leg in legs:
