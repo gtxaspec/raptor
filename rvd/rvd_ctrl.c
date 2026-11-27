@@ -2094,9 +2094,15 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 
 		if (jpeg_ch < 0 || jpeg_ch >= RVD_MAX_JPEG)
 			return rss_ctrl_resp_error(resp, resp_size, "bad jpeg channel");
+		/* A skipped snapshot (disabled, or an IVDC main that has none)
+		 * keeps its index with no stream behind it */
+		int jstream = jpeg_ch < st->jpeg_count ? st->jpeg_streams[jpeg_ch] : -1;
+		if (jstream < 0)
+			return rss_ctrl_resp_error(resp, resp_size,
+						   "no snapshot on this jpeg channel");
 
 		char ring_name[24];
-		snprintf(ring_name, sizeof(ring_name), "jpeg%d", jpeg_ch);
+		rvd_jpeg_ring_name(st, jpeg_ch, ring_name, sizeof(ring_name));
 		rss_ring_t *ring = rss_ring_open(ring_name);
 		if (!ring)
 			return rss_ctrl_resp_error(resp, resp_size,

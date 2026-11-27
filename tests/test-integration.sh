@@ -393,6 +393,70 @@ direct_expect "configured IVDC main, no ISP OSD: the missing main OSD is a warni
 direct_run no-ivdc-osd - on RSS_MOCK_ISP_OSD=1
 direct_absent "no IVDC main: the IPU OSD stays" "using hybrid OSD"
 
+# ── Snapshots on a second sensor ──
+# A sensor's snapshot rings are jpeg0/jpeg1 behind its prefix (s1_jpeg0,
+# s1_jpeg1: 27-multi-sensor.md, and the names rhd opens). Shaped like a T23
+# dual (Jooan W8U): both mains IVDC by config, so their snapshots are
+# skipped, channels 0 and 2 have none, and each sensor's sub snapshot is
+# its jpeg1.
+echo "=== Second-sensor snapshots ==="
+DUAL_CONF="$LOG_DIR/dual.conf"
+sed 's/^\[sensor\]$/[sensor0]/' "$CONFIG" > "$DUAL_CONF"
+sed -i '/^\[stream0\]/a ivdc = true' "$DUAL_CONF"
+printf '\n[sensor1]\nname = gc2053\ni2c_addr = 0x37\n\n[sensor1_stream0]\nivdc = true\n' >> "$DUAL_CONF"
+DUAL_LOG="$LOG_DIR/rvd-dual.log"
+"$OUT/rvd" -c "$DUAL_CONF" -f -d > "$DUAL_LOG" 2>&1 &
+dual_pid=$!
+for i in $(seq 1 30); do
+    grep -q "pipeline ready:" "$DUAL_LOG" 2>/dev/null && break
+    kill -0 "$dual_pid" 2>/dev/null || break
+    sleep 0.1
+done
+for name in jpeg1 s1_jpeg1; do
+    if timeout 5 "$OUT/ringdump" "$name" > /dev/null 2>&1; then
+        pass "dual sensor: snapshot ring $name exists under its documented name"
+    else
+        fail "dual sensor: snapshot ring $name exists under its documented name" "$(ls /dev/shm | grep jpeg | tr '\n' ' ')"
+    fi
+done
+for ch in 1 3; do
+    rm -f "$LOG_DIR/dual-jpeg$ch.jpg"
+    out=$("$OUT/raptorctl" rvd save jpeg "$LOG_DIR/dual-jpeg$ch.jpg" "$ch" 2>&1) || true
+    magic=$(head -c 2 "$LOG_DIR/dual-jpeg$ch.jpg" 2>/dev/null | od -An -tx1 | tr -d ' ')
+    if echo "$out" | grep -q '"ok"' && [ "$magic" = "ffd8" ]; then
+        pass "dual sensor: save jpeg $ch writes a JPEG"
+    else
+        fail "dual sensor: save jpeg $ch writes a JPEG" "$out"
+    fi
+done
+for ch in 0 2; do
+    out=$("$OUT/raptorctl" rvd save jpeg "$LOG_DIR/dual-none$ch.jpg" "$ch" 2>&1) || true
+    if echo "$out" | grep -q "no snapshot on this jpeg channel"; then
+        pass "dual sensor: save jpeg $ch says the channel has no snapshot"
+    else
+        fail "dual sensor: save jpeg $ch says the channel has no snapshot" "$out"
+    fi
+done
+# rhd opens the documented names: slot 3 is s1_jpeg1
+"$OUT/rhd" -c "$DUAL_CONF" -f -d > "$LOG_DIR/rhd-dual.log" 2>&1 &
+dual_rhd=$!
+for i in $(seq 1 30); do
+    curl -s -o /dev/null --max-time 1 "http://127.0.0.1:18080/" 2>/dev/null && break
+    sleep 0.1
+done
+for slot in 1 3; do
+    magic=$(curl -s --max-time 5 "http://127.0.0.1:18080/snap.jpg?stream=$slot" | head -c 2 | od -An -tx1 | tr -d ' ')
+    if [ "$magic" = "ffd8" ]; then
+        pass "dual sensor: rhd serves snapshot slot $slot"
+    else
+        fail "dual sensor: rhd serves snapshot slot $slot" "got '$magic'"
+    fi
+done
+kill "$dual_rhd" 2>/dev/null || true
+wait "$dual_rhd" 2>/dev/null || true
+kill "$dual_pid" 2>/dev/null || true
+wait "$dual_pid" 2>/dev/null || true
+
 echo "=== Starting daemons ==="
 
 start_daemon() {

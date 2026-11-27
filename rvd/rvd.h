@@ -10,6 +10,7 @@
 #include <rss_ipc.h>
 #include <rss_common.h>
 #include <stdatomic.h>
+#include <stdio.h>
 
 #define RVD_MAX_SENSORS		3
 #define RVD_MAX_STREAMS		(RVD_MAX_SENSORS * 4) /* main+sub+jpeg0+jpeg1 per sensor */
@@ -156,6 +157,11 @@ struct rvd_state {
 	/* JPEG snapshots (one per video stream) */
 	int jpeg_streams[RVD_MAX_JPEG]; /* stream indices, -1 if disabled */
 	int jpeg_count;
+	/* Each snapshot slot's sensor and its index among that sensor's slots,
+	 * set for a skipped slot too: its ring is jpeg<local> behind the
+	 * sensor's prefix (s1_jpeg0, s1_jpeg1), what consumers open. */
+	int jpeg_sensor[RVD_MAX_JPEG];
+	int jpeg_local[RVD_MAX_JPEG];
 
 	volatile sig_atomic_t *running;
 
@@ -183,6 +189,24 @@ struct rvd_state {
 
 /* rvd_pipeline.c */
 int rvd_pipeline_init(rvd_state_t *st);
+
+/* A ring's shm name: "main", "sub", "jpeg<N>" for sensor 0, "s<i>_" + that
+ * for the others. Every producer and lookup goes through this. */
+static inline void rvd_ring_name(int sensor_idx, const char *type, char *buf, size_t len)
+{
+	if (sensor_idx == 0)
+		rss_strlcpy(buf, type, len);
+	else
+		snprintf(buf, len, "s%d_%s", sensor_idx, type);
+}
+
+/* The ring name of snapshot slot j (0 .. jpeg_count - 1) */
+static inline void rvd_jpeg_ring_name(const rvd_state_t *st, int j, char *buf, size_t len)
+{
+	char base[16];
+	snprintf(base, sizeof(base), "jpeg%d", st->jpeg_local[j]);
+	rvd_ring_name(st->jpeg_sensor[j], base, buf, len);
+}
 void rvd_pipeline_deinit(rvd_state_t *st);
 
 /* Per-stream lifecycle (hot restart) */

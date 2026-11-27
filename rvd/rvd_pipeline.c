@@ -510,6 +510,8 @@ static int rvd_pipeline_init_novatek(rvd_state_t *st)
 			js->fs_chn = st->streams[v].fs_chn;
 			js->chn = video_count + st->jpeg_count;
 			js->sensor_idx = 0;
+			st->jpeg_sensor[st->jpeg_count] = 0;
+			st->jpeg_local[st->jpeg_count] = st->jpeg_count;
 			rss_strlcpy(js->cfg_sect, sect, sizeof(js->cfg_sect));
 			js->is_jpeg = true;
 			js->jpeg_idle = rss_config_get_bool(st->cfg, "jpeg", "idle", true);
@@ -754,15 +756,6 @@ static void apply_isp_direct_mode(rvd_state_t *st, rss_config_t *cfg)
 static int fs_base_channel(int sensor_idx)
 {
 	return sensor_idx * 3; /* sensor 0→0, sensor 1→3, sensor 2→6 */
-}
-
-/* Ring name for a sensor/stream combination */
-static void get_ring_name(int sensor_idx, const char *type, char *buf, size_t len)
-{
-	if (sensor_idx == 0)
-		rss_strlcpy(buf, type, len);
-	else
-		snprintf(buf, len, "s%d_%s", sensor_idx, type);
 }
 
 /*
@@ -1341,14 +1334,18 @@ int rvd_pipeline_init(rvd_state_t *st)
 		int def_quality = rss_config_get_int(cfg, "jpeg", "quality", 75);
 		int def_fps = rss_config_get_int(cfg, "jpeg", "fps", 1);
 		int video_count = st->stream_count;
+		int sensor_slots[RVD_MAX_SENSORS] = {0};
 
 		for (int v = 0; v < video_count && st->jpeg_count < RVD_MAX_JPEG; v++) {
+			int sensor = st->streams[v].sensor_idx;
 			/* An IVDC main's snapshot shares its group and is IVDC too, as
 			 * in the vendor T32 sample. On T23 dual-sensor the SDK rejects
 			 * that second IVDC channel, so where the driver's direct mode
 			 * is unknown the snapshot is skipped, keeping the index for
 			 * consistent ring naming. */
 			if (st->streams[v].enc_cfg.ivdc && st->direct_sensors <= 0) {
+				st->jpeg_sensor[st->jpeg_count] = sensor;
+				st->jpeg_local[st->jpeg_count] = sensor_slots[sensor]++;
 				st->jpeg_count++;
 				continue;
 			}
@@ -1394,6 +1391,8 @@ int rvd_pipeline_init(rvd_state_t *st)
 			st->streams[ji].jpeg_idle = rss_config_get_bool(cfg, "jpeg", "idle", true);
 			st->streams[ji].enc_cfg.init_qp = quality;
 			st->jpeg_streams[st->jpeg_count] = ji;
+			st->jpeg_sensor[st->jpeg_count] = sensor;
+			st->jpeg_local[st->jpeg_count] = sensor_slots[sensor]++;
 			st->stream_count = ji + 1;
 			st->jpeg_count++;
 
@@ -1675,7 +1674,7 @@ int rvd_stream_init(rvd_state_t *st, int idx)
 			if (st->refmode_shm) {
 				int local_chn = s->fs_chn - fs_base_channel(s->sensor_idx);
 				char shm_name[64];
-				get_ring_name(s->sensor_idx, local_chn == 0 ? "main" : "sub",
+				rvd_ring_name(s->sensor_idx, local_chn == 0 ? "main" : "sub",
 					      shm_name, sizeof(shm_name));
 				char full_shm[128];
 				snprintf(full_shm, sizeof(full_shm), "/rss_enc_%s", shm_name);
@@ -1833,9 +1832,7 @@ create_ring:
 					break;
 				}
 			}
-			char base[16];
-			snprintf(base, sizeof(base), "jpeg%d", jpeg_idx);
-			get_ring_name(s->sensor_idx, base, ring_name, sizeof(ring_name));
+			rvd_jpeg_ring_name(st, jpeg_idx, ring_name, sizeof(ring_name));
 
 			uint32_t w = s->enc_cfg.width;
 			uint32_t h = s->enc_cfg.height;
@@ -1851,7 +1848,7 @@ create_ring:
 					w, h, fps, s->enc_cfg.fps_den, 0, 0);
 		} else {
 			const char *type = is_main ? "main" : "sub";
-			get_ring_name(s->sensor_idx, type, ring_name, sizeof(ring_name));
+			rvd_ring_name(s->sensor_idx, type, ring_name, sizeof(ring_name));
 
 			const char *slots_key = is_main ? "main_slots" : "sub_slots";
 			int slots_cfg = rss_config_get_int(cfg, "ring", slots_key, 32);
@@ -2056,7 +2053,7 @@ void rvd_stream_deinit(rvd_state_t *st, int idx)
 
 		int local_chn = s->fs_chn - fs_base_channel(s->sensor_idx);
 		char shm_name[64], full_shm[128];
-		get_ring_name(s->sensor_idx, local_chn == 0 ? "main" : "sub", shm_name,
+		rvd_ring_name(s->sensor_idx, local_chn == 0 ? "main" : "sub", shm_name,
 			      sizeof(shm_name));
 		snprintf(full_shm, sizeof(full_shm), "/rss_enc_%s", shm_name);
 		shm_unlink(full_shm);
