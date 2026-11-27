@@ -34,12 +34,13 @@
 #define RHD_MAX_CLIENTS	     8
 #define RHD_RECV_BUF	     4096
 #define RHD_MJPEG_BOUNDARY   "raptorframe"
-#define RHD_SEND_TIMEOUT_MS  3000  /* max time to drain a one-shot response */
-#define RHD_RECV_TIMEOUT_MS  10000 /* max time a client may take to finish its request */
-#define RHD_TLS_HANDSHAKE_MS 5000  /* max time for a whole TLS handshake */
-#define RHD_STREAM_WRITE_MS  5000  /* max time to hand one stream write to a client */
-#define RHD_SNAP_TIMEOUT_MS  5000  /* max wait for a JPEG encoder to produce a fresh frame */
-#define RHD_MAX_JPEG	     6	   /* up to 2 per sensor, 3 sensors */
+#define RHD_SEND_TIMEOUT_MS  3000 /* max time to drain a one-shot response */
+#define RHD_RECV_TIMEOUT_MS  5000 /* max time a client may take to finish its request */
+#define RHD_EVICT_MIN_AGE_MS 1000 /* a connection younger than this is never evicted */
+#define RHD_TLS_HANDSHAKE_MS 5000 /* max time for a whole TLS handshake */
+#define RHD_STREAM_WRITE_MS  5000 /* max time to hand one stream write to a client */
+#define RHD_SNAP_TIMEOUT_MS  5000 /* max wait for a JPEG encoder to produce a fresh frame */
+#define RHD_MAX_JPEG	     6	  /* up to 2 per sensor, 3 sensors */
 
 /* Index page — loaded from file on first request, cached */
 #define RHD_INDEX_PATH "/usr/share/raptor/index.html"
@@ -150,6 +151,28 @@ static inline bool rhd_client_recv_expired(const rhd_client_t *c, int64_t now)
 	if (!rhd_client_owes_request(c) || c->hs_running)
 		return false;
 	return now - c->recv_start > RHD_RECV_TIMEOUT_MS;
+}
+
+/*
+ * With every slot taken, the connection a newcomer may replace: the oldest
+ * one still owing a request, as long as it has had RHD_EVICT_MIN_AGE_MS. Idle
+ * connections cost their owner nothing to keep opening, so the full table
+ * must not be what keeps real clients out; the age keeps a burst of new
+ * connections from pushing out each other before they can ask. -1 if none.
+ */
+static inline int rhd_evict_candidate(rhd_client_t *const *clients, int count, int64_t now)
+{
+	int best = -1;
+
+	for (int i = 0; i < count; i++) {
+		const rhd_client_t *c = clients[i];
+
+		if (!rhd_client_owes_request(c) || now - c->recv_start < RHD_EVICT_MIN_AGE_MS)
+			continue;
+		if (best < 0 || c->recv_start < clients[best]->recv_start)
+			best = i;
+	}
+	return best;
 }
 
 typedef struct {

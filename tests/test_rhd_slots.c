@@ -138,6 +138,83 @@ TEST a_client_in_its_tls_handshake_is_kept(void)
 }
 
 /*
+ * A full table must not be what keeps a real client out. The newcomer takes
+ * the slot of the connection that has waited longest for a request that is not
+ * coming -- and of nobody else.
+ */
+static const int64_t OLD_ENOUGH = RHD_EVICT_MIN_AGE_MS + 1;
+
+TEST the_oldest_idle_connection_is_the_one_evicted(void)
+{
+	rhd_client_t a = at_rest(), b = at_rest(), c = at_rest();
+	rhd_client_t *table[] = {&a, &b, &c};
+
+	a.recv_start = 3000;
+	b.recv_start = 1000;
+	c.recv_start = 2000;
+
+	ASSERT_EQ(1, rhd_evict_candidate(table, 3, 3000 + OLD_ENOUGH));
+	PASS();
+}
+
+TEST a_connection_too_young_to_have_asked_is_not_evicted(void)
+{
+	rhd_client_t a = at_rest();
+	rhd_client_t *table[] = {&a};
+
+	a.recv_start = 0;
+
+	ASSERT_EQ(-1, rhd_evict_candidate(table, 1, 500));
+	ASSERT_EQ(0, rhd_evict_candidate(table, 1, RHD_EVICT_MIN_AGE_MS));
+	ASSERT(RHD_EVICT_MIN_AGE_MS >= 500);
+	PASS();
+}
+
+TEST streams_snapshots_and_replies_are_never_evicted(void)
+{
+	rhd_client_t mjpeg = at_rest(), audio = at_rest(), snap = at_rest(), reply = at_rest();
+	rhd_client_t *table[] = {&mjpeg, &audio, &snap, &reply};
+	uint8_t body[] = "x";
+
+	mjpeg.is_mjpeg = true;
+	audio.is_audio = true;
+	snap.snap_pending = true;
+	reply.send_buf = body;
+
+	ASSERT_EQ(-1, rhd_evict_candidate(table, 4, 100 * OLD_ENOUGH));
+	PASS();
+}
+
+TEST an_idle_one_is_found_among_busy_ones(void)
+{
+	rhd_client_t mjpeg = at_rest(), idle = at_rest(), audio = at_rest();
+	rhd_client_t *table[] = {&mjpeg, &audio, &idle};
+
+	mjpeg.is_mjpeg = true;
+	audio.is_audio = true;
+
+	ASSERT_EQ(2, rhd_evict_candidate(table, 3, OLD_ENOUGH));
+	PASS();
+}
+
+TEST a_client_still_in_its_tls_handshake_can_be_evicted(void)
+{
+	rhd_client_t a = at_rest();
+	rhd_client_t *table[] = {&a};
+
+	a.hs_running = true;
+
+	ASSERT_EQ(0, rhd_evict_candidate(table, 1, OLD_ENOUGH));
+	PASS();
+}
+
+TEST the_first_request_is_due_within_a_few_seconds(void)
+{
+	ASSERT(RHD_RECV_TIMEOUT_MS <= 5000);
+	PASS();
+}
+
+/*
  * The main loop reads a client under the TLS layer only while the client has
  * no send thread using the same connection.
  */
@@ -157,6 +234,12 @@ TEST only_streaming_clients_are_kept_off_the_tls_layer(void)
 SUITE(rhd_slots_suite)
 {
 	RUN_TEST(only_streaming_clients_are_kept_off_the_tls_layer);
+	RUN_TEST(the_oldest_idle_connection_is_the_one_evicted);
+	RUN_TEST(a_connection_too_young_to_have_asked_is_not_evicted);
+	RUN_TEST(streams_snapshots_and_replies_are_never_evicted);
+	RUN_TEST(an_idle_one_is_found_among_busy_ones);
+	RUN_TEST(a_client_still_in_its_tls_handshake_can_be_evicted);
+	RUN_TEST(the_first_request_is_due_within_a_few_seconds);
 	RUN_TEST(a_client_in_its_tls_handshake_is_kept);
 	RUN_TEST(a_client_that_never_asks_for_anything_is_dropped);
 	RUN_TEST(a_half_sent_request_does_not_buy_more_time);

@@ -957,6 +957,24 @@ static void server_run(rhd_server_t *srv)
 					continue;
 
 				if (srv->client_count >= srv->max_clients) {
+					int idle = rhd_evict_candidate(
+						srv->clients, srv->client_count, rhd_now_ms());
+					if (idle >= 0) {
+						char addrstr[INET6_ADDRSTRLEN];
+						rhd_client_t *ic = srv->clients[idle];
+						RSS_WARN(
+							"evicted %s:%u (no request in %lld ms) for "
+							"a "
+							"new connection",
+							client_addr_str(&ic->addr, addrstr,
+									sizeof(addrstr)),
+							client_port(&ic->addr),
+							(long long)(rhd_now_ms() - ic->recv_start));
+						remove_client(srv, idle);
+					}
+				}
+
+				if (srv->client_count >= srv->max_clients) {
 					char addrstr[INET6_ADDRSTRLEN];
 					RSS_WARN("rejected %s:%u (max clients %d)",
 						 client_addr_str(&sa, addrstr, sizeof(addrstr)),

@@ -6,9 +6,11 @@ Legs, in the order they run:
   https: a handshake that never finishes, a TLS client that stops reading
          a stream, one that stops reading a snapshot, and one that sends
          data while frames are being written to it
+  http:  connections that never send a request while real clients arrive
 """
 import json
 import os
+import re
 import socket
 import ssl
 import subprocess
@@ -222,6 +224,17 @@ def https_legs():
     victim.close()
     th.join(5)
 
+    # Handshakes that hold every slot give way to a real client
+    held = [raw_conn() for _ in range(8)]
+    time.sleep(1.5)
+    line = tls_get("/snap", timeout=4)
+    check("a real TLS client is served while 8 handshakes hold the slots (%s)" % line,
+          line.startswith("HTTP/1.1 200"))
+    for a in held:
+        a.close()
+    check("the slots come back once the handshakes are gone",
+          wait_for(lambda: client_count() == 0, 8))
+
     # A stream client that stops reading is dropped, not waited for
     slow = tls_conn(rcvbuf=2048)
     slow.sendall(b"GET /mjpeg HTTP/1.0\r\n\r\n")
@@ -272,11 +285,79 @@ def https_legs():
     check("https daemon exits cleanly (rc=%s)" % rc, rc == 0)
 
 
+def http_legs():
+    print("-- http", flush=True)
+    d = Rhd("http")
+    idle = [raw_conn() for _ in range(8)]
+    time.sleep(1.5)
+    check("8 idle connections hold every slot", client_count() == 8)
+    t0 = time.time()
+    s = raw_conn()
+    s.sendall(b"GET /snap HTTP/1.0\r\n\r\n")
+    first = b""
+    try:
+        first = s.recv(100)
+    except OSError as e:
+        first = str(e).encode()
+    line = first.split(b"\r\n")[0].decode(errors="replace")
+    check("a real client is served while 8 idle ones hold the slots (%s)" % line,
+          line.startswith("HTTP/1.1 200"))
+    s.close()
+    check("the oldest idle connection was evicted for it",
+          re.search(r"\[WARN *\] .*evicted", d.logtext()) is not None and closed(idle[0]))
+    # Whoever is left is cut by the first-request deadline
+    left = [c for c in idle if not closed(c)]
+    for c in left:
+        c.settimeout(8)
+    ok = True
+    for c in left:
+        try:
+            ok = ok and c.recv(10) == b""
+        except OSError:
+            ok = False
+    took = time.time() - t0
+    check("idle connections are cut within the first-request deadline (%.1fs)" % took,
+          ok and took < 6.5)
+    for c in idle:
+        c.close()
+
+    # A stream is not an idle connection, whatever its age
+    stream = raw_conn()
+    stream.sendall(b"GET /mjpeg HTTP/1.0\r\n\r\n")
+    idle = [raw_conn() for _ in range(7)]
+    time.sleep(1.5)
+    s = raw_conn()
+    s.sendall(b"GET /snap HTTP/1.0\r\n\r\n")
+    line = s.recv(100).split(b"\r\n")[0].decode(errors="replace")
+    st, _ = ctl("status")
+    check("an MJPEG stream keeps its slot when a newcomer evicts an idle one (%s)" % line,
+          line.startswith("HTTP/1.1 200") and st is not None and st.get("mjpeg") == 1)
+    for c in idle + [s, stream]:
+        c.close()
+
+    rc = d.stop()
+    rep = d.sanitizer_report()
+    check("no sanitizer report from the http daemon", rep is None, rep or "")
+    check("http daemon exits cleanly (rc=%s)" % rc, rc == 0)
+
+
+def closed(c):
+    c.settimeout(0.05)
+    try:
+        return c.recv(10) == b""
+    except socket.timeout:
+        return False
+    except OSError:
+        return True
+
+
 def main():
     os.makedirs(WORK, exist_ok=True)
     which = sys.argv[1] if len(sys.argv) > 1 else "all"
     if which in ("all", "https"):
         https_legs()
+    if which in ("all", "http"):
+        http_legs()
     print("%d passed, %d failed" % (PASS, len(FAILED)))
     for n in FAILED:
         print("  FAILED: " + n)
