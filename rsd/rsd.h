@@ -161,6 +161,8 @@ typedef struct rsd_client {
 
 	/* Connection tracking */
 	int64_t last_activity; /* monotonic timestamp (us) */
+	int64_t connected_us;  /* when it was accepted */
+	bool authed;	       /* a request has passed the auth check (or none is set) */
 
 	/* Write mutex — serializes RTP data (send thread) and RTSP
 	 * responses (server thread) on TCP interleaved connections. */
@@ -274,6 +276,7 @@ typedef struct rsd_server {
 	int max_clients;     /* runtime limit (≤ RSD_MAX_CLIENTS) */
 	int session_timeout; /* RTSP session timeout in seconds */
 	int tcp_sndbuf;	     /* TCP send buffer size (bytes) */
+	int preauth_timeout; /* seconds a connection may go without one accepted request */
 	int send_timeout;    /* seconds a TCP write may make no progress before the client is cut */
 	bool rtcp_sr;	     /* send RTCP Sender Reports (default true) */
 	bool jpeg_enabled;   /* expose JPEG streams (default false) */

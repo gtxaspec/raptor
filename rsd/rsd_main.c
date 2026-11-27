@@ -90,6 +90,11 @@ int main(int argc, char **argv)
 		srv.send_timeout = 1;
 	if (srv.send_timeout > 300)
 		srv.send_timeout = 300;
+	srv.preauth_timeout = rss_config_get_int(dctx.cfg, "rtsp", "preauth_timeout", 10);
+	if (srv.preauth_timeout < 1)
+		srv.preauth_timeout = 1;
+	if (srv.preauth_timeout > 300)
+		srv.preauth_timeout = 300;
 	srv.rtcp_sr = rss_config_get_bool(dctx.cfg, "rtsp", "rtcp_sr", true);
 	srv.idr_on_join = rss_config_get_bool(dctx.cfg, "rtsp", "idr_on_join", true);
 	srv.jpeg_enabled = rss_config_get_bool(dctx.cfg, "rtsp", "jpeg", false);

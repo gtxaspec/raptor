@@ -490,13 +490,47 @@ def leg_request_framing():
     lab.finish()
 
 
+def leg_slots():
+    print("== idle connections and the client slots")
+    lab = Lab("slots", "preauth_timeout = 3\nmax_clients = 4\n", level="warn")
+    silent = [socket.create_connection(("127.0.0.1", PORT)) for _ in range(4)]
+    time.sleep(0.5)
+    n = Rtsp()
+    r = n.req("OPTIONS", "*", timeout=2)
+    check("slots: a real client gets in although silent sockets fill every slot", ok(r), status(r))
+    check("slots: the eviction is logged", "slots full" in lab.log_text())
+    time.sleep(4)
+    check("slots: a client that got a request accepted outlives the pre-auth allowance",
+          ok(n.req("OPTIONS", "*", timeout=2)))
+    gone = 0
+    for s in silent:
+        s.settimeout(0.5)
+        try:
+            if s.recv(1) == b"":
+                gone += 1
+        except OSError:
+            gone += 1
+    check("slots: every silent connection is closed", gone == 4, "%d of 4" % gone)
+    check("slots: the timeout is logged", "no accepted request from" in lab.log_text())
+    n.close()
+    lab.finish()
+
+    print("== unauthenticated connections with credentials configured")
+    lab = Lab("slotsauth", "username = cam\npassword = secret\npreauth_timeout = 3\n", level="warn")
+    c = Rtsp()
+    r = c.req("OPTIONS", "*", timeout=2)
+    check("slotsauth: a request without credentials is challenged", status(r).startswith("RTSP/1.0 401"), status(r))
+    check("slotsauth: the challenged connection is dropped at the allowance", c.closed_within(6))
+    lab.finish()
+
+
 def main():
     os.makedirs(WORK, exist_ok=True)
     rings = subprocess.Popen([os.path.join(OUT, "create_rings")],
                              stdout=open(os.path.join(WORK, "rings.log"), "w"),
                              stderr=subprocess.STDOUT)
     time.sleep(1.5)
-    legs = [leg_stalled_player, leg_alias_gate, leg_uri_resolution, leg_userinfo, leg_tls_stalls, leg_tls_fail_closed, leg_request_framing]
+    legs = [leg_stalled_player, leg_alias_gate, leg_uri_resolution, leg_userinfo, leg_tls_stalls, leg_tls_fail_closed, leg_request_framing, leg_slots]
     only = sys.argv[1:]
     try:
         for leg in legs:

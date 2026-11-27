@@ -20,6 +20,7 @@
 #include "rsd.h"
 #include "rsd_conn.h"
 #include "rsd_net.h"
+#include "rsd_slots.h"
 #include "rsd_tls_io.h"
 #include <rss_net.h>
 
@@ -193,6 +194,30 @@ static void remove_client(rsd_server_t *srv, rsd_client_t *client)
 	close(client->fd);
 
 	free(client);
+}
+
+/* Make room for a new connection by dropping the oldest one that never got a
+ * request through: silent sockets must not keep real clients out. */
+static bool evict_unauthenticated(rsd_server_t *srv)
+{
+	bool authed[RSD_MAX_CLIENTS];
+	int64_t at[RSD_MAX_CLIENTS];
+	int n = srv->client_count < RSD_MAX_CLIENTS ? srv->client_count : RSD_MAX_CLIENTS;
+
+	for (int i = 0; i < n; i++) {
+		authed[i] = srv->clients[i]->authed;
+		at[i] = srv->clients[i]->connected_us;
+	}
+	int pick = rsd_pick_evictee(authed, at, n);
+	if (pick < 0)
+		return false;
+
+	rsd_client_t *victim = srv->clients[pick];
+	char addr[INET6_ADDRSTRLEN];
+	RSS_WARN("slots full: dropping %s:%u, no accepted request yet",
+		 client_addr_str(&victim->addr, addr, sizeof(addr)), client_port(&victim->addr));
+	remove_client(srv, victim);
+	return true;
 }
 
 /* The client record, send thread and slot for an accepted connection; tls is
@@ -400,6 +425,7 @@ static void admit_client(rsd_server_t *srv, int fd, const struct sockaddr_storag
 	client->active = true;
 	client->waiting_keyframe = true;
 	client->last_activity = rss_timestamp_us();
+	client->connected_us = client->last_activity;
 
 #ifdef COMPY_HAS_TLS
 	client->tls = tls;
@@ -433,7 +459,7 @@ static void admit_client(rsd_server_t *srv, int fd, const struct sockaddr_storag
 	/* Early capacity check — main thread is the sole writer of
 	 * client_count so a lockless read is safe as an optimistic gate.
 	 * The definitive check still happens under clients_lock below. */
-	if (srv->client_count >= srv->max_clients) {
+	if (srv->client_count >= srv->max_clients && !evict_unauthenticated(srv)) {
 		RSS_WARN("max clients reached (%d), rejecting", srv->max_clients);
 		goto reject_client;
 	}
@@ -1129,6 +1155,15 @@ void rsd_server_run(rsd_server_t *srv)
 			rsd_client_t *c = srv->clients[i];
 			if (!c)
 				continue;
+			if (rsd_preauth_expired(c->authed, c->connected_us, now,
+						(int64_t)srv->preauth_timeout * 1000000)) {
+				char addr[INET6_ADDRSTRLEN];
+				RSS_WARN("no accepted request from %s:%u in %ds, disconnecting",
+					 client_addr_str(&c->addr, addr, sizeof(addr)),
+					 client_port(&c->addr), srv->preauth_timeout);
+				remove_client(srv, c);
+				continue;
+			}
 			bool playing = c->video.playing || c->audio.playing;
 			bool udp_media = c->udp_rtp_fd >= 0 || c->audio_udp_rtp_fd >= 0 ||
 					 c->bc_udp_rtp_fd >= 0;

@@ -1120,6 +1120,7 @@ static Compy_ControlFlow rsd_client_t_before(VSelf, Compy_Context *ctx, const Co
 		if (compy_auth_check(self->srv->auth, ctx, req) != 0)
 			return Compy_ControlFlow_Break;
 	}
+	self->authed = true;
 
 	/* RFC 2326 §12.32: a request whose Require names a feature this
 	 * server cannot honor MUST draw 551 with the unsupported tags in
