@@ -10,6 +10,7 @@ import re
 import select
 import signal
 import socket
+import ssl
 import subprocess
 import sys
 import time
@@ -36,20 +37,22 @@ def check(name, ok, detail=""):
 class Lab:
     """One rsd instance with its own config, on top of the shared rings."""
 
-    def __init__(self, name, rtsp_extra=""):
+    def __init__(self, name, rtsp_extra="", wait=True, level="debug"):
         self.name = name
         self.conf = os.path.join(WORK, name + ".conf")
         self.log = os.path.join(WORK, name + ".log")
         self.asan = os.path.join(WORK, name + ".asan")
         LOGS.append(self.log)
         with open(self.conf, "w") as f:
-            f.write("[rtsp]\nport = %d\n%s\n[log]\nlevel = debug\n" % (PORT, rtsp_extra))
+            f.write("[rtsp]\nport = %d\n%s\n[log]\nlevel = %s\n" % (PORT, rtsp_extra, level))
         env = dict(os.environ,
                    ASAN_OPTIONS="abort_on_error=0:detect_leaks=1:log_path=" + self.asan,
                    TSAN_OPTIONS="log_path=" + self.asan,
                    UBSAN_OPTIONS="print_stacktrace=1")
-        self.rsd = subprocess.Popen([os.path.join(OUT, "rsd"), "-c", self.conf, "-f", "-d"],
+        self.rsd = subprocess.Popen([os.path.join(OUT, "rsd"), "-c", self.conf, "-f"] + (["-d"] if level == "debug" else []),
                                     stdout=open(self.log, "w"), stderr=subprocess.STDOUT, env=env)
+        if not wait:
+            return
         for _ in range(100):
             try:
                 socket.create_connection(("127.0.0.1", PORT), timeout=0.2).close()
@@ -312,13 +315,124 @@ def leg_userinfo():
     lab.finish()
 
 
+def make_cert(name):
+    cert = os.path.join(WORK, name + ".pem")
+    key = os.path.join(WORK, name + ".key")
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1",
+                    "-nodes", "-days", "2", "-subj", "/CN=" + name, "-keyout", key, "-out", cert],
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return cert, key
+
+
+class Rtsps(Rtsp):
+    """An RTSPS client; raw() reaches the socket under the TLS layer."""
+
+    def __init__(self, timeout=3):
+        raw = socket.create_connection(("127.0.0.1", PORT), timeout=timeout)
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        self.s = ctx.wrap_socket(raw)
+        self.cseq = 0
+        self.buf = b""
+
+    def raw(self, data):
+        socket.socket.send(self.s, data)
+
+    def closed_within(self, seconds):
+        end = time.time() + seconds
+        self.s.settimeout(0.2)
+        while time.time() < end:
+            try:
+                if not self.s.recv(65536):
+                    return True
+            except ssl.SSLWantReadError:
+                continue
+            except socket.timeout:
+                continue
+            except OSError:
+                return True
+        return False
+
+
+def leg_tls_stalls():
+    print("== RTSPS handshake and record stalls")
+    cert, key = make_cert("rtsps")
+    lab = Lab("tls", "tls = true\ntls_cert = %s\ntls_key = %s\n" % (cert, key), level="warn")
+    t0 = time.time()
+    c = Rtsps()
+    check("tls: baseline RTSPS OPTIONS", ok(c.req("OPTIONS", "*")))
+    c.close()
+    silent = [socket.create_connection(("127.0.0.1", PORT)) for _ in range(3)]
+    time.sleep(0.3)
+    t0 = time.time()
+    try:
+        c = Rtsps(timeout=8)
+        r = c.req("OPTIONS", "*", timeout=8)
+        c.close()
+    except (OSError, ssl.SSLError):
+        r = None
+    took = time.time() - t0
+    check("tls: silent connections do not delay a real client", ok(r) and took < 3, "%s after %.1fs" % (status(r), took))
+    time.sleep(5.5)
+    cut = 0
+    for s in silent:
+        s.settimeout(0.5)
+        try:
+            if s.recv(1) == b"":
+                cut += 1
+        except OSError:
+            cut += 1
+        s.close()
+    check("tls: a connection that never finishes its handshake is cut", cut == 3, "%d of 3" % cut)
+    check("tls: the cut handshake is logged", "TLS handshake from" in lab.log_text() and "timed out" in lab.log_text())
+
+    a = Rtsps()
+    check("tls: half-record peer completes the handshake", ok(a.req("OPTIONS", "*")))
+    a.raw(b"\x17\x03\x03\x40\x00")  # a record header promising 16 KiB, then nothing
+    time.sleep(0.5)
+    b = Rtsps()
+    t0 = time.time()
+    r = b.req("OPTIONS", "*", timeout=3)
+    check("tls: half-sent record does not stop other clients", ok(r) and time.time() - t0 < 2.5, status(r))
+    check("tls: the half-record peer is dropped", a.closed_within(12))
+    check("tls: dropped half record is logged", "TLS record" in lab.log_text())
+    b.close()
+
+    flood = [socket.create_connection(("127.0.0.1", PORT)) for _ in range(10)]
+    time.sleep(0.3)
+    t0 = time.time()
+    try:
+        d = Rtsps(timeout=8)
+        r = d.req("OPTIONS", "*", timeout=8)
+        d.close()
+    except (OSError, ssl.SSLError):
+        r = None
+    check("tls: a real client gets a handshake slot although silent connections fill them all",
+          ok(r) and time.time() - t0 < 3, "%s after %.1fs" % (status(r), time.time() - t0))
+    for s in flood:
+        s.close()
+
+    def opt(cseq, pad):
+        return ("OPTIONS * RTSP/1.0\r\nCSeq: %d\r\nX-Pad: %s\r\n\r\n" % (cseq, "a" * pad)).encode()
+
+    e = Rtsps()
+    e.s.sendall(opt(1, 2450) + opt(2, 2450))
+    r1 = e.reply(3)
+    r2 = e.reply(3)
+    check("tls: a request held back by the library after one read is still answered",
+          ok(r1) and ok(r2), "%s / %s" % (status(r1), status(r2)))
+    e.close()
+    lab.finish()
+
+
 def main():
     os.makedirs(WORK, exist_ok=True)
     rings = subprocess.Popen([os.path.join(OUT, "create_rings")],
                              stdout=open(os.path.join(WORK, "rings.log"), "w"),
                              stderr=subprocess.STDOUT)
     time.sleep(1.5)
-    legs = [leg_stalled_player, leg_alias_gate, leg_uri_resolution, leg_userinfo]
+    legs = [leg_stalled_player, leg_alias_gate, leg_uri_resolution, leg_userinfo, leg_tls_stalls]
     only = sys.argv[1:]
     try:
         for leg in legs:

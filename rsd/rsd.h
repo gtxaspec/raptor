@@ -20,12 +20,15 @@
 #include <unistd.h>
 #include <netinet/in.h>
 
-#define RSD_MAX_CLIENTS	     8
-#define RSD_VIDEO_PT	     96
-#define RSD_JPEG_PT	     26
-#define RSD_VIDEO_CLOCK	     90000
-#define RSD_BUF_SIZE	     4096
-#define RSD_IDLE_TIMEOUT_SEC 60 /* disconnect idle clients (slowloris protection) */
+#define RSD_MAX_CLIENTS	      8
+#define RSD_VIDEO_PT	      96
+#define RSD_JPEG_PT	      26
+#define RSD_VIDEO_CLOCK	      90000
+#define RSD_BUF_SIZE	      4096
+#define RSD_TLS_HANDSHAKE_SEC 5 /* whole TLS handshake, not each read of it */
+#define RSD_TLS_RECORD_SEC    5 /* a started TLS record must complete in this time */
+#define RSD_MAX_HANDSHAKES    8
+#define RSD_IDLE_TIMEOUT_SEC  60 /* disconnect idle clients (slowloris protection) */
 
 /* RTCP Sender Report cadence (RFC 3550 recommends ~5 s).  The first SR
  * goes out ~1 s after PLAY so NVRs (ffmpeg/Frigate/go2rtc) get their
@@ -86,6 +89,9 @@ typedef struct rsd_conn_writer {
 	Compy_Writer inner;
 	struct rsd_client *client;
 } rsd_conn_writer_t;
+
+#define RSD_WAIT_REQUEST 1 /* a buffered request awaits write_lock */
+#define RSD_WAIT_RECORD	 2 /* TLS: the next record is not all here yet */
 
 /* Per-client state */
 typedef struct rsd_client {
@@ -162,7 +168,10 @@ typedef struct rsd_client {
 	rsd_conn_writer_t cw;
 	atomic_bool aborted;	/* a write failed or timed out; the fd is shut down */
 	atomic_bool ctl_wanted; /* the event loop is waiting to take write_lock */
-	bool deferred;		/* a buffered request awaits write_lock; fd out of epoll */
+	bool deferred;		/* parked, fd out of epoll; see RSD_WAIT_* */
+	uint8_t wait;
+	int64_t record_since; /* TLS: since when the next record has been incomplete */
+	bool tls_more;	      /* TLS: decrypted bytes still held by the library */
 	int64_t deferred_since;
 
 	/* Send queue (per-client, decouples reader from I/O) */
@@ -212,6 +221,23 @@ typedef struct {
 	_Atomic uint16_t sps_len;
 	_Atomic uint16_t pps_len;
 } rsd_ring_ctx_t;
+
+#ifdef COMPY_HAS_TLS
+/* A TLS handshake in flight. compy's accept blocks on the socket, so it runs
+ * on its own thread; the event loop cuts it at its deadline by shutting the
+ * socket down. */
+typedef struct {
+	pthread_t tid;
+	bool used;
+	bool cut;
+	int fd;
+	struct sockaddr_storage addr;
+	int64_t started_us;
+	atomic_bool done;
+	Compy_TlsContext *ctx;
+	Compy_TlsConn *conn;
+} rsd_handshake_t;
+#endif
 
 /* Server state */
 typedef struct rsd_server {
@@ -276,6 +302,7 @@ typedef struct rsd_server {
 #ifdef COMPY_HAS_TLS
 	/* TLS context for RTSPS (NULL = plain RTSP) */
 	Compy_TlsContext *tls_ctx;
+	rsd_handshake_t hs[RSD_MAX_HANDSHAKES];
 #endif
 } rsd_server_t;
 

@@ -9,6 +9,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/epoll.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <netinet/in.h>
@@ -19,6 +20,7 @@
 #include "rsd.h"
 #include "rsd_conn.h"
 #include "rsd_net.h"
+#include "rsd_tls_io.h"
 #include <rss_net.h>
 
 #define client_addr_str rss_addr_str
@@ -193,6 +195,134 @@ static void remove_client(rsd_server_t *srv, rsd_client_t *client)
 	free(client);
 }
 
+/* The client record, send thread and slot for an accepted connection; tls is
+ * the finished handshake or NULL. */
+static void admit_client(rsd_server_t *srv, int fd, const struct sockaddr_storage *addrp,
+			 void *tls);
+
+static void handshake_start(rsd_server_t *srv, int fd, const struct sockaddr_storage *addr);
+
+#ifdef COMPY_HAS_TLS
+static void *handshake_thread(void *arg)
+{
+	rsd_handshake_t *h = arg;
+	h->conn = Compy_TlsConn_accept(h->ctx, h->fd);
+	atomic_store(&h->done, true);
+	return NULL;
+}
+
+/* Collect a finished (or cut) handshake: admit the client, or drop the fd. */
+static void handshake_reap(rsd_server_t *srv, rsd_handshake_t *h, bool admit)
+{
+	pthread_join(h->tid, NULL);
+	if (h->conn && admit) {
+		admit_client(srv, h->fd, &h->addr, h->conn);
+	} else {
+		if (admit) {
+			char addrstr[INET6_ADDRSTRLEN];
+			RSS_WARN("TLS handshake from %s:%u %s",
+				 client_addr_str(&h->addr, addrstr, sizeof(addrstr)),
+				 client_port(&h->addr), h->cut ? "timed out" : "failed");
+		}
+		if (h->conn)
+			Compy_TlsConn_free(h->conn);
+		close(h->fd);
+	}
+	h->conn = NULL;
+	h->used = false;
+}
+
+static void handshake_start(rsd_server_t *srv, int fd, const struct sockaddr_storage *addr)
+{
+	rsd_handshake_t *h = NULL, *oldest = NULL;
+
+	for (int i = 0; i < RSD_MAX_HANDSHAKES; i++) {
+		rsd_handshake_t *s = &srv->hs[i];
+		if (!s->used) {
+			h = s;
+			break;
+		}
+		if (!oldest || s->started_us < oldest->started_us)
+			oldest = s;
+	}
+	if (!h) {
+		/* All busy: the oldest is the likeliest to be stalled, and a real
+		 * client must not queue behind silent connections. */
+		shutdown(oldest->fd, SHUT_RDWR);
+		handshake_reap(srv, oldest, false);
+		h = oldest;
+	}
+
+	h->used = true;
+	h->cut = false;
+	h->fd = fd;
+	h->addr = *addr;
+	h->started_us = rss_timestamp_us();
+	h->ctx = srv->tls_ctx;
+	h->conn = NULL;
+	atomic_store(&h->done, false);
+
+	pthread_attr_t attr;
+	pthread_attr_init(&attr);
+	pthread_attr_setstacksize(&attr, 256 * 1024);
+	int rc = pthread_create(&h->tid, &attr, handshake_thread, h);
+	pthread_attr_destroy(&attr);
+	if (rc != 0) {
+		h->used = false;
+		close(fd);
+	}
+}
+
+static bool handshakes_pending(const rsd_server_t *srv)
+{
+	for (int i = 0; i < RSD_MAX_HANDSHAKES; i++) {
+		if (srv->hs[i].used)
+			return true;
+	}
+	return false;
+}
+
+static void handshakes_poll(rsd_server_t *srv)
+{
+	int64_t now = rss_timestamp_us();
+	for (int i = 0; i < RSD_MAX_HANDSHAKES; i++) {
+		rsd_handshake_t *h = &srv->hs[i];
+		if (!h->used)
+			continue;
+		if (atomic_load(&h->done)) {
+			handshake_reap(srv, h, true);
+		} else if (!h->cut && now - h->started_us > RSD_TLS_HANDSHAKE_SEC * 1000000LL) {
+			h->cut = true;
+			shutdown(h->fd, SHUT_RDWR);
+		}
+	}
+}
+
+static void handshakes_abort(rsd_server_t *srv)
+{
+	for (int i = 0; i < RSD_MAX_HANDSHAKES; i++) {
+		if (srv->hs[i].used) {
+			shutdown(srv->hs[i].fd, SHUT_RDWR);
+			handshake_reap(srv, &srv->hs[i], false);
+		}
+	}
+}
+#else
+static bool handshakes_pending(const rsd_server_t *srv)
+{
+	(void)srv;
+	return false;
+}
+static void handshakes_poll(rsd_server_t *srv)
+{
+	(void)srv;
+}
+static void handshakes_abort(rsd_server_t *srv)
+{
+	(void)srv;
+}
+#endif
+
 static void accept_client(rsd_server_t *srv)
 {
 	struct sockaddr_storage addr;
@@ -227,8 +357,30 @@ static void accept_client(rsd_server_t *srv)
 	struct timeval snd_to = {.tv_sec = srv->send_timeout};
 	setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &snd_to, sizeof(snd_to));
 
+#ifdef COMPY_HAS_TLS
+	if (srv->tls_ctx) {
+		handshake_start(srv, fd, &addr);
+		return;
+	}
+#endif
+	admit_client(srv, fd, &addr, NULL);
+}
+
+static void admit_client(rsd_server_t *srv, int fd, const struct sockaddr_storage *addrp,
+			 void *tls_v)
+{
+#ifdef COMPY_HAS_TLS
+	Compy_TlsConn *tls = tls_v;
+#else
+	void *tls = tls_v;
+#endif
+	struct sockaddr_storage addr = *addrp;
 	rsd_client_t *client = calloc(1, sizeof(*client));
 	if (!client) {
+#ifdef COMPY_HAS_TLS
+		if (tls)
+			Compy_TlsConn_free(tls);
+#endif
 		close(fd);
 		return;
 	}
@@ -250,18 +402,15 @@ static void accept_client(rsd_server_t *srv)
 	client->last_activity = rss_timestamp_us();
 
 #ifdef COMPY_HAS_TLS
-	if (srv->tls_ctx) {
-		client->tls = Compy_TlsConn_accept(srv->tls_ctx, fd);
-		if (!client->tls) {
-			char addrstr[INET6_ADDRSTRLEN];
-			RSS_WARN("TLS handshake failed from %s:%u",
-				 client_addr_str(&addr, addrstr, sizeof(addrstr)),
-				 client_port(&addr));
-			close(fd);
-			free(client);
-			return;
-		}
+	client->tls = tls;
+	if (tls) {
+		/* Backstop for a record that turns out to carry no data: mbedTLS
+		 * then reads on, and must not wait for long. */
+		struct timeval rcv_to = {.tv_usec = 5000};
+		setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcv_to, sizeof(rcv_to));
 	}
+#else
+	(void)tls;
 #endif
 
 	rsd_conn_writer_init(client);
@@ -360,35 +509,82 @@ static void client_watch(rsd_server_t *srv, rsd_client_t *client, bool on)
 	epoll_ctl(srv->epoll_fd, EPOLL_CTL_MOD, client->fd, &ev);
 }
 
-/* Answer the buffered request, or park the client until its connection can
- * take the answer without the loop waiting (see rsd_control_lock). */
-static void client_dispatch(rsd_server_t *srv, rsd_client_t *client)
+static void client_park(rsd_server_t *srv, rsd_client_t *client, uint8_t wait)
 {
-	if (rsd_handle_rtsp_data(client, client->recv_buf, client->recv_len)) {
-		if (client->deferred) {
-			client->deferred = false;
-			client_watch(srv, client, true);
-		}
-		return;
-	}
 	if (!client->deferred) {
 		client->deferred = true;
 		client->deferred_since = rss_timestamp_us();
 		client_watch(srv, client, false);
 	}
+	client->wait = wait;
 }
 
-static void handle_client_data(rsd_server_t *srv, int fd, uint32_t events)
+static void client_unpark(rsd_server_t *srv, rsd_client_t *client)
 {
-	rsd_client_t *client = find_client_by_fd(srv, fd);
-	if (!client)
-		return;
-
-	if (client->deferred) {
-		if (events & (EPOLLERR | EPOLLHUP))
-			remove_client(srv, client);
+	if (client->tls_more) {
+		client_park(srv, client, RSD_WAIT_RECORD);
 		return;
 	}
+	if (!client->deferred)
+		return;
+	client->deferred = false;
+	client->wait = 0;
+	client_watch(srv, client, true);
+}
+
+/* Answer the buffered request, or park the client until its connection can
+ * take the answer without the loop waiting (see rsd_control_lock). */
+static void client_dispatch(rsd_server_t *srv, rsd_client_t *client)
+{
+	if (rsd_handle_rtsp_data(client, client->recv_buf, client->recv_len))
+		client_unpark(srv, client);
+	else
+		client_park(srv, client, RSD_WAIT_REQUEST);
+}
+
+#ifdef COMPY_HAS_TLS
+#define RSD_TLS_RETRY -2 /* write_lock busy: not the peer's doing, no clock runs */
+
+/* One TLS read that cannot wait. The read holds write_lock (the send thread
+ * writes under it, and compy's connection mutex is shared by both) and
+ * happens only once the whole next record is queued. Returns bytes read, 0
+ * on EOF or error, -1 when the record is not complete, RSD_TLS_RETRY when
+ * the lock is busy. */
+static ssize_t client_tls_read(rsd_client_t *client, size_t avail)
+{
+	if (pthread_mutex_trylock(&client->write_lock) != 0)
+		return RSD_TLS_RETRY;
+	Compy_Writer w = client->cw.inner;
+	int ready = VCALL(w, filled) > 0 ? 1 : rsd_tls_record_ready(client->fd);
+	if (ready == 0) {
+		pthread_mutex_unlock(&client->write_lock);
+		return -1;
+	}
+	if (ready < 0) {
+		pthread_mutex_unlock(&client->write_lock);
+		return 0;
+	}
+	ssize_t n = compy_tls_read(client->tls, client->recv_buf + client->recv_len, avail);
+	if (n < 0)
+		n = 0; /* a failed read ends the connection like an EOF */
+	/* decrypted bytes left over (a record larger than avail) raise no
+	 * socket event: the tick comes back for them */
+	client->tls_more = n > 0 && VCALL(w, filled) > 0;
+	pthread_mutex_unlock(&client->write_lock);
+	return n;
+}
+#endif
+
+/* One step for a client: its socket reported data, or it is parked and the
+ * tick found it may be able to go on. */
+static void client_service(rsd_server_t *srv, rsd_client_t *client, bool readable)
+{
+	if (client->deferred && client->wait == RSD_WAIT_REQUEST) {
+		client_dispatch(srv, client);
+		return;
+	}
+	if (!readable && !(client->deferred && client->wait == RSD_WAIT_RECORD))
+		return;
 
 	/* Read into client's buffer */
 	size_t avail = sizeof(client->recv_buf) - client->recv_len;
@@ -400,11 +596,29 @@ static void handle_client_data(rsd_server_t *srv, int fd, uint32_t events)
 
 	ssize_t n;
 #ifdef COMPY_HAS_TLS
-	if (client->tls)
-		n = compy_tls_read(client->tls, client->recv_buf + client->recv_len, avail);
-	else
+	if (client->tls) {
+		n = client_tls_read(client, avail);
+		if (n < 0) {
+			int64_t now = rss_timestamp_us();
+			if (n == -1 && !client->record_since)
+				client->record_since = now;
+			if (n == -1 &&
+			    now - client->record_since > RSD_TLS_RECORD_SEC * 1000000LL) {
+				char addrstr[INET6_ADDRSTRLEN];
+				RSS_WARN("TLS record from %s:%u incomplete after %ds, "
+					 "disconnecting",
+					 client_addr_str(&client->addr, addrstr, sizeof(addrstr)),
+					 client_port(&client->addr), RSD_TLS_RECORD_SEC);
+				remove_client(srv, client);
+				return;
+			}
+			client_park(srv, client, RSD_WAIT_RECORD);
+			return;
+		}
+		client->record_since = 0;
+	} else
 #endif
-		n = read(fd, client->recv_buf + client->recv_len, avail);
+		n = read(client->fd, client->recv_buf + client->recv_len, avail);
 	if (n <= 0) {
 		remove_client(srv, client);
 		return;
@@ -412,7 +626,22 @@ static void handle_client_data(rsd_server_t *srv, int fd, uint32_t events)
 
 	client->recv_len += (size_t)n;
 	client->last_activity = rss_timestamp_us();
+	if (client->deferred && client->wait == RSD_WAIT_RECORD)
+		client_unpark(srv, client);
 	client_dispatch(srv, client);
+}
+
+static void handle_client_data(rsd_server_t *srv, int fd, uint32_t events)
+{
+	rsd_client_t *client = find_client_by_fd(srv, fd);
+	if (!client)
+		return;
+
+	if (client->deferred && (events & (EPOLLERR | EPOLLHUP))) {
+		remove_client(srv, client);
+		return;
+	}
+	client_service(srv, client, !client->deferred);
 }
 
 int rsd_server_init(rsd_server_t *srv)
@@ -749,7 +978,8 @@ void rsd_server_run(rsd_server_t *srv)
 		bool any_deferred = false;
 		for (int i = 0; i < srv->client_count; i++)
 			any_deferred |= srv->clients[i] && srv->clients[i]->deferred;
-		int n = epoll_wait(srv->epoll_fd, events, 16, any_deferred ? 5 : 500);
+		int n = epoll_wait(srv->epoll_fd, events, 16,
+				   any_deferred || handshakes_pending(srv) ? 5 : 500);
 		for (int i = 0; i < n; i++) {
 			int fd = events[i].data.fd;
 
@@ -811,8 +1041,9 @@ void rsd_server_run(rsd_server_t *srv)
 		for (int i = srv->client_count - 1; i >= 0; i--) {
 			rsd_client_t *c = srv->clients[i];
 			if (c && c->deferred)
-				client_dispatch(srv, c);
+				client_service(srv, c, false);
 		}
+		handshakes_poll(srv);
 
 		/* Register any new UDP RTCP fds with epoll (created by SETUP) */
 		for (int i = 0; i < srv->client_count; i++) {
@@ -948,6 +1179,8 @@ void rsd_server_run(rsd_server_t *srv)
 
 void rsd_server_deinit(rsd_server_t *srv)
 {
+	handshakes_abort(srv);
+
 	/* Remove all clients */
 	while (srv->client_count > 0)
 		remove_client(srv, srv->clients[0]);
