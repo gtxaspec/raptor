@@ -181,10 +181,13 @@ int main(int argc, char **argv)
 			RSS_INFO("RTSPS enabled (cert=%s, port=%d, ciphers=%s)", tls_cert, srv.port,
 				 pref);
 		} else {
-			RSS_WARN("TLS enabled but cert/key not usable (cert=%s, key=%s), "
-				 "falling back to plain RTSP on port 554",
-				 tls_cert, tls_key);
-			srv.port = 554;
+			/* Serving plaintext on a port the operator meant for RTSPS
+			 * would expose the Digest handshake and the video. */
+			RSS_FATAL("tls = true but cert/key not usable (cert=%s, key=%s); "
+				  "refusing to serve RTSP in the clear",
+				  tls_cert, tls_key);
+			ret = 1;
+			goto early_exit;
 		}
 	}
 #endif
@@ -202,6 +205,17 @@ int main(int argc, char **argv)
 	rsd_server_run(&srv);
 
 	RSS_INFO("rsd shutting down");
+
+	goto cleanup;
+
+early_exit:
+	/* nothing was initialised past the config: no server to deinit */
+	if (srv.auth)
+		Compy_Auth_free(srv.auth);
+	pthread_mutex_destroy(&srv.clients_lock);
+	rss_config_free(dctx.cfg);
+	rss_daemon_cleanup("rsd");
+	return ret;
 
 cleanup:
 #ifdef COMPY_HAS_TLS

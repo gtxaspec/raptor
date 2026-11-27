@@ -426,13 +426,35 @@ def leg_tls_stalls():
     lab.finish()
 
 
+def leg_tls_fail_closed():
+    print("== tls = true without a usable certificate")
+    missing = os.path.join(WORK, "no-such.pem")
+    lab = Lab("failclosed", "tls = true\ntls_cert = %s\ntls_key = %s\n" % (missing, missing), wait=False)
+    try:
+        rc = lab.rsd.wait(8)
+    except subprocess.TimeoutExpired:
+        rc = None
+    check("failclosed: rsd refuses to start", rc not in (None, 0), "exit %s" % rc)
+    check("failclosed: the reason is logged", "refusing to serve RTSP in the clear" in lab.log_text())
+    for port in (PORT, 554, 322):
+        try:
+            socket.create_connection(("127.0.0.1", port), timeout=1).close()
+            served = True
+        except OSError:
+            served = False
+        check("failclosed: nothing listens on %d" % port, not served)
+    if rc is None:
+        lab.rsd.kill()
+        lab.rsd.wait()
+
+
 def main():
     os.makedirs(WORK, exist_ok=True)
     rings = subprocess.Popen([os.path.join(OUT, "create_rings")],
                              stdout=open(os.path.join(WORK, "rings.log"), "w"),
                              stderr=subprocess.STDOUT)
     time.sleep(1.5)
-    legs = [leg_stalled_player, leg_alias_gate, leg_uri_resolution, leg_userinfo, leg_tls_stalls]
+    legs = [leg_stalled_player, leg_alias_gate, leg_uri_resolution, leg_userinfo, leg_tls_stalls, leg_tls_fail_closed]
     only = sys.argv[1:]
     try:
         for leg in legs:
