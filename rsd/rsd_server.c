@@ -536,7 +536,7 @@ static void client_unpark(rsd_server_t *srv, rsd_client_t *client)
  * take the answer without the loop waiting (see rsd_control_lock). */
 static void client_dispatch(rsd_server_t *srv, rsd_client_t *client)
 {
-	if (rsd_handle_rtsp_data(client, client->recv_buf, client->recv_len))
+	if (rsd_handle_rtsp_data(client))
 		client_unpark(srv, client);
 	else
 		client_park(srv, client, RSD_WAIT_REQUEST);

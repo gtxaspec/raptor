@@ -448,13 +448,55 @@ def leg_tls_fail_closed():
         lab.rsd.wait()
 
 
+def leg_request_framing():
+    print("== interleaved frames and pipelined requests")
+    lab = Lab("framing")
+    rtcp = b"$\x01\x00\x08" + b"\x80\xc9\x00\x01\x00\x00\x00\x01"  # a 12-byte frame: an empty receiver report
+
+    def opt(cseq):
+        return ("OPTIONS rtsp://127.0.0.1:%d/stream0 RTSP/1.0\r\nCSeq: %d\r\n\r\n" % (PORT, cseq)).encode()
+
+    c = Rtsp()
+    c.s.sendall(rtcp + opt(1))
+    check("framing: a request after a short interleaved frame is answered", ok(c.reply(2)))
+    c.s.sendall(rtcp + rtcp + opt(2))
+    check("framing: a request after two frames is answered", ok(c.reply(2)))
+    c.close()
+
+    c = Rtsp()
+    c.s.sendall(opt(1) + opt(2) + opt(3))
+    got = [c.reply(2) for _ in range(3)]
+    check("framing: three requests in one segment are all answered", all(ok(r) for r in got),
+          ", ".join(status(r) for r in got))
+    seqs = [re.search(r"CSeq: *(\d+)", r or "") for r in got]
+    check("framing: the answers keep the request order",
+          [m.group(1) if m else None for m in seqs] == ["1", "2", "3"])
+    c.s.sendall(opt(4)[:20])
+    time.sleep(0.2)
+    c.s.sendall(opt(4)[20:] + rtcp)
+    check("framing: a request split across segments is answered once complete", ok(c.reply(2)))
+    c.close()
+
+    c = Rtsp()
+    c.s.sendall(b"NOT-RTSP at all\r\n\r\n")
+    r = c.reply(2)
+    check("framing: an unparseable request draws 400", status(r).startswith("RTSP/1.0 400"), status(r))
+    check("framing: and the connection is closed", c.closed_within(3))
+    c.close()
+
+    d = Rtsp()
+    check("framing: the daemon still answers", ok(d.req("OPTIONS", "*")))
+    d.close()
+    lab.finish()
+
+
 def main():
     os.makedirs(WORK, exist_ok=True)
     rings = subprocess.Popen([os.path.join(OUT, "create_rings")],
                              stdout=open(os.path.join(WORK, "rings.log"), "w"),
                              stderr=subprocess.STDOUT)
     time.sleep(1.5)
-    legs = [leg_stalled_player, leg_alias_gate, leg_uri_resolution, leg_userinfo, leg_tls_stalls, leg_tls_fail_closed]
+    legs = [leg_stalled_player, leg_alias_gate, leg_uri_resolution, leg_userinfo, leg_tls_stalls, leg_tls_fail_closed, leg_request_framing]
     only = sys.argv[1:]
     try:
         for leg in legs:

@@ -321,9 +321,10 @@ void rsd_server_run(rsd_server_t *srv);
 void rsd_server_deinit(rsd_server_t *srv);
 
 /* rsd_session.c */
-/* False when the connection's write_lock was busy: nothing was consumed, call
- * again with the same buffer. */
-bool rsd_handle_rtsp_data(rsd_client_t *client, const char *data, size_t len);
+/* Answers every complete request buffered for the client. False when the
+ * connection's write_lock was busy: that request is still buffered, call
+ * again. */
+bool rsd_handle_rtsp_data(rsd_client_t *client);
 void rsd_conn_writer_init(rsd_client_t *client);
 void rsd_client_abort(rsd_client_t *client, bool stalled);
 void rsd_endpoints_load(rsd_server_t *srv, rss_config_t *cfg);

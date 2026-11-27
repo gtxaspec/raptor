@@ -1369,16 +1369,29 @@ void rsd_conn_writer_init(rsd_client_t *client)
 #endif
 }
 
-bool rsd_handle_rtsp_data(rsd_client_t *client, const char *data, size_t len)
+/* Drop n bytes from the front of the receive buffer */
+static void recv_consume(rsd_client_t *client, size_t n)
 {
-	/* Handle TCP interleaved frames ($ + channel + 2-byte length + payload).
-	 * These arrive on the same TCP connection as RTSP signaling.
-	 * Advance data/len through all complete frames, then shift recv_buf once. */
-	const char *interleaved_start = data;
-	while (len >= 4 && data[0] == '$') {
+	if (n >= client->recv_len) {
+		client->recv_len = 0;
+		return;
+	}
+	memmove(client->recv_buf, client->recv_buf + n, client->recv_len - n);
+	client->recv_len -= n;
+}
+
+/* Handle the complete TCP interleaved frames ($ + channel + 2-byte length +
+ * payload) at the front of the buffer; they share the connection with RTSP
+ * signaling. */
+static void rsd_handle_interleaved(rsd_client_t *client)
+{
+	size_t off = 0;
+
+	while (client->recv_len - off >= 4 && client->recv_buf[off] == '$') {
+		const char *data = client->recv_buf + off;
 		uint8_t channel = (uint8_t)data[1];
 		uint16_t frame_len = ((uint8_t)data[2] << 8) | (uint8_t)data[3];
-		if (4 + (size_t)frame_len > len)
+		if (4 + (size_t)frame_len > client->recv_len - off)
 			break; /* incomplete frame */
 
 		/* Route incoming RTCP to the correct handler for RR parsing */
@@ -1402,31 +1415,66 @@ bool rsd_handle_rtsp_data(rsd_client_t *client, const char *data, size_t len)
 			}
 		}
 
-		size_t consumed = 4 + frame_len;
-		data += consumed;
-		len -= consumed;
+		off += 4 + frame_len;
 	}
-	/* Shift recv_buf once for all consumed interleaved frames */
-	size_t total_consumed = (size_t)(data - interleaved_start);
-	if (total_consumed > 0) {
-		if (total_consumed <= client->recv_len) {
-			memmove(client->recv_buf, client->recv_buf + total_consumed,
-				client->recv_len - total_consumed);
-			client->recv_len -= total_consumed;
-		} else {
-			client->recv_len = 0;
+	recv_consume(client, off);
+}
+
+/* A request the parser rejects can never become valid by waiting for more
+ * bytes: answer 400 and end the connection instead of keeping it until the
+ * buffer fills. */
+static void rsd_reject_request(rsd_client_t *client)
+{
+	static const char resp[] = "RTSP/1.0 400 Bad Request\r\nCSeq: 0\r\n\r\n";
+
+	if (rsd_control_lock(&client->write_lock, client->fd)) {
+		(void)!rsd_conn_write(&client->cw, resp, sizeof(resp) - 1);
+		pthread_mutex_unlock(&client->write_lock);
+	}
+	rsd_client_abort(client, false);
+	client->recv_len = 0;
+}
+
+bool rsd_handle_rtsp_data(rsd_client_t *client)
+{
+	/* Every complete request in the buffer is answered, in order. */
+	for (;;) {
+		rsd_handle_interleaved(client);
+		if (client->recv_len == 0 || client->recv_buf[0] == '$')
+			return true; /* nothing, or a frame still arriving */
+
+		Compy_Request req = Compy_Request_uninit();
+		CharSlice99 input = CharSlice99_new(client->recv_buf, client->recv_len);
+		Compy_ParseResult result = Compy_Request_parse(&req, input);
+
+		if (Compy_ParseResult_is_failure(result)) {
+			rsd_reject_request(client);
+			return true;
 		}
-	}
+		if (!Compy_ParseResult_is_complete(result))
+			return true; /* the rest arrives with the next read */
 
-	if (len == 0)
-		return true;
+		size_t consumed = client->recv_len;
+		match(result)
+		{
+			of(Compy_ParseResult_Success, status)
+			{
+				match(*status)
+				{
+					of(Compy_ParseStatus_Complete, offset)
+					{
+						consumed = *offset;
+					}
+					otherwise
+					{
+					}
+				}
+			}
+			otherwise
+			{
+			}
+		}
 
-	/* Try to parse an RTSP request from the buffer */
-	Compy_Request req = Compy_Request_uninit();
-	CharSlice99 input = CharSlice99_new((char *)data, len);
-	Compy_ParseResult result = Compy_Request_parse(&req, input);
-
-	if (Compy_ParseResult_is_complete(result)) {
 		Compy_Writer writer = DYN(rsd_conn_writer_t, Compy_Writer, &client->cw);
 		Compy_Controller ctrl = DYN(rsd_client_t, Compy_Controller, client);
 		if (!rsd_control_lock(&client->write_lock, client->fd)) {
@@ -1436,6 +1484,8 @@ bool rsd_handle_rtsp_data(rsd_client_t *client, const char *data, size_t len)
 		atomic_store_explicit(&client->ctl_wanted, false, memory_order_relaxed);
 		compy_dispatch(writer, ctrl, &req);
 		pthread_mutex_unlock(&client->write_lock);
+		/* req points into the buffer: it is dead from here */
+		recv_consume(client, consumed);
 
 		/* Apply deferred PLAY — now that write_lock is released,
 		 * we can safely take clients_lock (matching the lock order
@@ -1472,38 +1522,5 @@ bool rsd_handle_rtsp_data(rsd_client_t *client, const char *data, size_t len)
 				RSS_DEBUG("client PLAY (IDR requested)");
 			}
 		}
-
-		/* Extract consumed byte count */
-		size_t consumed = len;
-		match(result)
-		{
-			of(Compy_ParseResult_Success, status)
-			{
-				match(*status)
-				{
-					of(Compy_ParseStatus_Complete, offset)
-					{
-						consumed = *offset;
-					}
-					otherwise
-					{
-					}
-				}
-			}
-			otherwise
-			{
-			}
-		}
-
-		/* Remove parsed bytes from buffer */
-		if (consumed < client->recv_len) {
-			memmove(client->recv_buf, client->recv_buf + consumed,
-				client->recv_len - consumed);
-			client->recv_len -= consumed;
-		} else {
-			client->recv_len = 0;
-		}
 	}
-	/* If incomplete, data stays in recv_buf for next read */
-	return true;
 }
