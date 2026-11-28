@@ -3374,6 +3374,256 @@ def scenario_pwm_failure(stub, watch):
         pwm_reset(PWM_IRLED)
 
 
+# PWM_CONF with a three-rung IR level ladder: 5000, 20000 and 50000 ns of
+# the 50000 ns period.
+LADDER_CONF = PWM_CONF + "ir_levels = 10,40,100\nir_step_gain = 16000\n"
+
+
+def scenario_ladder_night(stub, watch):
+    """The IR level ladder through one night and into the next. Dusk
+    lights the first level. A settled reading still over ir_step_gain
+    climbs instead of becoming the baseline; the baseline is sampled on
+    the rung the night settles on. A brighter scene never steps down. A
+    scene that darkens later climbs after hysteresis_sec polls, and the
+    climb re-arms the cooldown: a reading that would be day against the
+    old baseline is resampled instead. The top level ends the climb,
+    and the next night starts on the first level again."""
+    pw = watch.pwm
+    pwm_reset(PWM_IRLED)
+    stub.set_scene(luma=120, gain=500, ev=4000)
+    # no ambient probes here: the dips this scenario makes are its own
+    ric = Ric("ladder", LADDER_CONF + "probe_gain_pct = 0\n")
+    if not ric.wait_running():
+        result(False, "ladder: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    time.sleep(0.5)
+
+    pm, mm = pw.mark(), stub.mark()
+    stub.set_scene(luma=5, gain=20000, ev=100000)  # dark, also on 10% IR
+    ok = wait_for(lambda: "night" in stub.modes_since(mm), 4)
+    result(ok and wait_duty(pw, pm, PWM_IRLED, "5000"),
+           "ladder: night starts on the first level", str(pw.since(pm)))
+    ok = wait_duty(pw, pm, PWM_IRLED, "20000", 6)
+    stub.set_scene(luma=5, gain=12000, ev=100000)  # 40% does the job
+    result(ok and "night baseline:" not in ric.read_log(),
+           "ladder: a settled reading over ir_step_gain climbs instead of "
+           "becoming the baseline", ric.read_log()[-400:])
+    ok = wait_for(lambda: "night baseline: gain=12000" in ric.read_log(), 5)
+    result(ok, "ladder: the baseline is sampled on the rung the night settles on",
+           ric.read_log()[-400:])
+
+    pm2, mm2 = pw.mark(), stub.mark()
+    stub.set_scene(luma=5, gain=6000, ev=100000)  # brighter, not day (> 25%)
+    time.sleep(8 * POLL_MS / 1000.0)
+    result(pwm_attr(pw.since(pm2), PWM_IRLED, "duty_cycle") == []
+           and "day" not in stub.modes_since(mm2),
+           "ladder: a brighter scene does not step down", str(pw.since(pm2)))
+
+    stub.set_scene(luma=5, gain=30000, ev=100000)  # darkens later
+    ok = wait_duty(pw, pm2, PWM_IRLED, "50000", 4)
+    # Lit by 100% the scene reads 2000 at once: a day against the old
+    # baseline (25% of 30000), a night against one sampled on this rung.
+    mm3 = stub.mark()
+    stub.set_scene(luma=5, gain=2000, ev=100000)
+    result(ok, "ladder: a scene that darkens later climbs after hysteresis",
+           str(pw.since(pm2)))
+    ok = wait_for(lambda: "night baseline: gain=2000" in ric.read_log(), 5)
+    time.sleep(4 * POLL_MS / 1000.0)
+    result(ok and "day" not in stub.modes_since(mm3),
+           "ladder: the climb re-arms the cooldown and resamples the baseline",
+           "modes=%s log=%s" % (stub.modes_since(mm3), ric.read_log()[-300:]))
+
+    pm3 = pw.mark()
+    stub.set_scene(luma=5, gain=30000, ev=100000)
+    time.sleep(8 * POLL_MS / 1000.0)
+    result(pwm_attr(pw.since(pm3), PWM_IRLED, "duty_cycle") == [],
+           "ladder: the top level ends the climb", str(pw.since(pm3)))
+    s = ric_status()
+    result(s is not None and s.get("ir_level") == 100,
+           "ladder: status reports the level in use", str(s))
+    g = ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "get-thresholds"})
+    result(g is not None and g.get("ir_levels") == [10, 40, 100]
+           and g.get("ir_step_gain") == 16000,
+           "ladder: get-thresholds lists the levels and the step gain", str(g))
+
+    pm4, mm4 = pw.mark(), stub.mark()
+    stub.set_scene(luma=60, gain=4000, ev=100000)  # dawn
+    ok = wait_for(lambda: "day" in stub.modes_since(mm4), 4)
+    result(ok and wait_duty(pw, pm4, PWM_IRLED, "0"),
+           "ladder: day puts the bank out", str(pw.since(pm4)))
+    s = ric_status()
+    result(s is not None and "ir_level" not in s,
+           "ladder: no level is reported in day", str(s))
+    time.sleep(5 * POLL_MS / 1000.0)
+    pm5, mm5 = pw.mark(), stub.mark()
+    stub.set_scene(luma=5, gain=12000, ev=100000)
+    ok = wait_for(lambda: "night" in stub.modes_since(mm5), 4)
+    result(ok and wait_duty(pw, pm5, PWM_IRLED, "5000"),
+           "ladder: the next night starts on the first level again",
+           str(pw.since(pm5)))
+    ric.stop()
+
+
+def scenario_ladder_forced_night(stub, watch):
+    """`ric mode night` runs the ladder too, so a forced night does not
+    sit on the lowest level, and ir_step_gain is live: held high the
+    forced night stays on the first level, set back it climbs one level
+    per hysteresis_sec polls. A manual `ir850 on` has no night to read a
+    rung from and lights at the bank's own pwm_irled_level."""
+    pw = watch.pwm
+    pwm_reset(PWM_IRLED)
+    stub.set_scene(luma=120, gain=20000, ev=4000)
+    ric = Ric("ladderforce", LADDER_CONF + "pwm_irled_level = 80\n")
+    if not ric.wait_running():
+        result(False, "ladder-forced: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    time.sleep(0.5)
+
+    pm = pw.mark()
+    r = ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "ir850", "value": "on"})
+    ok = r is not None and r.get("status") == "ok"
+    result(ok and wait_duty(pw, pm, PWM_IRLED, "40000"),
+           "ladder-forced: a manual ir850 on lights at pwm_irled_level",
+           "resp=%s events=%s" % (r, pw.since(pm)))
+    ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "ir850", "value": "off"})
+
+    r = ctrl_cmd(RUN_DIR + "/ric.sock",
+                 {"cmd": "set-threshold", "key": "ir_step_gain", "value": 90000})
+    pm = pw.mark()
+    r2 = ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "mode", "value": "night"})
+    ok = (r is not None and r.get("status") == "ok"
+          and r2 is not None and r2.get("state") == "night")
+    ok = ok and wait_duty(pw, pm, PWM_IRLED, "5000")
+    time.sleep(6 * POLL_MS / 1000.0)
+    result(ok and pwm_attr(pw.since(pm), PWM_IRLED, "duty_cycle") == ["5000"],
+           "ladder-forced: forced night holds the first level under ir_step_gain",
+           "resp=%s %s events=%s" % (r, r2, pw.since(pm)))
+
+    r = ctrl_cmd(RUN_DIR + "/ric.sock",
+                 {"cmd": "set-threshold", "key": "ir_step_gain", "value": 16000})
+    ok = r is not None and r.get("status") == "ok"
+    ok = ok and wait_duty(pw, pm, PWM_IRLED, "50000", 4)
+    result(ok and pwm_attr(pw.since(pm), PWM_IRLED, "duty_cycle")
+           == ["5000", "20000", "50000"],
+           "ladder-forced: forced night climbs level by level on the live "
+           "ir_step_gain", str(pw.since(pm)))
+    s = ric_status()
+    result(s is not None and s.get("mode") == "night" and s.get("ir_level") == 100,
+           "ladder-forced: status reports the level in use", str(s))
+
+    pm = pw.mark()
+    r = ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "mode", "value": "day"})
+    ok = r is not None and r.get("state") == "day"
+    result(ok and wait_duty(pw, pm, PWM_IRLED, "0"),
+           "ladder-forced: forced day puts the bank out",
+           "resp=%s events=%s" % (r, pw.since(pm)))
+    ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "mode", "value": "auto"})
+    ric.stop()
+
+
+def scenario_ladder_probe(stub, watch):
+    """An ambient probe on a ladder night: the bank goes out, the dark
+    reading it then takes (far over ir_step_gain) is the probe's and not
+    a reason to climb, and the bank comes back on the rung it was on."""
+    pw = watch.pwm
+    pwm_reset(PWM_IRLED)
+    stub.set_scene(luma=70, gain=4500, ev=1200000)
+    ric = Ric("ladderprobe", LADDER_CONF)
+    if not ric.wait_running():
+        result(False, "ladder-probe: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    time.sleep(0.5)
+
+    pm, mm = pw.mark(), stub.mark()
+    stub.set_scene(luma=6, gain=20000, ev=50000000)
+    ok = wait_for(lambda: "night" in stub.modes_since(mm), 4)
+    if not (ok and wait_duty(pw, pm, PWM_IRLED, "20000", 6)):
+        result(False, "ladder-probe: night on the second level", str(pw.since(pm)))
+        ric.stop()
+        return
+    stub.set_scene(luma=72, gain=1300, ev=370000)  # lit by 40%
+    if not wait_for(lambda: "night baseline: gain=1300" in ric.read_log(), 5):
+        result(False, "ladder-probe: baseline", ric.read_log()[-300:])
+        ric.stop()
+        return
+
+    pm2 = pw.mark()
+    stub.set_scene(luma=73, gain=1024, ev=290000)  # dip -> probe
+    ok = wait_duty(pw, pm2, PWM_IRLED, "0")
+    stub.set_scene(luma=4, gain=60000, ev=50000000)  # dark without IR
+    restored = wait_duty(pw, pm2, PWM_IRLED, "20000", 5)
+    stub.set_scene(luma=72, gain=1300, ev=370000)
+    result(ok and restored
+           and pwm_attr(pw.since(pm2), PWM_IRLED, "duty_cycle") == ["0", "20000"],
+           "ladder-probe: the probe does not climb and restores the rung in use",
+           str(pw.since(pm2)))
+    ric.stop()
+
+
+def scenario_ladder_gpio_untouched(stub, watch):
+    """A GPIO bank has no level to set: with ir_levels in the config it
+    is switched as always, silently. No step, no PWM write, the reading
+    over ir_step_gain is the baseline, and status reports no level."""
+    pw = watch.pwm
+    stub.set_scene(luma=120, gain=500, ev=4000)
+    ric = Ric("laddergpio", LUMA_CONF + "ir_levels = 10,40,100\nir_step_gain = 16000\n")
+    if not ric.wait_running():
+        result(False, "ladder-gpio: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    time.sleep(0.5)
+
+    gm, pm, mm = watch.mark(), pw.mark(), stub.mark()
+    stub.set_scene(luma=5, gain=20000, ev=100000)
+    ok = wait_for(lambda: "night" in stub.modes_since(mm), 4)
+    ok = ok and wait_for(lambda: "night baseline: gain=20000" in ric.read_log(), 5)
+    time.sleep(6 * POLL_MS / 1000.0)
+    led = [c for _, p, _, c in watch.since(gm) if p == IRLED]
+    result(ok and led == ["1"] and pw.since(pm) == [],
+           "ladder-gpio: the pin is switched once, nothing is stepped",
+           "led=%s pwm=%s" % (led, pw.since(pm)))
+    log = ric.read_log()
+    result("stepping up" not in log and "WARN" not in log,
+           "ladder-gpio: ir_levels on a GPIO bank is silent", log[-400:])
+    s = ric_status()
+    result(s is not None and s.get("state") == "night" and "ir_level" not in s,
+           "ladder-gpio: status reports no level", str(s))
+
+    # forced night on a GPIO bank is the hardware assertion it was
+    gm = watch.mark()
+    r = ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "mode", "value": "night"})
+    time.sleep(6 * POLL_MS / 1000.0)
+    led = [c for _, p, _, c in watch.since(gm) if p == IRLED]
+    result(r is not None and r.get("state") == "night" and led == ["1"]
+           and pw.since(pm) == [],
+           "ladder-gpio: forced night relights the pin and steps nothing",
+           "resp=%s led=%s" % (r, led))
+    ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "mode", "value": "auto"})
+    ric.stop()
+
+
+def scenario_ladder_levels_parse(stub, watch):
+    """ir_levels takes ascending percents: an entry out of order or out
+    of 1-100 is dropped by name, the rest stand."""
+    pwm_reset(PWM_IRLED)
+    stub.set_scene(luma=120, gain=500, ev=4000)
+    ric = Ric("ladderparse", PWM_CONF + "ir_levels = 10,5,40,200,100\n")
+    if not ric.wait_running():
+        result(False, "ladder-parse: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    log = ric.read_log()
+    result("ir_levels: 5 dropped" in log and "ir_levels: 200 dropped" in log,
+           "ladder-parse: bad entries are dropped by name", log[:500])
+    g = ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "get-thresholds"})
+    result(g is not None and g.get("ir_levels") == [10, 40, 100],
+           "ladder-parse: the valid levels stand", str(g))
+    ric.stop()
+
+
 def main():
     setup_sandbox()
     stub = StubRvd()
@@ -3451,6 +3701,11 @@ def main():
         scenario_pwm_discovery,
         scenario_pwm_config_wins,
         scenario_pwm_failure,
+        scenario_ladder_night,
+        scenario_ladder_forced_night,
+        scenario_ladder_probe,
+        scenario_ladder_gpio_untouched,
+        scenario_ladder_levels_parse,
     ]
     only = os.environ.get("RIC_SCENARIO", "")
     if only:
