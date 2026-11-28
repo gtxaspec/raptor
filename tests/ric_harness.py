@@ -3623,6 +3623,19 @@ def scenario_ladder_levels_parse(stub, watch):
            "ladder-parse: the valid levels stand", str(g))
     ric.stop()
 
+    ric = Ric("ladderparsesemi", PWM_CONF + "ir_levels = 10,20;40,100\n")
+    if not ric.wait_running():
+        result(False, "ladder-parse: semicolon ric start", "no 'ric running'")
+        ric.stop()
+        return
+    log = ric.read_log()
+    result('ir_levels: ";40,100" ignored' in log,
+           "ladder-parse: an entry that stops the list is named", log[:500])
+    g = ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "get-thresholds"})
+    result(g is not None and g.get("ir_levels") == [10, 20],
+           "ladder-parse: the entries before it stand", str(g))
+    ric.stop()
+
 
 def main():
     setup_sandbox()

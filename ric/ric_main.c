@@ -89,7 +89,8 @@ static void load_config(ric_state_t *st)
 	/* IR level ladder: "10,20,40,70,100", ascending percents. */
 	const char *levels = rss_config_get_str(cfg, "ircut", "ir_levels", "");
 	c->ir_level_count = 0;
-	for (const char *p = levels ? levels : ""; *p && c->ir_level_count < RIC_IR_LEVELS_MAX;) {
+	const char *p = levels ? levels : "";
+	while (*p && c->ir_level_count < RIC_IR_LEVELS_MAX) {
 		char *end;
 		long v = strtol(p, &end, 10);
 		if (end == p)
@@ -102,6 +103,9 @@ static void load_config(ric_state_t *st)
 		for (p = end; *p == ',' || *p == ' '; p++)
 			;
 	}
+	if (*p)
+		RSS_WARN("ir_levels: \"%s\" ignored (comma-separated percents, max %d)", p,
+			 RIC_IR_LEVELS_MAX);
 	c->ir_step_gain =
 		cfg_clamp("ir_step_gain", rss_config_get_int(cfg, "ircut", "ir_step_gain", 16000),
 			  0, INT_MAX);
