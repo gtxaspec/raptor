@@ -415,6 +415,15 @@ void *rsd_video_reader_thread(void *arg)
 				 geometry_changed ? ", resolution changed" : "");
 		}
 
+		/* A DESCRIBE is waiting for parameter sets not cached yet (the
+		 * reader just opened the ring): ask for the keyframe now rather
+		 * than leave it a GOP away. Once per waiting DESCRIBE. */
+		if (atomic_exchange_explicit(&rctx->params_wanted, false, memory_order_acq_rel) &&
+		    atomic_load_explicit(&rctx->sps_len, memory_order_relaxed) == 0) {
+			rss_ring_request_idr(rctx->ring);
+			rsd_idr_recovery_note(&idr_recovery, rss_timestamp_us());
+		}
+
 		int ret = rss_ring_wait(rctx->ring, 100);
 		if (ret != 0) {
 			const rss_ring_header_t *h = rss_ring_get_header(rctx->ring);
