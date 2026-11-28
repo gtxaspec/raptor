@@ -2192,6 +2192,17 @@ int rvd_extra_index(const rvd_state_t *st, int slot)
 	return -1;
 }
 
+/* A base stream's ring outlives its encoder restarts, but an extra stream's
+ * slot is cleared when it comes down, so its ring goes with it (the next
+ * attach creates a new one, as after a producer restart). */
+static void extra_drop_ring(rvd_stream_t *s)
+{
+	if (s->ring) {
+		rss_ring_destroy(s->ring);
+		s->ring = NULL;
+	}
+}
+
 /* Build extra_saved[slot] at the tail of streams[]. On any failure the
  * stream is torn down again and the camera runs without it. */
 static int extra_attach_one(rvd_state_t *st, int slot)
@@ -2224,8 +2235,10 @@ static int extra_attach_one(rvd_state_t *st, int slot)
 	ret = rvd_stream_init(st, idx);
 	if (ret == RSS_OK) {
 		ret = rvd_stream_start(st, idx);
-		if (ret != RSS_OK)
+		if (ret != RSS_OK) {
 			rvd_stream_deinit(st, idx);
+			extra_drop_ring(s);
+		}
 	}
 	if (ret != RSS_OK) {
 		RSS_WARN("extra [%s]: %ux%u doesn't fit (%d) -- running without it", s->cfg_sect,
@@ -2270,6 +2283,7 @@ void rvd_extra_detach(rvd_state_t *st)
 		st->stream_count = idx;
 		pthread_mutex_unlock(&st->osd_lock);
 		rvd_stream_deinit(st, idx);
+		extra_drop_ring(s);
 		RSS_HAL_CALL(st->ops, fs_destroy_channel, st->hal_ctx, s->fs_chn);
 		/* keep runtime bitrate/fps/size changes for the next attach */
 		st->extra_saved[s->extra_slot].enc_cfg = s->enc_cfg;
