@@ -430,8 +430,8 @@ start rmr-legacy "$OUT/rmr" -c "$WORK/legacy.conf" -f -d
 RMR_PID=$LAST_PID
 wait_for 10 "d['frames'] > 0" || fail "legacy rmr not recording: $(status)"
 KEYS=$(st_get "','.join(sorted(k for k in d if k != 'tracks'))")
-WANT="bytes,clip,dropped,file,frames,frames_lost,gps,io_peak_kb,io_pending_kb,mode,recording,sei_timecode,sign,storage_path,timelapse"
-[ "$KEYS" = "$WANT" ] && pass "legacy status fields unchanged" || fail "status fields: $KEYS"
+WANT="bytes,clip,dropped,enabled,file,frames,frames_lost,gps,io_peak_kb,io_pending_kb,mode,recording,sei_timecode,sign,storage_path,timelapse"
+[ "$KEYS" = "$WANT" ] && pass "legacy status fields: the old set plus enabled" || fail "status fields: $KEYS"
 [ "$(st_get "len(d['tracks']) == 1 and d['tracks'][0]['ring'] == 'main' and d['tracks'][0]['tag'] == ''")" = "True" ] &&
 	pass "legacy config records one untagged main track" || fail "legacy tracks: $(status)"
 sleep 1
