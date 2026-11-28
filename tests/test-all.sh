@@ -9,7 +9,7 @@
 #   4. Integration tests (daemons + curl/ffprobe), then the ric
 #      behavior suite (stub rvd + fake sysfs GPIO, test-ric.sh),
 #      the rac beep suite, the rsd and rwd security suites, the rhd
-#      client-handling suite, the pre-auth parser fuzzers, and the
+#      client-handling suite, the S31raptor hook suite, the pre-auth parser fuzzers, and the
 #      net-fallback suite
 #   5. Leak/race detection (lifecycle soak)
 #
@@ -240,6 +240,12 @@ if "$SCRIPT_DIR/test-rhd.sh"; then
     stage_pass "rhd client handling suite"
 else
     stage_fail "rhd client handling suite"
+fi
+
+if "$SCRIPT_DIR/test-s31raptor.sh"; then
+    stage_pass "S31raptor hooks"
+else
+    stage_fail "S31raptor hooks"
 fi
 
 if "$SCRIPT_DIR/test-fuzz.sh"; then

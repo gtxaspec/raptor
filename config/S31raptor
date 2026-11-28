@@ -5,6 +5,12 @@ CONF=/etc/raptor.conf
 RUNDIR=/var/run/rss
 SHMDIR=/dev/shm
 
+# Called from a hook: refuse, see run_hooks.
+if [ -n "$S31RAPTOR_HOOK" ]; then
+	echo "S31raptor: cannot run from a hook (the stack is locked)" >&2
+	exit 1
+fi
+
 # Re-exec under an exclusive lock so two runs cannot interleave. busybox
 # flock takes no -w; a run is bounded by stop_daemon's own waits anyway.
 if [ "$1" != watch ] && [ -z "$S31RAPTOR_LOCKED" ] && command -v flock >/dev/null 2>&1; then
@@ -20,16 +26,50 @@ if [ -r /etc/default/raptor ]; then
 	set +a
 fi
 
-# Executables here run with "stop" before any daemon goes down and with
-# "start" once the stack is up. They are for processes outside the stack that
-# call into the video pipeline: those must be off it while rvd tears it down
-# (on SigmaStar, a call into a destroyed ISP channel oopses the vendor MI
+# Executables in /etc/raptor.d run with "stop" before any daemon goes down and
+# with "start" once the stack is up. They are for processes outside the stack
+# that call into the video pipeline: those must be off it while rvd tears it
+# down (on SigmaStar, a call into a destroyed ISP channel oopses the vendor MI
 # module and leaves its device locked, so the next rvd hangs).
+#
+# Hooks run as root inside the held lock, so each one is bounded by
+# HOOK_TIMEOUT seconds (RAPTOR_HOOK_TIMEOUT in /etc/default/raptor, default
+# 10) and then killed. One that is not root-owned, or is writable by group or
+# others, is skipped, and so is every hook if the directory is. A hook must
+# not call S31raptor: it inherits the lock (S31RAPTOR_LOCKED), so the call is
+# not blocked but runs unlocked inside this run and runs the hooks again, which
+# recurses until the timeout. S31RAPTOR_HOOK makes the call an error instead.
 HOOKDIR=/etc/raptor.d
+HOOK_TIMEOUT=${RAPTOR_HOOK_TIMEOUT:-10}
+
+# root-owned and not writable by group or others: hook_trusted <path>
+hook_trusted() {
+	read -r uid mode <<-EOF
+		$(stat -L -c '%u %a' "$1" 2>/dev/null)
+	EOF
+	[ "$uid" = 0 ] && [ $((0$mode & 022)) -eq 0 ]
+}
 
 run_hooks() {
+	[ -d "$HOOKDIR" ] || return 0
+	if ! hook_trusted "$HOOKDIR"; then
+		printf '  hooks %s skipped (not root-owned or writable by others)\n' "$HOOKDIR"
+		return 0
+	fi
 	for h in "$HOOKDIR"/*; do
-		[ -x "$h" ] && "$h" "$1"
+		[ -f "$h" ] || continue
+		[ -x "$h" ] || continue
+		if ! hook_trusted "$h"; then
+			printf '  hook %s skipped (not root-owned or writable by others)\n' "${h##*/}"
+			continue
+		fi
+		if command -v timeout >/dev/null 2>&1; then
+			S31RAPTOR_HOOK=1 timeout -s KILL "$HOOK_TIMEOUT" "$h" "$1"
+		else
+			S31RAPTOR_HOOK=1 "$h" "$1"
+		fi
+		rc=$?
+		[ $rc -eq 0 ] || printf '  hook %s %s failed (status %d)\n' "${h##*/}" "$1" "$rc"
 	done
 }
 
