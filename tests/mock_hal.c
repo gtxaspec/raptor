@@ -696,9 +696,22 @@ static int mock_audio_read_frame(void *ctx, int dev, int chn, rss_audio_frame_t 
 	(void)block;
 	static int16_t pcm_buf[320];
 	static uint32_t seq;
+	static struct timespec next;
 
-	struct timespec ts = {.tv_sec = 0, .tv_nsec = 20000000};
-	nanosleep(&ts, NULL);
+	/* Pace on an absolute 20ms grid like a real ADC: a relative sleep adds
+	 * the caller's per-chunk work to every period, so the mock delivered
+	 * audio slower than its sample rate and rad's clock (correctly) slewed
+	 * frame intervals off the codec grid once several encoders ran. */
+	struct timespec now;
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	int64_t now_ns = (int64_t)now.tv_sec * 1000000000 + now.tv_nsec;
+	int64_t next_ns = (int64_t)next.tv_sec * 1000000000 + next.tv_nsec;
+	if (next_ns == 0 || now_ns - next_ns > 1000000000LL)
+		next_ns = now_ns; /* first call, or stalled > 1s: restart the grid */
+	next_ns += 20000000;
+	next.tv_sec = (time_t)(next_ns / 1000000000);
+	next.tv_nsec = (long)(next_ns % 1000000000);
+	clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, NULL);
 
 	frame->data = pcm_buf;
 	frame->length = sizeof(pcm_buf);
