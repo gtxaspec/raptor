@@ -265,7 +265,7 @@ static long long pwm_read(int ch, const char *attr)
 	return strtoll(buf, NULL, 10);
 }
 
-static void pwm_write(int ch, const char *attr, long long value)
+static int pwm_write(int ch, const char *attr, long long value)
 {
 	char path[80];
 	snprintf(path, sizeof(path), PWM_CHIP "/pwm%d/%s", ch, attr);
@@ -274,15 +274,19 @@ static void pwm_write(int ch, const char *attr, long long value)
 		/* As loud as a failed write, for the reason gpio_set gives:
 		 * this is an LED bank silently not lighting. */
 		RSS_WARN("pwm %d %s: cannot open: %s", ch, attr, strerror(errno));
-		return;
+		return -1;
 	}
 	/* Newline-terminated, as echo writes it: the number is delimited
 	 * whatever the attribute held before. */
 	char buf[24];
 	int len = snprintf(buf, sizeof(buf), "%lld\n", value);
-	if (write(fd, buf, len) < 0)
+	int ret = 0;
+	if (write(fd, buf, len) < 0) {
 		RSS_WARN("pwm %d %s=%lld: write failed: %s", ch, attr, value, strerror(errno));
+		ret = -1;
+	}
 	close(fd);
+	return ret;
 }
 
 /*
@@ -423,7 +427,8 @@ int ric_ircut_drive(ric_state_t *st, ric_mode_t pos)
  * ir850/ir940 enable flags: those gate what the AUTOMATIC transitions
  * do, while a manual command is explicit human intent -- lighting a
  * disabled bank from the shell is exactly what bench debugging needs.
- * Returns -1 when the bank has neither a pin nor a PWM channel.
+ * Returns -1 when the bank has neither a pin nor a PWM channel, -2 when the
+ * PWM duty write failed (the bank did not change).
  *
  * A PWM bank is lit at its level, a percentage of the period, and dark
  * at duty 0 with the channel left enabled: the level of a disabled
@@ -439,7 +444,8 @@ int ric_irled_drive(ric_state_t *st, bool bank940, bool on)
 	if (pwm >= 0) {
 		int level = bank940 ? c->pwm_irled2_level : c->pwm_irled_level;
 		long long duty = on ? (long long)c->pwm_period_ns * level / 100 : 0;
-		pwm_write(pwm, "duty_cycle", duty);
+		if (pwm_write(pwm, "duty_cycle", duty) < 0)
+			return -2;
 		RSS_INFO("%s: pwm %d duty_cycle=%lld of %dns (%s)", bank940 ? "ir940" : "ir850",
 			 pwm, duty, c->pwm_period_ns, on ? "on" : "off");
 		return 0;

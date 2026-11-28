@@ -3356,6 +3356,16 @@ def scenario_pwm_failure(stub, watch):
         result("pwm %d period: cannot open" % PWM_ABSENT in log
                and "pwm %d duty_cycle: cannot open" % PWM_ABSENT in log,
                "pwm-failure: a channel that will not open is named", log[-300:])
+        r = ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "ir850", "value": "on"})
+        result(r is not None and r.get("status") == "error"
+               and "PWM write failed" in json.dumps(r),
+               "pwm-failure: a manual ir850 on that cannot be written is an error",
+               str(r))
+        r = ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "ir940", "value": "on"})
+        result(r is not None and r.get("status") == "error"
+               and "PWM write failed" in json.dumps(r),
+               "pwm-failure: so is a manual ir940 on a channel that will not open",
+               str(r))
         s = ric_status()
         result(s is not None and s.get("status") == "ok",
                "pwm-failure: daemon healthy after the storm", str(s))

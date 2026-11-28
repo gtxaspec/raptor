@@ -289,7 +289,12 @@ static int ric_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		if (rss_json_get_str(cmd_json, "value", val, sizeof(val)) != 0 ||
 		    (strcmp(val, "on") != 0 && strcmp(val, "off") != 0))
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "need value on|off");
-		if (ric_irled_drive(st, bank940, strcmp(val, "on") == 0) < 0)
+		int rc = ric_irled_drive(st, bank940, strcmp(val, "on") == 0);
+		if (rc == -2)
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size,
+						   bank940 ? "ir940 PWM write failed"
+							   : "ir850 PWM write failed");
+		if (rc < 0)
 			return rss_ctrl_resp_error(
 				resp_buf, resp_buf_size,
 				bank940 ? "no ir940 pin or PWM channel configured"
