@@ -22,6 +22,7 @@ PORT = 15554
 PASS = 0
 FAILED = []
 LOGS = []
+SHARED = [None]  # the create_rings every leg but the last shares
 
 
 def check(name, ok, detail=""):
@@ -541,21 +542,85 @@ def leg_setup_failure():
     lab.finish()
 
 
+def start_rings(*args):
+    p = subprocess.Popen([os.path.join(OUT, "create_rings")] + list(args),
+                         stdout=open(os.path.join(WORK, "rings.log"), "a"),
+                         stderr=subprocess.STDOUT)
+    time.sleep(1.5)
+    return p
+
+
+def stop_rings(p):
+    p.terminate()
+    try:
+        p.wait(10)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        p.wait()
+
+
+def leg_describe_params():
+    print("== DESCRIBE waits for the parameter sets without blocking the loop")
+    stop_rings(SHARED[0])  # this leg needs rings that withhold their keyframes
+    release = os.path.join(WORK, "release-idr")
+    if os.path.exists(release):
+        os.unlink(release)
+    rings = start_rings("--hold-idr", release)
+    lab = Lab("descp")
+    a = Rtsp(timeout=5)
+    t0 = time.time()
+    a.send("DESCRIBE", "/stream0", "Accept: application/sdp\r\n")
+    a.send("OPTIONS", "*")  # pipelined behind the parked DESCRIBE
+    time.sleep(0.3)
+    b = Rtsp()
+    t1 = time.time()
+    r = b.req("OPTIONS", "*", timeout=1)
+    check("descp: another client's OPTIONS answered while a DESCRIBE waits", ok(r) and time.time() - t1 < 0.5, status(r))
+    r = Rtsp(timeout=2).req("OPTIONS", "*", timeout=1)
+    check("descp: a new client is accepted while a DESCRIBE waits", ok(r), status(r))
+    check("descp: the DESCRIBE has not been answered yet", a.reply(0.3) is None)
+    open(release, "w").close()
+    r = a.reply(1.5)
+    waited = time.time() - t0
+    check("descp: DESCRIBE answered once the reader has the parameter sets",
+          ok(r) and "sprop-parameter-sets=" in r and waited < 1.9, "%.2fs %s" % (waited, status(r)))
+    r = a.reply(1)
+    check("descp: the request pipelined behind it is answered after it", ok(r) and "Public:" in r, status(r))
+    a.close()
+    b.close()
+    lab.finish()
+    stop_rings(rings)
+
+    print("== DESCRIBE deadline answers without the parameter sets")
+    os.unlink(release)
+    rings = start_rings("--hold-idr", release)
+    lab = Lab("descd")
+    a = Rtsp(timeout=6)
+    t0 = time.time()
+    a.send("DESCRIBE", "/stream0", "Accept: application/sdp\r\n")
+    r = Rtsp().req("OPTIONS", "*", timeout=1)
+    check("descd: loop answers others while the DESCRIBE waits", ok(r), status(r))
+    r = a.reply(5)
+    waited = time.time() - t0
+    check("descd: DESCRIBE answered at the deadline", ok(r) and 1.8 < waited < 3.5, "%.2fs %s" % (waited, status(r)))
+    check("descd: the SDP carries no parameter sets", r is not None and "sprop-parameter-sets=" not in r)
+    check("descd: the timeout is logged", "no parameter sets after" in lab.log_text())
+    a.close()
+    lab.finish()
+    stop_rings(rings)
+
+
 def main():
     os.makedirs(WORK, exist_ok=True)
-    rings = subprocess.Popen([os.path.join(OUT, "create_rings")],
-                             stdout=open(os.path.join(WORK, "rings.log"), "w"),
-                             stderr=subprocess.STDOUT)
-    time.sleep(1.5)
-    legs = [leg_stalled_player, leg_alias_gate, leg_uri_resolution, leg_userinfo, leg_tls_stalls, leg_tls_fail_closed, leg_request_framing, leg_slots, leg_setup_failure]
+    SHARED[0] = rings = start_rings()
+    legs = [leg_stalled_player, leg_alias_gate, leg_uri_resolution, leg_userinfo, leg_tls_stalls, leg_tls_fail_closed, leg_request_framing, leg_slots, leg_setup_failure, leg_describe_params]
     only = sys.argv[1:]
     try:
         for leg in legs:
             if not only or leg.__name__ in only:
                 leg()
     finally:
-        rings.kill()
-        rings.wait()
+        stop_rings(rings)
     print("\n%d checks passed, %d failed" % (PASS, len(FAILED)))
     for f in FAILED:
         print("  FAILED: " + f)

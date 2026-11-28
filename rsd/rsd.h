@@ -155,6 +155,12 @@ typedef struct rsd_client {
 	 * clients_lock (reader threads take clients_lock → write_lock). */
 	bool play_pending;
 
+	/* DESCRIBE parked until the stream's parameter sets are cached: the
+	 * time it gives up (0 = not waiting), and the request to dispatch
+	 * again instead of consuming it. */
+	int64_t describe_deadline_us;
+	bool describe_retry;
+
 	/* RTSP parse buffer */
 	char recv_buf[RSD_BUF_SIZE];
 	size_t recv_len;

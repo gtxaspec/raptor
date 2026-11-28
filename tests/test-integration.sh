@@ -482,6 +482,7 @@ start_daemon() {
 start_daemon rvd "$OUT/rvd" -c "$CONFIG" -f -d
 start_daemon rhd "$OUT/rhd" -c "$CONFIG" -f -d
 start_daemon rsd "$OUT/rsd" -c "$CONFIG" -f -d
+RSD_PID=${DAEMON_PIDS##* }
 start_daemon rsr "$OUT/rsr" -c "$CONFIG" -f -d
 
 # Optional daemons (may exit immediately if disabled in config — that's OK)
@@ -2747,13 +2748,11 @@ EARLY_RUNS=5
 EARLY_BAD=0
 EARLY_LAST=""
 for run in $(seq 1 $EARLY_RUNS); do
-    pkill -f "$OUT/rsd -c" 2>/dev/null || true
-    for i in $(seq 1 50); do
-        pgrep -f "$OUT/rsd -c" > /dev/null 2>&1 || break
-        sleep 0.1
-    done
-    "$OUT/rsd" -c "$CONFIG" -f -d > "$LOG_DIR/rsd-early-$run.log" 2>&1 &
-    DAEMON_PIDS="$DAEMON_PIDS $!"
+    kill "$RSD_PID" 2>/dev/null || true
+    wait "$RSD_PID" 2>/dev/null || true
+    "$OUT/rsd" -c "$CONFIG" -f -d >> "$LOG_DIR/rsd.log" 2>&1 &
+    RSD_PID=$!
+    DAEMON_PIDS="$DAEMON_PIDS $RSD_PID"
     EARLY_LAST=$(python3 - <<'EARLY_EOF'
 import socket, threading, time
 deadline = time.monotonic() + 10

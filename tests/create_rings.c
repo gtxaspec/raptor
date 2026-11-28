@@ -10,6 +10,7 @@
  * Usage:
  *   create_rings              # all rings, L16 audio (default)
  *   create_rings --skip-video # audio/JPEG/speaker only (RVD owns video)
+ *   create_rings --hold-idr F # no SPS/PPS until file F exists and an IDR was requested
  *   create_rings --jpeg-kb N  # jpeg0 frames of N KB (COM padding after SOI)
  *   create_rings pcmu         # G.711 mu-law audio
  *   create_rings pcma         # G.711 A-law audio
@@ -161,11 +162,15 @@ int main(int argc, char **argv)
 	bool skip_video = false;
 	const char *codec_arg = NULL;
 	int jpeg_kb = 0;
+	const char *hold_idr = NULL;
+	bool idr_asked = false;
 	for (int i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "--no-audio") == 0)
 			no_audio = true;
 		else if (strcmp(argv[i], "--jpeg-kb") == 0 && i + 1 < argc)
 			jpeg_kb = atoi(argv[++i]);
+		else if (strcmp(argv[i], "--hold-idr") == 0 && i + 1 < argc)
+			hold_idr = argv[++i];
 		else if (strcmp(argv[i], "--skip-video") == 0)
 			skip_video = true;
 		else
@@ -263,6 +268,16 @@ int main(int argc, char **argv)
 
 	while (g_running) {
 		bool is_key = (frame_num % 50 == 0);
+		if (hold_idr) {
+			if (main_ring && rss_ring_check_idr(main_ring))
+				idr_asked = true;
+			if (idr_asked && access(hold_idr, F_OK) == 0) {
+				is_key = true;
+				hold_idr = NULL;
+			} else {
+				is_key = false;
+			}
+		}
 
 		if (!skip_video) {
 			const uint8_t *data = is_key ? idr_frame : p_frame;

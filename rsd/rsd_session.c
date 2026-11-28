@@ -333,32 +333,34 @@ static bool rsd_params_cached(rsd_ring_ctx_t *rctx)
 }
 
 /*
- * Answer DESCRIBE with the parameter sets, not before them. Right after rvd
- * or rsd (re)starts, the reader has not seen a keyframe yet, and an SDP
- * without sprop-parameter-sets is worse than a late one: go2rtc (Frigate's
- * restreamer) builds every MSE init segment from the SDP it connected with,
- * for as long as that connection lives, and without parameter sets it uses a
- * 128x96 placeholder SPS -- browsers then draw a 16:9 stream at 4:3. The
- * reader asks the encoder for an IDR; this waits for it, at most
- * RSD_DESCRIBE_PARAMS_WAIT_MS. That holds the RTSP loop briefly, and only in
- * that startup window; media keeps flowing on its own threads.
+ * Right after rvd or rsd (re)starts the reader has not seen a keyframe, and
+ * an SDP without sprop-parameter-sets is worse than a late one: go2rtc builds
+ * every MSE init segment from the SDP it connected with, and without
+ * parameter sets it uses a 128x96 placeholder SPS. So the DESCRIBE is parked
+ * (answered by a later pass of the event loop, which never waits) until the
+ * reader has them, or RSD_DESCRIBE_PARAMS_WAIT_US passes and the SDP goes out
+ * with whatever is cached. Runs after authentication, so only an
+ * authenticated client can make the reader ask for an IDR.
  */
-#define RSD_DESCRIBE_PARAMS_WAIT_MS 2000
+#define RSD_DESCRIBE_PARAMS_WAIT_US 2000000
 
-static void rsd_wait_params(rsd_ring_ctx_t *rctx)
+static bool rsd_describe_park(rsd_client_t *self, rsd_ring_ctx_t *rctx)
 {
-	if (rsd_params_cached(rctx))
-		return;
-	atomic_store_explicit(&rctx->params_wanted, true, memory_order_release);
-	for (int ms = 20; ms <= RSD_DESCRIBE_PARAMS_WAIT_MS; ms += 20) {
-		usleep(20000);
-		if (rsd_params_cached(rctx)) {
-			RSS_INFO("DESCRIBE stream %d: parameter sets after %d ms", rctx->idx, ms);
-			return;
-		}
+	if (rsd_params_cached(rctx)) {
+		self->describe_deadline_us = 0;
+		return false;
 	}
+	int64_t now = rss_timestamp_us();
+	if (!self->describe_deadline_us) {
+		self->describe_deadline_us = now + RSD_DESCRIBE_PARAMS_WAIT_US;
+		atomic_store_explicit(&rctx->params_wanted, true, memory_order_release);
+	}
+	if (now < self->describe_deadline_us)
+		return true;
 	RSS_WARN("DESCRIBE stream %d: no parameter sets after %d ms, SDP without them", rctx->idx,
-		 RSD_DESCRIBE_PARAMS_WAIT_MS);
+		 RSD_DESCRIBE_PARAMS_WAIT_US / 1000);
+	self->describe_deadline_us = 0;
+	return false;
 }
 
 static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request *req)
@@ -378,8 +380,10 @@ static void rsd_client_t_describe(VSelf, Compy_Context *ctx, const Compy_Request
 	 * between our check and any header read, causing a UAF. */
 	rsd_ring_ctx_t *rctx = &self->srv->video[self->stream_idx];
 	bool has_video = rctx->last_width > 0;
-	if (has_video)
-		rsd_wait_params(rctx);
+	if (has_video && rsd_describe_park(self, rctx)) {
+		self->describe_retry = true; /* unanswered: the request stays buffered */
+		return;
+	}
 
 	/* RFC 2435 carries dimensions in 8-bit units of 8 pixels: 2040 is
 	 * the widest JPEG the payload format can describe, and compy sends
@@ -1545,6 +1549,10 @@ bool rsd_handle_rtsp_data(rsd_client_t *client)
 		atomic_store_explicit(&client->ctl_wanted, false, memory_order_relaxed);
 		compy_dispatch(writer, ctrl, &req);
 		pthread_mutex_unlock(&client->write_lock);
+		if (client->describe_retry) {
+			client->describe_retry = false;
+			return false;
+		}
 		/* req points into the buffer: it is dead from here */
 		recv_consume(client, consumed);
 
