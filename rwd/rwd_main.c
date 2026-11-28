@@ -769,6 +769,8 @@ int main(int argc, char **argv)
 		return 0;
 	}
 
+	/* Every path to cleanup before the run is a failed start */
+	int exit_code = 1;
 	rwd_random_init();
 
 	rwd_server_t srv = {0};
@@ -928,6 +930,7 @@ int main(int argc, char **argv)
 
 	/* Run */
 	rwd_run(&srv);
+	exit_code = 0;
 
 	RSS_INFO("rwd shutting down");
 
@@ -965,5 +968,5 @@ cleanup:
 	rss_config_free(dctx.cfg);
 	rss_daemon_cleanup("rwd");
 
-	return 0;
+	return exit_code;
 }

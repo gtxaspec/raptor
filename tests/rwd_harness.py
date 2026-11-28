@@ -644,11 +644,48 @@ def scenario_stall():
     check("busy workers are logged once", log.count("requests in progress") >= 1)
 
 
+def scenario_missing_cert():
+    print("no usable certificate: serve nothing, and say so in the exit status")
+    conf = os.path.join(WORK, "nocert.conf")
+    log = os.path.join(WORK, "nocert.rwd.log")
+    with open(conf, "w") as f:
+        f.write("[webrtc]\nenabled = true\nudp_port = %d\nhttp_port = %d\n"
+                "cert = %s/missing.pem\nkey = %s/missing.key\nlocal_ip = 127.0.0.1\n\n"
+                "[log]\nlevel = warn\n" % (UDP_PORT, HTTP_PORT, WORK, WORK))
+    rings = subprocess.Popen([os.path.join(OUT, "create_rings")], stdout=subprocess.DEVNULL,
+                             stderr=subprocess.STDOUT)
+    time.sleep(1.0)
+    proc = subprocess.Popen([os.path.join(OUT, "rwd"), "-c", conf, "-f"],
+                            stdout=open(log, "w"), stderr=subprocess.STDOUT)
+    listened = False
+    end = time.time() + 8
+    while time.time() < end and proc.poll() is None:
+        try:
+            socket.create_connection(("127.0.0.1", HTTP_PORT), timeout=0.3).close()
+            listened = True
+            break
+        except OSError:
+            time.sleep(0.2)
+    try:
+        rc = proc.wait(5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        rc = proc.wait()
+    rings.terminate()
+    rings.wait()
+    text = open(log, errors="replace").read()
+    check("missing certificate: nothing listens", not listened)
+    check("missing certificate: the start fails with a non-zero status", rc not in (0, None),
+          "rc=%s" % rc)
+    check("missing certificate: the reason is logged", "DTLS init failed" in text, text[-300:])
+
+
 def main():
     os.makedirs(WORK, exist_ok=True)
     cert, key, _ = make_cert("tracker")
     only = os.environ.get("RWD_ONLY", "").split(",")
-    for sc in (scenario_dtls, scenario_cors, scenario_wt_key, scenario_stall):
+    for sc in (scenario_dtls, scenario_cors, scenario_wt_key, scenario_stall,
+               scenario_missing_cert):
         if only == [""] or sc.__name__[9:] in only:
             sc()
     for sc in (scenario_wt_auth, scenario_wt_tls, scenario_wt_race):
