@@ -81,7 +81,7 @@ int main(int argc, char **argv)
 			dur = 300;
 
 		printf("triggering motion clip for %d seconds...\n", dur);
-		int ret = send_cmd_verb("rmr", "start");
+		int ret = send_cmd_verb_checked("rmr", "start");
 		if (ret != 0)
 			return ret;
 		sleep(dur);

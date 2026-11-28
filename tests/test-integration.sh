@@ -1618,6 +1618,11 @@ fi
 "$OUT/raptorctl" rmr disable > /dev/null 2>&1
 check_contains "motion trigger refused while recording is off" "recording is off" \
     "$OUT/raptorctl" test-motion 2
+if "$OUT/raptorctl" test-motion 1 > /dev/null 2>&1; then
+    fail "test-motion fails when the trigger is refused" "exit status 0"
+else
+    pass "test-motion fails when the trigger is refused"
+fi
 check_contains "resume refused after disable" "recording is off" "$OUT/raptorctl" rmr resume
 check_contains "disabled: resume left recording off" '"recording":false' "$OUT/raptorctl" rmr status
 check_contains "status reports recording as off" '"enabled":false' "$OUT/raptorctl" rmr status

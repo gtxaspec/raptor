@@ -68,16 +68,38 @@ void jstr(cJSON *j, char *buf, int size)
 
 /* Build {"cmd":verb} with the serializer and send it — for the
  * fixed-verb call sites, which must not carry wire JSON themselves. */
+static int verb_json(const char *verb, char *json, size_t size)
+{
+	cJSON *j = cJSON_CreateObject();
+	if (!j)
+		return 0;
+	cJSON_AddStringToObject(j, "cmd", verb);
+	int ok = cJSON_PrintPreallocated(j, json, (int)size, 0);
+	cJSON_Delete(j);
+	return ok;
+}
+
 int send_cmd_verb(const char *daemon, const char *verb)
 {
 	char json[64];
-	cJSON *j = cJSON_CreateObject();
-	if (!j)
+	return verb_json(verb, json, sizeof(json)) ? send_cmd(daemon, json) : 1;
+}
+
+int send_cmd_verb_checked(const char *daemon, const char *verb)
+{
+	char json[64];
+	char resp[2048];
+	if (!verb_json(verb, json, sizeof(json)))
 		return 1;
-	cJSON_AddStringToObject(j, "cmd", verb);
-	int ok = cJSON_PrintPreallocated(j, json, sizeof(json), 0);
-	cJSON_Delete(j);
-	return ok ? send_cmd(daemon, json) : 1;
+	int ret = send_cmd_json(daemon, json, resp, sizeof(resp));
+	printf("%s\n", resp);
+	if (ret != 0)
+		return 1;
+	cJSON *r = cJSON_Parse(resp);
+	cJSON *st = r ? cJSON_GetObjectItem(r, "status") : NULL;
+	int refused = cJSON_IsString(st) && strcmp(st->valuestring, "error") == 0;
+	cJSON_Delete(r);
+	return refused;
 }
 
 int send_cmd(const char *daemon, const char *json)
