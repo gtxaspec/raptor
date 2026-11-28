@@ -28,8 +28,9 @@ TEST_SRCS = main.c test_rtp_info.c test_rsd_net.c test_rsd_conn.c test_rsd_tls_i
             test_ivs_poll.c test_ivs_rate.c \
             test_ivs_raw.c ../rvd/rvd_ivs_raw.c \
             test_osd_pos.c ../rvd/rvd_osd_pos.c \
-            test_osd_pool.c ../rvd/rvd_osd_pool.c
-LIB_SRCS = ../ric/ric_json.c ../rsd/rsd_sendq.c ../rsd/rsd_backchannel.c ../rwd/rwd_sendq.c ../rwd/rwd_pacer.c ../rad/rad_clock.c ../rad/rad_resync.c ../rmr/rmr_nal.c ../rmr/rmr_prebuf.c ../rmr/rmr_mux.c ../rmr/rmr_gps.c ../rmr/rmr_io.c ../rcd/rcd_ethcam.c ../rcd/rcd_tsmap.c ../rtd/rtd_nmea.c ../rtd/rtd_sim.c ../rmr/rmr_sign.c ../rmr/rmr_timelapse.c ../../raptor-common/src/rss_media_clock.c ../../raptor-common/src/rss_vui.c ../../raptor-common/src/rss_sign.c ../../raptor-common/src/rss_jpeg.c ../../raptor-common/src/rss_aac.c ../rmr/rmr_storage.c ../rmr/rmr_streams.c \
+            test_osd_pool.c ../rvd/rvd_osd_pool.c \
+            test_rmd_track.c test_rmd_tracker.c
+LIB_SRCS = ../ric/ric_json.c ../rmd/rmd_track.c ../rmd/rmd_tracker.c ../rmd/rmd_ptz.c ../rsd/rsd_sendq.c ../rsd/rsd_backchannel.c ../rwd/rwd_sendq.c ../rwd/rwd_pacer.c ../rad/rad_clock.c ../rad/rad_resync.c ../rmr/rmr_nal.c ../rmr/rmr_prebuf.c ../rmr/rmr_mux.c ../rmr/rmr_gps.c ../rmr/rmr_io.c ../rcd/rcd_ethcam.c ../rcd/rcd_tsmap.c ../rtd/rtd_nmea.c ../rtd/rtd_sim.c ../rmr/rmr_sign.c ../rmr/rmr_timelapse.c ../../raptor-common/src/rss_media_clock.c ../../raptor-common/src/rss_vui.c ../../raptor-common/src/rss_sign.c ../../raptor-common/src/rss_jpeg.c ../../raptor-common/src/rss_aac.c ../rmr/rmr_storage.c ../rmr/rmr_streams.c \
            ../../raptor-common/src/rss_util.c ../../raptor-common/src/rss_log.c \
            ../../raptor-common/src/cJSON.c \
            ../../raptor-common/third_party/monocypher/monocypher.c \

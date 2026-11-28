@@ -1,4 +1,4 @@
-SRCS := rmd_main.c rmd_actions.c
+SRCS := rmd_main.c rmd_actions.c rmd_track.c rmd_tracker.c rmd_ptz.c
 OBJS := $(SRCS:.c=.o)
 BIN  := rmd
 

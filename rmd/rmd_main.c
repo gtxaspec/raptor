@@ -27,6 +27,7 @@ static void load_config(rmd_ctx_t *ctx)
 	ctx->settings.record_on_motion = rss_config_get_bool(cfg, "motion", "record", true);
 	ctx->settings.record_post_sec = rss_config_get_int(cfg, "motion", "record_post_sec", 30);
 	ctx->settings.gpio_pin = rss_config_get_int(cfg, "motion", "gpio_pin", -1);
+	rmd_track_load(ctx);
 }
 
 /* Send configured IVS parameters to RVD */
@@ -211,6 +212,11 @@ static int rmd_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	cJSON_AddNumberToObject(r, "sensitivity", ctx->settings.sensitivity);
 	cJSON_AddNumberToObject(r, "skip_frames", ctx->settings.skip_frames);
 	cJSON_AddNumberToObject(r, "persons", ctx->person_count);
+	cJSON_AddBoolToObject(r, "track", ctx->track_cfg.enabled);
+	if (ctx->track_cfg.enabled) {
+		cJSON_AddBoolToObject(r, "track_moving", ctx->track.moving);
+		cJSON_AddNumberToObject(r, "track_moves", ctx->track.moves);
+	}
 	return rss_ctrl_resp_json(resp_buf, resp_buf_size, r);
 }
 
@@ -281,6 +287,7 @@ int main(int argc, char **argv)
 	while (*ctx.running) {
 		bool motion = rmd_poll_motion(&ctx);
 		rmd_update_state(&ctx, motion);
+		rmd_track_step(&ctx);
 
 		if (epoll_fd >= 0) {
 			struct epoll_event events[4];
@@ -298,6 +305,7 @@ int main(int argc, char **argv)
 	RSS_INFO("rmd shutting down");
 
 cleanup:
+	rmd_track_shutdown(&ctx);
 	if (ctx.recording_active)
 		rmd_trigger_recording(&ctx, false);
 	rmd_gpio_set(&ctx, false);

@@ -1299,6 +1299,30 @@ TEST ivs_detections_blocked_when_inactive(void)
 	PASS();
 }
 
+/* rmd's tracker reads the frame the boxes are in and when they were made. */
+TEST ivs_detections_report_frame_and_time(void)
+{
+	setup();
+	atomic_store(&st.ivs_active, true);
+	st.ivs_w = 640;
+	st.ivs_h = 360;
+	memset(&st.ivs_detections, 0, sizeof(st.ivs_detections));
+	st.ivs_detections.count = 1;
+	st.ivs_detections.timestamp = 123456789;
+	st.ivs_detections.detections[0].box.p0_x = 10;
+	st.ivs_detections.detections[0].box.p1_x = 50;
+	st.ivs_detections.detections[0].class_id = 2;
+	call("{\"cmd\":\"ivs-detections\"}");
+	ASSERT(strstr(resp, "\"width\":640") != NULL);
+	ASSERT(strstr(resp, "\"height\":360") != NULL);
+	ASSERT(strstr(resp, "\"timestamp\":123456789") != NULL);
+	ASSERT(strstr(resp, "\"x1\":50") != NULL);
+	ASSERT(strstr(resp, "\"class\":2") != NULL);
+	atomic_store(&st.ivs_active, false);
+	teardown();
+	PASS();
+}
+
 TEST ivs_set_sensitivity_blocked_when_inactive(void)
 {
 	setup();
@@ -1464,6 +1488,7 @@ SUITE(ctrl_suite)
 
 	/* IVS gating */
 	RUN_TEST(ivs_detections_blocked_when_inactive);
+	RUN_TEST(ivs_detections_report_frame_and_time);
 	RUN_TEST(ivs_set_sensitivity_blocked_when_inactive);
 	RUN_TEST(ivs_status_works_regardless_of_active);
 
