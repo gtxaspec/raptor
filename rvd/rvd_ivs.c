@@ -551,7 +551,7 @@ static void *rvd_jzdl_thread(void *arg)
 	 * the length of an inference stalls the encoders when inference runs back
 	 * to back (T41 with an NNA backend: the main stream fell to 15 fps) */
 	size_t fsz = (size_t)st->streams[1].enc_cfg.width * st->streams[1].enc_cfg.height * 3 / 2;
-	uint8_t *copy = malloc(fsz);
+	uint8_t *copy = calloc(1, fsz);
 	if (!copy) {
 		RSS_ERROR("JZDL: no memory for a %zu-byte frame", fsz);
 		IMP_FrameSource_SetFrameDepth(fs, 0);
@@ -571,7 +571,7 @@ static void *rvd_jzdl_thread(void *arg)
 			continue;
 		}
 
-		memcpy(copy, (const void *)frame->virAddr, fsz);
+		memcpy(copy, (const void *)frame->virAddr, frame->size < fsz ? frame->size : fsz);
 		IMP_FrameSource_ReleaseFrame(fs, frame);
 
 		rss_ivs_detect_result_t result = {0};
