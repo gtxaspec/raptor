@@ -186,6 +186,15 @@ struct rvd_state {
 	_Atomic int ivs_person_count;
 	rss_ivs_detect_result_t ivs_detections; /* latest persondet results */
 	pthread_mutex_t ivs_det_lock;		/* protects ivs_detections */
+	/* save raw on the JZDL thread's channel: that thread owns the channel's
+	 * frame depth, so it copies one frame for the requester (rvd_ivs_grab_raw) */
+	pthread_mutex_t ivs_raw_lock;
+	pthread_cond_t ivs_raw_cond;
+	_Atomic bool ivs_raw_want;
+	uint8_t *ivs_raw_buf;
+	size_t ivs_raw_cap;
+	uint32_t ivs_raw_size, ivs_raw_w, ivs_raw_h;
+	bool ivs_raw_done;
 };
 
 /* rvd_pipeline.c */
@@ -246,5 +255,8 @@ void rvd_ivs_pause(rvd_state_t *st);
 void rvd_ivs_resume(rvd_state_t *st);
 void rvd_ivs_deinit(rvd_state_t *st);
 void *rvd_ivs_thread(void *arg);
+bool rvd_ivs_owns_fs(rvd_state_t *st, int fs_chn);
+int rvd_ivs_grab_raw(rvd_state_t *st, uint8_t *buf, size_t cap, uint32_t *size, uint32_t *w,
+		     uint32_t *h, int timeout_ms);
 
 #endif /* RVD_H */
