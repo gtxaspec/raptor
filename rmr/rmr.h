@@ -184,6 +184,7 @@ struct rmr_state {
 	volatile sig_atomic_t *running;
 	_Atomic bool recording;	     /* continuous recording active */
 	_Atomic bool clip_recording; /* motion clip active */
+	_Atomic bool armed;	     /* recording switched on: config, enable, disable */
 };
 
 #endif /* RMR_H */

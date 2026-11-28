@@ -745,6 +745,7 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		return rss_ctrl_resp_error(resp_buf, resp_buf_size, "missing cmd");
 
 	if (strcmp(cmd, "enable") == 0) {
+		atomic_store(&st->armed, true);
 		atomic_store(&st->recording, true);
 		if (st->mode == RMR_MODE_BOTH)
 			atomic_store(&st->clip_recording, true);
@@ -752,6 +753,7 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 	if (strcmp(cmd, "disable") == 0) {
+		atomic_store(&st->armed, false);
 		atomic_store(&st->recording, false);
 		atomic_store(&st->clip_recording, false);
 		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
@@ -770,6 +772,10 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 	if (strcmp(cmd, "start") == 0) {
+		/* A trigger records only while recording is switched on:
+		 * this daemon also runs for the timelapse alone. */
+		if (!atomic_load(&st->armed))
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "recording is off");
 		if (st->mode == RMR_MODE_MOTION)
 			atomic_store(&st->recording, true);
 		if (st->mode == RMR_MODE_BOTH)
@@ -792,6 +798,7 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "alloc");
 		cJSON_AddBoolToObject(r, "recording", atomic_load(&st->recording));
 		cJSON_AddBoolToObject(r, "clip", atomic_load(&st->clip_recording));
+		cJSON_AddBoolToObject(r, "enabled", atomic_load(&st->armed));
 		cJSON_AddStringToObject(r, "mode", mode_names[st->mode]);
 		cJSON_AddStringToObject(r, "storage_path", rmr_storage_path(st->storage));
 		cJSON_AddStringToObject(r, "file", t0->segment_path);
@@ -1116,6 +1123,13 @@ static int track_attach(rmr_state_t *st, rmr_track_t *t)
 	return 0;
 }
 
+/* In motion mode the recording flag is the clip's trigger alone: the
+ * event is written once, as a clip, not also as a segment. */
+static bool segment_wanted(rmr_state_t *st)
+{
+	return atomic_load(&st->recording) && st->mode != RMR_MODE_MOTION;
+}
+
 static bool clip_wanted(rmr_state_t *st)
 {
 	if (st->mode == RMR_MODE_BOTH)
@@ -1291,7 +1305,7 @@ static void track_write_clip(rmr_track_t *t, bool clip_want, const rss_ring_slot
 static void track_frame(rmr_state_t *st, rmr_track_t *t, uint32_t length,
 			const rss_ring_slot_t *meta)
 {
-	bool rec = atomic_load(&st->recording);
+	bool rec = segment_wanted(st);
 
 	/* The encoder's frame counter exposes every frame that never
 	 * reached rmr (ring overflow, producer drops) */
@@ -1625,7 +1639,7 @@ static void record_loop(rmr_state_t *st)
 		telematics_poll(st);
 		io_service(st);
 
-		bool rec = atomic_load(&st->recording);
+		bool rec = segment_wanted(st);
 		bool clip_want = clip_wanted(st);
 		int busy = 0;
 		for (int i = 0; i < st->track_count; i++) {
@@ -1702,6 +1716,7 @@ int main(int argc, char **argv)
 	st.running = dctx.running;
 	st.tl_fd = -1;
 	st.tl_enabled = tl_enabled;
+	atomic_store(&st.armed, rec_enabled);
 	rmr_tl_init(&st.tl, rss_config_get_int(dctx.cfg, "timelapse", "interval", 10),
 		    rss_config_get_int(dctx.cfg, "timelapse", "playback_fps", 30),
 		    rss_config_get_int(dctx.cfg, "timelapse", "file_frames", 0));
