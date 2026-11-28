@@ -767,6 +767,10 @@ static int rmr_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 	}
 
 	if (strcmp(cmd, "resume") == 0) {
+		/* Only undoes a pause: after "disable" (or with recording off in the
+		 * config) it must not switch recording back on. */
+		if (!atomic_load(&st->armed))
+			return rss_ctrl_resp_error(resp_buf, resp_buf_size, "recording is off");
 		atomic_store(&st->recording, true);
 		return rss_ctrl_resp_ok(resp_buf, resp_buf_size);
 	}

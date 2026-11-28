@@ -490,6 +490,7 @@ start_daemon rod "$OUT/rod" -c "$CONFIG" -f -d
 start_daemon ric "$OUT/ric" -c "$CONFIG" -f -d
 start_daemon rtd "$OUT/rtd" -c "$CONFIG" -f -d
 start_daemon rmr "$OUT/rmr" -c "$CONFIG" -f -d
+RMR_PID=${DAEMON_PIDS##* }
 
 # Let daemons settle
 sleep 2
@@ -1593,9 +1594,10 @@ sed -e 's|^mode = continuous|mode = motion|' \
     "$CONFIG" > "$MOTION_CONFIG"
 rm -rf "$LOG_DIR/rec-motion"
 mkdir -p "$LOG_DIR/rec-motion/clips"
-pkill -f "$OUT/rmr -c" 2>/dev/null || true
-sleep 1
+kill "$RMR_PID" 2>/dev/null || true
+wait "$RMR_PID" 2>/dev/null || true
 start_daemon rmr-motion "$OUT/rmr" -c "$MOTION_CONFIG" -f -d
+RMR_PID=${DAEMON_PIDS##* }
 sleep 2
 check_contains "rmr status reports motion mode" '"mode":"motion"' "$OUT/raptorctl" rmr status
 "$OUT/raptorctl" test-motion 4 > "$LOG_DIR/test-motion.out" 2>&1 || true
@@ -1616,6 +1618,9 @@ fi
 "$OUT/raptorctl" rmr disable > /dev/null 2>&1
 check_contains "motion trigger refused while recording is off" "recording is off" \
     "$OUT/raptorctl" test-motion 2
+check_contains "resume refused after disable" "recording is off" "$OUT/raptorctl" rmr resume
+check_contains "disabled: resume left recording off" '"recording":false' "$OUT/raptorctl" rmr status
+check_contains "status reports recording as off" '"enabled":false' "$OUT/raptorctl" rmr status
 sleep 1
 CLIPS_AFTER=$(find "$LOG_DIR/rec-motion/clips" -name '*.mp4' 2>/dev/null | wc -l)
 if [ "$CLIPS_AFTER" -eq "$CLIPS" ]; then
@@ -1623,8 +1628,8 @@ if [ "$CLIPS_AFTER" -eq "$CLIPS" ]; then
 else
     fail "refused trigger writes no clip" "$CLIPS clip(s) before, $CLIPS_AFTER after"
 fi
-pkill -f "$OUT/rmr -c $MOTION_CONFIG" 2>/dev/null || true
-sleep 1
+kill "$RMR_PID" 2>/dev/null || true
+wait "$RMR_PID" 2>/dev/null || true
 
 # Mode both, paused: "pause" stops continuous recording only, and a
 # trigger must still write its clip (a parked dashcam records impacts
@@ -1636,6 +1641,7 @@ sed -e 's|^mode = continuous|mode = both|'     -e "s|^storage_path = .*|storage_
 rm -rf "$LOG_DIR/rec-both"
 mkdir -p "$LOG_DIR/rec-both/clips"
 start_daemon rmr-both "$OUT/rmr" -c "$BOTH_CONFIG" -f -d
+RMR_PID=${DAEMON_PIDS##* }
 sleep 2
 check_contains "rmr pause (mode both)" "ok" "$OUT/raptorctl" rmr pause
 check_contains "paused: continuous off, recording still on" '"recording":false,"clip":false,"enabled":true'     "$OUT/raptorctl" rmr status
@@ -1649,9 +1655,10 @@ else
     fail "trigger while paused writes a clip" "$BOTH_CLIPS clip(s) before, $BOTH_AFTER after"
 fi
 check_contains "still paused after the clip" '"recording":false' "$OUT/raptorctl" rmr status
-pkill -f "$OUT/rmr -c $BOTH_CONFIG" 2>/dev/null || true
-sleep 1
+kill "$RMR_PID" 2>/dev/null || true
+wait "$RMR_PID" 2>/dev/null || true
 start_daemon rmr "$OUT/rmr" -c "$CONFIG" -f -d
+RMR_PID=${DAEMON_PIDS##* }
 sleep 1
 
 # ── ONVIF backchannel: client audio reaches the speaker ring ──
