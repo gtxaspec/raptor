@@ -12,6 +12,8 @@
 #include <stdatomic.h>
 #include <stdio.h>
 
+#include "rvd_ivs_raw.h"
+
 #define RVD_MAX_SENSORS		3
 #define RVD_MAX_STREAMS		(RVD_MAX_SENSORS * 4) /* main+sub+jpeg0+jpeg1 per sensor */
 #define RVD_MAX_JPEG		(RVD_MAX_SENSORS * 2)
@@ -188,13 +190,7 @@ struct rvd_state {
 	pthread_mutex_t ivs_det_lock;		/* protects ivs_detections */
 	/* save raw on the JZDL thread's channel: that thread owns the channel's
 	 * frame depth, so it copies one frame for the requester (rvd_ivs_grab_raw) */
-	pthread_mutex_t ivs_raw_lock;
-	pthread_cond_t ivs_raw_cond;
-	_Atomic bool ivs_raw_want;
-	uint8_t *ivs_raw_buf;
-	size_t ivs_raw_cap;
-	uint32_t ivs_raw_size, ivs_raw_w, ivs_raw_h;
-	bool ivs_raw_done;
+	rvd_ivs_raw_t ivs_raw;
 };
 
 /* rvd_pipeline.c */

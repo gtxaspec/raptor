@@ -46,6 +46,7 @@ extern SUITE(rhd_slots_suite);
 extern SUITE(streams_suite);
 extern SUITE(ivs_poll_suite);
 extern SUITE(ivs_rate_suite);
+extern SUITE(ivs_raw_suite);
 
 GREATEST_MAIN_DEFS();
 
@@ -98,5 +99,6 @@ int main(int argc, char **argv)
 	RUN_SUITE(ivs_poll_suite);
 	RUN_SUITE(ethcam_suite);
 	RUN_SUITE(ivs_rate_suite);
+	RUN_SUITE(ivs_raw_suite);
 	GREATEST_MAIN_END();
 }

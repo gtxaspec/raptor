@@ -76,8 +76,8 @@ int rvd_ivs_init(rvd_state_t *st)
 	st->ivs_chn = IVS_CHN;
 	st->ivs_fs_chn = st->streams[1].fs_chn;
 	pthread_mutex_init(&st->ivs_det_lock, NULL);
-	pthread_mutex_init(&st->ivs_raw_lock, NULL);
-	pthread_cond_init(&st->ivs_raw_cond, NULL);
+	if (rvd_ivs_raw_init(&st->ivs_raw) != 0)
+		RSS_WARN("IVS: save raw on the JZDL channel unavailable");
 
 	int ret = RSS_HAL_CALL(st->ops, ivs_create_group, st->hal_ctx, IVS_GRP);
 	if (ret != 0) {
@@ -356,10 +356,10 @@ void rvd_ivs_deinit(rvd_state_t *st)
 	if (!atomic_load(&st->ivs_active))
 		return;
 
+	/* a save raw still waiting for the JZDL thread must leave first */
+	rvd_ivs_raw_close(&st->ivs_raw);
 	RSS_HAL_CALL(st->ops, ivs_destroy_group, st->hal_ctx, st->ivs_grp);
 	pthread_mutex_destroy(&st->ivs_det_lock);
-	pthread_mutex_destroy(&st->ivs_raw_lock);
-	pthread_cond_destroy(&st->ivs_raw_cond);
 
 	atomic_store(&st->ivs_active, false);
 	RSS_INFO("IVS: deinitialized");
@@ -533,21 +533,12 @@ static void ivs_process_persondet_result(rvd_state_t *st, void *result)
 
 #ifdef IVS_DETECT
 /* A pending save raw on this channel: copy the frame for it (rvd_ivs_grab_raw) */
-static void rvd_ivs_raw_serve(rvd_state_t *st, const IMPFrameInfo *frame)
+static void rvd_ivs_raw_serve_frame(rvd_state_t *st, const IMPFrameInfo *frame)
 {
-	if (!atomic_load(&st->ivs_raw_want))
+	if (!rvd_ivs_raw_wanted(&st->ivs_raw))
 		return;
-	pthread_mutex_lock(&st->ivs_raw_lock);
-	if (st->ivs_raw_buf && !st->ivs_raw_done) {
-		size_t n = frame->size < st->ivs_raw_cap ? frame->size : st->ivs_raw_cap;
-		memcpy(st->ivs_raw_buf, (const void *)(uintptr_t)frame->virAddr, n);
-		st->ivs_raw_size = (uint32_t)n;
-		st->ivs_raw_w = frame->width;
-		st->ivs_raw_h = frame->height;
-		st->ivs_raw_done = true;
-		pthread_cond_broadcast(&st->ivs_raw_cond);
-	}
-	pthread_mutex_unlock(&st->ivs_raw_lock);
+	rvd_ivs_raw_serve(&st->ivs_raw, (const void *)(uintptr_t)frame->virAddr, frame->size,
+			  frame->width, frame->height);
 }
 
 /*
@@ -589,7 +580,7 @@ static void *rvd_jzdl_thread(void *arg)
 			usleep(100000);
 			continue;
 		}
-		rvd_ivs_raw_serve(st, frame);
+		rvd_ivs_raw_serve_frame(st, frame);
 
 		if (!rvd_ivs_rate_due(&rate, rss_timestamp_us())) {
 			IMP_FrameSource_ReleaseFrame(fs, frame);
@@ -704,35 +695,5 @@ bool rvd_ivs_owns_fs(rvd_state_t *st, int fs_chn)
 int rvd_ivs_grab_raw(rvd_state_t *st, uint8_t *buf, size_t cap, uint32_t *size, uint32_t *w,
 		     uint32_t *h, int timeout_ms)
 {
-	struct timespec dl;
-	clock_gettime(CLOCK_REALTIME, &dl);
-	dl.tv_sec += timeout_ms / 1000;
-	dl.tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
-	if (dl.tv_nsec >= 1000000000L) {
-		dl.tv_sec++;
-		dl.tv_nsec -= 1000000000L;
-	}
-	int ret = 0;
-	pthread_mutex_lock(&st->ivs_raw_lock);
-	while (st->ivs_raw_buf && ret == 0) /* one request at a time */
-		ret = pthread_cond_timedwait(&st->ivs_raw_cond, &st->ivs_raw_lock, &dl);
-	if (ret == 0) {
-		st->ivs_raw_buf = buf;
-		st->ivs_raw_cap = cap;
-		st->ivs_raw_done = false;
-		atomic_store(&st->ivs_raw_want, true);
-		while (!st->ivs_raw_done && ret == 0)
-			ret = pthread_cond_timedwait(&st->ivs_raw_cond, &st->ivs_raw_lock, &dl);
-		if (st->ivs_raw_done) {
-			*size = st->ivs_raw_size;
-			*w = st->ivs_raw_w;
-			*h = st->ivs_raw_h;
-			ret = 0;
-		}
-		st->ivs_raw_buf = NULL;
-		atomic_store(&st->ivs_raw_want, false);
-		pthread_cond_broadcast(&st->ivs_raw_cond);
-	}
-	pthread_mutex_unlock(&st->ivs_raw_lock);
-	return ret == 0 ? 0 : -1;
+	return rvd_ivs_raw_grab(&st->ivs_raw, buf, cap, size, w, h, timeout_ms);
 }
