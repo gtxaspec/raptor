@@ -315,6 +315,28 @@ void rvd_ivs_resume(rvd_state_t *st)
 	(void)st;
 }
 
+/* `save raw` on the JZDL channel asks the IVS thread for its frame; that
+ * lives in rvd_ivs.c, which this binary doesn't link. No IVS here. */
+bool rvd_ivs_owns_fs(rvd_state_t *st, int fs_chn)
+{
+	(void)st;
+	(void)fs_chn;
+	return false;
+}
+
+int rvd_ivs_grab_raw(rvd_state_t *st, uint8_t *buf, size_t cap, uint32_t *size, uint32_t *w,
+		     uint32_t *h, int timeout_ms)
+{
+	(void)st;
+	(void)buf;
+	(void)cap;
+	(void)size;
+	(void)w;
+	(void)h;
+	(void)timeout_ms;
+	return RSS_ERR_NOTSUP;
+}
+
 void *rvd_ivs_thread(void *arg)
 {
 	(void)arg;
