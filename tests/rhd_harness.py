@@ -285,6 +285,36 @@ def https_legs():
     check("https daemon exits cleanly (rc=%s)" % rc, rc == 0)
 
 
+def failclosed_legs():
+    """https = true with no usable certificate: serve nothing rather than plaintext."""
+    print("-- https without a usable certificate", flush=True)
+    conf = os.path.join(WORK, "failclosed.conf")
+    log = os.path.join(WORK, "failclosed.rhd.log")
+    with open(conf, "w") as f:
+        f.write("[log]\nlevel = warn\n\n[http]\nport = %d\nhttps = true\n"
+                "cert = %s/missing.pem\nkey = %s/missing.key\nusername = u\npassword = p\n"
+                % (PORT, WORK, WORK))
+    proc = subprocess.Popen([RHD_BIN, "-c", conf, "-f"], stdout=open(log, "w"),
+                            stderr=subprocess.STDOUT, env=ENV)
+    listened = False
+    end = time.time() + 8
+    while time.time() < end and proc.poll() is None:
+        try:
+            socket.create_connection(("127.0.0.1", PORT), timeout=0.3).close()
+            listened = True
+            break
+        except OSError:
+            time.sleep(0.2)
+    try:
+        rc = proc.wait(5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        rc = proc.wait()
+    text = open(log, errors="replace").read()
+    check("rhd refuses to start", rc not in (0, None) and not listened, "rc=%s listened=%s" % (rc, listened))
+    check("the reason is logged", "refusing to serve HTTP in the clear" in text, text[-300:])
+
+
 def http_legs():
     print("-- http", flush=True)
     d = Rhd("http")
@@ -358,6 +388,8 @@ def main():
         https_legs()
     if which in ("all", "http"):
         http_legs()
+    if which in ("all", "failclosed"):
+        failclosed_legs()
     print("%d passed, %d failed" % (PASS, len(FAILED)))
     for n in FAILED:
         print("  FAILED: " + n)

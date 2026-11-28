@@ -1261,14 +1261,24 @@ int main(int argc, char **argv)
 		const char *key =
 			rss_config_get_str(ctx.cfg, "http", "key", "/etc/ssl/private/uhttpd.key");
 		srv.tls = rss_tls_init(cert, key);
-		if (srv.tls)
-			RSS_INFO("HTTPS enabled");
-		else
-			RSS_WARN("HTTPS init failed, falling back to HTTP");
+		if (!srv.tls) {
+			/* Plaintext on a port meant for HTTPS would expose the
+			 * Basic-auth password and every image */
+			RSS_FATAL("https = true but cert/key not usable (cert=%s, key=%s); "
+				  "refusing to serve HTTP in the clear",
+				  cert, key);
+			ret = 1;
+			goto cleanup;
+		}
+		RSS_INFO("HTTPS enabled");
 	}
 #else
-	if (rss_config_get_bool(ctx.cfg, "http", "https", false))
-		RSS_WARN("config requests https but rhd was built without TLS; serving plain HTTP");
+	if (rss_config_get_bool(ctx.cfg, "http", "https", false)) {
+		RSS_FATAL("https = true but rhd was built without TLS; "
+			  "refusing to serve HTTP in the clear");
+		ret = 1;
+		goto cleanup;
+	}
 	if (http_user[0])
 		RSS_WARN("HTTP Basic auth without TLS -- credentials sent in plaintext");
 #endif
@@ -1287,5 +1297,5 @@ cleanup:
 #endif
 	rss_config_free(ctx.cfg);
 	rss_daemon_cleanup("rhd");
-	return 0;
+	return ret;
 }
