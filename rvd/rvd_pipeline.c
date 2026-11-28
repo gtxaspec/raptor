@@ -2235,7 +2235,11 @@ static int extra_attach_one(rvd_state_t *st, int slot)
 		return ret;
 	}
 
+	/* The OSD thread walks streams[] up to stream_count under osd_lock:
+	 * publishing the slot is what hands it over, so do it under the lock. */
+	pthread_mutex_lock(&st->osd_lock);
 	st->stream_count = idx + 1;
+	pthread_mutex_unlock(&st->osd_lock);
 	RSS_INFO("extra [%s]: attached as stream%d (%ux%u, enc chn %d, ring %s)", s->cfg_sect, idx,
 		 s->enc_cfg.width, s->enc_cfg.height, s->chn, s->ring_type);
 	return RSS_OK;
@@ -2260,7 +2264,11 @@ void rvd_extra_detach(rvd_state_t *st)
 			break;
 
 		rvd_stream_stop(st, idx);
+		/* Withdrawn under osd_lock: once this returns the OSD thread no
+		 * longer reads the slot, which the memset below then clears. */
+		pthread_mutex_lock(&st->osd_lock);
 		st->stream_count = idx;
+		pthread_mutex_unlock(&st->osd_lock);
 		rvd_stream_deinit(st, idx);
 		RSS_HAL_CALL(st->ops, fs_destroy_channel, st->hal_ctx, s->fs_chn);
 		/* keep runtime bitrate/fps/size changes for the next attach */
