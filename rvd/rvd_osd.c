@@ -36,8 +36,6 @@
 
 #define STREAM_ISP_OSD(st, s) ((st)->use_isp_osd && (st)->streams[s].fs_chn % 3 == 0)
 
-#define OSD_MARGIN	      10
-
 /*
  * Resolve position for an element. Lookup chain:
  *   1. stream{N}_{name}_pos in [osd] (set by ROD's osd-position IPC)
@@ -59,69 +57,6 @@ static const char *resolve_position(rss_config_t *cfg, int s, const char *name)
 		return pos;
 
 	return "top_left";
-}
-
-void rvd_osd_calc_position(int stream_w, int stream_h, int region_w, int region_h,
-			   const char *pos_str, int *out_x, int *out_y)
-{
-	if (pos_str) {
-		int x, y;
-		if (sscanf(pos_str, "%d,%d", &x, &y) == 2) {
-			*out_x = x;
-			*out_y = y;
-			goto clamp;
-		}
-	}
-
-	const char *p = pos_str ? pos_str : "top_left";
-
-	if (strcmp(p, "top_left") == 0) {
-		*out_x = OSD_MARGIN;
-		*out_y = OSD_MARGIN;
-	} else if (strcmp(p, "top_center") == 0) {
-		*out_x = (stream_w - region_w) / 2;
-		*out_y = OSD_MARGIN;
-	} else if (strcmp(p, "top_right") == 0) {
-		*out_x = stream_w - region_w - OSD_MARGIN;
-		*out_y = OSD_MARGIN;
-	} else if (strcmp(p, "bottom_left") == 0) {
-		*out_x = OSD_MARGIN;
-		*out_y = stream_h - region_h - OSD_MARGIN;
-	} else if (strcmp(p, "bottom_center") == 0) {
-		*out_x = (stream_w - region_w) / 2;
-		*out_y = stream_h - region_h - OSD_MARGIN;
-	} else if (strcmp(p, "bottom_right") == 0) {
-		*out_x = stream_w - region_w - OSD_MARGIN;
-		*out_y = stream_h - region_h - OSD_MARGIN;
-	} else if (strcmp(p, "left_center") == 0) {
-		*out_x = OSD_MARGIN;
-		*out_y = (stream_h - region_h) / 2;
-	} else if (strcmp(p, "right_center") == 0) {
-		*out_x = stream_w - region_w - OSD_MARGIN;
-		*out_y = (stream_h - region_h) / 2;
-	} else if (strcmp(p, "center") == 0) {
-		*out_x = (stream_w - region_w) / 2;
-		*out_y = (stream_h - region_h) / 2;
-	} else {
-		*out_x = OSD_MARGIN;
-		*out_y = OSD_MARGIN;
-	}
-
-clamp:
-	if (*out_x < OSD_MARGIN)
-		*out_x = OSD_MARGIN;
-	if (*out_y < OSD_MARGIN)
-		*out_y = OSD_MARGIN;
-	if (*out_x + region_w > stream_w - OSD_MARGIN)
-		*out_x = stream_w - region_w - OSD_MARGIN;
-	if (*out_y + region_h > stream_h - OSD_MARGIN)
-		*out_y = stream_h - region_h - OSD_MARGIN;
-	if (*out_x < OSD_MARGIN)
-		*out_x = OSD_MARGIN;
-	if (*out_y < OSD_MARGIN)
-		*out_y = OSD_MARGIN;
-	*out_x &= ~1;
-	*out_y &= ~1;
 }
 
 /* ── Region lookup ── */
