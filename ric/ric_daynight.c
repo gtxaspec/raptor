@@ -236,6 +236,97 @@ static void gpio_set(int pin, int value)
 	close(fd);
 }
 
+/* ── PWM via the kernel's sysfs class ──
+ *
+ * An IR bank wired to a PWM output has no pin to switch. Its channel is
+ * exported, parked dark and left enabled; lit and dark are then one
+ * duty_cycle write each. One chip is assumed, pwmchip0.
+ */
+#define PWM_CHIP "/sys/class/pwm/pwmchip0"
+
+static long long pwm_read(int ch, const char *attr)
+{
+	char path[80];
+	snprintf(path, sizeof(path), PWM_CHIP "/pwm%d/%s", ch, attr);
+	int fd = open(path, O_RDONLY);
+	if (fd < 0) {
+		RSS_WARN("pwm %d %s: cannot open: %s", ch, attr, strerror(errno));
+		return -1;
+	}
+	char buf[24];
+	ssize_t n = read(fd, buf, sizeof(buf) - 1);
+	if (n <= 0) {
+		RSS_WARN("pwm %d %s: read failed: %s", ch, attr, n < 0 ? strerror(errno) : "empty");
+		close(fd);
+		return -1;
+	}
+	close(fd);
+	buf[n] = '\0';
+	return strtoll(buf, NULL, 10);
+}
+
+static void pwm_write(int ch, const char *attr, long long value)
+{
+	char path[80];
+	snprintf(path, sizeof(path), PWM_CHIP "/pwm%d/%s", ch, attr);
+	int fd = open(path, O_WRONLY);
+	if (fd < 0) {
+		/* As loud as a failed write, for the reason gpio_set gives:
+		 * this is an LED bank silently not lighting. */
+		RSS_WARN("pwm %d %s: cannot open: %s", ch, attr, strerror(errno));
+		return;
+	}
+	/* Newline-terminated, as echo writes it: the number is delimited
+	 * whatever the attribute held before. */
+	char buf[24];
+	int len = snprintf(buf, sizeof(buf), "%lld\n", value);
+	if (write(fd, buf, len) < 0)
+		RSS_WARN("pwm %d %s=%lld: write failed: %s", ch, attr, value, strerror(errno));
+	close(fd);
+}
+
+/*
+ * Export the channel if it is not there yet and park it dark: duty 0,
+ * the configured period, enabled. The kernel refuses any state whose
+ * duty exceeds its period, and older kernels any state with no period
+ * at all, so the order depends on where the channel stands. A fresh
+ * export reads period 0 and takes the period first -- a duty write
+ * there is EINVAL, even of 0. A channel that already has a period (ric
+ * restarted, or something lit it before ric ran) takes duty 0 first,
+ * since the new period may be shorter than the duty in force.
+ */
+static void pwm_park(int ch, int period_ns)
+{
+	char path[80];
+	snprintf(path, sizeof(path), PWM_CHIP "/pwm%d/period", ch);
+	if (access(path, F_OK) == 0) {
+		RSS_DEBUG("pwm %d already exported", ch);
+	} else {
+		char buf[16];
+		int len = snprintf(buf, sizeof(buf), "%d", ch);
+		int fd = open(PWM_CHIP "/export", O_WRONLY);
+		if (fd < 0) {
+			RSS_WARN("pwm %d export: cannot open: %s", ch, strerror(errno));
+			return;
+		}
+		if (write(fd, buf, len) < 0)
+			RSS_WARN("pwm %d export: %s", ch, strerror(errno));
+		close(fd);
+	}
+
+	long long in_force = pwm_read(ch, "period");
+	if (in_force < 0)
+		return; /* named above; the writes below would only repeat it */
+	if (in_force == 0) {
+		pwm_write(ch, "period", period_ns);
+		pwm_write(ch, "duty_cycle", 0);
+	} else {
+		pwm_write(ch, "duty_cycle", 0);
+		pwm_write(ch, "period", period_ns);
+	}
+	pwm_write(ch, "enable", 1);
+}
+
 void ric_gpio_init(ric_state_t *st)
 {
 	gpio_export(st->settings.gpio_ircut);
@@ -252,6 +343,12 @@ void ric_gpio_init(ric_state_t *st)
 		gpio_export(st->settings.gpio_irled2);
 		gpio_set(st->settings.gpio_irled2, st->settings.irled2_active_low ? 1 : 0);
 	}
+	/* PWM banks are parked the same way, for the same reason: whatever
+	 * duty the channel was left at stays lit until the first transition. */
+	if (st->settings.pwm_irled >= 0)
+		pwm_park(st->settings.pwm_irled, st->settings.pwm_period_ns);
+	if (st->settings.pwm_irled2 >= 0)
+		pwm_park(st->settings.pwm_irled2, st->settings.pwm_period_ns);
 }
 
 /*
@@ -326,13 +423,27 @@ int ric_ircut_drive(ric_state_t *st, ric_mode_t pos)
  * ir850/ir940 enable flags: those gate what the AUTOMATIC transitions
  * do, while a manual command is explicit human intent -- lighting a
  * disabled bank from the shell is exactly what bench debugging needs.
- * Returns -1 when the bank has no pin.
+ * Returns -1 when the bank has neither a pin nor a PWM channel.
+ *
+ * A PWM bank is lit at its level, a percentage of the period, and dark
+ * at duty 0 with the channel left enabled: the level of a disabled
+ * channel's output is the driver's choice, and not every driver idles
+ * low.
  */
 int ric_irled_drive(ric_state_t *st, bool bank940, bool on)
 {
 	ric_config_t *c = &st->settings;
 	int pin = bank940 ? c->gpio_irled2 : c->gpio_irled;
+	int pwm = bank940 ? c->pwm_irled2 : c->pwm_irled;
 
+	if (pwm >= 0) {
+		int level = bank940 ? c->pwm_irled2_level : c->pwm_irled_level;
+		long long duty = on ? (long long)c->pwm_period_ns * level / 100 : 0;
+		pwm_write(pwm, "duty_cycle", duty);
+		RSS_INFO("%s: pwm %d duty_cycle=%lld of %dns (%s)", bank940 ? "ir940" : "ir850",
+			 pwm, duty, c->pwm_period_ns, on ? "on" : "off");
+		return 0;
+	}
 	if (pin < 0)
 		return -1;
 	bool alow = bank940 ? c->irled2_active_low : c->irled_active_low;
@@ -792,8 +903,9 @@ void ric_poll_exposure(ric_state_t *st)
 		 * lifts luma over the threshold, day mode cuts the LEDs,
 		 * the scene goes dark again, and the filter clicks all
 		 * night. */
-		bool ir_banks = (st->settings.gpio_irled >= 0 && st->settings.ir850_enabled) ||
-				(st->settings.gpio_irled2 >= 0 && st->settings.ir940_enabled);
+		bool ir_banks =
+			(ric_irled_present(&st->settings, false) && st->settings.ir850_enabled) ||
+			(ric_irled_present(&st->settings, true) && st->settings.ir940_enabled);
 		bool ir_lit = ir_banks && st->current_mode == RIC_MODE_NIGHT && !st->probe_active;
 
 		/* The running max must not learn from a probe: with the IR

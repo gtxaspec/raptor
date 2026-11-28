@@ -12,6 +12,9 @@ touches is ours:
   - /sys/class/gpio/gpioN  -> pre-created files on a tmpfs. gpio_export()
     sees direction already present and takes the already-exported path, so
     every actuation is a plain file write we can watch with inotify.
+  - /sys/class/pwm/pwmchip0/pwmN -> the same trick for IR banks on a PWM
+    output: pwm_park() sees pwmN/period and skips the export, and every
+    period, duty_cycle and enable write is a watched file write.
   - /dev/ingenic_adc_aux_N -> only for the ADC scenario, via the LD_PRELOAD
     shim (ric_adc_shim.c) redirecting to a backing file.
 
@@ -39,6 +42,11 @@ RUN_DIR = "/var/run/rss"
 GPIO_ROOT = "/sys/class/gpio"
 IRCUT1, IRCUT2, IRLED, IRLED2 = 52, 53, 49, 50
 PINS = (IRCUT1, IRCUT2, IRLED, IRLED2)
+PWM_ROOT = "/sys/class/pwm"
+PWM_CHIP = PWM_ROOT + "/pwmchip0"
+PWM_IRLED, PWM_IRLED2, PWM_ALT = 2, 3, 5
+PWM_CHANNELS = (PWM_IRLED, PWM_IRLED2, PWM_ALT)
+PWM_ABSENT = 7  # never created: the channel ric has to export itself
 WORK = os.environ.get("RIC_TEST_WORK", "/tmp/ric-test")
 RIC_BIN = os.environ.get("RIC_BIN", "asan-out/ric")
 ADC_PRELOAD = os.environ.get("RIC_ADC_PRELOAD", "")
@@ -68,6 +76,20 @@ def mount_tmpfs(target):
     subprocess.run(["mount", "-t", "tmpfs", "none", target], check=True)
 
 
+def pwm_reset(ch, period=0, duty=0, enable=0):
+    """Put a fake PWM channel into a known state; the default is what the
+    kernel hands out on a fresh export (no period, no duty, disabled).
+    Each file is staged outside the channel directory and renamed in, so
+    the reset itself never shows up as a write in the PwmWatch stream."""
+    d = "%s/pwm%d" % (PWM_CHIP, ch)
+    os.makedirs(d, exist_ok=True)
+    for name, val in (("period", period), ("duty_cycle", duty), ("enable", enable)):
+        tmp = "%s/stage/%s" % (PWM_ROOT, name)
+        with open(tmp, "w") as f:
+            f.write("%d\n" % val)
+        os.replace(tmp, "%s/%s" % (d, name))
+
+
 def setup_sandbox():
     mount_tmpfs("/sys")
     os.makedirs(GPIO_ROOT)
@@ -80,6 +102,14 @@ def setup_sandbox():
         with open(d + "/value", "w") as f:
             f.write("0")
     open(GPIO_ROOT + "/export", "w").close()
+    # pwm_park() checks access(pwmN/period) the same way. PWM_ABSENT gets
+    # no directory: that channel takes the export path, and since a plain
+    # file exports nothing, the failure path after it.
+    os.makedirs(PWM_CHIP)
+    os.makedirs(PWM_ROOT + "/stage")
+    for ch in PWM_CHANNELS:
+        pwm_reset(ch)
+    open(PWM_CHIP + "/export", "w").close()
     mount_tmpfs("/run")
     os.makedirs(RUN_DIR, exist_ok=True)
     os.makedirs(WORK, exist_ok=True)
@@ -316,6 +346,60 @@ class GpioWatch:
             return [e for e in self.events[mark:] if e[2] == fname]
 
 
+class PwmWatch:
+    """GpioWatch for the fake pwmchip0: every attribute write on a
+    channel, plus writes to the chip's export file (channel None).
+    Content is the first line: ric newline-terminates what it writes,
+    and a plain file keeps the tail of a longer number it held before."""
+
+    def __init__(self):
+        import ctypes
+
+        self.libc = ctypes.CDLL(None, use_errno=True)
+        self.fd = self.libc.inotify_init1(0)
+        if self.fd < 0:
+            raise OSError("inotify_init1 failed")
+        self.wd_dir = {}  # wd -> (directory, channel)
+        dirs = [(PWM_CHIP, None)]
+        dirs += [("%s/pwm%d" % (PWM_CHIP, ch), ch) for ch in PWM_CHANNELS]
+        for d, ch in dirs:
+            wd = self.libc.inotify_add_watch(self.fd, d.encode(), IN_CLOSE_WRITE)
+            self.wd_dir[wd] = (d, ch)
+        self.events = []  # (monotonic, channel, fname, content)
+        self.lock = threading.Lock()
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    def _loop(self):
+        while True:
+            r, _, _ = select.select([self.fd], [], [], 0.2)
+            if not r:
+                continue
+            data = os.read(self.fd, 4096)
+            t = time.monotonic()
+            off = 0
+            while off < len(data):
+                wd, mask, cookie, nlen = struct.unpack_from("iIII", data, off)
+                name = data[off + 16 : off + 16 + nlen].split(b"\0")[0].decode()
+                off += 16 + nlen
+                if wd not in self.wd_dir or not name:
+                    continue
+                d, ch = self.wd_dir[wd]
+                try:
+                    content = open("%s/%s" % (d, name)).read().split("\n")[0].strip()
+                except OSError:
+                    content = "?"
+                with self.lock:
+                    self.events.append((t, ch, name, content))
+
+    def mark(self):
+        with self.lock:
+            return len(self.events)
+
+    def since(self, mark):
+        with self.lock:
+            return list(self.events[mark:])
+
+
 # ── ric lifecycle ────────────────────────────────────────────────────
 
 
@@ -431,6 +515,56 @@ LUMA_CONF = (
     + "trigger = luma\nnight_luma = 20\nnight_gain = 80000\n"
     + "day_gain_pct = 25\nhysteresis_sec = 2\npulse_ms = 100\n"
 )
+
+
+def pwm_attr(events, ch, attr):
+    """Every value written to one attribute of one channel, in order."""
+    return [c for _, p, n, c in events if p == ch and n == attr]
+
+
+def pwm_last(events, ch, attr="duty_cycle"):
+    vals = pwm_attr(events, ch, attr)
+    return vals[-1] if vals else None
+
+
+def wait_duty(pw, pm, ch, val, timeout=3.0):
+    """Poll until ch's most recent duty_cycle write since pm equals val."""
+    return wait_for(lambda: pwm_last(pw.since(pm), ch) == val, timeout)
+
+
+def pwm_illegal_write(events, ch, period, duty):
+    """Replay ch's writes against the kernel's rule, from the state the
+    channel started in: a duty may never sit above the period in force,
+    and nothing but a period is accepted while there is no period at all
+    (kernels before the invalid-state relaxation answer EINVAL even for
+    duty 0). Returns the first write a real pwmchip would have refused,
+    or None."""
+    for e in events:
+        _, p, name, content = e
+        if p != ch or name not in ("period", "duty_cycle"):
+            continue
+        val = int(content)
+        new_period = val if name == "period" else period
+        new_duty = val if name == "duty_cycle" else duty
+        if new_period == 0 or new_duty > new_period:
+            return e
+        period, duty = new_period, new_duty
+    return None
+
+
+def gpio_touched(watch, gm, pin):
+    """Any value or direction write on pin since gm."""
+    return [e for e in watch.since(gm) + watch.since(gm, "direction") if e[1] == pin]
+
+
+# The LUMA_CONF board with its 850nm bank on a PWM channel instead of a pin.
+PWM_CONF = (
+    "gpio_ircut = %d\ngpio_ircut2 = %d\npwm_irled = %d\n" % (IRCUT1, IRCUT2, PWM_IRLED)
+    + "trigger = luma\nnight_luma = 20\nnight_gain = 80000\n"
+    + "day_gain_pct = 25\nhysteresis_sec = 2\npulse_ms = 100\n"
+)
+# No pins and no channels: everything comes from /etc/thingino.json.
+DISCOVER_CONF = "trigger = luma\nnight_luma = 20\nnight_gain = 80000\nhysteresis_sec = 2\n"
 
 
 # ── scenarios ────────────────────────────────────────────────────────
@@ -2809,10 +2943,434 @@ def scenario_poll_cadence(stub, watch):
     ric.stop()
 
 
+def scenario_pwm_dusk_dawn(stub, watch):
+    """An IR bank on a PWM output, with no pin at all. A fresh channel
+    (period 0) is parked dark in the one order a kernel takes -- the
+    period before any duty -- then dusk lights it at full duty and dawn
+    puts it out at duty 0 with the channel still enabled. The 850 pin
+    the device file offers is never consulted: raptor.conf set the bank."""
+    pw = watch.pwm
+    pwm_reset(PWM_IRLED)
+    stub.set_scene(luma=120, gain=500, ev=4000)
+    gm, pm = watch.mark(), pw.mark()
+    ric = Ric("pwmduskdawn", PWM_CONF)
+    if not ric.wait_running():
+        result(False, "pwm: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    time.sleep(0.5)
+    ev = pw.since(pm)
+    park = [(n, c) for _, p, n, c in ev if p == PWM_IRLED][:3]
+    result(park == [("period", "50000"), ("duty_cycle", "0"), ("enable", "1")],
+           "pwm: fresh channel parked dark, period first", str(ev))
+    result(pwm_attr(ev, None, "export") == [],
+           "pwm: a channel that is there is not exported again", str(ev))
+    result("pwm_irled=%d" % PWM_IRLED in ric.read_log(),
+           "pwm: startup line names the channel", ric.read_log()[-300:])
+
+    pm2, mm = pw.mark(), stub.mark()
+    stub.set_scene(luma=5, gain=20000, ev=100000)
+    ok = wait_for(lambda: "night" in stub.modes_since(mm), 4)
+    result(ok, "pwm dusk: luma below threshold switches to night",
+           ric.read_log()[-300:])
+    result(wait_duty(pw, pm2, PWM_IRLED, "50000"),
+           "pwm dusk: bank lit at the full period", str(pw.since(pm2)))
+
+    time.sleep((3 + 1) * POLL_MS / 1000.0)
+    pm3, mm = pw.mark(), stub.mark()
+    stub.set_scene(luma=5, gain=4000, ev=100000)
+    ok = wait_for(lambda: "day" in stub.modes_since(mm), 4)
+    result(ok, "pwm dawn: gain ratio switches back to day", ric.read_log()[-300:])
+    result(wait_duty(pw, pm3, PWM_IRLED, "0"),
+           "pwm dawn: bank dark at duty 0", str(pw.since(pm3)))
+
+    ev = pw.since(pm)
+    result(set(pwm_attr(ev, PWM_IRLED, "enable")) == {"1"},
+           "pwm: channel left enabled through dark", str(ev))
+    bad = pwm_illegal_write(ev, PWM_IRLED, 0, 0)
+    result(bad is None, "pwm: every write is one the kernel takes", str(bad))
+    result(gpio_touched(watch, gm, IRLED) == [],
+           "pwm: no GPIO is exported or driven for the bank",
+           str(gpio_touched(watch, gm, IRLED)))
+    ric.stop()
+
+
+def scenario_pwm_level(stub, watch):
+    """A level other than 100, on a channel a previous run left lit with
+    a longer period: the park must go duty 0 first (the new period is
+    shorter than the duty in force), and lit is level percent of the
+    period."""
+    pw = watch.pwm
+    pwm_reset(PWM_IRLED, period=100000, duty=80000, enable=1)
+    stub.set_scene(luma=120, gain=500, ev=4000)
+    pm = pw.mark()
+    ric = Ric("pwmlevel", PWM_CONF + "pwm_irled_level = 40\n")
+    if not ric.wait_running():
+        result(False, "pwm-level: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    time.sleep(0.5)
+    ev = pw.since(pm)
+    park = [(n, c) for _, p, n, c in ev if p == PWM_IRLED][:3]
+    result(park == [("duty_cycle", "0"), ("period", "50000"), ("enable", "1")],
+           "pwm-level: lit channel parked dark, duty before the shorter period",
+           str(ev))
+
+    pm2, mm = pw.mark(), stub.mark()
+    stub.set_scene(luma=5, gain=20000, ev=100000)
+    ok = wait_for(lambda: "night" in stub.modes_since(mm), 4)
+    result(ok and wait_duty(pw, pm2, PWM_IRLED, "20000"),
+           "pwm-level: night lights the bank at 40% of the period",
+           str(pw.since(pm2)))
+    bad = pwm_illegal_write(pw.since(pm), PWM_IRLED, 100000, 80000)
+    result(bad is None, "pwm-level: no duty above the period in force", str(bad))
+    ric.stop()
+
+
+def scenario_pwm_manual(stub, watch):
+    """The manual and policy verbs treat a PWM bank as a bank: ir850
+    on|off drive it alone, the ir850 enable flag is live at night, a
+    forced mode reasserts it, and a bank with neither a pin nor a
+    channel still answers with an error."""
+    pw = watch.pwm
+    pwm_reset(PWM_IRLED)
+    stub.set_scene(luma=120, gain=500, ev=4000)
+    ric = Ric("pwmmanual", PWM_CONF)
+    if not ric.wait_running():
+        result(False, "pwm-manual: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    time.sleep(0.5)
+
+    pm, mm = pw.mark(), stub.mark()
+    r = ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "ir850", "value": "on"})
+    ok = r is not None and r.get("status") == "ok" and r.get("mode") == "auto"
+    result(ok and wait_duty(pw, pm, PWM_IRLED, "50000"),
+           "pwm-manual: ir850 on lights the bank alone",
+           "resp=%s events=%s" % (r, pw.since(pm)))
+    pm = pw.mark()
+    r = ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "ir850", "value": "off"})
+    ok = r is not None and r.get("status") == "ok"
+    result(ok and wait_duty(pw, pm, PWM_IRLED, "0"),
+           "pwm-manual: ir850 off puts it out",
+           "resp=%s events=%s" % (r, pw.since(pm)))
+    result(stub.modes_since(mm) == [],
+           "pwm-manual: no ISP call, no mode change", str(stub.modes_since(mm)))
+
+    r = ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "ir940", "value": "on"})
+    result(r is not None and r.get("status") == "error"
+           and "pin or PWM channel" in json.dumps(r),
+           "pwm-manual: a bank with neither is an error that says so", str(r))
+
+    pm = pw.mark()
+    r = ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "mode", "value": "night"})
+    ok = r is not None and r.get("state") == "night"
+    result(ok and wait_duty(pw, pm, PWM_IRLED, "50000"),
+           "pwm-manual: forced night lights the bank",
+           "resp=%s events=%s" % (r, pw.since(pm)))
+    pm = pw.mark()
+    r = ctrl_cmd(RUN_DIR + "/ric.sock",
+                 {"cmd": "set-threshold", "key": "ir850", "value": 0})
+    ok = r is not None and r.get("status") == "ok"
+    result(ok and wait_duty(pw, pm, PWM_IRLED, "0"),
+           "pwm-manual: disabling ir850 mid-night drops the bank now",
+           "resp=%s events=%s" % (r, pw.since(pm)))
+    pm = pw.mark()
+    r = ctrl_cmd(RUN_DIR + "/ric.sock",
+                 {"cmd": "set-threshold", "key": "ir850", "value": 1})
+    ok = r is not None and r.get("status") == "ok"
+    result(ok and wait_duty(pw, pm, PWM_IRLED, "50000"),
+           "pwm-manual: re-enabling lights it back",
+           "resp=%s events=%s" % (r, pw.since(pm)))
+    pm = pw.mark()
+    r = ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "mode", "value": "day"})
+    ok = r is not None and r.get("state") == "day"
+    result(ok and wait_duty(pw, pm, PWM_IRLED, "0"),
+           "pwm-manual: forced day puts it out",
+           "resp=%s events=%s" % (r, pw.since(pm)))
+    ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "mode", "value": "auto"})
+    ric.stop()
+
+
+def scenario_pwm_probe(stub, watch):
+    """The luma trigger counts a PWM bank as a lit bank: the probe-dawn
+    case (gain dip under a compressed-gain night baseline) lifts it for
+    an ambient sample exactly as it lifts a pin, and the bank stays out
+    through the day switch."""
+    pw = watch.pwm
+    pwm_reset(PWM_IRLED)
+    stub.set_scene(luma=70, gain=4500, ev=1200000)
+    ric = Ric("pwmprobe", PWM_CONF)
+    if not ric.wait_running():
+        result(False, "pwm-probe: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    time.sleep(0.5)
+
+    mm = stub.mark()
+    stub.set_scene(luma=6, gain=8192, ev=50000000)
+    if not wait_for(lambda: "night" in stub.modes_since(mm), 4):
+        result(False, "pwm-probe: night entry", str(stub.modes_since(mm)))
+        ric.stop()
+        return
+    stub.set_scene(luma=72, gain=1300, ev=370000)
+    time.sleep((3 + 2) * POLL_MS / 1000.0)  # cooldown -> baseline 1300
+
+    pm, mm = pw.mark(), stub.mark()
+    stub.set_scene(luma=73, gain=1024, ev=290000)
+    ok = wait_for(lambda: pwm_last(pw.since(pm), PWM_IRLED) == "0", 3)
+    result(ok, "pwm-probe: gain dip lifts the PWM bank for an ambient sample",
+           str(pw.since(pm)))
+    stub.set_scene(luma=95, gain=2500, ev=800000)
+    ok = wait_for(lambda: "day" in stub.modes_since(mm), 4)
+    result(ok, "pwm-probe: ambient luma switches to day", ric.read_log()[-300:])
+    result(pwm_last(pw.since(pm), PWM_IRLED) == "0",
+           "pwm-probe: bank stays out through the day switch", str(pw.since(pm)))
+    ric.stop()
+
+
+def scenario_pwm_discovery(stub, watch):
+    """thingino.json decides the bank's kind. An ir850 object with a
+    pwm_channel and no pin is a PWM bank at its pwm_level, with no
+    complaint about the missing pin. An object that has a pin stays a
+    GPIO bank whatever PWM keys ride along. A 940-only PWM board lights
+    by default like any only bank. An object with neither keeps the
+    warning and the bank stays absent."""
+    pw = watch.pwm
+    orig = open("/etc/thingino.json").read()
+    ircut = "%d %d" % (IRCUT1, IRCUT2)
+    try:
+        with open("/etc/thingino.json", "w") as f:
+            json.dump({"gpio": {"ircut": ircut, "ir850": {
+                "pwm_channel": PWM_IRLED, "pwm_level": 60,
+                "active_on_boot": False}}}, f)
+        pwm_reset(PWM_IRLED)
+        stub.set_scene(luma=120, gain=500, ev=4000)
+        gm = watch.mark()
+        ric = Ric("pwmdiscover", DISCOVER_CONF)
+        if not ric.wait_running():
+            result(False, "pwm-discovery: ric start", "no 'ric running'")
+            ric.stop()
+            return
+        log = ric.read_log()
+        ok = ("ir850 from /etc/thingino.json: PWM channel %d, lit at 60%%" % PWM_IRLED
+              in log)
+        result(ok, "pwm-discovery: channel and level resolved from thingino.json",
+               log[:500])
+        result("no usable" not in log,
+               "pwm-discovery: no missing-pin warning for a PWM bank", log[:500])
+        time.sleep(0.3)
+        pm, mm = pw.mark(), stub.mark()
+        stub.set_scene(luma=5, gain=20000, ev=100000)
+        ok = wait_for(lambda: "night" in stub.modes_since(mm), 4)
+        result(ok and wait_duty(pw, pm, PWM_IRLED, "30000"),
+               "pwm-discovery: discovered bank lights at its pwm_level",
+               str(pw.since(pm)))
+        result(gpio_touched(watch, gm, IRLED) == [],
+               "pwm-discovery: no GPIO is exported or driven for the bank",
+               str(gpio_touched(watch, gm, IRLED)))
+        ric.stop()
+
+        # a pin makes it a GPIO bank, exactly as before the PWM keys existed
+        with open("/etc/thingino.json", "w") as f:
+            json.dump({"gpio": {"ircut": ircut, "ir850": {
+                "pin": IRLED, "pwm_channel": PWM_IRLED, "pwm_level": 60}}}, f)
+        pwm_reset(PWM_IRLED)
+        stub.set_scene(luma=120, gain=500, ev=4000)
+        pm = pw.mark()
+        ric = Ric("pwmpinwins", DISCOVER_CONF)
+        if not ric.wait_running():
+            result(False, "pwm-discovery: pin-object ric start", "no 'ric running'")
+            ric.stop()
+            return
+        time.sleep(0.3)
+        gm, mm = watch.mark(), stub.mark()
+        stub.set_scene(luma=5, gain=20000, ev=100000)
+        ok = wait_for(lambda: "night" in stub.modes_since(mm), 4)
+        result(ok and wait_last(watch, gm, IRLED, "1"),
+               "pwm-discovery: an object with a pin is still driven as a GPIO",
+               str(watch.since(gm)))
+        result(pw.since(pm) == [] and "PWM channel" not in ric.read_log(),
+               "pwm-discovery: its pwm_channel and pwm_level are ignored",
+               str(pw.since(pm)))
+        ric.stop()
+
+        # the only bank a board has lights by default, PWM or not; polarity
+        # is a pin's property and is refused aloud, not applied
+        with open("/etc/thingino.json", "w") as f:
+            json.dump({"gpio": {"ircut": ircut, "ir940": {
+                "pwm_channel": PWM_IRLED2, "active_low": True}}}, f)
+        pwm_reset(PWM_IRLED2)
+        stub.set_scene(luma=120, gain=500, ev=4000)
+        ric = Ric("pwm940only", DISCOVER_CONF)
+        if not ric.wait_running():
+            result(False, "pwm-discovery: 940-only ric start", "no 'ric running'")
+            ric.stop()
+            return
+        result("ir940 is on PWM channel %d: active_low" % PWM_IRLED2 in ric.read_log(),
+               "pwm-discovery: active_low on a PWM bank is named as ignored",
+               ric.read_log()[:500])
+        time.sleep(0.3)
+        pm, mm = pw.mark(), stub.mark()
+        stub.set_scene(luma=5, gain=20000, ev=100000)
+        ok = wait_for(lambda: "night" in stub.modes_since(mm), 4)
+        result(ok and wait_duty(pw, pm, PWM_IRLED2, "50000"),
+               "pwm-discovery: a 940-only PWM bank lights by default, uninverted",
+               str(pw.since(pm)))
+        ric.stop()
+
+        # neither a pin nor a channel: today's warning, today's absent bank
+        with open("/etc/thingino.json", "w") as f:
+            json.dump({"gpio": {"ircut": ircut,
+                                "ir850": {"active_on_boot": False}}}, f)
+        stub.set_scene(luma=120, gain=500, ev=4000)
+        pm = pw.mark()
+        ric = Ric("pwmneither", DISCOVER_CONF)
+        if not ric.wait_running():
+            result(False, "pwm-discovery: empty-object ric start", "no 'ric running'")
+            ric.stop()
+            return
+        result('gpio.ir850 object carries no usable "pin"' in ric.read_log(),
+               "pwm-discovery: an object with neither keeps the warning",
+               ric.read_log()[:500])
+        r = ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "ir850", "value": "on"})
+        result(r is not None and r.get("status") == "error" and pw.since(pm) == [],
+               "pwm-discovery: a bank with neither still answers with an error",
+               "resp=%s events=%s" % (r, pw.since(pm)))
+        ric.stop()
+    finally:
+        with open("/etc/thingino.json", "w") as f:
+            f.write(orig)
+
+
+def scenario_pwm_config_wins(stub, watch):
+    """raptor.conf is authoritative for a PWM bank as it is for a pin:
+    an explicit channel is driven and the discovered one left alone, an
+    explicit level beats the device file's pwm_level, and a bank given
+    both a pin and a channel is driven by PWM with one warning."""
+    pw = watch.pwm
+    orig = open("/etc/thingino.json").read()
+    try:
+        with open("/etc/thingino.json", "w") as f:
+            json.dump({"gpio": {"ircut": "%d %d" % (IRCUT1, IRCUT2), "ir850": {
+                "pwm_channel": PWM_IRLED, "pwm_level": 60}}}, f)
+        pwm_reset(PWM_IRLED)
+        pwm_reset(PWM_ALT)
+        stub.set_scene(luma=120, gain=500, ev=4000)
+        pm = pw.mark()
+        ric = Ric("pwmconfch", DISCOVER_CONF + "pwm_irled = %d\n" % PWM_ALT)
+        if not ric.wait_running():
+            result(False, "pwm-config: ric start", "no 'ric running'")
+            ric.stop()
+            return
+        time.sleep(0.3)
+        mm = stub.mark()
+        stub.set_scene(luma=5, gain=20000, ev=100000)
+        ok = wait_for(lambda: "night" in stub.modes_since(mm), 4)
+        result(ok and wait_duty(pw, pm, PWM_ALT, "50000"),
+               "pwm-config: the configured channel is driven, at its own level",
+               str(pw.since(pm)))
+        result([e for e in pw.since(pm) if e[1] == PWM_IRLED] == [],
+               "pwm-config: the discovered channel is left alone",
+               str(pw.since(pm)))
+        ric.stop()
+
+        pwm_reset(PWM_IRLED)
+        stub.set_scene(luma=120, gain=500, ev=4000)
+        ric = Ric("pwmconflvl", DISCOVER_CONF + "pwm_irled_level = 25\n")
+        if not ric.wait_running():
+            result(False, "pwm-config: level ric start", "no 'ric running'")
+            ric.stop()
+            return
+        time.sleep(0.3)
+        pm, mm = pw.mark(), stub.mark()
+        stub.set_scene(luma=5, gain=20000, ev=100000)
+        ok = wait_for(lambda: "night" in stub.modes_since(mm), 4)
+        result(ok and wait_duty(pw, pm, PWM_IRLED, "12500"),
+               "pwm-config: an explicit level beats the discovered pwm_level",
+               str(pw.since(pm)))
+        ric.stop()
+    finally:
+        with open("/etc/thingino.json", "w") as f:
+            f.write(orig)
+
+    # both a pin and a channel from raptor.conf, plus a stale polarity flag
+    pwm_reset(PWM_IRLED)
+    stub.set_scene(luma=120, gain=500, ev=4000)
+    gm, pm = watch.mark(), pw.mark()
+    conf = LUMA_CONF + "pwm_irled = %d\ngpio_irled_active_low = true\n" % PWM_IRLED
+    ric = Ric("pwmboth", conf)
+    if not ric.wait_running():
+        result(False, "pwm-config: pin-and-channel ric start", "no 'ric running'")
+        ric.stop()
+        return
+    log = ric.read_log()
+    result(log.count("ir850 has both gpio_irled") == 1,
+           "pwm-config: pin and channel together warn once", log[:500])
+    result("not applied to a PWM bank" in log,
+           "pwm-config: active_low on a PWM bank is named as ignored", log[:500])
+    r = ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "mode", "value": "night"})
+    ok = r is not None and r.get("state") == "night"
+    result(ok and wait_duty(pw, pm, PWM_IRLED, "50000"),
+           "pwm-config: the channel wins and lights uninverted",
+           "resp=%s events=%s" % (r, pw.since(pm)))
+    result(gpio_touched(watch, gm, IRLED) == [],
+           "pwm-config: the losing pin is neither exported nor driven",
+           str(gpio_touched(watch, gm, IRLED)))
+    ctrl_cmd(RUN_DIR + "/ric.sock", {"cmd": "mode", "value": "auto"})
+    ric.stop()
+
+
+def scenario_pwm_failure(stub, watch):
+    """A PWM channel that fails must cost a warning, not the daemon, as
+    a GPIO does: the 850 channel's duty_cycle becomes /dev/full (opens,
+    every write fails ENOSPC) and the 940 bank names a channel that does
+    not exist, so ric exports it and then finds nothing to open. Both
+    are named in the log and the transition still completes."""
+    pw = watch.pwm
+    pwm_reset(PWM_IRLED)
+    duty = "%s/pwm%d/duty_cycle" % (PWM_CHIP, PWM_IRLED)
+    os.unlink(duty)
+    os.symlink("/dev/full", duty)
+    try:
+        stub.set_scene(luma=120, gain=500, ev=4000)
+        pm = pw.mark()
+        conf = PWM_CONF + "pwm_irled2 = %d\nir940 = true\n" % PWM_ABSENT
+        ric = Ric("pwmfail", conf)
+        if not ric.wait_running():
+            result(False, "pwm-failure: ric start", "no 'ric running'")
+            ric.stop()
+            return
+        time.sleep(0.5)
+        result(pwm_attr(pw.since(pm), None, "export") == [str(PWM_ABSENT)],
+               "pwm-failure: only the missing channel is exported",
+               str(pw.since(pm)))
+        mm = stub.mark()
+        stub.set_scene(luma=5, gain=20000, ev=100000)
+        ok = wait_for(lambda: "night" in stub.modes_since(mm), 4)
+        result(ok, "pwm-failure: transition still completes",
+               str(stub.modes_since(mm)))
+        log = ric.read_log()
+        result("pwm %d duty_cycle=50000: write failed" % PWM_IRLED in log,
+               "pwm-failure: a failing write is named", log[-300:])
+        result("pwm %d period: cannot open" % PWM_ABSENT in log
+               and "pwm %d duty_cycle: cannot open" % PWM_ABSENT in log,
+               "pwm-failure: a channel that will not open is named", log[-300:])
+        s = ric_status()
+        result(s is not None and s.get("status") == "ok",
+               "pwm-failure: daemon healthy after the storm", str(s))
+        ric.stop()
+    finally:
+        pwm_reset(PWM_IRLED)
+
+
 def main():
     setup_sandbox()
     stub = StubRvd()
     watch = GpioWatch()
+    # The PWM scenarios reach their watcher through the GPIO one, so
+    # every scenario keeps the same (stub, watch) signature.
+    watch.pwm = PwmWatch()
 
     # Legs for behavior that is specified but not yet landed go here and
     # are reported as KNOWN-FAIL instead of failing the suite; strict mode
@@ -2876,6 +3434,13 @@ def main():
         scenario_day_verify_gain,
         scenario_day_trial,
         scenario_poll_cadence,
+        scenario_pwm_dusk_dawn,
+        scenario_pwm_level,
+        scenario_pwm_manual,
+        scenario_pwm_probe,
+        scenario_pwm_discovery,
+        scenario_pwm_config_wins,
+        scenario_pwm_failure,
     ]
     only = os.environ.get("RIC_SCENARIO", "")
     if only:

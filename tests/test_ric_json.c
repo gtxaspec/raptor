@@ -34,6 +34,10 @@ static ric_config_t fresh_config(void)
 	c.gpio_ircut2 = -1;
 	c.gpio_irled = -1;
 	c.gpio_irled2 = -1;
+	c.pwm_irled = -1;
+	c.pwm_irled2 = -1;
+	c.pwm_irled_level = 100;
+	c.pwm_irled2_level = 100;
 	c.pulse_ms = 10;
 	return c;
 }
@@ -399,6 +403,135 @@ TEST ric_json_all_preset_skips_file(void)
 	PASS();
 }
 
+/* A bank on a PWM output: an object with a pwm_channel and no pin.
+ * Channel 0 is a channel; an absent pwm_level leaves the level alone;
+ * polarity is handed back for the caller to refuse. */
+TEST ric_json_pwm_bank(void)
+{
+	ric_config_t c = fresh_config();
+	const char *j = "{\"gpio\":{\"ir850\":{\"pwm_channel\":2,\"pwm_level\":60,"
+			"\"active_low\":true,\"active_on_boot\":false},"
+			"\"ir940\":{\"pwm_channel\":0}}}";
+	write_fixture(j, strlen(j));
+	ric_json_gpio_load(&c, FIXTURE);
+	ASSERT_EQ(2, c.pwm_irled);
+	ASSERT_EQ(60, c.pwm_irled_level);
+	ASSERT_EQ(-1, c.gpio_irled);
+	ASSERT(c.irled_active_low);
+	ASSERT_EQ(0, c.pwm_irled2);
+	ASSERT_EQ(100, c.pwm_irled2_level);
+	ASSERT_EQ(-1, c.gpio_irled2);
+	ASSERT_FALSE(c.irled2_active_low);
+	unlink(FIXTURE);
+	PASS();
+}
+
+/* The load-bearing compatibility case: an object that has a usable pin
+ * is the GPIO bank it has always been, whatever PWM keys it carries. */
+TEST ric_json_pwm_keys_beside_pin_ignored(void)
+{
+	ric_config_t c = fresh_config();
+	const char *j = "{\"gpio\":{\"ir850\":{\"pin\":49,\"pwm_channel\":2,\"pwm_level\":60},"
+			"\"ir940\":{\"pin\":50,\"active_low\":true,\"pwm_level\":30}}}";
+	write_fixture(j, strlen(j));
+	ric_json_gpio_load(&c, FIXTURE);
+	ASSERT_EQ(49, c.gpio_irled);
+	ASSERT_EQ(-1, c.pwm_irled);
+	ASSERT_EQ(100, c.pwm_irled_level);
+	ASSERT_EQ(50, c.gpio_irled2);
+	ASSERT(c.irled2_active_low);
+	ASSERT_EQ(-1, c.pwm_irled2);
+	ASSERT_EQ(100, c.pwm_irled2_level);
+	unlink(FIXTURE);
+	PASS();
+}
+
+/* An unusable pin does not shadow the channel: the pad is not a GPIO. */
+TEST ric_json_pwm_bank_with_unusable_pin(void)
+{
+	ric_config_t c = fresh_config();
+	const char *j = "{\"gpio\":{\"ir850\":{\"pin\":-1,\"pwm_channel\":3}}}";
+	write_fixture(j, strlen(j));
+	ric_json_gpio_load(&c, FIXTURE);
+	ASSERT_EQ(3, c.pwm_irled);
+	ASSERT_EQ(-1, c.gpio_irled);
+	unlink(FIXTURE);
+	PASS();
+}
+
+TEST ric_json_pwm_bad_channel_rejected(void)
+{
+	ric_config_t c = fresh_config();
+	const char *j = "{\"gpio\":{\"ir850\":{\"pwm_channel\":-1},"
+			"\"ir940\":{\"pwm_channel\":\"2\",\"pwm_level\":60}}}";
+	write_fixture(j, strlen(j));
+	ric_json_gpio_load(&c, FIXTURE);
+	ASSERT_EQ(-1, c.pwm_irled);
+	ASSERT_EQ(-1, c.gpio_irled);
+	ASSERT_EQ(-1, c.pwm_irled2);
+	ASSERT_EQ(100, c.pwm_irled2_level);
+	unlink(FIXTURE);
+	PASS();
+}
+
+/* A pwm_level outside 1..100, or not a number, keeps the level in
+ * force; the channel is still taken. */
+TEST ric_json_pwm_bad_level_keeps_level(void)
+{
+	ric_config_t c = fresh_config();
+	const char *j = "{\"gpio\":{\"ir850\":{\"pwm_channel\":2,\"pwm_level\":0},"
+			"\"ir940\":{\"pwm_channel\":3,\"pwm_level\":\"60\"}}}";
+	write_fixture(j, strlen(j));
+	ric_json_gpio_load(&c, FIXTURE);
+	ASSERT_EQ(2, c.pwm_irled);
+	ASSERT_EQ(100, c.pwm_irled_level);
+	ASSERT_EQ(3, c.pwm_irled2);
+	ASSERT_EQ(100, c.pwm_irled2_level);
+	c = fresh_config();
+	const char *j2 = "{\"gpio\":{\"ir850\":{\"pwm_channel\":2,\"pwm_level\":101}}}";
+	write_fixture(j2, strlen(j2));
+	ric_json_gpio_load(&c, FIXTURE);
+	ASSERT_EQ(2, c.pwm_irled);
+	ASSERT_EQ(100, c.pwm_irled_level);
+	unlink(FIXTURE);
+	PASS();
+}
+
+TEST ric_json_pwm_explicit_level_wins(void)
+{
+	ric_config_t c = fresh_config();
+	c.pwm_irled_level = 40;
+	c.pwm_irled_level_explicit = true;
+	const char *j = "{\"gpio\":{\"ir850\":{\"pwm_channel\":2,\"pwm_level\":60}}}";
+	write_fixture(j, strlen(j));
+	ric_json_gpio_load(&c, FIXTURE);
+	ASSERT_EQ(2, c.pwm_irled);
+	ASSERT_EQ(40, c.pwm_irled_level);
+	unlink(FIXTURE);
+	PASS();
+}
+
+/* A bank raptor.conf set either way is not looked up: a configured
+ * channel is not joined by a discovered pin, nor a configured pin by a
+ * discovered channel. */
+TEST ric_json_pwm_conf_precedence(void)
+{
+	ric_config_t c = fresh_config();
+	c.pwm_irled = 5;
+	c.gpio_irled2 = 12;
+	const char *j = "{\"gpio\":{\"ir850\":8,"
+			"\"ir940\":{\"pwm_channel\":3,\"pwm_level\":60}}}";
+	write_fixture(j, strlen(j));
+	ric_json_gpio_load(&c, FIXTURE);
+	ASSERT_EQ(5, c.pwm_irled);
+	ASSERT_EQ(-1, c.gpio_irled);
+	ASSERT_EQ(12, c.gpio_irled2);
+	ASSERT_EQ(-1, c.pwm_irled2);
+	ASSERT_EQ(100, c.pwm_irled2_level);
+	unlink(FIXTURE);
+	PASS();
+}
+
 SUITE(ric_json_suite)
 {
 	RUN_TEST(ric_json_missing_file);
@@ -426,4 +559,11 @@ SUITE(ric_json_suite)
 	RUN_TEST(ric_json_truncated_document);
 	RUN_TEST(ric_json_conf_precedence);
 	RUN_TEST(ric_json_all_preset_skips_file);
+	RUN_TEST(ric_json_pwm_bank);
+	RUN_TEST(ric_json_pwm_keys_beside_pin_ignored);
+	RUN_TEST(ric_json_pwm_bank_with_unusable_pin);
+	RUN_TEST(ric_json_pwm_bad_channel_rejected);
+	RUN_TEST(ric_json_pwm_bad_level_keeps_level);
+	RUN_TEST(ric_json_pwm_explicit_level_wins);
+	RUN_TEST(ric_json_pwm_conf_precedence);
 }
