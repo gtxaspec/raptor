@@ -1669,6 +1669,37 @@ static int validate_video_channel(rvd_state_t *st, const char *cmd_json, int *ou
 	return 0;
 }
 
+/* Write an NV12 frame to file (via file.tmp) and answer the save command. */
+static int rvd_ctrl_save_raw_reply(const char *file, const void *data, uint32_t size, uint32_t w,
+				   uint32_t h, char *resp, int resp_size)
+{
+	char tmp[272];
+	snprintf(tmp, sizeof(tmp), "%s.tmp", file);
+	int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	ssize_t wr = -1;
+	if (fd >= 0) {
+		wr = write(fd, data, size);
+		close(fd);
+	}
+	if (fd < 0 || wr != (ssize_t)size || rename(tmp, file) != 0) {
+		unlink(tmp);
+		return rss_ctrl_resp_error(resp, resp_size, strerror(errno));
+	}
+
+	RSS_INFO("save: %s (%u bytes, raw %ux%u)", file, size, w, h);
+	cJSON *r = cJSON_CreateObject();
+	if (!r)
+		return rss_ctrl_resp_error(resp, resp_size, "out of memory");
+	cJSON_AddStringToObject(r, "status", "ok");
+	cJSON_AddStringToObject(r, "file", file);
+	cJSON_AddStringToObject(r, "format", "raw");
+	cJSON_AddStringToObject(r, "pixfmt", "nv12");
+	cJSON_AddNumberToObject(r, "width", w);
+	cJSON_AddNumberToObject(r, "height", h);
+	cJSON_AddNumberToObject(r, "bytes", (double)size);
+	return rss_ctrl_resp_json(resp, resp_size, r);
+}
+
 /* save raw on the channel the JZDL thread reads: it owns that channel's frame
  * depth, so the frame comes from it (rvd_ivs_grab_raw) instead of a second
  * SetFrameDepth/GetFrame user, which crashes the SDK. */
@@ -1684,33 +1715,9 @@ static int rvd_ctrl_save_raw_ivs(rvd_state_t *st, int ch, const char *file, char
 		free(buf);
 		return rss_ctrl_resp_error(resp, resp_size, "raw frame grab failed");
 	}
-
-	char tmp[272];
-	snprintf(tmp, sizeof(tmp), "%s.tmp", file);
-	int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-	ssize_t wr = -1;
-	if (fd >= 0) {
-		wr = write(fd, buf, size);
-		close(fd);
-	}
+	int ret = rvd_ctrl_save_raw_reply(file, buf, size, w, h, resp, resp_size);
 	free(buf);
-	if (fd < 0 || wr != (ssize_t)size || rename(tmp, file) != 0) {
-		unlink(tmp);
-		return rss_ctrl_resp_error(resp, resp_size, strerror(errno));
-	}
-
-	RSS_INFO("save: %s (%u bytes, raw %ux%u, from the JZDL thread)", file, size, w, h);
-	cJSON *r = cJSON_CreateObject();
-	if (!r)
-		return rss_ctrl_resp_error(resp, resp_size, "out of memory");
-	cJSON_AddStringToObject(r, "status", "ok");
-	cJSON_AddStringToObject(r, "file", file);
-	cJSON_AddStringToObject(r, "format", "raw");
-	cJSON_AddStringToObject(r, "pixfmt", "nv12");
-	cJSON_AddNumberToObject(r, "width", w);
-	cJSON_AddNumberToObject(r, "height", h);
-	cJSON_AddNumberToObject(r, "bytes", (double)size);
-	return rss_ctrl_resp_json(resp, resp_size, r);
+	return ret;
 }
 
 static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st, char *resp,
@@ -2108,34 +2115,11 @@ static int handle_pipeline_cmd(const char *cmd, const char *cmd_json, rvd_state_
 							   "raw frame grab failed");
 			}
 
-			char tmp[272];
-			snprintf(tmp, sizeof(tmp), "%s.tmp", file);
-			int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-			ssize_t wr = -1;
-			if (fd >= 0) {
-				wr = write(fd, info.virt_addr, info.size);
-				close(fd);
-			}
+			int rc = rvd_ctrl_save_raw_reply(file, info.virt_addr, info.size,
+							 info.width, info.height, resp, resp_size);
 			RSS_HAL_CALL(st->ops, fs_release_frame, st->hal_ctx, fs_chn, frame);
 			RSS_HAL_CALL(st->ops, fs_set_frame_depth, st->hal_ctx, fs_chn, 0);
-			if (fd < 0 || wr != (ssize_t)info.size || rename(tmp, file) != 0) {
-				unlink(tmp);
-				return rss_ctrl_resp_error(resp, resp_size, strerror(errno));
-			}
-
-			RSS_INFO("save: %s (%u bytes, raw %ux%u)", file, info.size, info.width,
-				 info.height);
-			cJSON *r = cJSON_CreateObject();
-			if (!r)
-				return rss_ctrl_resp_error(resp, resp_size, "out of memory");
-			cJSON_AddStringToObject(r, "status", "ok");
-			cJSON_AddStringToObject(r, "file", file);
-			cJSON_AddStringToObject(r, "format", "raw");
-			cJSON_AddStringToObject(r, "pixfmt", "nv12");
-			cJSON_AddNumberToObject(r, "width", info.width);
-			cJSON_AddNumberToObject(r, "height", info.height);
-			cJSON_AddNumberToObject(r, "bytes", (double)info.size);
-			return rss_ctrl_resp_json(resp, resp_size, r);
+			return rc;
 		}
 
 		if (jpeg_ch < 0 || jpeg_ch >= RVD_MAX_JPEG)
