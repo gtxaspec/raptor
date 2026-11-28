@@ -12,6 +12,27 @@ if [ "$1" != watch ] && [ -z "$S31RAPTOR_LOCKED" ] && command -v flock >/dev/nul
 	S31RAPTOR_LOCKED=1 exec flock "$RUNDIR/.lock" "$0" "$@"
 fi
 
+# Environment the daemons read at start, set per camera (for example
+# RSS_SCL_RING_DIV for the Infinity6C HAL). Every assignment is exported.
+if [ -r /etc/default/raptor ]; then
+	set -a
+	. /etc/default/raptor
+	set +a
+fi
+
+# Executables here run with "stop" before any daemon goes down and with
+# "start" once the stack is up. They are for processes outside the stack that
+# call into the video pipeline: those must be off it while rvd tears it down
+# (on SigmaStar, a call into a destroyed ISP channel oopses the vendor MI
+# module and leaves its device locked, so the next rvd hangs).
+HOOKDIR=/etc/raptor.d
+
+run_hooks() {
+	for h in "$HOOKDIR"/*; do
+		[ -x "$h" ] && "$h" "$1"
+	done
+}
+
 # Read a boolean from raptor.conf: config_bool <section> <key> <default>
 config_bool() {
 	val=$(raptorctl config get "$1" "$2" 2>/dev/null | tr -d '\r\n')
@@ -154,6 +175,8 @@ start() {
 	done
 	start-stop-daemon -S -b -m -p "$RUNDIR/watch.pid" -x /bin/sh -- "$0" watch $watched
 
+	run_hooks start
+
 	echo "Done."
 }
 
@@ -222,6 +245,8 @@ stop() {
 	start-stop-daemon -K -q -p "$RUNDIR/watch.pid" 2>/dev/null
 	rm -f "$RUNDIR/watch.pid"
 	[ -n "$S31RAPTOR_WATCH" ] || rm -f "$RUNDIR"/restarts.*
+
+	run_hooks stop
 
 	# Stop consumers first, then producer (RVD) last
 	for d in rsr rsp rwd rmd rmr rcd rtd ric rhd rsd rsd-555 rod rad rvd; do
