@@ -103,6 +103,8 @@ void *rvd_encoder_thread(void *arg)
 		RSS_DEBUG("jpeg chn %d: pulsed receive every %lld ms", s->chn,
 			  (long long)(pulse_interval_us / 1000));
 	bool had_readers = false; /* pulse pacing applies to held demand only */
+	bool lingering = false;	  /* on demand: no readers, encoder kept warm */
+	int64_t idle_since_us = 0;
 	/* The source frame counter stamped into the ring: the encoder's own
 	 * sequence for video channels, so consumers can split source loss
 	 * from ring overflow. JPEG channels pass none: pulse and on-demand
@@ -116,8 +118,10 @@ void *rvd_encoder_thread(void *arg)
 	bool vui_matrix_warned = false;
 
 	while (rss_running(st->running) && atomic_load(&st->stream_active[idx])) {
-		/* JPEG on-demand: start/stop encoder based on ring consumers */
-		if (s->is_jpeg && s->jpeg_idle && s->ring) {
+		/* On demand (JPEG, and video streams with on_demand): start/stop
+		 * the encoder based on ring consumers */
+		if (((s->is_jpeg && s->jpeg_idle) || s->on_demand || (s->no_osd && !s->is_jpeg)) &&
+		    s->ring) {
 			/* Periodically check for crashed consumers (~10s) */
 			int64_t now_reap = rss_timestamp_us();
 			if (now_reap - last_reap >= RVD_REAP_INTERVAL_US) {
@@ -129,16 +133,43 @@ void *rvd_encoder_thread(void *arg)
 					  rss_ring_get_header(s->ring)->reader_pids[3]);
 				uint32_t reaped = rss_ring_reap_dead_readers(s->ring);
 				if (reaped)
-					RSS_WARN("jpeg chn %d: reaped %u dead reader(s)", s->chn,
-						 reaped);
+					RSS_WARN("%s chn %d: reaped %u dead reader(s)",
+						 s->is_jpeg ? "jpeg" : "video", s->chn, reaped);
 				last_reap = now_reap;
 			}
 
-			if (rss_ring_reader_count(s->ring) == 0) {
+			uint32_t demand = rss_ring_reader_count(s->ring);
+			if (!s->is_jpeg && !s->on_demand)
+				demand = 1; /* always on */
+			/* No OSD cover: privacy stops the stream instead, at once */
+			bool privacy_stop = s->no_osd && !s->is_jpeg &&
+					    __atomic_load_n(&st->privacy[idx], __ATOMIC_RELAXED);
+			if (privacy_stop)
+				demand = 0;
+			if (demand > 0 && lingering) {
+				/* A reader came back while the encoder idled on:
+				 * it gets a keyframe now, not at the next GOP. */
+				RSS_HAL_CALL(st->ops, enc_request_idr, st->hal_ctx, s->chn);
+				RSS_DEBUG("video chn %d: reader back within linger", s->chn);
+			}
+			if (demand > 0)
+				lingering = false;
+			if (demand == 0 && s->enabled && !privacy_stop && s->linger_ms) {
+				int64_t now = rss_timestamp_us();
+				if (!lingering) {
+					lingering = true;
+					idle_since_us = now;
+				}
+				if (now - idle_since_us < (int64_t)s->linger_ms * 1000)
+					demand = 1; /* keep encoding into the ring a while */
+			}
+			if (demand == 0) {
+				lingering = false;
 				if (s->enabled) {
 					RSS_HAL_CALL(st->ops, enc_stop, st->hal_ctx, s->chn);
 					s->enabled = false;
-					RSS_DEBUG("jpeg chn %d: stopped (no consumers)", s->chn);
+					RSS_DEBUG("%s chn %d: stopped (no consumers)",
+						  s->is_jpeg ? "jpeg" : "video", s->chn);
 				}
 				had_readers = false;
 				usleep(100000);
@@ -185,7 +216,17 @@ void *rvd_encoder_thread(void *arg)
 				}
 				start_errors = 0;
 				s->enabled = true;
-				RSS_DEBUG("jpeg chn %d: started (%u consumers)", s->chn,
+				/* A video consumer arriving mid-GOP would otherwise
+				 * wait up to a GOP for its first decodable frame. */
+				if (!s->is_jpeg)
+					RSS_HAL_CALL(st->ops, enc_request_idr, st->hal_ctx, s->chn);
+				/* The single-buffer fallback check times "no frames
+				 * yet" from here, not from rvd_stream_start: an
+				 * on-demand ring may wait hours for its first reader. */
+				atomic_store(&s->demand_start_ms,
+					     (uint32_t)(rss_timestamp_us() / 1000));
+				RSS_DEBUG("%s chn %d: started (%u consumers)",
+					  s->is_jpeg ? "jpeg" : "video", s->chn,
 					  rss_ring_reader_count(s->ring));
 			}
 		}
@@ -475,6 +516,7 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running)
 	/* Start per-channel encoder threads */
 	for (int i = 0; i < st->stream_count; i++)
 		rvd_stream_start(st, i);
+	rvd_extra_attach(st); /* last: every base channel holds its rmem now */
 	rvd_apply_flip(st);
 
 	/* OSD update thread */
@@ -540,6 +582,10 @@ void rvd_frame_loop(rvd_state_t *st, volatile sig_atomic_t *running)
 				    s->vbs_fallback_tried || s->fs_cfg.nr_vbs <= 1)
 					continue;
 				if (vbs_now - s->started_us < 6000000)
+					continue;
+				if (s->on_demand &&
+				    (uint32_t)(vbs_now / 1000) - atomic_load(&s->demand_start_ms) <
+					    6000)
 					continue;
 				if (rss_ring_get_header(s->ring)->write_seq != 0)
 					continue;

@@ -260,6 +260,37 @@ void rvd_stream_stop(rvd_state_t *st, int idx)
 	(void)idx;
 }
 
+/* Extra-stream attach/detach live in the pipeline; the integration suite
+ * drives them. Here an extra is present exactly when the fixture puts it
+ * in streams[]. */
+int rvd_extra_index(const rvd_state_t *st, int slot)
+{
+	for (int i = 0; i < st->stream_count; i++)
+		if (st->streams[i].is_extra && st->streams[i].extra_slot == slot)
+			return i;
+	return -1;
+}
+
+int rvd_extra_attach(rvd_state_t *st)
+{
+	(void)st;
+	return 0;
+}
+
+void rvd_extra_detach(rvd_state_t *st)
+{
+	(void)st;
+}
+
+int rvd_sensor_main(const rvd_state_t *st, int sensor_idx)
+{
+	for (int i = 0; i < st->stream_count; i++)
+		if (!st->streams[i].is_jpeg && !st->streams[i].is_extra &&
+		    st->streams[i].sensor_idx == sensor_idx)
+			return i;
+	return -1;
+}
+
 /*
  * Recorded, not discarded: republishing the ring header is the whole point
  * of the set-fps path, and nothing else in the daemon's reach observes it.

@@ -2612,6 +2612,165 @@ else
         "expected a plain 'sensor0 fps: 25' and no unsupported-platform line"
 fi
 
+# ── Extra streams: a video stream per spare framesource slot ──
+# [stream2] adds a stream on the sensor's third framesource, encoded only
+# while it is read; ring = aux names its ring (default "stream2"). Extra
+# streams are attached after every base stream has started, so that when
+# encoder memory runs out it is the extra that goes without, never main:
+# the mock's RSS_MOCK_ENC_CREATE_FAIL plays the IMP encoder refusing a
+# channel for want of rmem. Main runs at 20 fps here against a 25 fps
+# sensor so the extra's default rate can be told apart from the sensor's.
+echo ""
+echo "=== Extra streams ==="
+
+AUX_CONF="$LOG_DIR/test-aux.conf"
+{
+    # Earlier legs persist runtime changes into the suite config, so set
+    # main's rate inside [stream0] rather than trusting what is there
+    awk '/^\[/ { sect = $0 } sect == "[stream0]" && /^fps *=/ { $0 = "fps = 20" } { print }' "$CONFIG"
+    printf '\n[stream2]\nenabled = true\nring = aux\nwidth = 1280\nheight = 720\nbitrate = 1500000\nlinger = 2\n'
+} > "$AUX_CONF"
+
+aux_rvd() {
+    pkill -f "$OUT/rvd" 2>/dev/null || true
+    sleep 1
+    start_daemon rvd env "$@" "$OUT/rvd" -c "$AUX_CONF" -f -d
+    sleep 2
+}
+ring_field() { "$OUT/ringdump" "$1" 2>&1 | sed -n "s/.*$2: *\([0-9x]*\).*/\1/p" | head -1; }
+main_moves() {
+    m1=$(ring_field main "Write seq")
+    sleep 1
+    m2=$(ring_field main "Write seq")
+    [ -n "$m1" ] && [ -n "$m2" ] && [ "$m2" -gt "$m1" ]
+}
+
+# Off by default: the suite config has no [stream2]
+if grep -q "extra \[" "$LOG_DIR/rvd.log" 2>/dev/null; then
+    fail "no extra stream without [stream2]" "rvd logged an extra-stream line on the default config"
+else
+    pass "no extra stream without [stream2]"
+fi
+
+aux_rvd
+if grep -q "extra \[stream2\]: attached as stream4 (1280x720.*ring aux)" "$LOG_DIR/rvd.log" 2>/dev/null; then
+    pass "aux attaches as stream4 at its configured size"
+else
+    fail "aux attaches as stream4 at its configured size" "no 'extra [stream2]: attached' line"
+fi
+check_contains "status names the extra stream's ring" '"ring":"aux"' "$OUT/raptorctl" rvd status
+check_contains "status names main's ring" '"ring":"main"' "$OUT/raptorctl" rvd status
+check "aux ring advertises 1280x720" test "$(ring_field aux Size)" = "1280x720"
+check "aux defaults to main's rate, not the sensor's" \
+    sh -c "'$OUT/raptorctl' rvd get-fps 4 | grep -q '\"fps_num\":[ ]*20'"
+
+a1=$(ring_field aux "Write seq")
+sleep 1
+a2=$(ring_field aux "Write seq")
+check "aux encodes nothing while nobody reads it" test -n "$a1" -a "$a1" = "$a2"
+
+AUX_DUMP=$(timeout 10 "$OUT/ringdump" aux -f -n 10 2>&1 || true)
+if [ "$(echo "$AUX_DUMP" | grep -c 'len=')" -ge 10 ]; then
+    pass "a reader gets aux frames"
+else
+    fail "a reader gets aux frames" "fewer than 10 frames in 10s"
+fi
+case "$(echo "$AUX_DUMP" | grep 'len=' | head -1)" in
+    *key=1*) pass "the first aux frame a reader gets is a keyframe" ;;
+    *) fail "the first aux frame a reader gets is a keyframe" "first frame is not key=1" ;;
+esac
+
+# linger = 2: the encoder keeps going a while after the reader leaves,
+# so a reader that comes straight back finds it warm, keyframe first
+a1=$(ring_field aux "Write seq")
+sleep 0.5
+a2=$(ring_field aux "Write seq")
+check "aux keeps encoding for its linger after the reader leaves" \
+    test -n "$a1" -a -n "$a2" -a "${a2:-0}" -gt "${a1:-0}"
+AUX_DUMP=$(timeout 10 "$OUT/ringdump" aux -f -n 3 2>&1 || true)
+# A reader joining a running encoder first sees the newest frame already
+# in the ring and the one being encoded; the IDR its return asks for is
+# the next. Without that request it would wait out the GOP (50 here).
+if echo "$AUX_DUMP" | grep 'len=' | head -3 | grep -q 'key=1'; then
+    pass "a reader back within the linger gets a keyframe at once"
+else
+    fail "a reader back within the linger gets a keyframe at once" "no key=1 in the first three frames"
+fi
+sleep 3
+a1=$(ring_field aux "Write seq")
+sleep 1
+a2=$(ring_field aux "Write seq")
+check "aux pauses once the linger runs out" test -n "$a1" -a "$a1" = "$a2"
+check "main keeps running beside aux" main_moves
+
+check_contains "aux takes a runtime bitrate" "ok" "$OUT/raptorctl" rvd set-bitrate 4 800000
+check_contains "aux reports the runtime bitrate" "800000" "$OUT/raptorctl" rvd get-bitrate 4
+check_contains "aux refuses to be larger than main" "larger than main" \
+    "$OUT/raptorctl" rvd set-resolution 4 2560 1440
+check_contains "aux resizes within main" "ok" "$OUT/raptorctl" rvd set-resolution 4 960 540
+check "aux ring follows the resize" test "$(ring_field aux Size)" = "960x540"
+check_contains "aux keeps its runtime bitrate across a resize" "800000" \
+    "$OUT/raptorctl" rvd get-bitrate 4
+
+# Rebuilding main takes aux down and puts it back last
+AUX_ATTACHES=$(grep -c "extra \[stream2\]: attached" "$LOG_DIR/rvd.log" || true)
+check_contains "main restarts with aux attached" "ok" "$OUT/raptorctl" rvd stream-restart 0
+sleep 2
+if [ "$(grep -c "extra \[stream2\]: attached" "$LOG_DIR/rvd.log" || true)" -gt "$AUX_ATTACHES" ]; then
+    pass "aux is re-attached after main restarts"
+else
+    fail "aux is re-attached after main restarts" "no new 'extra [stream2]: attached' line"
+fi
+check "main runs after its restart" main_moves
+AUX_DUMP=$(timeout 10 "$OUT/ringdump" aux -f -n 3 2>&1 || true)
+if [ "$(echo "$AUX_DUMP" | grep -c 'len=')" -ge 3 ]; then
+    pass "aux delivers frames after main restarts"
+else
+    fail "aux delivers frames after main restarts" "no aux frames"
+fi
+
+# No encoder memory for aux at all: rvd runs without it, main untouched
+aux_rvd RSS_MOCK_ENC_CREATE_FAIL=4
+if grep -q "extra \[stream2\]: 1280x720 doesn't fit .* running without it" "$LOG_DIR/rvd.log" 2>/dev/null; then
+    pass "aux that doesn't fit is dropped with a warning"
+else
+    fail "aux that doesn't fit is dropped with a warning" "no 'running without it' line"
+fi
+check "main runs when aux doesn't fit" main_moves
+check_contains "a dropped aux is not a channel" "need valid video channel" \
+    "$OUT/raptorctl" rvd stream-restart 4
+
+# Room for 720p but not 1080p: a resize that doesn't fit goes back
+aux_rvd RSS_MOCK_ENC_CREATE_FAIL=4:921600
+check_contains "an aux resize that doesn't fit is refused" "kept old settings" \
+    "$OUT/raptorctl" rvd set-resolution 4 1920 1080
+check "aux is back at its old size" test "$(ring_field aux Size)" = "1280x720"
+AUX_DUMP=$(timeout 10 "$OUT/ringdump" aux -f -n 3 2>&1 || true)
+if [ "$(echo "$AUX_DUMP" | grep -c 'len=')" -ge 3 ]; then
+    pass "aux still delivers frames after a refused resize"
+else
+    fail "aux still delivers frames after a refused resize" "no aux frames"
+fi
+check "main runs after a refused aux resize" main_moves
+
+# No ring key: the ring is named after the section. A name a base stream
+# or another daemon owns is refused and the default used instead.
+sed 's/^ring = aux$/ring = main/' "$AUX_CONF" > "$AUX_CONF.tmp" && mv "$AUX_CONF.tmp" "$AUX_CONF"
+aux_rvd
+if grep -q "\[stream2\] ring = main is not usable" "$LOG_DIR/rvd.log" 2>/dev/null; then
+    pass "a reserved ring name is refused"
+else
+    fail "a reserved ring name is refused" "no 'ring = main is not usable' warning"
+fi
+check "the refused name falls back to ring stream2" test "$(ring_field stream2 Size)" = "1280x720"
+check "main is still main's ring" main_moves
+
+# Back to the suite's own rvd for the legs that follow
+pkill -f "$OUT/rvd" 2>/dev/null || true
+sleep 1
+start_daemon rvd "$OUT/rvd" -c "$CONFIG" -f -d
+sleep 2
+
 if [ "$KEEP" = "1" ]; then
     echo ""
     echo "=== Keeping daemons running (Ctrl-C to stop) ==="

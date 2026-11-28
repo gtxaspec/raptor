@@ -30,6 +30,12 @@ static const char *find_daemon_for_section(const char *section)
 		if (strcmp(section, map[i].section) == 0)
 			return map[i].daemon;
 	}
+	/* [streamN] and [sensorS_streamN]: every video stream is rvd's */
+	const char *p = section;
+	if (strncmp(p, "sensor", 6) == 0 && p[6] >= '0' && p[6] <= '9' && p[7] == '_')
+		p += 8;
+	if (strncmp(p, "stream", 6) == 0 && p[6] >= '0' && p[6] <= '9' && p[7] == '\0')
+		return "rvd";
 	return NULL;
 }
 
