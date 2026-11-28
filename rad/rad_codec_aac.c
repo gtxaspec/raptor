@@ -42,13 +42,13 @@ static int aac_init(rad_codec_ctx_t *ctx, rss_config_t *cfg, int sample_rate)
 	/* ISO/IEC 14496-3 budgets 6144 bits per channel per 1024-sample
 	 * frame, so the ceiling scales with the sample rate. */
 	const int max_bitrate = sample_rate * 6144 / 1024;
-	int bitrate = rss_config_get_int(cfg, "audio", "bitrate", 128000);
+	int bitrate = rss_config_get_int(cfg, RAD_CFG_SECTION(ctx), "bitrate", 128000);
 	if (bitrate > max_bitrate)
 		bitrate = max_bitrate;
 
 	/* HE-AAC needs Fs >= 32kHz (the Fs/2 SBR core collapses below);
 	 * clamp an explicit request rather than failing encoder open. */
-	const char *profile = rss_config_get_str(cfg, "audio", "aac_profile", "lc");
+	const char *profile = rss_config_get_str(cfg, RAD_CFG_SECTION(ctx), "aac_profile", "lc");
 	enum faac_object_type object = FAAC_OBJ_LOW;
 	if (strcmp(profile, "he") == 0) {
 		if (sample_rate >= 32000) {

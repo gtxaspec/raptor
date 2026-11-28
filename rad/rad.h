@@ -29,13 +29,17 @@
  * freed by deinit).
  */
 typedef struct rad_codec_ctx {
-	void *priv;	     /* codec-private state */
-	rss_ring_t *ring;    /* ring for direct publish (AAC accumulation) */
-	int codec_id;	     /* RAD_CODEC_* */
-	int encode_buf_size; /* minimum encode output buffer size */
-	int frame_samples;   /* samples per published frame (0 = sample-oriented) */
-	uint8_t aot;	     /* AAC object type in effect (2=LC, 5=HE v1), 0 otherwise */
+	void *priv;		 /* codec-private state */
+	rss_ring_t *ring;	 /* ring for direct publish (AAC accumulation) */
+	int codec_id;		 /* RAD_CODEC_* */
+	int encode_buf_size;	 /* minimum encode output buffer size */
+	int frame_samples;	 /* samples per published frame (0 = sample-oriented) */
+	uint8_t aot;		 /* AAC object type in effect (2=LC, 5=HE v1), 0 otherwise */
+	const char *cfg_section; /* config section for codec settings (NULL = "audio") */
 } rad_codec_ctx_t;
+
+/* Config section a codec reads its own settings (bitrate, profile...) from */
+#define RAD_CFG_SECTION(ctx) ((ctx)->cfg_section ? (ctx)->cfg_section : "audio")
 
 typedef struct {
 	const char *name; /* config name: "pcmu", "pcma", "l16", "aac", "opus" */

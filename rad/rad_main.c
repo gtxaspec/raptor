@@ -10,6 +10,12 @@
  *   l16   — Uncompressed 16-bit PCM, any sample rate (RTP PT dynamic)
  *   aac   — AAC-LC via faac (compile with RAPTOR_AAC=1)
  *   opus  — Opus via libopus (compile with RAPTOR_OPUS=1)
+ *
+ * Optional extra outputs (config: [audio2] / [audio3] codec): the same
+ * captured PCM feeds further encoders that publish to rings "audio2" /
+ * "audio3", so consumers needing other codecs or bitrates (e.g. Opus for
+ * live view, low-rate AAC-LC for recording) read them pre-encoded instead
+ * of transcoding. On demand by default: encoded only while acquired.
  */
 
 #include <stdio.h>
@@ -54,6 +60,218 @@ typedef struct {
 
 static void *ao_playback_thread(void *arg);
 
+/* ── Extra encoder outputs ([audio2], [audio3] → rings of the same name) ──
+ *
+ * Share the capture with the primary output: every PCM frame read for
+ * "audio" is also handed to each configured extra encoder. Each is off
+ * unless its section sets codec. Failures here are never fatal -- the
+ * primary output carries on. Codec settings (bitrate, aac_profile,
+ * opus_complexity) come from the output's own section; the sample rate
+ * is the capture's. */
+
+#define RAD_EXTRA_OUTPUTS 2
+
+typedef struct {
+	const char *name;	    /* ring name == config section */
+	const rad_codec_ops_t *ops; /* NULL = inactive */
+	rad_codec_ctx_t ctx;
+	rss_ring_t *ring;
+	uint8_t *buf;
+	int buf_size;
+	/* On demand (default): encode only while a consumer holds the ring
+	 * (rss_ring_acquire), as rvd does for JPEG. Consumers of an
+	 * on-demand output must acquire it. */
+	bool on_demand;
+	bool idle; /* no readers: encoder paused */
+	int64_t last_reap_us;
+	rss_config_t *cfg;
+	int sample_rate;
+} rad_out_t;
+
+typedef struct {
+	rad_out_t out[RAD_EXTRA_OUTPUTS];
+} rad_extra_t;
+
+static void out_stop(rad_out_t *o)
+{
+	if (o->ops && o->ops->deinit)
+		o->ops->deinit(&o->ctx);
+	o->ops = NULL;
+	memset(&o->ctx, 0, sizeof(o->ctx));
+	if (o->ring) {
+		rss_ring_destroy(o->ring);
+		o->ring = NULL;
+	}
+	free(o->buf);
+	o->buf = NULL;
+	o->buf_size = 0;
+}
+
+static void out_start(rad_out_t *o, rss_config_t *cfg, int sample_rate)
+{
+	const char *name = rss_config_get_str(cfg, o->name, "codec", "");
+	if (!name[0] || strcmp(name, "none") == 0)
+		return;
+
+	const rad_codec_ops_t *ops = rad_codec_find(name);
+	if (!ops) {
+		RSS_WARN("%s: unknown codec '%s' (not built in?), disabled", o->name, name);
+		return;
+	}
+	if ((ops->codec_id == RAD_CODEC_PCMU || ops->codec_id == RAD_CODEC_PCMA) &&
+	    sample_rate != 8000) {
+		RSS_WARN("%s: %s needs an 8000 Hz capture (have %d), disabled", o->name, name,
+			 sample_rate);
+		return;
+	}
+
+	memset(&o->ctx, 0, sizeof(o->ctx));
+	o->ctx.codec_id = ops->codec_id;
+	o->ctx.cfg_section = o->name;
+	if (ops->init(&o->ctx, cfg, sample_rate) != 0) {
+		RSS_WARN("%s: codec %s init failed, disabled", o->name, name);
+		memset(&o->ctx, 0, sizeof(o->ctx));
+		return;
+	}
+	o->ops = ops;
+
+	int ring_data_size = (ops->codec_id == RAD_CODEC_L16) ? 256 * 1024 : 128 * 1024;
+	o->ring = rss_ring_create(o->name, 32, ring_data_size);
+	if (!o->ring) {
+		RSS_WARN("%s: ring create failed, disabled", o->name);
+		out_stop(o);
+		return;
+	}
+	rss_ring_set_stream_info(o->ring, 0x10, ops->codec_id, (uint32_t)o->ctx.frame_samples, 0,
+				 sample_rate, 1, o->ctx.aot, 0);
+	o->ctx.ring = o->ring;
+
+	o->buf_size = o->ctx.encode_buf_size;
+	if (o->buf_size < sample_rate / 50 * 2)
+		o->buf_size = sample_rate / 50 * 2;
+	o->buf = malloc(o->buf_size);
+	if (!o->buf) {
+		RSS_WARN("%s: encode buffer alloc failed, disabled", o->name);
+		out_stop(o);
+		return;
+	}
+
+	o->cfg = cfg;
+	o->sample_rate = sample_rate;
+	o->on_demand = rss_config_get_bool(cfg, o->name, "on_demand", true);
+	o->idle = o->on_demand;
+	o->last_reap_us = rss_timestamp_us();
+
+	RSS_INFO("%s: %s %d Hz -> ring %s%s", o->name, ops->name, sample_rate, o->name,
+		 o->on_demand ? " (on demand)" : "");
+}
+
+/* Fresh encoder state for a resume: an AAC frame half-filled before the
+ * pause would otherwise carry a stale first-sample timestamp. Same codec
+ * and settings, so the ring's stream info stays valid. */
+static bool out_reset_codec(rad_out_t *o)
+{
+	const rad_codec_ops_t *ops = o->ops;
+	if (ops->deinit)
+		ops->deinit(&o->ctx);
+	memset(&o->ctx, 0, sizeof(o->ctx));
+	o->ctx.codec_id = ops->codec_id;
+	o->ctx.cfg_section = o->name;
+	if (ops->init(&o->ctx, o->cfg, o->sample_rate) != 0) {
+		o->ops = NULL;
+		return false;
+	}
+	o->ctx.ring = o->ring;
+	return true;
+}
+
+/* Returns true when the encoder should run for this chunk. */
+static bool out_demand(rad_out_t *o)
+{
+	if (!o->on_demand)
+		return true;
+
+	int64_t now = rss_timestamp_us();
+	if (now - o->last_reap_us >= 10000000) {
+		uint32_t reaped = rss_ring_reap_dead_readers(o->ring);
+		if (reaped)
+			RSS_WARN("%s: reaped %u dead reader(s)", o->name, reaped);
+		o->last_reap_us = now;
+	}
+
+	if (rss_ring_reader_count(o->ring) == 0) {
+		if (!o->idle) {
+			o->idle = true;
+			RSS_DEBUG("%s: paused (no readers)", o->name);
+		}
+		return false;
+	}
+	if (o->idle) {
+		if (!out_reset_codec(o)) {
+			RSS_WARN("%s: codec re-init failed, disabled", o->name);
+			out_stop(o);
+			return false;
+		}
+		o->idle = false;
+		RSS_DEBUG("%s: running (%u readers)", o->name, rss_ring_reader_count(o->ring));
+	}
+	return true;
+}
+
+static void out_encode(rad_out_t *o, const int16_t *pcm, int samples, int64_t ts)
+{
+	if (!o->ops || !out_demand(o))
+		return;
+	int n = o->ops->encode(&o->ctx, pcm, samples, o->buf, o->buf_size, ts);
+	if (n > 0)
+		rss_ring_publish(o->ring, o->buf, n, ts, o->ctx.codec_id, 0, RSS_SRC_SEQ_NONE);
+}
+
+static void extra_init(rad_extra_t *x)
+{
+	static const char *names[RAD_EXTRA_OUTPUTS] = {"audio2", "audio3"};
+	memset(x, 0, sizeof(*x));
+	for (int i = 0; i < RAD_EXTRA_OUTPUTS; i++)
+		x->out[i].name = names[i];
+}
+
+static void extra_start(rad_extra_t *x, rss_config_t *cfg, int sample_rate)
+{
+	for (int i = 0; i < RAD_EXTRA_OUTPUTS; i++)
+		out_start(&x->out[i], cfg, sample_rate);
+}
+
+static void extra_stop(rad_extra_t *x)
+{
+	for (int i = 0; i < RAD_EXTRA_OUTPUTS; i++)
+		out_stop(&x->out[i]);
+}
+
+static void extra_encode(rad_extra_t *x, const int16_t *pcm, int samples, int64_t ts)
+{
+	for (int i = 0; i < RAD_EXTRA_OUTPUTS; i++)
+		out_encode(&x->out[i], pcm, samples, ts);
+}
+
+/* status / config-show: "outputs": [{ring, codec, on_demand, running}] */
+static void extra_json(const rad_extra_t *x, cJSON *parent)
+{
+	cJSON *arr = NULL;
+	for (int i = 0; i < RAD_EXTRA_OUTPUTS; i++) {
+		const rad_out_t *o = &x->out[i];
+		if (!o->ops)
+			continue;
+		if (!arr)
+			arr = cJSON_AddArrayToObject(parent, "outputs");
+		cJSON *e = cJSON_CreateObject();
+		cJSON_AddStringToObject(e, "ring", o->name);
+		cJSON_AddStringToObject(e, "codec", o->ops->name);
+		cJSON_AddBoolToObject(e, "on_demand", o->on_demand);
+		cJSON_AddBoolToObject(e, "running", !o->idle);
+		cJSON_AddItemToArray(arr, e);
+	}
+}
+
 /* ── Control socket handler ── */
 
 typedef struct {
@@ -94,6 +312,7 @@ typedef struct {
 	uint8_t **encode_buf;
 	int *encode_buf_size;
 	rad_clock_t *synth_clock;
+	rad_extra_t *extra;
 } rad_ctrl_ctx_t;
 
 static int rad_fmt_result(char *buf, int bufsz, int ret)
@@ -287,6 +506,7 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			rss_ring_destroy(*ctx->ring);
 			*ctx->ring = NULL;
 		}
+		extra_stop(ctx->extra);
 
 		/* Deinit HAL audio input */
 		RSS_HAL_CALL(ctx->ops, audio_deinit, ctx->hal_ctx);
@@ -374,6 +594,7 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 					 (uint32_t)ctx->codec_ctx->frame_samples, 0,
 					 ctx->sample_rate, 1, ctx->codec_ctx->aot, 0);
 		ctx->codec_ctx->ring = *ctx->ring;
+		extra_start(ctx->extra, ctx->cfg, ctx->sample_rate);
 
 		ctx->ai_disabled = false;
 		rad_clock_init(ctx->synth_clock, rss_timestamp_us());
@@ -630,11 +851,12 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			(*ctx->codec_ops)->deinit(ctx->codec_ctx);
 		memset(ctx->codec_ctx, 0, sizeof(*ctx->codec_ctx));
 
-		/* 2. Destroy ring (consumers will detect and reconnect) */
+		/* 2. Destroy rings (consumers will detect and reconnect) */
 		if (*ctx->ring) {
 			rss_ring_destroy(*ctx->ring);
 			*ctx->ring = NULL;
 		}
+		extra_stop(ctx->extra);
 
 		/* 3. Reinit HAL audio (sample rate may have changed) */
 		RSS_HAL_CALL(ctx->ops, audio_deinit, ctx->hal_ctx);
@@ -778,6 +1000,9 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 			*ctx->encode_buf_size = new_buf_size;
 		}
 
+		/* 7b. Second output follows the (possibly new) capture rate */
+		extra_start(ctx->extra, ctx->cfg, new_sample_rate);
+
 		/* 8. Persist config only after successful switch */
 		if (codec_switched)
 			rss_config_set_str(ctx->cfg, "audio", "codec", target_codec);
@@ -796,6 +1021,7 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		cJSON_AddStringToObject(r, "status", "ok");
 		cJSON *config = cJSON_AddObjectToObject(r, "config");
 		cJSON_AddStringToObject(config, "codec", ctx->codec_str);
+		extra_json(ctx->extra, config);
 		cJSON_AddNumberToObject(config, "sample_rate", ctx->sample_rate);
 		cJSON_AddNumberToObject(config, "volume", ctx->volume);
 		cJSON_AddNumberToObject(config, "gain", ctx->gain);
@@ -812,6 +1038,7 @@ static int rad_ctrl_handler(const char *cmd_json, char *resp_buf, int resp_buf_s
 		cJSON_AddStringToObject(r, "status", "ok");
 		cJSON_AddBoolToObject(r, "ai_enabled", !ctx->ai_disabled);
 		cJSON_AddStringToObject(r, "codec", ctx->codec_str);
+		extra_json(ctx->extra, r);
 		cJSON_AddNumberToObject(r, "sample_rate", ctx->sample_rate);
 		cJSON_AddNumberToObject(r, "volume", ctx->volume);
 		cJSON_AddNumberToObject(r, "gain", ctx->gain);
@@ -1052,6 +1279,8 @@ int main(int argc, char **argv)
 	uint8_t *encode_buf = NULL;
 	const rad_codec_ops_t *codec_ops = NULL;
 	rad_codec_ctx_t codec_ctx = {0};
+	rad_extra_t extra;
+	extra_init(&extra);
 	bool ao_enabled = false;
 	pthread_t ao_tid;
 	bool ao_thread_started = false;
@@ -1248,6 +1477,9 @@ int main(int argc, char **argv)
 	/* Give codec access to ring for direct publish (AAC accumulation) */
 	codec_ctx.ring = ring;
 
+	/* Optional extra encoders on the same capture */
+	extra_start(&extra, dctx.cfg, sample_rate);
+
 	/* Control socket */
 	rss_mkdir_p(RSS_RUN_DIR);
 	ctrl = rss_ctrl_listen(RSS_RUN_DIR "/rad.sock");
@@ -1296,6 +1528,7 @@ int main(int argc, char **argv)
 		.encode_buf = &encode_buf,
 		.encode_buf_size = &encode_buf_size,
 		.synth_clock = &synth_clock,
+		.extra = &extra,
 	};
 
 	uint64_t frame_count = 0;
@@ -1359,6 +1592,8 @@ int main(int argc, char **argv)
 			rss_ring_publish(ring, encode_buf, out_len, ts, ctrl_ctx.codec_id, 0,
 					 RSS_SRC_SEQ_NONE);
 
+		extra_encode(&extra, pcm, samples, ts);
+
 		RSS_HAL_CALL(ops, audio_release_frame, hal_ctx, ai_dev, 0, &frame);
 
 		frame_count++;
@@ -1386,6 +1621,7 @@ cleanup:
 		codec_ops->deinit(&codec_ctx);
 	if (ring)
 		rss_ring_destroy(ring);
+	extra_stop(&extra);
 	if (hal_ctx) {
 		if (ctrl_ctx.ao_enabled)
 			RSS_HAL_CALL(ops, ao_deinit, hal_ctx);
