@@ -8,7 +8,7 @@
  * way to discard buffered input).
  *
  * Requires RAPTOR_AAC_ENC (faac). Optional: RAPTOR_OPUS (libopus
- * decode), RAPTOR_AAC (helix-aac decode for AAC re-encode).
+ * decode), RAPTOR_AAC (libfaad3 decode for AAC re-encode).
  */
 
 #ifndef RAPTOR_AAC_ENC
@@ -17,10 +17,11 @@
 #include <rss_common.h>
 
 /* Stub when faac is not available */
-rsp_audio_enc_t *rsp_audio_init(uint32_t input_codec, uint32_t sample_rate)
+rsp_audio_enc_t *rsp_audio_init(uint32_t input_codec, uint32_t sample_rate, uint8_t aac_aot)
 {
 	(void)input_codec;
 	(void)sample_rate;
+	(void)aac_aot;
 	RSS_WARN("rsp_audio: transcode not available (no faac)");
 	return NULL;
 }
@@ -65,7 +66,8 @@ void rsp_audio_free(rsp_audio_enc_t *enc)
 #endif
 
 #ifdef RAPTOR_AAC
-#include <aacdec.h>
+#include <faad3.h>
+#include <rss_aac.h>
 #endif
 
 /* ── G.711 tables ── */
@@ -135,12 +137,17 @@ struct rsp_audio_enc {
 	OpusDecoder *opus_dec;
 #endif
 #ifdef RAPTOR_AAC
-	HAACDecoder aac_dec;
+	faad_decoder *aac_dec;
+	int16_t *aac_pcm;     /* sized from the decoder's max_output_bytes */
+	uint32_t aac_pcm_cap; /* bytes */
 #endif
 };
 
-rsp_audio_enc_t *rsp_audio_init(uint32_t input_codec, uint32_t sample_rate)
+rsp_audio_enc_t *rsp_audio_init(uint32_t input_codec, uint32_t sample_rate, uint8_t aac_aot)
 {
+#ifndef RAPTOR_AAC
+	(void)aac_aot;
+#endif
 	rsp_audio_enc_t *enc = calloc(1, sizeof(*enc));
 	if (!enc)
 		return NULL;
@@ -165,18 +172,29 @@ rsp_audio_enc_t *rsp_audio_init(uint32_t input_codec, uint32_t sample_rate)
 		return NULL;
 	}
 	params.sample_rate = enc->output_rate;
-	params.num_channels = 1;
-	params.mpeg_version = FAAC_MPEG4;
+	params.bandwidth = 0; /* derive cutoff from bit_rate */
+	params.input_format = FAAC_INPUT_16BIT;
 	/* RTMP push stays AAC-LC: the FLV sequence header emitted here
 	 * carries no HE signaling, and the fixed 128k bitrate would never
 	 * select HE anyway. */
+#if FAAC_VERSION_MAJOR >= 3
+	/* ABI 3: whole-stream bit_rate (same value for mono), raw is
+	 * MPEG-4, TNS/PNS are flags (both on). */
+	params.channels = 1;
+	params.object_type = FAAC_OBJ_LC;
+	params.stereo_mode = FAAC_STEREO_LR;
+	params.flags = FAAC_FLAG_TNS | FAAC_FLAG_PNS;
+	params.bit_rate = 128000;
+	params.stream_format = FAAC_STREAM_RAW;
+#else
+	params.num_channels = 1;
+	params.mpeg_version = FAAC_MPEG4;
 	params.object_type = FAAC_OBJ_LOW;
 	params.joint_mode = FAAC_JOINT_NONE;
 	params.use_tns = false;
 	params.bit_rate = 128000; /* per channel; mono */
-	params.bandwidth = 0;	  /* derive cutoff from bit_rate */
 	params.output_format = FAAC_STREAM_RAW;
-	params.input_format = FAAC_INPUT_16BIT;
+#endif
 
 	status = faac_encoder_open(&params, &enc->faac);
 	if (status != FAAC_OK) {
@@ -222,15 +240,40 @@ rsp_audio_enc_t *rsp_audio_init(uint32_t input_codec, uint32_t sample_rate)
 
 #ifdef RAPTOR_AAC
 	if (input_codec == RSP_CODEC_AAC) {
-		enc->aac_dec = AACInitDecoder();
-		if (!enc->aac_dec) {
-			RSS_WARN("rsp_audio: AAC decoder init failed");
+		/* Ring AAC is raw mono access units; the ASC is the one rad
+		 * signals for the same AOT and rate, so HE-AAC input decodes
+		 * through SBR at the ring rate instead of as a bare core. */
+		uint8_t asc[RSS_AAC_ASC_MAX];
+		int aot = aac_aot == RSS_AAC_AOT_SBR ? RSS_AAC_AOT_SBR : RSS_AAC_AOT_LC;
+		int asc_len = rss_aac_asc(aot, (int)sample_rate, 1, asc);
+		faad_config dc;
+		faad_status ds = faad_config_init(&dc, (uint32_t)sizeof(dc));
+		if (ds == FAAD_OK) {
+			dc.stream_format = FAAD_STREAM_RAW;
+			dc.output_format = FAAD_OUTPUT_16BIT;
+			dc.downmix_mode = FAAD_DOWNMIX_MONO;
+			ds = asc_len > 0
+				     ? faad_decoder_open(&dc, asc, (uint32_t)asc_len, &enc->aac_dec)
+				     : FAAD_ERR_UNSUPPORTED;
+		}
+		/* faad_decode_frame() wants the lifetime bound, implicit
+		 * SBR/PS included, so the buffer comes from the decoder. */
+		faad_stream_info di = {.struct_size = sizeof(di)};
+		if (ds == FAAD_OK)
+			ds = faad_decoder_get_info(enc->aac_dec, &di);
+		if (ds == FAAD_OK) {
+			enc->aac_pcm = malloc(di.max_output_bytes);
+			if (enc->aac_pcm)
+				enc->aac_pcm_cap = di.max_output_bytes;
+			else
+				ds = FAAD_ERR_NO_MEMORY;
+		}
+		if (ds != FAAD_OK) {
+			RSS_WARN("rsp_audio: AAC decoder init failed: %s", faad_strerror(ds));
+			faad_decoder_close(&enc->aac_dec);
 		} else {
-			AACFrameInfo fi = {0};
-			fi.nChans = 1;
-			fi.sampRateCore = (int)sample_rate;
-			AACSetRawBlockParams(enc->aac_dec, 0, &fi);
-			RSS_DEBUG("rsp_audio: AAC decoder ready (raw mode, %uHz)", sample_rate);
+			RSS_DEBUG("rsp_audio: AAC decoder ready (raw, aot %d, %uHz, %u B PCM)", aot,
+				  sample_rate, enc->aac_pcm_cap);
 		}
 	}
 #endif
@@ -297,19 +340,19 @@ static int decode_to_pcm(rsp_audio_enc_t *enc, const uint8_t *data, uint32_t len
 		if (!enc->aac_dec)
 			return 0;
 		{
-			unsigned char *inp = (unsigned char *)data;
-			int left = (int)len;
-			int err = AACDecode(enc->aac_dec, &inp, &left, pcm);
-			if (err != 0)
+			/* Decode into the decoder-sized buffer. Mono downmix
+			 * is configured, so written bytes are mono samples;
+			 * pcm_max caps what is handed on. */
+			uint32_t used = 0, written = 0;
+			faad_status ds =
+				faad_decode_frame(enc->aac_dec, data, len, &used, enc->aac_pcm,
+						  enc->aac_pcm_cap, &written, NULL);
+			if (ds != FAAD_OK)
 				return 0;
-			AACFrameInfo info;
-			AACGetLastFrameInfo(enc->aac_dec, &info);
-			samples = info.outputSamps;
-			if (info.nChans == 2) {
-				samples /= 2;
-				for (int i = 0; i < samples; i++)
-					pcm[i] = (pcm[i * 2] + pcm[i * 2 + 1]) / 2;
-			}
+			samples = (int)(written / sizeof(int16_t));
+			if (samples > pcm_max)
+				samples = pcm_max;
+			memcpy(pcm, enc->aac_pcm, (size_t)samples * sizeof(int16_t));
 		}
 		break;
 #endif
@@ -456,9 +499,8 @@ void rsp_audio_reset(rsp_audio_enc_t *enc)
 		opus_decoder_ctl(enc->opus_dec, OPUS_RESET_STATE);
 #endif
 #ifdef RAPTOR_AAC
-	if (enc->aac_dec) {
-		AACFlushCodec(enc->aac_dec);
-	}
+	if (enc->aac_dec)
+		faad_decoder_flush(enc->aac_dec);
 #endif
 	enc->pcm_fill = 0;
 	enc->out_ts_running = false;
@@ -474,8 +516,8 @@ void rsp_audio_free(rsp_audio_enc_t *enc)
 		opus_decoder_destroy(enc->opus_dec);
 #endif
 #ifdef RAPTOR_AAC
-	if (enc->aac_dec)
-		AACFreeDecoder(enc->aac_dec);
+	faad_decoder_close(&enc->aac_dec);
+	free(enc->aac_pcm);
 #endif
 	free(enc->pcm_buf);
 	free(enc->aac_buf);

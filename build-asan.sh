@@ -95,7 +95,7 @@ if [ -n "$PREV_SAN" ] && [ "$PREV_SAN" != "$SAN_LABEL" ]; then
     # asan binaries for tsan runs. Derive the list instead of naming it.
     find "$OUT" -name '*.a' -print0 2>/dev/null | xargs -0r rm -f
     rm -rf "$OUT"/mbedtls-build "$OUT"/mbedtls-install "$OUT"/compy-build \
-        "$OUT"/srt-build "$OUT"/srt-install "$OUT"/faac-build
+        "$OUT"/srt-build "$OUT"/srt-install "$OUT"/faac-build "$OUT"/faac-install
     rm -f "$OUT"/schrift.o
 fi
 # The stamp is written at the END, with .build-ok: it records what was
@@ -109,9 +109,10 @@ fi
 # A third argument pins the clone to that tag: the checkout is made once
 # and never pulled, since a detached tag checkout with a single fetch
 # refspec fast-forwards straight back onto master. faac needs this: the
-# firmware builds the 2.1 release and upstream master changed the
+# firmware builds a tagged release and upstream master changed the
 # faac_params_init signature on 2026-08-20, which broke this build for
-# everyone whose deps clone had been updated since.
+# everyone whose deps clone had been updated since. The clone lives in
+# deps/faac3: an old deps/faac from knik0/faac has no faac-3.0.1 tag.
 clone_or_pull() {
     local name="$1" url="$2" ref="$3" dir="$DEPS/$name"
     if [ -d "$dir/.git" ]; then
@@ -149,8 +150,7 @@ find_or_clone raptor-ipc    https://github.com/gtxaspec/raptor-ipc.git    IPC_DI
 find_or_clone raptor-hal    https://github.com/gtxaspec/raptor-hal.git    HAL_DIR
 find_or_clone compy         https://github.com/gtxaspec/compy.git         COMPY_DIR
 find_or_clone libschrift    https://github.com/tomolt/libschrift.git      SCHRIFT_DIR
-find_or_clone faac          https://github.com/knik0/faac.git             FAAC_DIR faac-2.1
-find_or_clone ESP8266Audio  https://github.com/earlephilhower/ESP8266Audio.git ESP8266AUDIO_DIR
+find_or_clone faac3         https://github.com/FreewareAdvancedAudio/faac.git FAAC_DIR faac-3.0.1
 
 # Build mbedTLS from source with DTLS-SRTP enabled
 MBEDTLS_VER="3.6.6"
@@ -254,13 +254,6 @@ COMPY_CFLAGS="$COMPY_CFLAGS -I$COMPY_BUILD/_deps/metalang99-src/include"
 CC=gcc
 CFLAGS="-Wall -Wextra -Werror -std=$RAPTOR_STD -D_GNU_SOURCE -DPLATFORM_T31 -O1 -g $SANITIZE"
 CFLAGS="$CFLAGS -I$IPC_DIR/include -I$COMMON_DIR/include -I$COMMON_DIR/third_party/monocypher $MBEDTLS_CFLAGS"
-# libhelix-aac's headers need a platform: x86 is built in, other hosts (the
-# arm64 build hosts) take its generic C path. Every unit that includes them
-# needs the same answer, so it is set here.
-case "$(uname -m)" in
-    x86_64|i?86) HOST_X86=1 ;;
-    *) HOST_X86=0; CFLAGS="$CFLAGS -DARDUINO" ;;
-esac
 LDFLAGS="$SANITIZE -lpthread -lrt -lm"
 
 HAL_CFLAGS="-I$HAL_DIR/include"
@@ -324,38 +317,36 @@ $CC -o "$OUT/rhd" "$OUT/rhd_main.o" "$OUT/rhd_http.o" "$OUT/rhd_audio.o" $LIBS $
 echo "  -> rhd"
 
 echo "=== RSD ==="
-# Helix AAC decoder (vendored inside ESP8266Audio) for the backchannel
-# AAC path. Same from-clone treatment as libfaac below; the Arduino
-# headers it expects are stubbed away, and it compiles under the
-# sanitizers on purpose -- this decoder eats network data.
-HELIX_AAC_DIR="$ESP8266AUDIO_DIR/src/libhelix-aac"
-HELIX_BUILD="$OUT/helix-aac-build"
-if [ ! -f "$HELIX_BUILD/libhelix-aac.a" ]; then
-    echo "=== libhelix-aac (from clone) ==="
-    mkdir -p "$HELIX_BUILD/stubs"
-    printf '%s\n' '#ifndef PGMSPACE_H' '#define PGMSPACE_H' '#include <stdint.h>' \
-        '#include <string.h>' '#define PROGMEM' '#define PGM_P const char *' \
-        '#define pgm_read_byte(x) (*(const uint8_t *)(x))' \
-        '#define pgm_read_word(x) (*(const uint16_t *)(x))' \
-        '#define pgm_read_dword(x) (*(const uint32_t *)(x))' \
-        '#define memcpy_P memcpy' '#endif' > "$HELIX_BUILD/stubs/pgmspace.h"
-    printf '%s\n' '#ifndef ARDUINO_H' '#define ARDUINO_H' '#include <stdint.h>' \
-        '#include "pgmspace.h"' '#endif' > "$HELIX_BUILD/stubs/Arduino.h"
-    for f in "$HELIX_AAC_DIR"/*.c; do
-        $CC $CFLAGS -w -DUSE_DEFAULT_STDLIB -I"$HELIX_BUILD/stubs" -I"$HELIX_AAC_DIR" -fPIC \
-            -c "$f" -o "$HELIX_BUILD/$(basename "${f%.c}").o"
-    done
-    ar rcs "$HELIX_BUILD/libhelix-aac.a" "$HELIX_BUILD"/*.o
-    echo "  -> libhelix-aac.a"
+# FAAC 3.0 from the clone -- 3.0 is not in Debian/Ubuntu yet. One
+# meson build gives both libraries: libfaad3 for the
+# backchannel here, libfaac for rad below. Both compile under the
+# sanitizers on purpose -- the decoder eats network data.
+FAAC_BUILD="$OUT/faac-build"
+FAAC_PREFIX="$OUT/faac-install"
+if [ ! -f "$FAAC_PREFIX/lib/libfaac.a" ] || [ ! -f "$FAAC_PREFIX/lib/libfaad3.a" ]; then
+    echo "=== libfaac + libfaad3 (from clone) ==="
+    rm -rf "$FAAC_BUILD"
+    CC=$CC meson setup "$FAAC_BUILD" "$FAAC_DIR" --prefix="$FAAC_PREFIX" --libdir=lib \
+        -Ddefault_library=static -Dbuildtype=plain -Dc_args="-O1 -g $SANITIZE" \
+        -Dc_link_args="$SANITIZE" -Dfrontend=false -Dmax-channels=2 \
+        -Dmuxer=false -Dresampler=false -Dmuxer-video=false \
+        -Dmuxer-fragmented=false -Dmuxer-chapters=false \
+        -Dencoder-drc=false -Ddecoder-drc=false -Ddecoder-dab=false -Ddecoder-ps=false >/dev/null
+    ninja -C "$FAAC_BUILD" >/dev/null
+    ninja -C "$FAAC_BUILD" install >/dev/null
+    echo "  -> libfaac.a libfaad3.a"
 fi
-RSD_CODEC_CFLAGS="-DRAPTOR_OPUS -DRAPTOR_AAC -I$HELIX_AAC_DIR"
+FAAC_CFLAGS="-I$FAAC_PREFIX/include"
+FAAC_LIBS="$FAAC_PREFIX/lib/libfaac.a"
+FAAD_LIBS="$FAAC_PREFIX/lib/libfaad3.a"
+RSD_CODEC_CFLAGS="-DRAPTOR_OPUS -DRAPTOR_AAC $FAAC_CFLAGS"
 $CC $CFLAGS $COMPY_CFLAGS $RSD_CODEC_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_main.c" -o "$OUT/rsd_main.o"
 $CC $CFLAGS $COMPY_CFLAGS $RSD_CODEC_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_server.c" -o "$OUT/rsd_server.o"
 $CC $CFLAGS $COMPY_CFLAGS $RSD_CODEC_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_session.c" -o "$OUT/rsd_session.o"
 $CC $CFLAGS $COMPY_CFLAGS $RSD_CODEC_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_ring_reader.c" -o "$OUT/rsd_ring_reader.o"
 $CC $CFLAGS $COMPY_CFLAGS $RSD_CODEC_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_sendq.c" -o "$OUT/rsd_sendq.o"
 $CC $CFLAGS $COMPY_CFLAGS $RSD_CODEC_CFLAGS -c "$RAPTOR_DIR/rsd/rsd_backchannel.c" -o "$OUT/rsd_backchannel.o"
-$CC -o "$OUT/rsd" "$OUT"/rsd_main.o "$OUT"/rsd_server.o "$OUT"/rsd_session.o "$OUT"/rsd_ring_reader.o "$OUT"/rsd_sendq.o "$OUT"/rsd_backchannel.o $LIBS "$COMPY_BUILD/libcompy.a" $MBEDTLS_LIBS -lopus "$HELIX_BUILD/libhelix-aac.a" $LDFLAGS
+$CC -o "$OUT/rsd" "$OUT"/rsd_main.o "$OUT"/rsd_server.o "$OUT"/rsd_session.o "$OUT"/rsd_ring_reader.o "$OUT"/rsd_sendq.o "$OUT"/rsd_backchannel.o $LIBS "$COMPY_BUILD/libcompy.a" $MBEDTLS_LIBS -lopus $FAAD_LIBS $LDFLAGS
 echo "  -> rsd"
 
 echo "=== RIC ==="
@@ -477,44 +468,7 @@ $CC -o "$OUT/rvd" "$OUT"/rvd_main.o "$OUT"/rvd_pipeline.o "$OUT"/rvd_frame_loop.
 echo "  -> rvd"
 
 echo "=== RAD (mock HAL) ==="
-# Build libfaac from the clone — not packaged in Debian/Ubuntu due to
-# licensing. Needs a minimal config.h (upstream's Makefile/autotools
-# build chain is bypassed; mirrors thingino-firmware's faac.mk).
-FAAC_BUILD="$OUT/faac-build"
-if [ ! -f "$FAAC_BUILD/libfaac.a" ]; then
-    echo "=== libfaac (from clone) ==="
-    mkdir -p "$FAAC_BUILD"
-    printf '%s\n' \
-        '#define PACKAGE "faac"' \
-        '#define PACKAGE_VERSION "1.40.0"' \
-        '#define HAVE_GETOPT_H 1' \
-        '#define HAVE_STDINT_H 1' \
-        '#define HAVE_SYS_TIME_H 1' \
-        '#define HAVE_SYS_TYPES_H 1' \
-        '#define HAVE_STRCASECMP 1' \
-        '#define FAAC_PRECISION_SINGLE 1' \
-        '#define FAAC_SBR_DECIMATION 1' \
-        '#define MAX_CHANNELS 2' \
-        > "$FAAC_BUILD/config.h"
-    # Every libfaac source: the hand list predated the new faac_encoder
-    # API (faac.c) and SBR, and drifted exactly the way the comment
-    # above warns.
-    FAAC_SRCS=$(cd "$FAAC_DIR/libfaac" && ls *.c)
-    # quantize_sse.c is x86 intrinsics, used only with HAVE_SSE2 (unset here)
-    [ "$HOST_X86" = 1 ] || FAAC_SRCS=$(echo "$FAAC_SRCS" | grep -v '^quantize_sse\.c$')
-    # -w silences upstream libfaac warnings (sign-compare, unused-parameter,
-    # missing-field-initializers). Not our code to fix.
-    for f in $FAAC_SRCS; do
-        $CC $CFLAGS -w -DHAVE_CONFIG_H -I"$FAAC_BUILD" \
-            -I"$FAAC_DIR" -I"$FAAC_DIR/include" -fPIC \
-            -c "$FAAC_DIR/libfaac/$f" -o "$FAAC_BUILD/${f%.c}.o"
-    done
-    ar rcs "$FAAC_BUILD/libfaac.a" "$FAAC_BUILD"/*.o
-    echo "  -> libfaac.a"
-fi
-FAAC_CFLAGS="-I$FAAC_DIR/include"
-FAAC_LIBS="$FAAC_BUILD/libfaac.a"
-
+# libfaac was built with libfaad3 in the RSD section above.
 for f in rad_main.c rad_clock.c rad_resync.c rad_codec.c rad_codec_g711.c rad_codec_l16.c rad_codec_aac.c rad_codec_opus.c; do
   $CC $CFLAGS $HAL_CFLAGS $FAAC_CFLAGS -DRAPTOR_AAC -DRAPTOR_OPUS -c "$RAPTOR_DIR/rad/$f" -o "$OUT/${f%.c}.o"
 done

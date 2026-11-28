@@ -89,8 +89,11 @@ typedef struct {
 	 * layout never depends on codec flags. */
 	void *opus; /* OpusDecoder*, RAPTOR_OPUS builds */
 	bool opus_dead;
-	void *aac; /* HAACDecoder, RAPTOR_AAC builds */
+	void *aac;	      /* faad_decoder*, RAPTOR_AAC builds */
+	int16_t *aac_pcm;     /* sized from the decoder's max_output_bytes */
+	uint32_t aac_pcm_cap; /* bytes */
 	bool aac_dead;
+	bool aac_off_format; /* decoder output is not ring rate mono */
 	/* RFC 3640 fragmented-AU reassembly: fragments carry the full AU
 	 * size in every piece and share one RTP timestamp. */
 	uint32_t aac_frag_ts;

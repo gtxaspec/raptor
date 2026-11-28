@@ -29,9 +29,6 @@
 #ifdef RAPTOR_MP3
 #include <mp3dec.h>
 #endif
-#ifdef RAPTOR_AAC
-#include <aacdec.h>
-#endif
 
 #define RFS_MP4_MAX_FRAMES	 65536
 #define RFS_MP4_MAX_AUDIO_FRAMES (65536 * 4)
