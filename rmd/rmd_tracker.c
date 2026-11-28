@@ -179,16 +179,21 @@ static int fetch_boxes(rmd_ctx_t *ctx, rmd_box_t *boxes, int max, int64_t *ts)
 static void go_back(rmd_ctx_t *ctx)
 {
 	rmd_track_state_t *s = &ctx->track;
+	bool returning = false;
 	if (s->moved && ctx->track_cfg.home_on_idle) {
 		RSS_INFO("track: motion over after %d move(s), going back%s", s->moves,
 			 ctx->track_cfg.shadow ? " (shadow)" : "");
 		void *user;
 		const rmd_track_io_t *io = io_of(ctx, &user);
 		if (!ctx->track_cfg.shadow)
-			io->go_back(user);
+			returning = io->go_back(user) == 0;
 	}
+	/* A trigger right after must not look at frames taken while the head returns:
+	 * wait for it to stop, then settle, as after any move. */
+	s->moving = returning;
+	if (returning)
+		s->stop_us = rss_timestamp_us();
 	s->moved = false;
-	s->moving = false;
 	s->have_prev = false;
 	s->moves = 0;
 	rmd_track_avg_reset(&s->avg);

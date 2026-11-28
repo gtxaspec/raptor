@@ -261,11 +261,58 @@ TEST tracker_go_back(void)
 	rmd_track_step(&ctx);
 	ASSERT_EQ(1, f.go_backs);
 
+	/* the head is still returning: a trigger now waits for it to stop first */
 	ctx.state = RMD_STATE_ACTIVE;
+	rmd_track_step(&ctx);
+	ASSERT_EQ(1, f.moves);
 	rmd_track_step(&ctx);
 	ASSERT_EQ(2, f.moves);
 	rmd_track_shutdown(&ctx);
 	ASSERT_EQ(2, f.go_backs);
+	PASS();
+}
+
+/* After go back, a trigger must not act on a result from a frame taken while the head
+ * returns: it waits for the head to stop, then for settle_ms after that stop. */
+TEST tracker_retrigger_waits_for_the_head_to_return(void)
+{
+	rmd_ctx_t ctx;
+	fake_t f;
+	setup(&ctx, &f);
+	ctx.track_cfg.settle_ms = 1000;
+
+	box(&f, 120, 180);
+	f.ts = rss_timestamp_us() - 2000000;
+	rmd_track_step(&ctx);
+	ASSERT_EQ(1, f.moves);
+	f.busy = 0;
+	rmd_track_step(&ctx); /* stopped */
+	ctx.state = RMD_STATE_IDLE;
+	rmd_track_step(&ctx);
+	ASSERT_EQ(1, f.go_backs);
+	ASSERT(ctx.track.moving);
+	ASSERT(ctx.track.stop_us > 0);
+
+	/* re-trigger at once, head still running: no look, no move */
+	ctx.state = RMD_STATE_ACTIVE;
+	f.busy = 1;
+	int calls = f.detection_calls;
+	f.ts = rss_timestamp_us();
+	rmd_track_step(&ctx);
+	ASSERT_EQ(calls, f.detection_calls);
+	ASSERT_EQ(1, f.moves);
+
+	/* stopped: a result stamped inside the settle time is ignored, a later one acted on */
+	f.busy = 0;
+	rmd_track_step(&ctx);
+	ASSERT_FALSE(ctx.track.moving);
+	int64_t stop = ctx.track.stop_us;
+	f.ts = stop + 500000;
+	rmd_track_step(&ctx);
+	ASSERT_EQ(1, f.moves);
+	f.ts = stop + 1000000;
+	rmd_track_step(&ctx);
+	ASSERT_EQ(2, f.moves);
 	PASS();
 }
 
@@ -525,6 +572,7 @@ SUITE(rmd_tracker_suite)
 	RUN_TEST(tracker_average);
 	RUN_TEST(tracker_shadow);
 	RUN_TEST(tracker_go_back);
+	RUN_TEST(tracker_retrigger_waits_for_the_head_to_return);
 	RUN_TEST(tracker_move_bounded_by_the_head_range);
 	RUN_TEST(tracker_limits_retried_not_hammered);
 	RUN_TEST(tracker_load_holds_values_in_range);
