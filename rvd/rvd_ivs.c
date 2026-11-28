@@ -106,8 +106,10 @@ int rvd_ivs_start(rvd_state_t *st)
 
 	int w = st->streams[1].enc_cfg.width;
 	int h = st->streams[1].enc_cfg.height;
+	pthread_mutex_lock(&st->ivs_det_lock);
 	st->ivs_w = w;
 	st->ivs_h = h;
+	pthread_mutex_unlock(&st->ivs_det_lock);
 
 	void *algo_handle = NULL;
 	st->ivs_persondet = false;

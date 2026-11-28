@@ -189,7 +189,7 @@ struct rvd_state {
 	int ivs_roi_count;  /* total ROI count for move detection */
 	_Atomic int ivs_person_count;
 	rss_ivs_detect_result_t ivs_detections; /* latest persondet results */
-	int ivs_w, ivs_h;			/* the frame detections are in */
+	int ivs_w, ivs_h; /* the frame detections are in; under ivs_det_lock */
 	pthread_mutex_t ivs_det_lock;		/* protects ivs_detections */
 	/* save raw on the JZDL thread's channel: that thread owns the channel's
 	 * frame depth, so it copies one frame for the requester (rvd_ivs_grab_raw) */

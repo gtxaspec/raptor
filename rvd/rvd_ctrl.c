@@ -1352,15 +1352,18 @@ static int handle_ivs_cmd(const char *cmd, const char *cmd_json, rvd_state_t *st
 			return rss_ctrl_resp_error(resp, resp_size, "ivs not active");
 		}
 		rss_ivs_detect_result_t snap;
+		int ivs_w, ivs_h;
 		pthread_mutex_lock(&st->ivs_det_lock);
 		snap = st->ivs_detections;
+		ivs_w = st->ivs_w;
+		ivs_h = st->ivs_h;
 		pthread_mutex_unlock(&st->ivs_det_lock);
 
 		cJSON *r = cJSON_CreateObject();
 		cJSON_AddStringToObject(r, "status", "ok");
 		cJSON_AddNumberToObject(r, "count", (double)snap.count);
-		cJSON_AddNumberToObject(r, "width", (double)st->ivs_w);
-		cJSON_AddNumberToObject(r, "height", (double)st->ivs_h);
+		cJSON_AddNumberToObject(r, "width", (double)ivs_w);
+		cJSON_AddNumberToObject(r, "height", (double)ivs_h);
 		cJSON_AddNumberToObject(r, "timestamp", (double)snap.timestamp);
 		cJSON *arr = cJSON_AddArrayToObject(r, "detections");
 		for (int i = 0; i < snap.count; i++) {
