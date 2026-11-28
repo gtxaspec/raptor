@@ -2772,6 +2772,43 @@ def scenario_day_trial(stub, watch):
     ric.stop()
 
 
+def scenario_poll_cadence(stub, watch):
+    """Poll-counted delays must not shrink while a client is asking. A
+    control request wakes the main loop's wait early, and polling on
+    every wake let back-to-back status requests run a 5-poll debounce in
+    a fraction of a second. Under the same hammering the debounce must
+    take its five poll intervals, and still complete: requests that
+    never stop must not starve the poll either."""
+    conf = LUMA_CONF.replace("hysteresis_sec = 2", "hysteresis_sec = 5")
+    stub.set_scene(luma=120, gain=500, ev=4000)
+    ric = Ric("cadence", conf)
+    if not ric.wait_running():
+        result(False, "cadence: ric start", "no 'ric running'")
+        ric.stop()
+        return
+    time.sleep(0.5)
+
+    mm = stub.mark()
+    stub.set_scene(luma=5, gain=500, ev=4000)
+    t0 = time.monotonic()
+    asked = 0
+    # 5 polls of 200 ms: the fifth dark poll cannot come before 0.8 s
+    while time.monotonic() - t0 < 0.6:
+        ric_status()
+        asked += 1
+    result("night" not in stub.modes_since(mm) and asked >= 10,
+           "cadence: back-to-back requests do not shorten the debounce",
+           "requests=%d modes=%s" % (asked, stub.modes_since(mm)))
+    while "night" not in stub.modes_since(mm) and time.monotonic() - t0 < 4:
+        ric_status()
+        asked += 1
+    took = time.monotonic() - t0
+    result("night" in stub.modes_since(mm) and took < 2.0,
+           "cadence: the debounce completes on time under constant requests",
+           "took=%.2fs requests=%d" % (took, asked))
+    ric.stop()
+
+
 def main():
     setup_sandbox()
     stub = StubRvd()
@@ -2838,6 +2875,7 @@ def main():
         scenario_luma_day_gain_gate,
         scenario_day_verify_gain,
         scenario_day_trial,
+        scenario_poll_cadence,
     ]
     only = os.environ.get("RIC_SCENARIO", "")
     if only:

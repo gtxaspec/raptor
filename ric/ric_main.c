@@ -708,17 +708,29 @@ int main(int argc, char **argv)
 	RSS_DEBUG("  hysteresis=%ds poll=%dms", st.settings.hysteresis_sec,
 		  st.settings.poll_interval_ms);
 
-	/* Main loop: poll exposure + handle control socket */
+	/* Main loop: poll exposure on a fixed cadence + handle control socket.
+	 * A control request wakes the wait early. Polling on every wake made
+	 * each poll-counted delay (hysteresis, cooldown, lockouts) shrink
+	 * while a client was asking -- the web UI's live gain readout asks
+	 * every second or two. */
+	int64_t next_poll_us = 0;
 	while (*st.running) {
-		ric_poll_exposure(&st);
+		int64_t now_us = rss_timestamp_us();
+		if (now_us >= next_poll_us) {
+			ric_poll_exposure(&st);
+			next_poll_us = now_us + (int64_t)st.settings.poll_interval_ms * 1000;
+			now_us = rss_timestamp_us();
+		}
+		int wait_ms =
+			next_poll_us > now_us ? (int)((next_poll_us - now_us + 999) / 1000) : 0;
 
 		if (epoll_fd >= 0) {
 			struct epoll_event ev;
-			int n = epoll_wait(epoll_fd, &ev, 1, st.settings.poll_interval_ms);
+			int n = epoll_wait(epoll_fd, &ev, 1, wait_ms);
 			if (n > 0 && st.ctrl)
 				rss_ctrl_accept_and_handle(st.ctrl, ric_ctrl_handler, &st);
 		} else {
-			usleep(st.settings.poll_interval_ms * 1000);
+			usleep((useconds_t)wait_ms * 1000);
 		}
 	}
 
