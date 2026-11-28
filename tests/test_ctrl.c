@@ -321,6 +321,26 @@ void *rvd_ivs_thread(void *arg)
 	return NULL;
 }
 
+bool rvd_ivs_owns_fs(rvd_state_t *st, int fs_chn)
+{
+	(void)st;
+	(void)fs_chn;
+	return false;
+}
+
+int rvd_ivs_grab_raw(rvd_state_t *st, uint8_t *buf, size_t cap, uint32_t *size, uint32_t *w,
+		     uint32_t *h, int timeout_ms)
+{
+	(void)st;
+	(void)buf;
+	(void)cap;
+	(void)size;
+	(void)w;
+	(void)h;
+	(void)timeout_ms;
+	return -1;
+}
+
 /* ── Test fixture ── */
 
 static rvd_state_t st;
