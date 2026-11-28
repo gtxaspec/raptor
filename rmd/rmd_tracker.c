@@ -6,12 +6,15 @@
  * aim point is outside the dead zone. When motion ends the head goes back.
  */
 
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "rmd.h"
 
-#define RMD_TRACK_MAX_BOXES 32 /* rvd sends at most RSS_IVS_MAX_DETECTIONS, 20 */
+#define RMD_TRACK_MAX_BOXES    32 /* rvd sends at most RSS_IVS_MAX_DETECTIONS, 20 */
+#define RMD_TRACK_MAX_AVERAGE  32
+#define RMD_TRACK_LIMITS_RETRY 5000000 /* us between asks while the head's range is unknown */
 
 static uint32_t parse_classes(const char *s)
 {
@@ -30,6 +33,18 @@ static uint32_t parse_classes(const char *s)
 	return mask;
 }
 
+/* A [track] integer held to lo..hi: a value outside is a typo or a unit mistake, and a
+ * large one would send the head far past what a frame needs. */
+static int cfg_int(rss_config_t *cfg, const char *key, int def, int lo, int hi)
+{
+	int v = rss_config_get_int(cfg, "track", key, def);
+	if (v >= lo && v <= hi)
+		return v;
+	int clamped = v < lo ? lo : hi;
+	RSS_WARN("track: %s = %d is outside %d..%d, using %d", key, v, lo, hi, clamped);
+	return clamped;
+}
+
 void rmd_track_load(rmd_ctx_t *ctx)
 {
 	rss_config_t *cfg = ctx->cfg;
@@ -38,22 +53,19 @@ void rmd_track_load(rmd_ctx_t *ctx)
 	t->enabled = rss_config_get_bool(cfg, "track", "enabled", false);
 	t->shadow = rss_config_get_bool(cfg, "track", "shadow", false);
 	t->aim.class_mask = parse_classes(rss_config_get_str(cfg, "track", "classes", ""));
-	t->aim.min_confidence = rss_config_get_int(cfg, "track", "min_confidence", 40) / 100.0f;
-	t->aim.deadzone_pct = rss_config_get_int(cfg, "track", "deadzone_pct", 15);
-	t->aim.deadzone_y_pct =
-		rss_config_get_int(cfg, "track", "deadzone_y_pct", t->aim.deadzone_pct);
-	t->aim.aim_y_pct = rss_config_get_int(cfg, "track", "aim_y_pct", 50);
-	t->aim.steps_x_per_frame = rss_config_get_int(cfg, "track", "steps_x_per_frame", 0);
-	t->aim.steps_y_per_frame = rss_config_get_int(cfg, "track", "steps_y_per_frame", 0);
-	t->aim.gain_pct = rss_config_get_int(cfg, "track", "gain_pct", 80);
-	t->aim.max_steps_x = rss_config_get_int(cfg, "track", "max_steps_x", 0);
-	t->aim.max_steps_y = rss_config_get_int(cfg, "track", "max_steps_y", 0);
-	t->settle_ms = rss_config_get_int(cfg, "track", "settle_ms", 1000);
-	t->average = rss_config_get_int(cfg, "track", "average", 1);
-	if (t->average < 1)
-		t->average = 1;
-	t->speed = rss_config_get_int(cfg, "track", "speed", 0);
-	t->lost_sec = rss_config_get_int(cfg, "track", "lost_sec", 5);
+	t->aim.min_confidence = cfg_int(cfg, "min_confidence", 40, 0, 100) / 100.0f;
+	t->aim.deadzone_pct = cfg_int(cfg, "deadzone_pct", 15, 0, 100);
+	t->aim.deadzone_y_pct = cfg_int(cfg, "deadzone_y_pct", t->aim.deadzone_pct, 0, 100);
+	t->aim.aim_y_pct = cfg_int(cfg, "aim_y_pct", 50, 0, 100);
+	t->aim.steps_x_per_frame = cfg_int(cfg, "steps_x_per_frame", 0, 0, RMD_TRACK_MAX_STEPS);
+	t->aim.steps_y_per_frame = cfg_int(cfg, "steps_y_per_frame", 0, 0, RMD_TRACK_MAX_STEPS);
+	t->aim.gain_pct = cfg_int(cfg, "gain_pct", 80, 0, 100);
+	t->aim.max_steps_x = cfg_int(cfg, "max_steps_x", 0, 0, RMD_TRACK_MAX_STEPS);
+	t->aim.max_steps_y = cfg_int(cfg, "max_steps_y", 0, 0, RMD_TRACK_MAX_STEPS);
+	t->settle_ms = cfg_int(cfg, "settle_ms", 1000, 0, 60000);
+	t->average = cfg_int(cfg, "average", 1, 1, RMD_TRACK_MAX_AVERAGE);
+	t->speed = cfg_int(cfg, "speed", 0, 0, INT_MAX);
+	t->lost_sec = cfg_int(cfg, "lost_sec", 5, 0, 86400);
 	t->home_on_idle = rss_config_get_bool(cfg, "track", "home_on_idle", true);
 	t->invert_x = rss_config_get_bool(cfg, "track", "invert_x", false);
 	t->invert_y = rss_config_get_bool(cfg, "track", "invert_y", false);
@@ -94,11 +106,17 @@ static int real_go_back(void *user)
 	return rmd_ptz_go_back(((rmd_ctx_t *)user)->track_cfg.motors_socket);
 }
 
+static int real_limits(void *user, int *x_max, int *y_max)
+{
+	return rmd_ptz_limits(((rmd_ctx_t *)user)->track_cfg.motors_socket, x_max, y_max);
+}
+
 const rmd_track_io_t rmd_track_io_real = {
 	.detections = real_detections,
 	.busy = real_busy,
 	.move = real_move,
 	.go_back = real_go_back,
+	.limits = real_limits,
 };
 
 static const rmd_track_io_t *io_of(rmd_ctx_t *ctx, void **user)
@@ -176,6 +194,26 @@ static void go_back(rmd_ctx_t *ctx)
 	rmd_track_avg_reset(&s->avg);
 }
 
+/* The head's range bounds one move; asked once it answers, retried while it does not. */
+static void head_limits(rmd_ctx_t *ctx, const rmd_track_io_t *io, void *user, int64_t now)
+{
+	rmd_track_state_t *s = &ctx->track;
+	if (s->x_limit > 0 || s->y_limit > 0 || !io->limits || ctx->track_cfg.shadow ||
+	    (s->limits_try_us && now - s->limits_try_us < RMD_TRACK_LIMITS_RETRY))
+		return;
+	s->limits_try_us = now;
+	int x = 0, y = 0;
+	if (io->limits(user, &x, &y) == 0) {
+		s->x_limit = x > 0 ? x : 0;
+		s->y_limit = y > 0 ? y : 0;
+	}
+}
+
+static int cap_steps(int configured, int limit)
+{
+	return limit > 0 && (configured <= 0 || configured > limit) ? limit : configured;
+}
+
 void rmd_track_step(rmd_ctx_t *ctx)
 {
 	rmd_track_settings_t *t = &ctx->track_cfg;
@@ -236,10 +274,15 @@ void rmd_track_step(rmd_ctx_t *ctx)
 		return;
 	rmd_track_avg_reset(&s->avg);
 
+	head_limits(ctx, io, user, now);
+	rmd_track_cfg_t aim = t->aim;
+	aim.max_steps_x = cap_steps(aim.max_steps_x, s->x_limit);
+	aim.max_steps_y = cap_steps(aim.max_steps_y, s->y_limit);
+
 	int dx, dy;
-	if (!rmd_track_move_to(ax, ay, &t->aim, &dx, &dy))
+	if (!rmd_track_move_to(ax, ay, &aim, &dx, &dy))
 		return;
-	if (!rmd_track_edge_limit(&boxes[i], &t->aim, &dx, &dy)) {
+	if (!rmd_track_edge_limit(&boxes[i], &aim, &dx, &dy)) {
 		RSS_DEBUG("track: box at the frame edge, no move away from it");
 		return;
 	}

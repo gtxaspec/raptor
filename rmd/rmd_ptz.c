@@ -8,6 +8,7 @@
  */
 
 #include <errno.h>
+#include <limits.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/socket.h>
@@ -82,6 +83,17 @@ int rmd_ptz_busy(const char *sock)
 	if (motors_send(sock, &req, &msg) < 0)
 		return -1;
 	return msg.status == 1;
+}
+
+int rmd_ptz_limits(const char *sock, int *x_max, int *y_max)
+{
+	struct motors_request req = {.command = 'b'};
+	struct motors_message msg = {0};
+	if (motors_send(sock, &req, &msg) < 0)
+		return -1;
+	*x_max = msg.x_max_steps > (unsigned)INT_MAX ? INT_MAX : (int)msg.x_max_steps;
+	*y_max = msg.y_max_steps > (unsigned)INT_MAX ? INT_MAX : (int)msg.y_max_steps;
+	return 0;
 }
 
 int rmd_ptz_go_back(const char *sock)

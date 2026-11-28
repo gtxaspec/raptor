@@ -61,13 +61,18 @@ static int axis_steps(float aim, int size, int deadzone_pct, int steps_per_frame
 	if ((err < 0 ? -err : err) * 100.0f < deadzone_pct)
 		return 0;
 	float s = err * steps_per_frame * gain_pct / 100.0f;
+	/* Bound the float before the conversion: out of range it is undefined. */
+	if (max_steps <= 0 || max_steps > RMD_TRACK_MAX_STEPS)
+		max_steps = RMD_TRACK_MAX_STEPS;
+	if (s > max_steps)
+		s = (float)max_steps;
+	if (s < -max_steps)
+		s = (float)-max_steps;
 	int steps = (int)(s < 0 ? s - 0.5f : s + 0.5f);
-	if (max_steps > 0) {
-		if (steps > max_steps)
-			steps = max_steps;
-		if (steps < -max_steps)
-			steps = -max_steps;
-	}
+	if (steps > max_steps)
+		steps = max_steps;
+	if (steps < -max_steps)
+		steps = -max_steps;
 	return steps;
 }
 

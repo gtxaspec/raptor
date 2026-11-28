@@ -57,6 +57,7 @@ typedef struct {
 	int (*busy)(void *user);			    /* 1 running, 0 stopped, <0 no answer */
 	int (*move)(void *user, int dx, int dy, int speed);
 	int (*go_back)(void *user);
+	int (*limits)(void *user, int *x_max, int *y_max); /* range per axis; may be NULL */
 } rmd_track_io_t;
 
 /* Tracker state */
@@ -69,7 +70,9 @@ typedef struct {
 	float prev_x, prev_y;
 	int64_t last_seen_us;
 	int moves;
-	rmd_track_avg_t avg; /* aim points since the last stop */
+	rmd_track_avg_t avg;   /* aim points since the last stop */
+	int x_limit, y_limit;  /* the head's range in steps, as it reports it; 0 = not known */
+	int64_t limits_try_us; /* last ask, retried while unknown */
 } rmd_track_state_t;
 
 /* Daemon context */
@@ -103,6 +106,7 @@ int rmd_trigger_recording(rmd_ctx_t *ctx, bool start);
 int rmd_ptz_move(const char *sock, int dx, int dy, int speed);
 int rmd_ptz_busy(const char *sock); /* 1 running, 0 stopped, -1 no answer */
 int rmd_ptz_go_back(const char *sock);
+int rmd_ptz_limits(const char *sock, int *x_max, int *y_max); /* 0 ok, -1 no answer */
 
 /* rmd_tracker.c */
 extern const rmd_track_io_t rmd_track_io_real; /* user: the rmd_ctx_t */

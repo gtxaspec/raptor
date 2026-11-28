@@ -22,6 +22,8 @@ typedef struct {
 	int moves, last_dx, last_dy;
 	int go_backs;
 	int detection_calls;
+	int limit_x, limit_y; /* what the head reports as its range; 0 = does not answer */
+	int limit_calls;
 } fake_t;
 
 static int fake_detections(void *user, char *buf, int size)
@@ -62,7 +64,19 @@ static int fake_go_back(void *user)
 	return 0;
 }
 
-static const rmd_track_io_t fake_io = {fake_detections, fake_busy, fake_move, fake_go_back};
+static int fake_limits(void *user, int *x_max, int *y_max)
+{
+	fake_t *f = user;
+	f->limit_calls++;
+	if (!f->limit_x && !f->limit_y)
+		return -1;
+	*x_max = f->limit_x;
+	*y_max = f->limit_y;
+	return 0;
+}
+
+static const rmd_track_io_t fake_io = {fake_detections, fake_busy, fake_move, fake_go_back,
+				       fake_limits};
 
 /* 620/400 steps a frame, dead zone 15/25 %, gain 80 %, aim at the box centre, no settle,
  * one result a move, motion active. */
@@ -255,6 +269,96 @@ TEST tracker_go_back(void)
 	PASS();
 }
 
+/* The range the head reports bounds a single move; a configured max_steps below it wins. */
+TEST tracker_move_bounded_by_the_head_range(void)
+{
+	rmd_ctx_t ctx;
+	fake_t f;
+	setup(&ctx, &f);
+	f.limit_x = 100;
+	f.limit_y = 50;
+	ctx.track_cfg.aim.deadzone_y_pct = 5;
+
+	f.x0 = 0;
+	f.x1 = 40; /* far left: 620 steps wanted, 100 allowed */
+	f.y0 = 0;
+	f.y1 = 40;
+	rmd_track_step(&ctx);
+	ASSERT_EQ(1, f.moves);
+	ASSERT_EQ(-100, f.last_dx);
+	ASSERT_EQ(-50, f.last_dy);
+	ASSERT_EQ(1, f.limit_calls);
+
+	f.busy = 0;
+	rmd_track_step(&ctx); /* stop */
+	ctx.track_cfg.aim.max_steps_x = 30;
+	usleep(2000);
+	rmd_track_step(&ctx);
+	ASSERT_EQ(2, f.moves);
+	ASSERT_EQ(-30, f.last_dx);
+	ASSERT_EQ(1, f.limit_calls); /* asked once */
+	PASS();
+}
+
+/* A head that does not answer is asked again, but not on every step. */
+TEST tracker_limits_retried_not_hammered(void)
+{
+	rmd_ctx_t ctx;
+	fake_t f;
+	setup(&ctx, &f);
+
+	box(&f, 120, 180);
+	rmd_track_step(&ctx);
+	ASSERT_EQ(1, f.moves);
+	ASSERT_EQ(1, f.limit_calls);
+	ASSERT(f.last_dx > -RMD_TRACK_MAX_STEPS);
+	f.busy = 0;
+	rmd_track_step(&ctx);
+	usleep(2000);
+	rmd_track_step(&ctx);
+	ASSERT_EQ(2, f.moves);
+	ASSERT_EQ(1, f.limit_calls);
+	PASS();
+}
+
+/* [track] values outside their range are held to it, not passed to the head. */
+TEST tracker_load_holds_values_in_range(void)
+{
+	char path[96];
+	snprintf(path, sizeof(path), "/tmp/rmd_track_cfg_%d.conf", (int)getpid());
+	FILE *fp = fopen(path, "w");
+	ASSERT(fp);
+	fputs("[track]\nenabled = true\nsteps_x_per_frame = 2000000000\n"
+	      "steps_y_per_frame = -5\ngain_pct = 100000\nmax_steps_x = 99999999\n"
+	      "max_steps_y = -1\nmin_confidence = 500\ndeadzone_pct = -3\naim_y_pct = 900\n"
+	      "settle_ms = -1\naverage = 0\nspeed = -4\nlost_sec = 99999999\n",
+	      fp);
+	fclose(fp);
+
+	rmd_ctx_t ctx;
+	memset(&ctx, 0, sizeof(ctx));
+	ctx.cfg = rss_config_load(path);
+	unlink(path);
+	ASSERT(ctx.cfg);
+	rmd_track_load(&ctx);
+	rss_config_free(ctx.cfg);
+
+	const rmd_track_settings_t *t = &ctx.track_cfg;
+	ASSERT_EQ(RMD_TRACK_MAX_STEPS, t->aim.steps_x_per_frame);
+	ASSERT_EQ(0, t->aim.steps_y_per_frame);
+	ASSERT_EQ(100, t->aim.gain_pct);
+	ASSERT_EQ(RMD_TRACK_MAX_STEPS, t->aim.max_steps_x);
+	ASSERT_EQ(0, t->aim.max_steps_y);
+	ASSERT_EQ(1.0f, t->aim.min_confidence);
+	ASSERT_EQ(0, t->aim.deadzone_pct);
+	ASSERT_EQ(100, t->aim.aim_y_pct);
+	ASSERT_EQ(0, t->settle_ms);
+	ASSERT_EQ(1, t->average);
+	ASSERT_EQ(0, t->speed);
+	ASSERT_EQ(86400, t->lost_sec);
+	PASS();
+}
+
 /* A box cut off at the frame's bottom never tilts the head up: aimed high on a tall box cut
  * by the bottom edge (the bench case of a person lying at the bottom of the view), the move
  * up is dropped. */
@@ -388,6 +492,16 @@ TEST ptz_busy_and_go_back_wire(void)
 
 	memset(&m, 0, sizeof(m));
 	ASSERT_EQ(0, fake_md_start(&m, path, &th));
+	int xmax = 0, ymax = 0;
+	ASSERT_EQ(0, rmd_ptz_limits(path, &xmax, &ymax));
+	pthread_join(th, NULL);
+	close(m.lfd);
+	ASSERT_EQ('b', m.req[0]);
+	ASSERT_EQ(3050, xmax);
+	ASSERT_EQ(1550, ymax);
+
+	memset(&m, 0, sizeof(m));
+	ASSERT_EQ(0, fake_md_start(&m, path, &th));
 	ASSERT_EQ(0, rmd_ptz_go_back(path));
 	pthread_join(th, NULL);
 	close(m.lfd);
@@ -398,6 +512,7 @@ TEST ptz_busy_and_go_back_wire(void)
 	/* no daemon: an error, not a hang */
 	ASSERT_EQ(-1, rmd_ptz_busy(path));
 	ASSERT_EQ(-1, rmd_ptz_move(path, 10, 0, 0));
+	ASSERT_EQ(-1, rmd_ptz_limits(path, &xmax, &ymax));
 	PASS();
 }
 
@@ -410,6 +525,9 @@ SUITE(rmd_tracker_suite)
 	RUN_TEST(tracker_average);
 	RUN_TEST(tracker_shadow);
 	RUN_TEST(tracker_go_back);
+	RUN_TEST(tracker_move_bounded_by_the_head_range);
+	RUN_TEST(tracker_limits_retried_not_hammered);
+	RUN_TEST(tracker_load_holds_values_in_range);
 	RUN_TEST(tracker_edge);
 	RUN_TEST(tracker_no_box);
 	RUN_TEST(ptz_move_wire);

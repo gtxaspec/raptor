@@ -17,6 +17,10 @@ typedef struct {
 	int class_id;
 } rmd_box_t;
 
+/* The largest single move on an axis, in motor steps: the cap where max_steps is 0, and the
+ * bound a [track] value is held to. Larger than any head's range. */
+#define RMD_TRACK_MAX_STEPS 10000
+
 typedef struct {
 	int frame_w, frame_h;  /* the inference frame */
 	uint32_t class_mask;   /* bit n follows class n; 0 follows any class */
@@ -28,7 +32,7 @@ typedef struct {
 	int steps_x_per_frame; /* pan steps that move the view one frame width */
 	int steps_y_per_frame; /* tilt steps that move the view one frame height */
 	int gain_pct;	       /* share of the error corrected by one move */
-	int max_steps_x;       /* largest move, 0 = no limit */
+	int max_steps_x;       /* largest move, 0 = RMD_TRACK_MAX_STEPS */
 	int max_steps_y;
 } rmd_track_cfg_t;
 

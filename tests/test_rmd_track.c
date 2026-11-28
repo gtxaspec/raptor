@@ -275,6 +275,28 @@ TEST track_edge_clear(void)
 	PASS();
 }
 
+/* A step count or gain far past any head's range: the move is capped, not a float converted
+ * out of int range. */
+TEST track_move_bounded_without_max_steps(void)
+{
+	rmd_track_cfg_t c = cfg();
+	c.steps_x_per_frame = 2000000000;
+	c.steps_y_per_frame = 2000000000;
+	c.gain_pct = 1000000;
+	rmd_box_t left_top = box_at(20, 20, 0.9f, 0);
+	int dx, dy;
+
+	ASSERT(rmd_track_move(&left_top, &c, &dx, &dy));
+	ASSERT_EQ(-RMD_TRACK_MAX_STEPS, dx);
+	ASSERT_EQ(-RMD_TRACK_MAX_STEPS, dy);
+
+	/* a larger configured cap is held to the same bound */
+	c.max_steps_x = 2000000000;
+	ASSERT(rmd_track_move(&left_top, &c, &dx, &dy));
+	ASSERT_EQ(-RMD_TRACK_MAX_STEPS, dx);
+	PASS();
+}
+
 SUITE(rmd_track_suite)
 {
 	RUN_TEST(track_pick_none_eligible);
@@ -293,4 +315,5 @@ SUITE(rmd_track_suite)
 	RUN_TEST(track_edge_bottom);
 	RUN_TEST(track_edge_both_sides);
 	RUN_TEST(track_edge_clear);
+	RUN_TEST(track_move_bounded_without_max_steps);
 }
